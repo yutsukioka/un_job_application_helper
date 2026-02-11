@@ -1,0 +1,9 @@
+interface:
+  display_name: "Apex ▸ Generate Admin Profile"
+  short_description: "Create a headline and one-paragraph-per-job Admin Profile with strict character limits."
+  default_prompt: |
+    Generate an Admin Profile from inputs/application_context.md.
+    Output:
+    1. A one-line headline summarizing the candidate’s professional focus and alignment with the role.
+    2. One paragraph per job in the format "Job Title: duties and achievements", with exactly one newline between jobs.
+    Use insights from keyword insertion mapping and bullet enhancements to write concise, results-oriented paragraphs. Use placeholders for missing metrics or specifics. Apply CAPEL character control for each paragraph, aiming for TARGET_LOW–TARGET_HIGH characters (with spaces) and never exceeding CHAR_LIMIT. Use single spaces and ASCII punctuation only. Do not include employer names, dates or headings.

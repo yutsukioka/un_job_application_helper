@@ -1,0 +1,14 @@
+interface:
+  display_name: "Apex ▸ Generate Qualification Answers"
+  short_description: "Draft 1000‑character answers to each job qualification question using the two‑part format."
+  default_prompt: |
+    Using inputs/application_context.md, write answers for each question in JOB_QUALIFICATION_QUESTIONS.
+    Each answer must consist of one paragraph containing two parts:
+    1. (Period, Organization) – (briefly referencing when and where the relevant experience was gained).
+    2. A detailed description of how that experience meets the requirement, including actions taken and outcomes achieved, with metrics if available or placeholders if missing.
+    Follow these rules:
+    - Do not exceed 1000 characters (with spaces) per answer; aim for 800–950 characters.
+    - Do not start with “Yes, I have…” or restate the question; do not refer the reader to other documents.
+    - Use placeholders for missing specifics (e.g., [User to Insert Metric]).
+    - If an answer is short, add a specific detail; if too long, tighten by removing filler and combining sentences.
+    Present each question with its answer, with a blank line separating pairs.

@@ -1,0 +1,14 @@
+interface:
+  display_name: "Apex ▸ Generate Cover Letter"
+  short_description: "Draft a tailored cover letter using UVP, STAR examples, and gap mitigation, formatted as a business letter."
+  default_prompt: |
+    Write a cover letter for the target role using inputs/application_context.md and analysis outputs (UVP, STAR stories, gap information).
+    Use standard business letter formatting:
+    1. Date line: current date.
+    2. Hiring manager name/title and organization (use placeholders if unknown).
+    3. Salutation.
+    4. Opening paragraph: state the role and include your UVP or a compelling summary of fit and motivation.
+    5. Body paragraphs (2–3): use STAR stories to address key requirements, emphasize motivation and values alignment, and proactively address any gaps with transferable skills or learning commitments.
+    6. Closing paragraph: reiterate enthusiasm and invite further discussion.
+    7. Sign‑off: Professional closing and candidate name.
+    Use placeholders where details are missing; keep tone professional and enthusiastic.

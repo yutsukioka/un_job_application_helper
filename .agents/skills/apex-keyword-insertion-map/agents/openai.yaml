@@ -1,0 +1,11 @@
+interface:
+  display_name: "Apex ▸ Keyword Insertion Map"
+  short_description: "Identify 5–10 must‑use phrases and advise where to insert them in the Admin Profile."
+  default_prompt: |
+    Using inputs/application_context.md, produce 5–10 critical phrases that should appear in the Admin Profile.
+    For each phrase include:
+    - Phrase: exact wording.
+    - Why: why this phrase is important (based on JD or star rating).
+    - Where to place: which job entry and where within the paragraph.
+    - Natural insertion suggestion: a short sentence fragment showing natural integration.
+    Avoid near‑duplicate phrases and choose high‑value keywords from TERM_EXTRACTOR and JD. Do not rewrite the full Admin Profile.

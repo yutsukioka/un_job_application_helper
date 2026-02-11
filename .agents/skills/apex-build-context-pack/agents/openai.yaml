@@ -1,0 +1,10 @@
+interface:
+  display_name: "Apex ▸ Build Context Pack"
+  short_description: "Create/refresh inputs/application_context.md (job history, JD, terms, skills taxonomy, limits)."
+  default_prompt: |
+    Create or update inputs/application_context.md for the Apex workflow.
+    Use only content I provide (pasted below or referenced files in this repo).
+    Preserve text verbatim inside fenced code blocks.
+    If any section is missing, keep a placeholder like [PASTE HERE] rather than inventing.
+    Ensure LIMITS includes CHAR_LIMIT, TARGET_LOW, TARGET_HIGH, WORD_TARGET (or placeholders).
+    After writing the file, output a short checklist of which sections are present/missing.

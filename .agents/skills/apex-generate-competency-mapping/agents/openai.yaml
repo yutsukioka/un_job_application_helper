@@ -1,0 +1,8 @@
+interface:
+  display_name: "Apex ▸ Generate Competency Mapping"
+  short_description: "Map skills to roles with relevance scores and compute total experience and skill type for each skill."
+  default_prompt: |
+    Using inputs/application_context.md, create a competency mapping document with two sections:
+    1. **Job title and skills**: for each role, list the job title (with organization and dates if available) and the relevant skills (from SKILLS_TAXONOMY) used in that role with a relevance score (3=core, 2=regular, 1=occasional). List skills in descending relevance order and limit to the top 10–12 skills per job. Insert a blank line after each job entry.
+    2. **Total years of experiences per skills with Skill Type**: aggregate the time spent on each skill across all roles (avoid double‑counting overlapping periods) and express the total in years and months (and days if precise). Assign a Skill Type category (Adaptation, Communication, Hard Skill, Leadership, Persuasion, Problem Solving, Soft Skill, Teamwork, Time Management) to each skill. Insert a blank line between each skill entry.
+    Conclude with a note encouraging the user to review the skills and durations for accuracy. Do not include commentary beyond the required headings and lists.

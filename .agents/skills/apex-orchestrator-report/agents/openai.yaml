@@ -1,0 +1,18 @@
+interface:
+  display_name: "Apex ▸ Strategy Report & Menu"
+  short_description: "Produce the full Exceptional Application Strategy Report (Phases 1–7) and present the Phase 8 document menu."
+  default_prompt: |
+    Generate the complete Exceptional Application Strategy Report using inputs/application_context.md.
+    - Synthesize all input sources (Phase 1.1)
+    - Identify core requirements (Phase 1.2)
+    - Map evidence and gaps with mitigation strategies (Phase 1.3)
+    - Draft headline/summary optimization (Phase 2.1)
+    - Create keyword insertion map (Phase 2.2)
+    - Produce enhanced bullet examples (Phase 2.3)
+    - Build STAR story blueprints (Phase 3)
+    - Draft a UVP statement (Phase 4)
+    - Offer cover letter integration pointers (Phase 5)
+    - Provide impression maximizer tips (Phase 6)
+    - Pose coaching reflection questions (Phase 7)
+    Apply the multi‑expert ApexStrategist persona (ChatGPT 5.2 Pro) and the recursive quality loop for each section.
+    Conclude by presenting the Phase 8 document menu (6 multi-select items) and wait for the user's choice without generating any documents.

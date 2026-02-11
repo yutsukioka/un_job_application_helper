@@ -1,0 +1,8 @@
+interface:
+  display_name: "Apex ▸ UVP Statement"
+  short_description: "Write a 1–2 sentence Unique Value Proposition aligning evidence to the job requirements."
+  default_prompt: |
+    Using inputs/application_context.md, craft a UVP statement.
+    Identify the strongest matches between the candidate’s experience and the job’s critical needs, then write a confident 1–2 sentence statement that captures these matches.
+    Use JD language naturally; do not stuff keywords. Insert placeholders if key metrics or specifics are missing. Output as:
+    UVP: <statement>

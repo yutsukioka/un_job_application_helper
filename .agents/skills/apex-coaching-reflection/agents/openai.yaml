@@ -1,0 +1,10 @@
+interface:
+  display_name: "Apex ▸ Coaching Reflection Prompts"
+  short_description: "Pose 1–2 open‑ended questions to help the candidate reflect on motivations, values and cultural fit."
+  default_prompt: |
+    Using inputs/application_context.md, craft 1–2 open‑ended coaching reflection questions that encourage the candidate to consider their personal motivations, values and cultural fit for the target role and organization.
+    Each question should invite reflection rather than yes/no answers.
+    Output:
+    ## Coaching Reflection Prompts
+    - <Question 1>
+    - <Question 2>

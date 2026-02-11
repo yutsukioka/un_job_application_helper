@@ -1,0 +1,15 @@
+interface:
+  display_name: "Utility ▸ CAPEL Fit"
+  short_description: "Normalize and fit text to a strict character limit using deterministic scripts."
+  default_prompt: |
+    Fit the provided text to the specified character limits.
+    Inputs:
+    - CHAR_LIMIT: maximum characters allowed (with spaces).
+    - TARGET_LOW: lower bound of the desired character band.
+    - TARGET_HIGH: upper bound of the band (≤ CHAR_LIMIT).
+    - Text: the paragraph to fit.
+    Scripts available:
+    - scripts/normalize_text.py to normalize punctuation and whitespace.
+    - scripts/charcount.py to count characters.
+    - scripts/fit_entry.py to auto‑adjust text (optional). Use report mode to see counts; use auto mode for conservative compression/expansion.
+    Do not add new substantive content; only adjust length using placeholders or phrase compression.

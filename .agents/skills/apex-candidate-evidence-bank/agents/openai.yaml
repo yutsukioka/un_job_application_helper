@@ -1,0 +1,12 @@
+interface:
+  display_name: "Apex ▸ Candidate Evidence Bank"
+  short_description: "Map evidence to JD requirements, identify gaps and propose mitigation strategies."
+  default_prompt: |
+    Build an Evidence Bank using inputs/application_context.md.
+    For each core requirement (from JD core requirements or by extracting them yourself):
+    - Requirement: state the requirement and star weight if known.
+    - Strong evidence: list 2–5 concise snippets from USER_JOB_HISTORY_TEXT that demonstrate the requirement (tag each with the role title).
+    - Gap / Missing proof: specify any missing metrics, tools, experiences as placeholders.
+    - Mitigation strategies: suggest 1–2 concrete ways the candidate can demonstrate or develop the missing requirement using transferable skills, certifications, personal projects or related experiences.
+    After all requirements, list a consolidated section of “Metrics & Specifics Needed” with all placeholders that the user should fill.
+    Do not invent information; use only what the user provided.

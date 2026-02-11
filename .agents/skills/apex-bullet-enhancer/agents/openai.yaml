@@ -1,0 +1,9 @@
+interface:
+  display_name: "Apex ▸ Bullet Enhancer"
+  short_description: "Rewrite 2–3 existing job history bullets with stronger verbs, outcomes and keyword integration."
+  default_prompt: |
+    Using inputs/application_context.md, select 2–3 bullet points or sentences from USER_JOB_HISTORY_TEXT that correspond to high‑priority TERM_EXTRACTOR keywords.
+    For each, produce:
+    - Original: <copied bullet>
+    - Enhanced: <rewritten version with action verb, quantifiable outcome (or placeholder), and integrated ★★☆/★★★ keyword>
+    Maintain a concise, results‑oriented style and do not invent responsibilities or achievements.

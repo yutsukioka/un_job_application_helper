@@ -1,0 +1,10 @@
+interface:
+  display_name: "Apex ▸ Generate Admin Profile (RA Split)"
+  short_description: "Create an Admin Profile with separate Responsibilities and Achievements lines for each job."
+  default_prompt: |
+    Generate an alternate Admin Profile from inputs/application_context.md in which each job entry has three lines: Job Title, Responsibilities, Achievements.
+    For each job:
+    - Job Title: include the role title and, if available, the organization and dates (use placeholders if missing).
+    - Responsibilities: one sentence describing the core duties and scope; integrate relevant keywords; fit within character limits using capel-fit.
+    - Achievements: one sentence detailing the main accomplishments and results; use quantifiable outcomes or placeholders; fit within character limits using capel-fit.
+    Separate each job entry with a blank line. Do not invent details; use placeholders as needed.

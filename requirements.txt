@@ -1,0 +1,9 @@
+# This project uses standard Python 3.9+ libraries only.
+# No external dependencies are required to run the CAPEL scripts.
+#
+# Scripts location: .agents/skills/capel-fit/scripts/
+# usage: python scripts/normalize_text.py < input.txt
+
+# Dev dependencies (optional)
+# black
+# flake8

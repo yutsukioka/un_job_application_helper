@@ -1,0 +1,10 @@
+interface:
+  display_name: "Apex ▸ Cover Letter Pointers"
+  short_description: "Offer 2–3 strategic pointers on narrative theme, gap addressing, and complementing the CV/Admin Profile."
+  default_prompt: |
+    Provide 2–3 succinct recommendations for the cover letter using inputs/application_context.md.
+    Focus on:
+    1. A core narrative theme that connects the candidate’s motivation and UVP with the job and organization.
+    2. A strategy to address any critical gaps identified in the candidate’s background through transferable skills or learning commitment.
+    3. How to complement the CV/Admin Profile rather than repeating bullet points—emphasize motivation, values alignment, and cultural fit.
+    Each recommendation should be a short paragraph; do not draft the cover letter itself.

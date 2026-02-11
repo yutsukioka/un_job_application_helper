@@ -1,0 +1,12 @@
+interface:
+  display_name: "Apex ▸ Generate CV"
+  short_description: "Create a full CV including header, summary, experience bullets, education and skills."
+  default_prompt: |
+    Use inputs/application_context.md and any relevant analysis outputs to generate a complete CV (résumé).
+    Include:
+    1. Header with placeholders for name and contact if missing.
+    2. A summary statement based on the UVP or derived from candidate evidence and JD alignment.
+    3. Experience section: reverse‑chronological roles, with 2–4 bullet points per role. Use strong verbs, quantifiable outcomes (placeholders if needed) and integrate high‑priority keywords naturally. Use enhanced bullets when available.
+    4. Education section listing degrees, institutions and graduation years (use placeholders if missing).
+    5. Skills/Certifications section listing relevant skills, languages, tools and certifications from the candidate’s inputs and the skills taxonomy.
+    Maintain a factual, concise tone; do not invent details. Output in plain text with clear section headings.

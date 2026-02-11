@@ -1,0 +1,11 @@
+interface:
+  display_name: "Apex ▸ STAR Story Blueprints"
+  short_description: "Generate 3–4 STAR story blueprints aligned to critical role requirements."
+  default_prompt: |
+    Using inputs/application_context.md, create 3–4 STAR story blueprints.
+    For each blueprint include:
+    - Targeted requirement (with star weight if known).
+    - Relevant experience selected (role/source).
+    - STAR breakdown: Situation, Task, Action, Result.
+    - Tailoring note: how to align the narrative tone with the organization’s mission or context.
+    Select requirements that are emphasized in the JD or highly starred. Only use experiences from the user’s history; use placeholders for missing metrics or outcomes. Do not draft the cover letter here.

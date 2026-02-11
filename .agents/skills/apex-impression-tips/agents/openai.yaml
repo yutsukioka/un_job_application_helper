@@ -1,0 +1,14 @@
+interface:
+  display_name: "Apex ▸ Impression Maximizer Tips"
+  short_description: "Offer tone/language recommendations and final review advice to make application materials stand out."
+  default_prompt: |
+    Provide Impression Maximizer Tips using inputs/application_context.md.
+    - Determine the organization type (public sector, non‑profit, tech, etc.) from the job description.
+    - Suggest an overall tone and language style appropriate to that context (e.g. confident and proactive, diplomatic and detail‑oriented, innovative and mission‑driven).
+    - Advise on performing a final review to ensure consistency, accuracy, and narrative cohesion across CV, Admin Profile, and cover letter.
+    Output:
+    ## Impression Maximizer Tips
+    ### Tone & Language
+    <paragraph>
+    ### Final Review
+    <paragraph>

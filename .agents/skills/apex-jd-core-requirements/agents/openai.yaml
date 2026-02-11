@@ -1,0 +1,10 @@
+interface:
+  display_name: "Apex ▸ JD Core Requirements"
+  short_description: "Extract the 5–7 most critical requirements from the job description and note star weights."
+  default_prompt: |
+    Using inputs/application_context.md, identify and list the top 5–7 core requirements for the role.
+    For each requirement, provide:
+    - Requirement: concise phrasing.
+    - Why it is core: a brief explanation referencing the JD.
+    - Star weight: the term's star rating from TERM_EXTRACTOR if available; otherwise “not starred / unknown”.
+    Exclude generic behavioral competencies unless they are central to the role. Prioritize required or repeated responsibilities and qualifications.

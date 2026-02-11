@@ -1,0 +1,12 @@
+interface:
+  display_name: "Apex ▸ Output Lint"
+  short_description: "Final compliance pass: single spaces, ASCII punctuation, no bullets/tabs, correct newline separation."
+  default_prompt: |
+    Validate and fix formatting of the text below to meet strict e-recruitment field constraints:
+    - Single spaces; ASCII punctuation only; no fancy ellipsis (use "...")
+    - No bullets/tabs or accidental numbering
+    - One paragraph per item (if multiple items, preserve exactly one newline between items)
+    Do not invent facts; only minimal formatting fixes and placeholders if strictly necessary.
+    If character limits apply, use the capel-fit skill/scripts for deterministic counting.
+    Text:
+    [PASTE TEXT HERE]
