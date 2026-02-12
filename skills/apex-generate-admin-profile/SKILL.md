@@ -1,6 +1,11 @@
 ---
 name: apex-generate-admin-profile
-description: Generate a unified Admin Profile for e‑recruitment systems: one headline followed by one paragraph per job in the format “Job Title: duties and achievements”. Apply CAPEL character controls and integrate keyword guidance and bullet enhancements. Use this skill only when the user selects Option 1 of Phase 8 or explicitly asks for an Admin Profile.
+description: >-
+  Generate a unified Admin Profile for e‑recruitment systems: one headline
+  followed by one paragraph per job in the format "Job Title: duties and
+  achievements". Apply CAPEL character controls and integrate keyword guidance
+  and bullet enhancements. Use this skill only when the user selects Option 1
+  of Phase 8 or explicitly asks for an Admin Profile.
 ---
 
 # apex-generate-admin-profile

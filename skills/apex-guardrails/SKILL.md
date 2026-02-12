@@ -1,6 +1,11 @@
 ---
 name: apex-guardrails
-description: Enforce the non‑negotiable constraints of the Exceptional Candidate workflow: source‑grounding, placeholders over guessing, no chain‑of‑thought, keyword integrity, and stateless behavior. Use this skill to wrap any application analysis or drafting task to ensure compliance. Do not use it for unrelated coding tasks.
+description: >-
+  Enforce the non‑negotiable constraints of the Exceptional Candidate workflow:
+  source‑grounding, placeholders over guessing, no chain‑of‑thought, keyword
+  integrity, and stateless behavior. Use this skill to wrap any application
+  analysis or drafting task to ensure compliance. Do not use it for unrelated
+  coding tasks.
 ---
 
 # apex-guardrails

@@ -1,0 +1,12 @@
+interface:
+  display_name: "Apex ▸ Term Extractor"
+  short_description: "Extract 5 JD-grounded screening terms with stars, ATS synonyms, and resume-ready examples in strict format."
+  default_prompt: |
+    Analyze the provided job description and return exactly five terms using the strict four-line format.
+    Requirements:
+    - Use only JD-grounded terms (no guessing)
+    - Include 6-12 semicolon-separated synonyms per term
+    - Assign stars using the rubric (☆☆☆☆☆ to ☆)
+    - Avoid near-duplicate terms
+    - Include one resume-style example sentence per term
+    Output only the five formatted terms with one blank line between terms and no extra text.

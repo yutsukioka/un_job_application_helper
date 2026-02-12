@@ -1,6 +1,11 @@
 ---
 name: apex-generate-admin-profile-ra-split
-description: Generate an alternate Admin Profile where each job entry is split into three lines: Job Title, Responsibilities, and Achievements. Use this skill only when the user selects Option 5 of Phase 8 or explicitly asks for a split responsibilities/achievements profile. Do not generate CVs or other documents in this skill.
+description: >-
+  Generate an alternate Admin Profile where each job entry is split into three
+  lines: Job Title, Responsibilities, and Achievements. Use this skill only
+  when the user selects Option 5 of Phase 8 or explicitly asks for a split
+  responsibilities/achievements profile. Do not generate CVs or other documents
+  in this skill.
 ---
 
 # apex-generate-admin-profile-ra-split

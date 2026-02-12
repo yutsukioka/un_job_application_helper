@@ -23,11 +23,12 @@ The agent operates in two stages:
 ## Architecture
 
 ```
-skills/                   # 20 AI agent skills
+skills/                   # 21 AI agent skills
 ├── apex-orchestrator-report/   # Main orchestrator (Phases 1-8)
 ├── apex-guardrails/            # Non-negotiable quality constraints
 ├── apex-build-context-pack/    # Assembles inputs/application_context.md
 │
+├── term_extractor/                   # Extract 5 high-priority terms with synonyms & examples
 ├── apex-jd-core-requirements/        # Phase 1.2 — Core requirement extraction
 ├── apex-candidate-evidence-bank/     # Phase 1.3 — Evidence mapping & gap analysis
 ├── apex-keyword-insertion-map/       # Phase 2.2 — Keyword placement guidance
@@ -62,13 +63,19 @@ Each skill consists of:
 
 ## Getting Started
 
-### 1. Prepare your inputs
+### 1. Prepare or Update your inputs
 
+**Manual Setup:**
 Copy the template and fill in your data:
 
 ```bash
 cp inputs/application_context.template.md inputs/application_context.md
 ```
+
+**Updating via Agent:**
+You can ask the agent to build or update your context pack using the `apex-build-context-pack` skill.
+- "Please update `inputs/application_context.md` with the attached job description."
+- "Extract the requirements from this PDF and put them into the `JOB_REQUIREMENT_TEXT` section of my context file."
 
 The context file requires 11 input sections:
 - `USER_JOB_HISTORY_TEXT` — Your employment history
@@ -80,9 +87,41 @@ The context file requires 11 input sections:
 - `SKILLS_TAXONOMY` — Skills categorization
 - `CHAR_LIMIT` / `TARGET_LOW` / `TARGET_HIGH` / `WORD_TARGET` — Length constraints
 
+#### Guide: How to write `USER_JOB_HISTORY_TEXT`
+
+The `USER_JOB_HISTORY_TEXT` section is the foundation of your application. The quality of the agent's output depends directly on the detail and structure of this input.
+
+**Goal:** Provide a detailed evidence record that supports strategy analysis, document generation, and competency mapping.
+
+**Best Source Documents:** Build each role from evidence, not just memory. Use:
+1. Employment contracts and official job descriptions.
+2. Performance reviews (PER/ePAS) and progress reports.
+3. Quantifiable project reports, donor submissions, and financial records.
+4. Field mission reports and training logs.
+
+**Recommended Structure per Role:**
+1. **Header:** `Job Title | Organization | Dates | Contract Type`
+2. **Key Achievements (3-6 bullets):** Focus on outcomes with numbers using the "action + scope + result + metric" structure.
+3. **Duties:** Include operational details, tools used, coordination scope, compliance tasks, and specific stakeholder names.
+4. **Currency:** Use USD as the primary currency; add local currency in parentheses if needed.
+
+**Quality Rules:**
+- Trace facts to source documents.
+- Quantify results whenever possible (USD, counts, %, timelines).
+- Do not merge distinct roles unless they were formally one position.
+- Provide as much detail as possible; the agent will synthesize it for you.
+
 ### 2. Run the orchestrator
 
-Invoke the `apex-orchestrator-report` skill. It will:
+You can run the full workflow by prompting the agent with clear instructions.
+
+**Example Prompt (Full Run):**
+> "Please run the UN Job Application Helper on my data.
+> 1. Read the file `inputs/application_context.md` in this repository.
+> 2. Use `apex-orchestrator-report` to generate the multi‑phase strategy report (phases 1–7).
+> 3. Once that’s done, I want Option 1, 2, 3, 4, and 5 from the Phase 8 menu: an Admin Profile. Use `apex-generate-admin-profile` to create a headline and one paragraph per job, and apply `capel-fit` to enforce the character limits from my context file."
+
+The `apex-orchestrator-report` skill will:
 1. Parse your context file
 2. Generate the strategy report (Phases 1–7)
 3. Present the Phase 8 menu
