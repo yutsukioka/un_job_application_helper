@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ JD Core Requirements"
   short_description: "Extract the 5–7 most critical requirements from the job description and note star weights."

@@ -111,7 +111,24 @@ The `USER_JOB_HISTORY_TEXT` section is the foundation of your application. The q
 - Do not merge distinct roles unless they were formally one position.
 - Provide as much detail as possible; the agent will synthesize it for you.
 
-### 2. Run the orchestrator
+### 2. Run the Term Extractor (prerequisite)
+
+Before running the orchestrator, populate the `TERM_EXTRACTOR` section of
+your context file. Use the `term_extractor` skill to analyse the job
+description and extract 5 high-priority terms with synonyms, star ratings,
+and resume-ready examples:
+
+> "Run `term_extractor` on the job description in my context file."
+
+**Please examine the extracted terms for your review, and make sure they
+sound reasonable for the JD. Then proceed to the next step. If you are not
+confident in the terms, do not include the `application_context.md` file
+and re-run extraction with adjusted inputs.**
+
+Once you are satisfied, paste the output into the `TERM_EXTRACTOR` section
+of `inputs/application_context.md` (or let the agent do it for you).
+
+### 3. Run the orchestrator
 
 You can run the full workflow by prompting the agent with clear instructions.
 
@@ -127,7 +144,7 @@ The `apex-orchestrator-report` skill will:
 3. Present the Phase 8 menu
 4. Generate documents based on your selection
 
-### 3. (Optional) CAPEL character fitting
+### 4. (Optional) CAPEL character fitting
 
 The `capel-fit` scripts enforce strict character limits for e-recruitment fields:
 

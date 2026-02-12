@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Output Lint"
   short_description: "Final compliance pass: single spaces, ASCII punctuation, no bullets/tabs, correct newline separation."

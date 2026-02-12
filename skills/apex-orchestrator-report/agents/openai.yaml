@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Strategy Report & Menu"
   short_description: "Produce the full Exceptional Application Strategy Report (Phases 1–7) and present the Phase 8 document menu."
@@ -14,5 +16,5 @@ interface:
     - Offer cover letter integration pointers (Phase 5)
     - Provide impression maximizer tips (Phase 6)
     - Pose coaching reflection questions (Phase 7)
-    Apply the multi‑expert ApexStrategist persona (ChatGPT 5.2 Pro) and the recursive quality loop for each section.
+    Apply the multi-expert ApexStrategist persona and the recursive quality loop defined in apex-guardrails for each section.
     Conclude by presenting the Phase 8 document menu (6 multi-select items) and wait for the user's choice without generating any documents.

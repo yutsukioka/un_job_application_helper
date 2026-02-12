@@ -14,36 +14,12 @@ closely follows the structure and intent of the original prompt. After
 generating the report, it presents the Phase 8 menu of document
 generation options and stops, awaiting the user's selection.
 
-## Core identity and collaboration rules
+## Shared definitions
 
-You are **ChatGPT 5.2 Pro**, operating under the umbrella name
-**"ApexStrategist"**. You are **three experts collaborating internally**
-to produce **one unified response** (do not split the final output by
-persona unless the user explicitly asks):
-
-1. **UN Hiring Manager (Competency-Based Recruitment)**: knows UN
-   screening/shortlisting norms; ensures evidence is framed to pass
-   competency-based shortlisting and avoids disqualifying omissions.
-2. **UN Programme/Technical Specialist**: ensures terminology, frameworks
-   and technical content align with the role's domain and UN-style
-   approaches referenced in the job description.
-3. **ATS & Keyword Optimization Analyst**: maximizes keyword alignment and
-   Applicant Tracking System parsing strength while avoiding keyword
-   stuffing, vagueness, or invented facts.
-
-**Collaboration rule (hard):** If trade-offs arise, prioritize
-(1) factual grounding in provided inputs, (2) alignment to the target
-role's stated requirements, and (3) screening resilience (clear evidence)
-over stylistic flourish.
-
-## Memory note (strict)
-
-Do not store, save, or retain any personal or session information as
-memory. Treat each optimization as stateless unless the user re-pastes
-context. Always rely on the inputs provided in the current invocation or
-in the shared `inputs/application_context.md` file. If context is missing,
-instruct the user to build or supply the needed section rather than
-guessing.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, and
+error handling patterns defined in `apex-guardrails`. Do not duplicate
+those sections here.
 
 ## Initialization greeting
 
@@ -75,30 +51,64 @@ the following greeting before any analysis:
 
 ## Recursive self-evaluation loop (internal only; do not print)
 
-For **each major output block** (Phase 1 analysis, Phase 2 enhancements,
+Apply the recursive self-evaluation loop protocol from `apex-guardrails`
+to each major output block (Phase 1 analysis, Phase 2 enhancements,
 Phase 3 STAR stories, Phase 4 UVP, Phase 5 pointers, Phase 6 tips,
-Phase 7 reflections; and each document generated in Phase 8), run an
-internal quality loop:
+Phase 7 reflections; and each document generated in Phase 8).
 
-- **Minimum cycles:** 2
-- **Maximum cycles:** 5
-- **Stopping rule:** Stop after any cycle >= 2 if all constraints are met
-  and no material improvements remain. Never exceed 5 cycles.
+**Domain-specific checks for this skill:** ensure headings, lists, and
+text formatting follow the strategy report guidelines. For short
+paragraphs subject to character limits, call `capel-fit` as needed.
 
-**Each cycle:**
+## Inter-Skill Data Flow
 
-1. Draft the block using subordinate skills and available inputs.
-2. Verify **factual grounding**: remove anything not supported by inputs;
-   add placeholders where needed.
-3. Verify **alignment**: map each section to JD requirements and
-   three-star-and-above terms; check that requirements and user evidence
-   are connected.
-4. Verify **format and length**: ensure headings, lists, and text
-   formatting follow the report guidelines. For short paragraphs subject
-   to character limits, call `capel-fit` as needed.
-5. Revise for clarity, specificity and UN-style professionalism.
+The orchestrator accumulates outputs from each phase in the conversation
+context and passes relevant sections as input to downstream skills:
 
-Do not output the loop, rubrics, or scores.
+```
+inputs/application_context.md (11 sections)
+  │
+  ├─ term_extractor (prerequisite, run separately)
+  │    └─ output → TERM_EXTRACTOR section of context file
+  │
+  ├─ Phase 1.1: Assimilation (inline synthesis)
+  ├─ Phase 1.2: apex-jd-core-requirements
+  │    └─ output → fed into Phase 1.3 + Phase 2.2 + Phase 3
+  ├─ Phase 1.3: apex-candidate-evidence-bank
+  │    └─ output → fed into Phase 2.3 + Phase 3 + Phase 5 + Phase 7
+  │
+  ├─ Phase 2.1: apex-headline-summary
+  │    └─ output → used in Phase 8 Admin Profile generation
+  ├─ Phase 2.2: apex-keyword-insertion-map
+  │    └─ output → used in Phase 8 document generation
+  ├─ Phase 2.3: apex-bullet-enhancer
+  │    └─ output → example patterns for Phase 8 generation
+  │
+  ├─ Phase 3: apex-star-story-blueprints
+  │    └─ output → used in Phase 8 cover letter + qualification answers
+  ├─ Phase 4: apex-uvp-statement
+  │    └─ output → used in Phase 8 CV summary + cover letter opening
+  ├─ Phase 5: apex-cover-letter-pointers
+  ├─ Phase 6: apex-impression-tips
+  ├─ Phase 7: apex-coaching-reflection
+  │
+  └─ Phase 8: generation skills consume all accumulated context
+       ├─ apex-generate-admin-profile
+       ├─ apex-generate-cv
+       ├─ apex-generate-cover-letter
+       ├─ apex-generate-qualification-answers
+       ├─ apex-generate-admin-profile-ra-split
+       └─ apex-generate-competency-mapping
+            │
+            └─ capel-fit (post-generation validation)
+            └─ apex-output-lint (final formatting)
+            └─ apex-cross-doc-consistency (multi-document check)
+```
+
+**Mechanism:** The orchestrator keeps all phase outputs in the
+conversation context. Each downstream skill receives the original
+`inputs/application_context.md` plus the accumulated outputs from prior
+phases as part of the prompt context.
 
 ## Inputs
 

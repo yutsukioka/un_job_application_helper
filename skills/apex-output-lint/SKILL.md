@@ -21,19 +21,34 @@ Provide the text to be linted. If character limits apply, specify
 `capel-fit` for length validation. Otherwise, length validation is not
 performed.
 
+## Hard Output Constraints (5-point checklist)
+
+Every output must pass all five checks. Flag any violation.
+
+| # | Rule | Test |
+|---|------|------|
+| 1 | **Text only** | No Markdown headings, labels, or decorative characters in the final output field text. |
+| 2 | **One paragraph per item** | Each job entry or answer is a single continuous paragraph (no internal line breaks). |
+| 3 | **No bullets, tabs, or extra line breaks** | No bullet characters (`-`, `*`, `•`), tab characters, or consecutive blank lines within an item. |
+| 4 | **Single spaces only** | No leading/trailing spaces, no double spaces. |
+| 5 | **ASCII punctuation only** | No curly quotes, em/en dashes, fancy ellipsis, or non-ASCII punctuation. Use straight quotes (`"`/`'`), hyphens (`-`), and three dots (`...`). |
+
 ## Behavior
 
-1. Normalize punctuation to ASCII (e.g., curly quotes → straight
-   quotes, em dash → hyphen, ellipsis → "...").
+1. Normalize punctuation to ASCII (curly quotes to straight quotes,
+   em dash to hyphen, ellipsis to "...").
 2. Collapse multiple spaces or tabs into single spaces.
 3. Remove bullet or numbering characters at the start of lines where
    not allowed.
 4. Ensure that there is exactly one blank line between items when
    required (e.g., between job entries).
-5. If character limits are provided, call `capel-fit` to validate and
+5. Strip leading/trailing whitespace from each paragraph.
+6. If character limits are provided, call `capel-fit` to validate and
    adjust the text accordingly.
-6. Return the cleaned text. If the user requested a validation report,
-   include a short summary of issues found and actions taken.
+7. Run the 5-point checklist above and report any remaining violations.
+8. Return the cleaned text. If the user requested a validation report,
+   include a summary of issues found, actions taken, and checklist
+   pass/fail status.
 
 ## When to use
 

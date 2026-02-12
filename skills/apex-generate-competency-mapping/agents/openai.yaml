@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Competency Mapping"
   short_description: "Map skills to roles with relevance scores and compute total experience and skill type for each skill."

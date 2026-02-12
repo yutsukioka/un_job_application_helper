@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Utility ▸ CAPEL Fit"
   short_description: "Normalize and fit text to a strict character limit using deterministic scripts."

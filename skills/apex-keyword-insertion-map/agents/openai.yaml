@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Keyword Insertion Map"
   short_description: "Identify 5–10 must‑use phrases and advise where to insert them in the Admin Profile."

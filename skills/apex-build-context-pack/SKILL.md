@@ -80,8 +80,33 @@ indicate that the user must supply it later.
    WORD_TARGET: <value or [PASTE HERE]>
    ```
 
-3. After writing the file, return a brief checklist summarizing which
-   sections were populated and which still contain placeholders.
+3. After writing the file, run the **Pre-flight Validation** below.
+
+## Pre-flight Validation
+
+Before any downstream skill consumes `inputs/application_context.md`,
+verify that all 11 required sections are populated (i.e., contain
+substantive text, not just `[PASTE HERE]`). Check each section and
+report status:
+
+| # | Section | Status |
+|---|---------|--------|
+| 1 | `USER_JOB_HISTORY_TEXT` | populated / missing |
+| 2 | `USER_ADMIN_PROFILE_TEXT` | populated / missing |
+| 3 | `JOB_DESCRIPTION_TEXT` | populated / missing |
+| 4 | `JOB_REQUIREMENT_TEXT` | populated / missing |
+| 5 | `JOB_QUALIFICATION_QUESTIONS` | populated / missing |
+| 6 | `TERM_EXTRACTOR` | populated / missing |
+| 7 | `SKILLS_TAXONOMY` | populated / missing |
+| 8 | `CHAR_LIMIT` | populated / missing |
+| 9 | `TARGET_LOW` | populated / missing |
+| 10 | `TARGET_HIGH` | populated / missing |
+| 11 | `WORD_TARGET` | populated / missing |
+
+If any section is missing, list it and recommend the user supply the
+data before proceeding. Do not allow the orchestrator to run with
+missing critical sections (`USER_JOB_HISTORY_TEXT`,
+`JOB_DESCRIPTION_TEXT`).
 
 ## When to use
 
