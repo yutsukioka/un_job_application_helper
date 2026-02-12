@@ -23,7 +23,7 @@ The agent operates in two stages:
 ## Architecture
 
 ```
-.agents/skills/           # 20 AI agent skills
+skills/                   # 20 AI agent skills
 ├── apex-orchestrator-report/   # Main orchestrator (Phases 1-8)
 ├── apex-guardrails/            # Non-negotiable quality constraints
 ├── apex-build-context-pack/    # Assembles inputs/application_context.md
@@ -93,15 +93,15 @@ Invoke the `apex-orchestrator-report` skill. It will:
 The `capel-fit` scripts enforce strict character limits for e-recruitment fields:
 
 ```bash
-python .agents/skills/capel-fit/scripts/normalize_text.py < input.txt
-python .agents/skills/capel-fit/scripts/charcount.py < input.txt
-python .agents/skills/capel-fit/scripts/fit_entry.py --limit 4000 --low 3600 --high 3950 < input.txt
+python skills/capel-fit/scripts/normalize_text.py < input.txt
+python skills/capel-fit/scripts/charcount.py < input.txt
+python skills/capel-fit/scripts/fit_entry.py --limit 4000 --low 3600 --high 3950 < input.txt
 ```
 
 ## Requirements
 
 - Python 3.9+ (for CAPEL scripts — standard library only, no external dependencies)
-- An AI agent runtime that supports the `.agents/skills/` convention
+- An AI agent runtime that supports the `skills/` convention (this repo is designed to live at `.agents/` in your project)
 
 ## Privacy
 
@@ -109,4 +109,4 @@ The `inputs/` directory is gitignored by default because it contains personal em
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE) for details.
+This project is licensed under the **Apache License 2.0** — see [LICENSE](LICENSE) for details.
