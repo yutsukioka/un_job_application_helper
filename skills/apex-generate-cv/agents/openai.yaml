@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate CV"
   short_description: "Create a full CV including header, summary, experience bullets, education and skills."

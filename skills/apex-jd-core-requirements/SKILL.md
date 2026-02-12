@@ -12,19 +12,10 @@ the most critical skills, experiences and qualifications. These
 requirements form the foundation for mapping evidence and tailoring
 application materials.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, and guiding principles defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -45,7 +36,7 @@ For each requirement, include:
 * **Requirement:** A concise phrasing of the requirement.
 * **Why it is core:** A brief explanation referencing where it appears
   in the JD (no long quotes).
-* **Star weight:** The star rating (e.g. ★★★★☆) if the term appears in
+* **Star weight:** The star rating (e.g. ★★★★) if the term appears in
   the term extractor; otherwise indicate “not starred / unknown”.
 
 ## Selection rules

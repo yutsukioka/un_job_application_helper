@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Qualification Answers"
   short_description: "Draft 1000‑character answers to each job qualification question using the two‑part format."

@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Coaching Reflection Prompts"
   short_description: "Pose 1–2 open‑ended questions to help the candidate reflect on motivations, values and cultural fit."

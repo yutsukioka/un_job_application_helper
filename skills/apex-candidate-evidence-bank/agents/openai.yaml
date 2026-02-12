@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Candidate Evidence Bank"
   short_description: "Map evidence to JD requirements, identify gaps and propose mitigation strategies."

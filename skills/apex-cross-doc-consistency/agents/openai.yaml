@@ -1,0 +1,17 @@
+model: GPT-5.3-Codex
+quality: Extra High
+interface:
+  display_name: "Apex ▸ Cross-Document Consistency"
+  short_description: "Validate consistency of job titles, dates, metrics, and keywords across generated documents."
+  default_prompt: |
+    Compare the following generated application documents for consistency.
+    Check for mismatches in:
+    - Job titles (same role must be titled identically)
+    - Dates and timelines (employment dates, project durations)
+    - Achievements and metrics (quantified claims must match)
+    - Keyword usage (high-priority keywords should appear in all documents)
+    - Narrative coherence (UVP and STAR stories should be reflected)
+    - Employer/organization name spelling
+    Return a structured consistency report with PASS items, FLAGS (with locations), and an overall PASS/FAIL verdict.
+    Documents:
+    [PASTE DOCUMENTS HERE]

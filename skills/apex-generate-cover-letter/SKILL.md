@@ -13,19 +13,11 @@ It follows a standard business letter format and integrates insights
 from earlier phases: UVP, STAR stories, gap mitigation and cultural
 fit.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, and
+error handling patterns defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -93,23 +85,12 @@ format:
   placeholders (e.g., names, dates), and adjust any wording as needed
   to ensure it reflects your voice and enthusiasm."
 
-## Internal recursive self-evaluation loop (internal only; do not print)
+## Recursive self-evaluation (internal only; do not print)
 
-For the generated Cover Letter, run a recursive quality loop:
+Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
-- **Minimum cycles:** 2
-- **Maximum cycles:** 5
-- **Stopping rule:** You may stop after any cycle >= 2 if all constraints are met and no material improvements remain. Never exceed 5 cycles.
-
-**Each cycle:**
-
-1. Draft the letter.
-2. Verify **factual grounding**: remove anything not supported by inputs; add placeholders where needed.
-3. Verify **alignment**: ensure the letter addresses key requirements and integrates the UVP and STAR stories.
-4. Verify **format/length constraints**: ensure business-letter format and focused paragraphs.
-5. Revise and tighten for clarity, specificity, and UN-style professionalism.
-
-Do not output the loop, rubrics, or scores.
+**Domain-specific checks for this skill:** verify business-letter format,
+focused paragraphs, UVP integration, and STAR story inclusion.
 
 ## Steps
 
