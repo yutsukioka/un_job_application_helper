@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Admin Profile (RA Split)"
   short_description: "Create an Admin Profile with separate Responsibilities and Achievements lines for each job."

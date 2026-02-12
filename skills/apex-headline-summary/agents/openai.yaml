@@ -1,0 +1,13 @@
+model: GPT-5.3-Codex
+quality: Extra High
+interface:
+  display_name: "Apex ▸ Headline / Summary"
+  short_description: "Generate a one-line role-targeted headline for the Admin Profile and CV summary."
+  default_prompt: |
+    Using inputs/application_context.md, generate a single headline for the candidate's Admin Profile and CV.
+    The headline should be 10-20 words, written as a noun phrase, and must:
+    - Name the candidate's primary professional domain.
+    - Reference the target role's key requirement or sector.
+    - Include at least one high-priority keyword from TERM_EXTRACTOR.
+    - Avoid generic language; be specific to this candidate and role.
+    Output as: Headline: <one-line summary>

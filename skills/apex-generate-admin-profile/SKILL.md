@@ -18,19 +18,11 @@ is condensed into a single paragraph that highlights duties and
 achievements, incorporates high‑priority keywords naturally and fits
 within specified character limits.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, and
+error handling patterns defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -106,23 +98,12 @@ contributing to a [X]% improvement in targeting accuracy.
   carefully, fill in any placeholders, and adjust any details to ensure
   it perfectly represents you."
 
-## Internal recursive self-evaluation loop (internal only; do not print)
+## Recursive self-evaluation (internal only; do not print)
 
-For the generated Admin Profile, run a recursive quality loop:
+Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
-- **Minimum cycles:** 2
-- **Maximum cycles:** 5
-- **Stopping rule:** You may stop after any cycle >= 2 if all constraints are met and no material improvements remain. Never exceed 5 cycles.
-
-**Each cycle:**
-
-1. Draft the profile entries.
-2. Verify **factual grounding**: remove anything not supported by inputs; add placeholders where needed.
-3. Verify **alignment**: ensure each section explicitly maps to JD requirements and three-star-and-above terms.
-4. Verify **format/length constraints**: ensure strict adherence to character limits and the "Job Title: duties..." format.
-5. Revise and tighten for clarity, specificity, and UN-style professionalism.
-
-Do not output the loop, rubrics, or scores.
+**Domain-specific checks for this skill:** verify character limits per
+entry and the "Job Title: duties..." format.
 
 ## Steps
 

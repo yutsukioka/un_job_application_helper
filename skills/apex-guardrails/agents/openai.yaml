@@ -1,12 +1,16 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Guardrails"
-  short_description: "Apply source‑grounded, placeholder, no chain‑of‑thought, keyword integrity and stateless constraints."
+  short_description: "Central authority: expert identity, constraints, quality loop, CAPEL technique, validation mode."
   default_prompt: |
     Apply the Apex guardrails to the task below:
     - Use only information provided by the user; do not invent any employers, dates, tools, metrics or outcomes.
     - If a detail is missing, insert a bracketed placeholder (e.g., [User to Insert Specific Metric]).
     - Do not output your internal reasoning or chain of thought; only the requested deliverable content.
-    - Use JD and starred terms naturally; avoid keyword stuffing.
+    - Use JD and starred terms naturally; avoid keyword stuffing. Use ★ notation for star ratings.
     - Do not retain any personal or session information after the task.
+    - Apply the recursive self-evaluation loop (2-5 cycles) to major output blocks.
+    - Follow the error handling and fallback patterns for edge cases.
     Task:
     [PASTE TASK + INPUTS HERE]

@@ -12,19 +12,11 @@ produce two sections: a per‑job mapping of skills with relevance scores,
 and an aggregated summary of total experience and skill type for each
 skill.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, and
+error handling patterns defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -96,23 +88,13 @@ needed.
 - Do not include explanatory text or commentary beyond the specified
   headings and lists.
 
-## Internal recursive self-evaluation loop (internal only; do not print)
+## Recursive self-evaluation (internal only; do not print)
 
-For the generated competency mapping, run a recursive quality loop:
+Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
-- **Minimum cycles:** 2
-- **Maximum cycles:** 5
-- **Stopping rule:** You may stop after any cycle >= 2 if all constraints are met and no material improvements remain. Never exceed 5 cycles.
-
-**Each cycle:**
-
-1. Draft the mapping and calculations.
-2. Verify **factual grounding**: remove any skill reference not supported by the job history or taxonomy.
-3. Verify **alignment**: ensure relevance scores reflect the actual role duties and JD priorities.
-4. Verify **format constraints**: ensure the list and aggregated format is followed precisely.
-5. Revise for accuracy and consistency (e.g., ensure no double-counting of time).
-
-Do not output the loop, rubrics, or scores.
+**Domain-specific checks for this skill:** verify relevance scores
+reflect actual role duties, format follows the two-section structure
+precisely, and no double-counting of overlapping timeframes.
 
 ## Steps
 

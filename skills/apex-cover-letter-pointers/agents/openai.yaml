@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Cover Letter Pointers"
   short_description: "Offer 2–3 strategic pointers on narrative theme, gap addressing, and complementing the CV/Admin Profile."

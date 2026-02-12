@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ UVP Statement"
   short_description: "Write a 1–2 sentence Unique Value Proposition aligning evidence to the job requirements."

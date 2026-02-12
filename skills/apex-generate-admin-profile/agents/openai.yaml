@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Admin Profile"
   short_description: "Create a headline and one-paragraph-per-job Admin Profile with strict character limits."

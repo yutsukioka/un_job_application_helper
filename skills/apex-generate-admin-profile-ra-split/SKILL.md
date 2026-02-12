@@ -17,19 +17,11 @@ in which each job entry is divided into separate lines for
 responsibilities and achievements, while maintaining the
 no‑invention rule and respecting character limits for each line.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, and
+error handling patterns defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -52,11 +44,11 @@ For each job, output exactly three lines:
 1. **Job Title:** `<Role Title> — <Organization> (<Dates>)` (include
    organization and dates only if provided; otherwise use the role
    title alone).
-2. **Responsibilities:** A single sentence describing the key duties and
-   scope of the role. Integrate critical keywords where relevant. Ensure
+2. **Responsibilities:** A concise narrative written as a single continuous
+   line (no line breaks) describing the key duties and scope of the role.Integrate critical keywords where relevant. Ensure
    this line meets the character limits.
-3. **Achievements:** A single sentence detailing the main
-   accomplishments and results, using quantifiable outcomes where
+3. **Achievements:** A concise narrative written as a single continuous
+   line (no line breaks) detailing the main accomplishments and results, using quantifiable outcomes where
    possible and placeholders otherwise. Also respect the character
    limits.
 
@@ -85,23 +77,13 @@ Insert exactly one blank line between each job entry for readability.
   any placeholders, and adjust any details to ensure accuracy and
   completeness."
 
-## Internal recursive self-evaluation loop (internal only; do not print)
+## Recursive self-evaluation (internal only; do not print)
 
-For the generated split profile, run a recursive quality loop:
+Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
-- **Minimum cycles:** 2
-- **Maximum cycles:** 5
-- **Stopping rule:** You may stop after any cycle >= 2 if all constraints are met and no material improvements remain. Never exceed 5 cycles.
-
-**Each cycle:**
-
-1. Draft the split profile entries.
-2. Verify **factual grounding**: remove anything not supported by inputs; add placeholders where needed.
-3. Verify **alignment**: ensure each section explicitly maps to JD requirements and three-star-and-above terms.
-4. Verify **format/length constraints**: ensure strict adherence to character limits for both Responsibilities and Achievements fields.
-5. Revise and tighten for clarity, specificity, and UN-style professionalism.
-
-Do not output the loop, rubrics, or scores.
+**Domain-specific checks for this skill:** verify character limits for
+both Responsibilities and Achievements lines and the three-line format
+per job entry.
 
 ## Steps
 

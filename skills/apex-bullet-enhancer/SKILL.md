@@ -11,21 +11,12 @@ This skill rewrites a handful of existing bullet points from the
 `USER_JOB_HISTORY_TEXT` into stronger, result‑oriented versions.
 Each original bullet is paired with its enhanced version, illustrating
 how to incorporate action verbs, quantifiable metrics (or placeholders)
-and ★★☆ or ★★★ keywords from the `TERM_EXTRACTOR`.
+and ★★ or ★★★ keywords from the `TERM_EXTRACTOR`.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, and guiding principles defined in `apex-guardrails`.
 
 ## Inputs
 
@@ -48,7 +39,7 @@ entries. For each entry:
 1. **Original:** the original bullet text excerpt from the user’s
    history.
 2. **Enhanced:** the rewritten version, using strong verbs and
-   quantifiable outcomes. Include at least one ★★☆ or ★★★ keyword. If
+   quantifiable outcomes. Include at least one ★★ or ★★★ keyword. If
    the original bullet lacks specific metrics, insert a placeholder such
    as `[User to Insert Metric]`.
 
@@ -74,7 +65,7 @@ compliance rate and strengthened partnerships with [Donor Name]."
 ## Steps
 
 1. Parse the job history to identify 2–3 bullets or sentences that map
-   to high‑priority keywords (★★☆ or ★★★).
+   to high‑priority keywords (★★ or ★★★).
 2. For each selected bullet, draft an enhanced version with:
    - A strong action verb
    - A quantifiable outcome (use placeholder if needed)

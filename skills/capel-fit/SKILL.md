@@ -7,10 +7,22 @@ description: Normalize and fit text to a strict character limit and target band 
 
 ## Purpose
 
-This skill provides deterministic character counting and automatic
-adjustment utilities to ensure that text fits within specified
-character limits (with spaces) while meeting target bands. It is
-script‑backed to guarantee precise counts and reproducible behavior.
+This skill provides **deterministic, post-generation** character counting
+and adjustment utilities. It is the second half of the CAPEL length
+control system:
+
+1. **Internal CAPEL (LLM-side):** During drafting, the LLM uses a word
+   budget countdown to approximate the target length. This technique is
+   defined in `apex-guardrails` under "Internal CAPEL Generation
+   Technique."
+2. **capel-fit scripts (this skill):** After the LLM finishes drafting,
+   these Python scripts validate the exact character count and apply
+   deterministic compression or expansion to fit the text within the
+   target band. Scripts guarantee precise counts and reproducible
+   behavior.
+
+Generation skills should: *"Draft using internal CAPEL word budget, then
+validate with `capel-fit` scripts."*
 
 ## Inputs
 

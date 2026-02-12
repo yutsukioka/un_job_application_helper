@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Cover Letter"
   short_description: "Draft a tailored cover letter using UVP, STAR examples, and gap mitigation, formatted as a business letter."

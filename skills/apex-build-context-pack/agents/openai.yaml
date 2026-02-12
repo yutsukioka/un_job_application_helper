@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Build Context Pack"
   short_description: "Create/refresh inputs/application_context.md (job history, JD, terms, skills taxonomy, limits)."

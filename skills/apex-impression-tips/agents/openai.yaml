@@ -1,3 +1,5 @@
+model: GPT-5.3-Codex
+quality: Extra High
 interface:
   display_name: "Apex ▸ Impression Maximizer Tips"
   short_description: "Offer tone/language recommendations and final review advice to make application materials stand out."

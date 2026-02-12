@@ -12,19 +12,10 @@ on the analysis from earlier phases. Rather than drafting the letter,
 it offers high‑level recommendations on narrative theme, gap
 addressing, and complementing the CV and Admin Profile.
 
-## Expert lens (apply internally; do not print)
+## Shared definitions
 
-When generating this output, apply the three-expert perspective
-defined in the orchestrator:
-- **UN Hiring Manager**: Is the content framed to pass
-  competency-based screening?
-- **Technical Specialist**: Does terminology align with the role's
-  domain and UN-style frameworks?
-- **ATS Analyst**: Are keywords integrated naturally for system
-  parsing?
-
-Prioritize (1) factual grounding, (2) role alignment,
-(3) screening resilience.
+Apply the expert lens, collaboration rules, guardrails, quality loop
+protocol, and guiding principles defined in `apex-guardrails`.
 
 ## Inputs
 

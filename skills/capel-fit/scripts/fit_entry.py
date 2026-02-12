@@ -156,10 +156,22 @@ def auto_adjust(text: str, limits: Limits, max_passes: int = 5) -> Tuple[str, st
             needed = limits.target_low - len(t)
             if needed <= 0:
                 return t, "; ".join(notes)
-            addon = " [User to Insert Specific Metric]"
-            if len(addon) <= needed:
-                t = normalize_text(t + addon)
-                notes.append("added_placeholder_metric")
+            expansion_templates = [
+                " [User to Insert Specific Metric]",
+                " [date]",
+                " [tool used]",
+                " [scope detail]",
+                " [User to Insert Metric]",
+            ]
+            expanded = False
+            for tmpl in expansion_templates:
+                if len(t) >= limits.target_low:
+                    break
+                if tmpl not in t and len(tmpl) <= (limits.target_low - len(t)):
+                    t = normalize_text(t + tmpl)
+                    expanded = True
+            if expanded:
+                notes.append("added_placeholder_expansion")
             else:
                 notes.append("too_short_report_only")
                 return t, "; ".join(notes)
