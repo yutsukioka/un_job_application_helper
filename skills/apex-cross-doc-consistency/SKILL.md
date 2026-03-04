@@ -2,7 +2,7 @@
 name: apex-cross-doc-consistency
 description: >-
   Validate consistency across multiple generated application documents
-  (Admin Profile, CV, Cover Letter, Qualification Answers, etc.). Flag
+  (Admin Profile, CV, Cover Letter, Qualification Answers, IOM RA Split, etc.). Flag
   mismatches in job titles, dates, achievements, keyword usage, and
   narrative claims. Use this skill after generating two or more Phase 8
   documents to ensure they tell a cohesive story.
@@ -20,12 +20,13 @@ structured consistency report with actionable flags.
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, and guiding principles defined in `apex-guardrails`.
 
+It does not rewrite documents; it flags issues with specific locations and suggested fixes.
+
 ## Inputs
 
 Required:
 
-- At least two generated documents from Phase 8 (e.g., Admin Profile
-  and CV, or CV and Cover Letter).
+- At least two generated documents from Phase 8 (any combination of Option 1–6).
 
 Optional:
 
@@ -52,6 +53,7 @@ Optional:
    the generated documents. Flag missing narrative threads.
 6. **Employer and organization names:** Verify spelling and naming
    consistency across documents.
+7. **Format compliance (only if strict-field outputs included):** If Option 1 or Option 4 outputs are included, flag bullets/line breaks/curly quotes that violate strict paste rules.
 
 ## Output format
 
@@ -73,7 +75,7 @@ PASS / FAIL (with count of flags)
 
 ## Rules
 
-- Do not modify the documents; only report findings.
+- Do not edit or rewrite the documents; only report findings.
 - Reference specific locations in each document when flagging issues.
 - Distinguish between critical flags (factual mismatches) and minor
   flags (stylistic differences).

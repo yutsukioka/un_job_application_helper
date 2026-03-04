@@ -2,9 +2,15 @@ model: GPT-5.3-Codex
 quality: Extra High
 interface:
   display_name: "Apex ▸ UVP Statement"
-  short_description: "Write a 1–2 sentence Unique Value Proposition aligning evidence to the job requirements."
+  short_description: "Write a concise 1–2 sentence UVP aligned to JD needs, evidence, and UN-style language."
   default_prompt: |
-    Using inputs/application_context.md, craft a UVP statement.
-    Identify the strongest matches between the candidate’s experience and the job’s critical needs, then write a confident 1–2 sentence statement that captures these matches.
-    Use JD language naturally; do not stuff keywords. Insert placeholders if key metrics or specifics are missing. Output as:
-    UVP: <statement>
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    write a UVP statement (1–2 sentences) that:
+    - Aligns the candidate’s strongest evidence (USER_JOB_HISTORY_TEXT)
+      to the role’s core requirements (JD/requirements).
+    - Uses JD language and at least one high-priority TERM_EXTRACTOR
+      keyword naturally (no stuffing).
+    - Reflects UN-style professionalism; use placeholders for missing metrics/scope.
+
+    Output exactly:
+    UVP: <1–2 sentence statement>

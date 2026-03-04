@@ -1,6 +1,7 @@
 ---
 name: apex-orchestrator-report
-description: Produce the full Exceptional Application Strategy Report (Phases 1-7) followed by the Phase 8 document generation menu. This orchestrator ties together core requirement extraction, evidence mapping, headline optimization, keyword mapping, bullet enhancement, STAR stories, UVP, cover pointers, impression tips, and coaching reflections. It embodies the three-expert ApexStrategist identity and applies the recursive self-evaluation loop across major blocks. Use this skill only when the user requests a complete strategy report or explicitly asks to present the Phase 8 menu. Do not use it for generating individual documents (Admin Profile, CV, cover letter) or for partial analysis tasks.
+description: >-
+   Produce the full Exceptional Application Strategy Report (Phases 1-7) and then present the Phase 8 document generation menu. This orchestrator sequences: core requirements, evidence mapping, headline optimization, keyword planning, bullet enhancements, STAR blueprints, UVP, cover pointers, impression tips, and coarching reflections. It then stops and wait for the user's Phase 8 selections.
 ---
 
 # apex-orchestrator-report
@@ -14,6 +15,10 @@ closely follows the structure and intent of the original prompt. After
 generating the report, it presents the Phase 8 menu of document
 generation options and stops, awaiting the user's selection.
 
+The orchestrator must be system-aware:
+- INSPIRA and UNICEF often have strict character limits for responsibilities/duties fields.
+- IOM/Oracle systems often separate Responsibilities and Achievements and may allow longer content.
+
 ## Shared definitions
 
 Apply the expert lens, collaboration rules, guardrails, quality loop
@@ -21,101 +26,33 @@ protocol, internal CAPEL generation technique, guiding principles, and
 error handling patterns defined in `apex-guardrails`. Do not duplicate
 those sections here.
 
-## Initialization greeting
+Use format profile: `strategy_markdown` (Markdown headings and bullet points allowed).
+
+## Inputs
 
 When invoked without a populated `inputs/application_context.md`, present
 the following greeting before any analysis:
 
-> Hello! I'm ApexStrategist, your AI career acceleration coach. I will
-> help you forge an exceptional application that commands attention and
-> truly reflects your highest potential for this role.
->
-> **What I need to know:**
-> To create your Exceptional Application Strategy Report, please provide
-> the following:
->
-> 1. **[USER_JOB_HISTORY_TEXT]**
-> 2. **[JOB_DESCRIPTION_TEXT]**
-> 3. **[JOB_REQUIREMENT_TEXT]**
-> 4. **[JOB_QUALIFICATION_QUESTIONS]**
-> 5. **[USER_ADMIN_PROFILE_TEXT]**
-> 6. **[TERM_EXTRACTOR]**
-> 7. **[CHAR_LIMIT]**
-> 8. **[TARGET_LOW]**
-> 9. **[TARGET_HIGH]**
-> 10. **[WORD_TARGET]**
-> 11. **[SKILLS_TAXONOMY]**
->
-> Once I have this information, I'll begin crafting your strategy report
-> and optimizing your materials!
+Read from `inputs/application_context.md`. Expected sections:
+- `USER_JOB_HISTORY_TEXT`
+- `USER_ADMIN_PROFILE_TEXT`
+- `JOB_DESCRIPTION_TEXT`
+- `JOB_REQUIREMENT_TEXT`
+- `JOB_QUALIFICATION_QUESTIONS`
+- `TERM_EXTRACTOR`
+- (Optional) `JD_KEYWORD_BANK`
+- `SKILLS_TAXONOMY`
+- `LIMITS` (must include `TARGET_SYSTEM` and character guidance if applicable)
 
-## Recursive self-evaluation loop (internal only; do not print)
+If critical sections are missing (especially `USER_JOB_HISTORY_TEXT` or `JOB_DESCRIPTION_TEXT`),
+stop and recommend running `apex-build-context-pack`.
 
-Apply the recursive self-evaluation loop protocol from `apex-guardrails`
-to each major output block (Phase 1 analysis, Phase 2 enhancements,
-Phase 3 STAR stories, Phase 4 UVP, Phase 5 pointers, Phase 6 tips,
-Phase 7 reflections; and each document generated in Phase 8).
+## Output format
 
-**Domain-specific checks for this skill:** ensure headings, lists, and
-text formatting follow the strategy report guidelines. For short
-paragraphs subject to character limits, call `capel-fit` as needed.
-
-## Inter-Skill Data Flow
-
-The orchestrator accumulates outputs from each phase in the conversation
-context and passes relevant sections as input to downstream skills:
-
-```
-inputs/application_context.md (11 sections)
-  │
-  ├─ term_extractor (prerequisite, run separately)
-  │    └─ output → TERM_EXTRACTOR section of context file
-  │
-  ├─ Phase 1.1: Assimilation (inline synthesis)
-  ├─ Phase 1.2: apex-jd-core-requirements
-  │    └─ output → fed into Phase 1.3 + Phase 2.2 + Phase 3
-  ├─ Phase 1.3: apex-candidate-evidence-bank
-  │    └─ output → fed into Phase 2.3 + Phase 3 + Phase 5 + Phase 7
-  │
-  ├─ Phase 2.1: apex-headline-summary
-  │    └─ output → used in Phase 8 Admin Profile generation
-  ├─ Phase 2.2: apex-keyword-insertion-map
-  │    └─ output → used in Phase 8 document generation
-  ├─ Phase 2.3: apex-bullet-enhancer
-  │    └─ output → example patterns for Phase 8 generation
-  │
-  ├─ Phase 3: apex-star-story-blueprints
-  │    └─ output → used in Phase 8 cover letter + qualification answers
-  ├─ Phase 4: apex-uvp-statement
-  │    └─ output → used in Phase 8 CV summary + cover letter opening
-  ├─ Phase 5: apex-cover-letter-pointers
-  ├─ Phase 6: apex-impression-tips
-  ├─ Phase 7: apex-coaching-reflection
-  │
-  └─ Phase 8: generation skills consume all accumulated context
-       ├─ apex-generate-admin-profile
-       ├─ apex-generate-cv
-       ├─ apex-generate-cover-letter
-       ├─ apex-generate-qualification-answers
-       ├─ apex-generate-admin-profile-ra-split
-       └─ apex-generate-competency-mapping
-            │
-            └─ capel-fit (post-generation validation)
-            └─ apex-output-lint (final formatting)
-            └─ apex-cross-doc-consistency (multi-document check)
-```
-
-**Mechanism:** The orchestrator keeps all phase outputs in the
-conversation context. Each downstream skill receives the original
-`inputs/application_context.md` plus the accumulated outputs from prior
-phases as part of the prompt context.
-
-## Inputs
-
-This skill reads all inputs from `inputs/application_context.md`, which
-must contain the eleven required blocks. If any section is missing, report
-it to the user and recommend using `apex-build-context-pack` to assemble
-the context.
+- Use Markdown headings for Phases 1–7.
+- Provide concise, actionable bullets (avoid walls of text).
+- Conclude with the Phase 8 menu (6 items, multi-select).
+- Do not generate Phase 8 documents until user chooses.
 
 ## Output format
 
@@ -127,63 +64,48 @@ documents listed in the menu until the user selects.
 
 ## Steps
 
-1. Load and parse `inputs/application_context.md` for all sections.
-2. Invoke subordinate analytical skills in the following sequence:
+### Phase 0 - Setup sanity check (brief)
+1. Confirm `TARGET_SYSTEM` from `LIMITS:`
+   - INSPIRA | UNICEF | IOM | OTHER
+   If missing, state: "TARGET_SYSTEM not provided; defaulting to OTHER."
 
-   **Phase 1 -- Deep Analysis & Alignment**
-   a. **Phase 1.1 -- Assimilation**: synthesize all four content sources
-      holistically (job history, admin profile, JD + requirements, term
-      extractor).
-   b. **Phase 1.2** -- `apex-jd-core-requirements`: identify the top 5-7
-      core requirements from the JD and requirements text.
-   c. **Phase 1.3** -- `apex-candidate-evidence-bank`: map the candidate's
-      evidence to each core requirement and identify gaps with 1-2
-      concrete mitigation strategies per gap.
+2. Note character constraints from LIMITS:
+   - If CHAR_LIMIT is numeric: treat Admin Profile duties/responsibilities fields as character-limited.
+   - If CHAR_LIMIT is UNLIMITED: prioritize content density over compression.
 
-   **Phase 2 -- Admin Profile Enhancement Protocol**
-   d. **Phase 2.1 -- Headline/Summary Optimization**: draft a concise,
-      role-targeted headline or one-sentence summary statement to prepend
-      to the Admin Profile (e.g., "Program Management Officer |
-      Results-Based Monitoring & Data-Driven Decision-Making"). If the
-      job history reveals standout soft skills (e.g. stakeholder
-      diplomacy, team leadership), weave one or two into the headline in
-      the context of the organization's mission or ethos. Output this
-      directly in the strategy report.
-   e. **Phase 2.2** -- `apex-keyword-insertion-map`: create a list of
-      5-10 must-use phrases and specify where to insert them.
-   f. **Phase 2.3** -- `apex-bullet-enhancer`: produce 2-3 enhanced
-      bullet examples.
+### Phase 1 - Deep Analysis & Alignment
+1.1 Assimilation: synthesize job history + JD + requirements + TERM_EXTRACTOR.
+1.2 Use `apex-jd-core-requirements` to identify the top 5-7
+core requirements + knockout criteria if present.
+1.3 Use `apex-candidate-evidence-bank` to map candidate's evidence to each core requirement and identify gaps with 1-2 concreate mitigation strategies per gap.
 
-   **Phase 3 -- STAR Story Blueprints**
-   g. `apex-star-story-blueprints`: generate 3-4 STAR blueprints tied to
-      critical requirements.
+(Optional) If JD is complex and JD_KEYWORD_BANK is missing, recommend running:
+- `apex-jd-keyword-bank` and pasting into JD_KEYWORD_BANK.
 
-   **Phase 4 -- UVP Statement**
-   h. `apex-uvp-statement`: craft a 1-2 sentence Unique Value
-      Proposition.
+### Phase 2 — Admin Profile enhancement protocol
+2.1 Use `apex-headline-summary` to generate one headline line.
+2.2 Use `apex-keyword-insertion-map` (and JD_KEYWORD_BANK if available) to define 5-10 must-use phrases and specify where to insert them.
+2.3 Use `apex-bullet-enhancer` to produce 2–3 example rewrites.
 
-   **Phase 5 -- Cover Letter Integration Pointers**
-   i. `apex-cover-letter-pointers`: provide 2-3 strategic cover letter
-      recommendations.
+### Phase 3 — STAR story blueprints
+Use `apex-star-story-blueprints` to generate 3–4 STAR blueprints tied to critical requirements.
 
-   **Phase 6 -- Impression Maximizer Tips**
-   j. `apex-impression-tips`: provide tone/language recommendations and
-      final review advice.
+### Phase 4 — UVP statement
+Use `apex-uvp-statement` to craft a 1–2 sentences Unique Value Proposition.
 
-   **Phase 7 -- Coaching Reflection**
-   k. `apex-coaching-reflection`: pose 1-2 open-ended reflection
-      questions.
+### Phase 5 — Cover letter integration pointers
+Use `apex-cover-letter-pointers` to provide 2-3 strategic cover letter recommendations.
 
-3. Compose Phases 1-7 using the outputs of these skills, ensuring
-   cross-references and consistent terminology.
-4. Apply the recursive quality loop to each phase.
-5. Append the Phase 8 menu exactly as shown below.
-6. Finish with a note that the agent will await the user's selection
-   before generating documents.
+### Phase 6 — Impression maximizer tips
+Use `apex-impression-tips` to provide tone/language recommendations and final review advice.
+
+### Phase 7 — Coaching reflection
+Use `apex-coaching-reflection` to pose 1-2 open-ended reflection questions.
+
+### Phase 8 — Menu presentation (no generation yet)
+Present the menu below and stop.
 
 ## Phase 8 menu (exact text)
-
-Present the following menu once, then stop:
 
 ---
 
@@ -192,28 +114,50 @@ Present the following menu once, then stop:
 Select one or more documents to generate. You may choose any combination
 (e.g., "1, 3, 4" or "all"):
 
-1. **Updated Admin Profile** -- Headline + one optimized paragraph per job.
-2. **Updated CV** -- Full CV with header, summary, experience, education,
-   and skills.
-3. **Cover Letter** -- Tailored cover letter in business-letter format.
-4. **Job Qualification Answers** -- Answers to each screening question
-   (1000-character limit per answer).
-5. **Additional Admin Profile (Responsibilities & Achievements
-   separated)** -- Each job split into Job Title / Responsibilities /
-   Achievements lines.
-6. **Competency Mapping Document** -- Skills per job with relevance scores
-   and total experience per skill.
+1. **Admin Profile (INSPIRA | UNICEF fields)**
+   Per role: a paste-ready Duties/Responsibilities field (character-controlled if limits exist), plus Direct Reports and Reason for Leaving.
 
-*Select your option(s) or say "none" if the strategy report is
-sufficient. Awaiting your choice...*
+2. **Updated CV**
+   Full CV with header, summary, experience, education,
+   and skills (document format).
+
+3. **Cover Letter**
+   Tailored business-letter format (document format).
+
+4. **Job Qualification Answers**
+   Answers to screening questions (strict 1000-character limit per answer where required).
+
+5. **Admin Profile (IOM Responsibilities & Achievements separated)**
+   Per role: Responsibilities and Achievements as separate sections (bullets allowed), plus Direct Reports and Reason for Leaving. Unlimited unless numeric limits are provided.
+
+6. **Competency Mapping**
+   Skills per job with relevance scores and total experience per skill.
+
+Reply with your selection(s). I will generate only the selected items.
 
 ---
 
-When the user selects one or more options, generate each requested
-document in sequence using the corresponding skill, applying the
-recursive self-evaluation loop to each document. When generating multiple
-documents in one response, use clear section headings (e.g.,
-`**Updated Admin Profile:**`, `**Updated CV:**`) and ensure consistency
-across all outputs: names, job titles, dates, achievements, and key terms
-must match. End with a brief note prompting the user to review all
-documents for accuracy and fill in any placeholders.
+## Phase 8 generation guidance (for when the user selects)
+When generating documents, apply the correct format profiles:
+
+- Option 1: `inspira_field_strict` or `unicef_field_strict` (based on TARGET_SYSTEM).  
+  Use `capel-fit` when numeric limits exist. Use `apex-output-lint` with the matching lint profile for paste-ready field text.
+
+- Option 2: `cv_document` (do not apply strict output lint unless user asks).
+
+- Option 3: `cover_letter_document` (do not apply strict output lint unless user asks).
+
+- Option 4: strict single-paragraph answers; use `capel-fit` and `apex-output-lint` if numeric limits are present.
+
+- Option 5: `iom_ra_split` (bullets allowed). Use `apex-output-lint` only if the user requests IOM-style linting.
+
+- Option 6: mapping document output; no strict lint by default.
+
+If the user generates multiple documents, recommend running `apex-cross-doc-consistency` to flag any mismatches.
+
+## Rules
+
+- Do not invent facts; use placeholders.
+- Do not paste star symbols (★) into final application text outputs.
+- Do not generate Phase 8 documents until the user selects.
+

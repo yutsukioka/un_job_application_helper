@@ -2,12 +2,27 @@ model: GPT-5.3-Codex
 quality: Extra High
 interface:
   display_name: "Apex ▸ Keyword Insertion Map"
-  short_description: "Identify 5–10 must‑use phrases and advise where to insert them in the Admin Profile."
+  short_description: "Identify must-use phrases and specify where to place them in Admin Profile entries (ATS-safe, no stuffing)."
   default_prompt: |
-    Using inputs/application_context.md, produce 5–10 critical phrases that should appear in the Admin Profile.
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    produce a keyword/phrase insertion map for Admin Profile writing.
+
+    Sources:
+    - TERM_EXTRACTOR (primary; starred terms)
+    - JOB_DESCRIPTION_TEXT / JOB_REQUIREMENT_TEXT (role language)
+    - If available, the JD Keyword Bank output (apex-jd-keyword-bank)
+
+    Output:
+    ## Must-Use Phrases (5–10)
     For each phrase include:
-    - Phrase: exact wording.
-    - Why: why this phrase is important (based on JD or star rating).
-    - Where to place: which job entry and where within the paragraph.
-    - Natural insertion suggestion: a short sentence fragment showing natural integration.
-    Avoid near‑duplicate phrases and choose high‑value keywords from TERM_EXTRACTOR and JD. Do not rewrite the full Admin Profile.
+    - Phrase: exact wording to use
+    - Why: JD-grounded rationale and/or star weight
+    - Where to place: which role(s) in the Admin Profile and where
+    within that role text (opening clause / mid-sentence / closing clause)
+    - Natural insertion suggestion: a short fragment showing how to
+    integrate it naturally (not a full rewrite)
+
+    Constraints:
+    - Avoid near-duplicates and obvious keyword stuffing.
+    - Prefer phrases that align to TARGET_SYSTEM field style
+    (INSPIRA/UNICEF: paragraph, ASCII-safe; IOM_RA: headings/bullets allowed).

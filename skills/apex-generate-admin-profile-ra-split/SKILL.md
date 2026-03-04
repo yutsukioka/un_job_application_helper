@@ -1,27 +1,28 @@
 ---
 name: apex-generate-admin-profile-ra-split
 description: >-
-  Generate an alternate Admin Profile where each job entry is split into three
-  lines: Job Title, Responsibilities, and Achievements. Use this skill only
-  when the user selects Option 5 of Phase 8 or explicitly asks for a split
-  responsibilities/achievements profile. Do not generate CVs or other documents
-  in this skill.
+  Generate IOM/Oracle Recruiting Cloud-style employment-record content where each role is split into Responsibilities and Achievements sections with bullets point aloowed, plus Direct Reports and Reason for Leaving. Option 5 of Phase 8.
 ---
 
 # apex-generate-admin-profile-ra-split
 
 ## Purpose
 
-This skill produces an alternate version of the Admin Profile
-in which each job entry is divided into separate lines for
-responsibilities and achievements, while maintaining the
-no‑invention rule and respecting character limits for each line.
+This skill produces IOM/Oracle Recruiting Cloud-style role entries where Responsibilities and Achievements
+are entered separately. The output may use headings and hyphen bullets for skimmability.
+
+Core intent:
+- Responsibilities = baseline mandate (“what was required”)
+- Achievements = impact (“what changed because of your actions”), using condensed CAR/STAR bullets
+- Integrate JD language and high-priority terms naturally without keyword stuffing
+- Include Direct Reports and Reason for Leaving per role
 
 ## Shared definitions
 
-Apply the expert lens, collaboration rules, guardrails, quality loop
-protocol, internal CAPEL generation technique, guiding principles, and
-error handling patterns defined in `apex-guardrails`.
+Apply the multi-expert lens, collaboration rules, guardrails, quality loop
+protocol, internal CAPEL generation technique, guiding principles, Output Format Profiles, and error handling patterns defined in `apex-guardrails`.
+
+Use format profile: `iom_ra_split` (headings allowed, hyphen bullets allowed).
 
 ## Inputs
 
@@ -34,67 +35,80 @@ Required:
 Optional:
 
 - `TERM_EXTRACTOR` and keyword insertion guidance.
-- Character limits: `CHAR_LIMIT`, `TARGET_LOW`, `TARGET_HIGH`,
-  `WORD_TARGET` for per‑line CAPEL management.
+- `JD_KEYWORD_BANK`
+- `apex-keyword-insertion-map` output
+- `apex-bullet-enhancer` output
+- `apex-star-story-blueprints` output (to seed achievements)
+- LIMITS (if present; may include numeric limits, but if not present or unlimited; no need to apply character limitation.)
 
 ## Output format
 
-For each job, output exactly three lines:
+For each job, (newest to oldest unless user specifies), output exactly four lines:
 
-1. **Job Title:** `<Role Title> — <Organization> (<Dates>)` (include
-   organization and dates only if provided; otherwise use the role
-   title alone).
-2. **Responsibilities:** A concise narrative written as a single continuous
-   line (no line breaks) describing the key duties and scope of the role.Integrate critical keywords where relevant. Ensure
-   this line meets the character limits.
-3. **Achievements:** A concise narrative written as a single continuous
-   line (no line breaks) detailing the main accomplishments and results, using quantifiable outcomes where
-   possible and placeholders otherwise. Also respect the character
-   limits.
+1. **ROLE:** <Job Title> — <Organization> — <Dates> (use placeholders if missing)
+2. **DIRECT_REPORTS:** <short line; number + type if known; otherwise placeholder>
 
-Insert exactly one blank line between each job entry for readability.
+3. **RESPONSIBILITIES:**
+- <List all distinct responsibilities. Use as many bullets as necessary to be comprehensive, but strictly avoid redundancy. Combine overlapping tasks.>
+
+4. **ACHIEVEMENTS:**
+- <List all distinct achievements. Include as many as relevant, ensuring each highlights unique impact or value without repeating information.>
+
+5. **REASON_FOR_LEAVING:** <short standard phrase OR safe options with "(Select one)">
+
+Insert exactly one blank line between roles.
+
+Formatting rules:
+- Use hyphen bullets only: "- "
+- Avoid fancy bullets, emojis, tabs, and smart quotes.
+- Keep each bullet ideally 1 line; max 2 lines.
+- Prioritize uniqueness: Every bullet must add new value. If two points say similar things, merge them into one strong bullet.
+- Do not add filler points just to lengthen the list.
+
+## Content rules
+
+### Responsibilities bullets
+- Describe ongoing functions, coordination, compliance, planning, reporting, and delivery responsibilities.
+- Include scope (stakeholders, partners, geography, caseload/program scale) when supported by evidence.
+- Do not write achievements here.
+
+### Achievements bullets (condensed CAR/STAR)
+Each achievement bullet must include:
+- Action (what you did) + Result (what changed)
+- Add Context only briefly if needed
+- Quantify results where possible; otherwise placeholders (e.g., [X]%, [USD X], [N] partners, [N] reports)
+
+Team-based achievements are allowed, but specify the individual’s workstream (e.g., “Led the data verification workstream…”).
+
+### Direct Reports
+- If known: state number and type (e.g., “Direct reports: 3 staff + 8 enumerators”).
+- If unknown: “Direct reports: [Confirm number and types]”.
+
+### Reason for leaving
+Use standard, diplomatic phrases (do not criticize employer):
+- End of contract / End of consultancy / Project concluded / Career progression / Relocation / Full-time study
+If unknown, provide 2–3 safe options separated by " / " and append "(Select one)".
+## Length & Character Limits
+
+- IF NO LIMIT IS SPECIFIED (or user specifies "Unlimited"): Generate as many distinct, high-value bullets as necessary. Focus on comprehensive coverage without redundancy. 
+- IF A NUMERIC LIMIT IS SPECIFIED (`CHAR_LIMIT`): Strictly adhere to the user's limit by using `capel-fit`. Prioritize the most impactful points, keep phrasing concise, and reduce the total bullet count to fit within the constraint.
+- Formatting constraint: Even when under strict limits, do not abandon the bulleted format to save space (e.g., do not cram text into a dense paragraph) unless the user explicitly requests paragraph-only mode.
 
 ## Rules
 
-* Do not invent organization names, dates or results; use placeholders
-  such as `[Org Name]`, `[Dates]`, `[User to Insert Metric]` as needed.
-* **Coverage:** Include every job from USER_JOB_HISTORY_TEXT and/or
-  USER_ADMIN_PROFILE_TEXT; do not omit, merge, or skip any roles or
-  contracts. Preserve the source chronology (default: newest to oldest,
-  unless specified otherwise).
-* Use CAPEL-style internal countdown for each Responsibilities and
-  Achievements line to fit within the provided character limits. Aim
-  for the target band; use placeholders for expansion if too short and
-  conservative compression if too long.
-* Maintain professional tone and integrate high-priority keywords
-  naturally.
-* **Initial acknowledgment:** Begin with "Understood. Generating your
-  additional Admin Profile with separate responsibilities and
-  achievements sections. This may take a moment..."
-* **Conclusion:** After listing all roles, add: "Here is the draft of
-  your additional Admin Profile with responsibilities and achievements
-  separated for each role. Please review each entry carefully, fill in
-  any placeholders, and adjust any details to ensure accuracy and
-  completeness."
+- **No invention:** Do not fabricate organization names, dates or results, metrics, budgets, tools, or headcounts; use placeholders such as `[Org Name]`, `[Dates]`, `[User to Insert Metric]` as needed.
+- **JD terminology:** Use JD terminology naturally; do not paste star symbols (★). Maintain professional tone and integrate high-priority keywords naturally.
+- **Coverage:** Include every job from USER_JOB_HISTORY_TEXT and/or USER_ADMIN_PROFILE_TEXT; do not omit, merge, or skip any roles or contracts. Preserve the source chronology (default: newest to oldest, unless specified otherwise).
 
 ## Recursive self-evaluation (internal only; do not print)
 
 Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
-**Domain-specific checks for this skill:** verify character limits for
-both Responsibilities and Achievements lines and the three-line format
-per job entry.
-
 ## Steps
 
-1. For each job in the user’s history, extract the title, duties and
-   achievements.
-2. Draft the Responsibilities line: focus on the main duties, tools and
-   scope; integrate keywords; apply `capel-fit` to meet character
-   limits.
-3. Draft the Achievements line: emphasize outcomes and quantifiable
-   results; insert placeholders for missing numbers; apply
-   `capel-fit` as needed.
-4. Assemble each job entry with the three lines separated by newlines
-   and a blank line between jobs.
-5. Output the complete split profile.
+1. Extract roles and dates from USER_JOB_HISTORY_TEXT; preserve chronology.
+2. Build Responsibilities bullets per role aligned to JOB_DESCRIPTION_TEXT language.
+3. Build Achievements bullets per role using CAR/STAR compression and metrics/placeholders.
+4. Add Direct Reports and Reason for Leaving lines.
+5. Output using the exact headings and bullet format.
+

@@ -1,6 +1,6 @@
 ---
 name: apex-generate-cover-letter
-description: Draft a tailored cover letter for the target role using business‑letter formatting, UVP, STAR stories and gap addressing. Use this skill only when the user selects Option 3 of Phase 8 or explicitly requests a cover letter. Do not generate CVs or Admin Profiles in this skill.
+description: Draft a tailored cover letter for the target role using business‑letter formatting, UVP, 1-2 STAR stories and gap addressing. Use this skill only when the user selects Option 3 of Phase 8 or explicitly requests a cover letter. Do not generate CVs or Admin Profiles in this skill.
 ---
 
 # apex-generate-cover-letter
@@ -18,6 +18,7 @@ fit.
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, internal CAPEL generation technique, guiding principles, and
 error handling patterns defined in `apex-guardrails`.
+Format profile: `cover_letter_document`.
 
 ## Inputs
 
@@ -34,6 +35,7 @@ Optional:
   paragraphs.
 - `apex-candidate-evidence-bank` output: for gap identification and
   mitigation.
+- `TERM_EXTRACTOR` / `JD_KEYWORD_BANK`: for keyword integration.
 
 ## Output format
 
@@ -77,13 +79,6 @@ format:
 - **Sign-off:** Use a professional closing ("Sincerely," or "Best
   regards,") followed by the candidate's name. If applicable, indicate
   any enclosures (e.g., "Enclosure: Resume").
-- **Initial acknowledgment:** Begin with "Understood. Generating your
-  tailored cover letter based on our strategy. This may take a
-  moment..."
-- **Conclusion:** After the letter text, advise: "Here is the draft of
-  your cover letter. Please review it thoroughly, fill in any
-  placeholders (e.g., names, dates), and adjust any wording as needed
-  to ensure it reflects your voice and enthusiasm."
 
 ## Recursive self-evaluation (internal only; do not print)
 

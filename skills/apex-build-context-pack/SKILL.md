@@ -1,16 +1,19 @@
 ---
 name: apex-build-context-pack
-description: Create or update `inputs/application_context.md` containing all raw inputs (job history, admin profile, job description, requirements, qualification questions, term extractor, skills taxonomy and limits) for the Exceptional Candidate workflow. Use this skill to assemble or refresh the context pack before analysis or generation tasks.
+description: >-
+   Create or update `inputs/application_context.md` containing all raw inputs
+   (job history, admin profile, job description, requirements, qualification questions,
+   term extractor, skills taxonomy and limits) for the Exceptional Candidate workflow.
+   Use this skill to assemble or refresh the context pack before analysis or generation tasks.
 ---
 
 # apex-build-context-pack
 
 ## Purpose
 
-This skill consolidates all required user inputs into a single
-Markdown file (`inputs/application_context.md`) that other skills
-reference. It does not perform any analysis or generate documents; it
-simply organizes the raw data in a standard structure.
+This skill consolidates all required user inputs into a single Markdown file (`inputs/application_context.md`) that other skills
+reference.
+It does not perform any analysis or generate documents; it simply organizes the raw data in a standard structure with paste-ready blocks.
 
 ## Inputs
 
@@ -24,16 +27,21 @@ pasting directly or referencing existing files in the repo):
 5. `JOB_QUALIFICATION_QUESTIONS`
 6. `TERM_EXTRACTOR`
 7. `SKILLS_TAXONOMY`
-8. `LIMITS` (CHAR_LIMIT, TARGET_LOW, TARGET_HIGH, WORD_TARGET)
+8. `LIMITS` (TARGET_SYSTEM, CHAR_LIMIT, TARGET_LOW, TARGET_HIGH, WORD_TARGET)
 
 If any section is missing, use a placeholder block with `[PASTE HERE]` to
 indicate that the user must supply it later.
 
+Optional (recommended for improved ATS/keyword work):
+- `JD_KEYWORD_BANK` (20–40 phrases from `apex-jd-keyword-bank`)
+
 ## Output behavior
 
 1. Ensure an `inputs/` directory exists; create it if necessary.
-2. Create or overwrite `inputs/application_context.md` with the following
-   structure and headings:
+2. Create or overwrite `inputs/application_context.md` with the following structure and headings:
+   Notes:
+   - Preserve pasted user text verbatim inside fenced code blocks.
+   - Keep headings exactly as written to reduce downstream parsing issues.
 
    ```
    # Application Context Pack
@@ -68,27 +76,38 @@ indicate that the user must supply it later.
    <pasted text or [PASTE HERE]>
    ```
 
+   ## JD_KEYWORD_BANK
+   ```
+   <optional; paste output from apex-jd-keyword-bank or leave [PASTE HERE]>
+   ```
+
    ## SKILLS_TAXONOMY
    ```
    <pasted text or [PASTE HERE]>
    ```
 
    ## LIMITS
+   TARGET_SYSTEM: <INSPIRA | UNICEF | IOM | OTHER or [PASTE HERE]>
    CHAR_LIMIT: <value or [PASTE HERE]>
    TARGET_LOW: <value or [PASTE HERE]>
    TARGET_HIGH: <value or [PASTE HERE]>
    WORD_TARGET: <value or [PASTE HERE]>
+   
+   ## Optional per-system or per-field overrides (leave blank if not used):
+   INSPIRA_DUTIES_CHAR_LIMIT: 1000
+   UNICEF_RESPONSIBILITIES_CHAR_LIMIT: 2500
+   IOM_RESPONSIBILITIES_CHAR_LIMIT: UNLIMITED
+   IOM_ACHIEVEMENTS_CHAR_LIMIT: UNLIMITED
    ```
 
 3. After writing the file, run the **Pre-flight Validation** below.
 
 ## Pre-flight Validation
 
-Before any downstream skill consumes `inputs/application_context.md`,
-verify that all 11 required sections are populated (i.e., contain
-substantive text, not just `[PASTE HERE]`). Check each section and
-report status:
+Before any downstream skill consumes `inputs/application_context.md`,verify that all 11 required sections are populated (contain
+substantive text, not just `[PASTE HERE]`).
 
+Required sections status table:
 | # | Section | Status |
 |---|---------|--------|
 | 1 | `USER_JOB_HISTORY_TEXT` | populated / missing |
@@ -103,13 +122,12 @@ report status:
 | 10 | `TARGET_HIGH` | populated / missing |
 | 11 | `WORD_TARGET` | populated / missing |
 
-If any section is missing, list it and recommend the user supply the
-data before proceeding. Do not allow the orchestrator to run with
-missing critical sections (`USER_JOB_HISTORY_TEXT`,
-`JOB_DESCRIPTION_TEXT`).
+Optional section check (do not block workflow):
+- `JD_KEYWORD_BANK`: populated / missing
+
+If any required section is missing, list it and recommend the user supply the data before proceeding. Do not allow the orchestrator to run with missing critical sections (`USER_JOB_HISTORY_TEXT`, `JOB_DESCRIPTION_TEXT`).
 
 ## When to use
 
-Use this skill whenever the raw context needs to be assembled or
-refreshed. It should be run before other analytical or generation
-skills if the context file is missing or outdated.
+Use this skill whenever the raw context needs to be assembled or refreshed.
+Run it before other analytical or generation skills if the context file is missing or outdated.

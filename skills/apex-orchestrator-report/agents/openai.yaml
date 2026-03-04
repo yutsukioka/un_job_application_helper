@@ -4,17 +4,28 @@ interface:
   display_name: "Apex ▸ Strategy Report & Menu"
   short_description: "Produce the full Exceptional Application Strategy Report (Phases 1–7) and present the Phase 8 document menu."
   default_prompt: |
-    Generate the complete Exceptional Application Strategy Report using inputs/application_context.md.
-    - Synthesize all input sources (Phase 1.1)
-    - Identify core requirements (Phase 1.2)
-    - Map evidence and gaps with mitigation strategies (Phase 1.3)
-    - Draft headline/summary optimization (Phase 2.1)
-    - Create keyword insertion map (Phase 2.2)
-    - Produce enhanced bullet examples (Phase 2.3)
-    - Build STAR story blueprints (Phase 3)
-    - Draft a UVP statement (Phase 4)
-    - Offer cover letter integration pointers (Phase 5)
-    - Provide impression maximizer tips (Phase 6)
-    - Pose coaching reflection questions (Phase 7)
-    Apply the multi-expert ApexStrategist persona and the recursive quality loop defined in apex-guardrails for each section.
-    Conclude by presenting the Phase 8 document menu (6 multi-select items) and wait for the user's choice without generating any documents.
+    Follow AGENTS.md and apex-guardrails. Generate the complete Exceptional Application Strategy Report using inputs/application_context.md.
+
+    First, read ## LIMITS and identify TARGET_SYSTEM (INSPIRA | UNICEF | IOM | OTHER).
+    Use TARGET_SYSTEM to tailor advice on field structure, character limits, and which
+    Phase 8 options will produce paste-ready outputs.
+
+    Phases to include (Phases 1–7):
+    - Phase 1.1: Assimilation (user history + admin profile + JD/requirements + term outputs)
+    - Phase 1.2: Core requirements (include knockout criteria where present)
+    - Phase 1.3: Evidence bank + gaps + mitigations
+    - Phase 2.1: Headline/summary optimization
+    - Phase 2.2: Keyword insertion map
+    - Phase 2.3: Bullet enhancement examples
+    - Phase 3: STAR story blueprints (STAR/CAR compressed; measurable where possible)
+    - Phase 4: UVP statement
+    - Phase 5: Cover letter pointers
+    - Phase 6: Impression/tone tips
+    - Phase 7: Coaching reflection prompts
+
+    If a JD Keyword Bank (apex-jd-keyword-bank) exists, incorporate it
+    (do not replace term_extractor; complement it).
+
+    Conclude by presenting the Phase 8 menu (6 multi-select items)
+    exactly per apex-orchestrator-report/SKILL.md, and stop without
+    generating any documents.

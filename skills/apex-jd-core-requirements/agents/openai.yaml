@@ -2,11 +2,23 @@ model: GPT-5.3-Codex
 quality: Extra High
 interface:
   display_name: "Apex ▸ JD Core Requirements"
-  short_description: "Extract the 5–7 most critical requirements from the job description and note star weights."
+  short_description: "Extract the 5–7 most critical requirements AND any knockout criteria; include star weights where available."
   default_prompt: |
-    Using inputs/application_context.md, identify and list the top 5–7 core requirements for the role.
-    For each requirement, provide:
-    - Requirement: concise phrasing.
-    - Why it is core: a brief explanation referencing the JD.
-    - Star weight: the term's star rating from TERM_EXTRACTOR if available; otherwise “not starred / unknown”.
-    Exclude generic behavioral competencies unless they are central to the role. Prioritize required or repeated responsibilities and qualifications.
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md
+    (JOB_DESCRIPTION_TEXT + JOB_REQUIREMENT_TEXT), extract:
+    1) Knockout / gatekeeping criteria (if present), and
+    2) The top 5–7 core requirements for the role.
+
+    For each core requirement, provide:
+    - Requirement (concise phrasing)
+    - Why it is core (brief JD-grounded reason; no long quotes)
+    - Star weight (from TERM_EXTRACTOR if available; otherwise “not starred / unknown”)
+
+    Guidance:
+    - Knockouts include required degree, years of experience, languages,
+    certifications, security clearance, etc. Capture them explicitly if stated.
+    - Core requirements should reflect the role’s actual work
+    (monitoring/reporting, programme management, M&E, partnerships,
+    policy drafting, etc.), not generic soft skills unless
+    the JD emphasizes them.
+    - Use only what’s in the JD/requirements; do not invent.

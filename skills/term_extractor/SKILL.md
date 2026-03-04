@@ -17,6 +17,11 @@ screening terms for ATS optimization and competency-based shortlisting.
 The output populates the `TERM_EXTRACTOR` section of
 `inputs/application_context.md` for use by downstream skills.
 
+Important:
+- Star ratings (★★★★★ etc.) are used here for prioritization.
+- Do not paste star symbols into final application fields/documents unless explicitly requested.
+- When other skills reference “★★/★★★ keywords”, they mean the underlying term (not the star symbols).
+
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, and guiding principles defined in `apex-guardrails`.
 
@@ -61,7 +66,7 @@ Optional:
 
 Only use ★★★★★ when the posting clearly supports it.
 
-## Output format
+## Output format (STRIC)
 
 For each of the five terms, output exactly four lines (no bullets, no
 numbering, no extra sections). Separate terms with one blank line.
@@ -101,3 +106,8 @@ No extra text before or after the five terms.
    gatekeepers (degree/language/tools/frameworks), and eliminate
    redundancy or overly generic terms. Output only once all metrics
    pass.
+
+## Related skill (optional)
+
+If you want a broader phrase bank (20–40 phrases) to support ATS insertion mapping beyond five terms,
+use: `apex-jd-keyword-bank` and paste its output into the `JD_KEYWORD_BANK` section of the context pack.

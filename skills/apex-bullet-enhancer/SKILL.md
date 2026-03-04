@@ -1,74 +1,75 @@
 ---
 name: apex-bullet-enhancer
-description: Enhance 2–3 existing job history bullet points by rewriting them using strong action verbs, quantifiable outcomes, and integration of high‑star keywords. Use this skill only when the user requests example bullet enhancements (Phase 2.3 of the Exceptional Candidate workflow). Do not generate the final Admin Profile or CV directly.
+description: Enhance 2–3 existing job history bullet points by rewriting them using strong action verbs, quantifiable outcomes, and integration of high-priority JD terms (from TERM_EXTRACTOR). Use this skill only when the user requests example bullet enhancements (Phase 2.3). Do not generate the final Admin Profile or CV directly.
 ---
 
 # apex-bullet-enhancer
 
 ## Purpose
 
-This skill rewrites a handful of existing bullet points from the
+This skill rewrites a small set of existing bullets or sentences from the candidate's 
 `USER_JOB_HISTORY_TEXT` into stronger, result‑oriented versions.
-Each original bullet is paired with its enhanced version, illustrating
-how to incorporate action verbs, quantifiable metrics (or placeholders)
-and ★★ or ★★★ keywords from the `TERM_EXTRACTOR`.
+
+It is an **example generator** used to demonstrate how to:
+- strengthen verbs,
+- clarify scope,
+add metrics (or placeholders),
+integrate high-priority JD terminology naturally.
+
+Important:
+- TERM_EXTRACTOR star ratings are an internal prioritization signal.
+- When this skill says "use a high-priority term," use the **term text** (do not paste star symbols into the enhanced bullet).
 
 ## Shared definitions
 
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, and guiding principles defined in `apex-guardrails`.
 
+Use `strategy_markdown` formatting (headings and bullets allowed). This output is not intended to be pasted directly into strict application fields.
+
 ## Inputs
 
 Required:
 
-- `USER_JOB_HISTORY_TEXT`: the full job history with bullet points or
-  descriptions.
-- `TERM_EXTRACTOR`: list of high‑priority keywords with star ratings.
+- `USER_JOB_HISTORY_TEXT`: the full job history with bullets or descriptive sentences.
+- `TERM_EXTRACTOR`: 5 high‑priority terms with star ratings and synonyms.
 
 Optional:
 
-- `JOB_DESCRIPTION_TEXT`: to align the tone and vocabulary of the
-  enhancements with the target role.
+- `JOB_DESCRIPTION_TEXT`: to align vocabulary with the target role.
+- `apex-keyword-insertion-map` output: to focus on must-use phrases.
 
 ## Output format
 
-Produce a section titled `## Bullet Enhancement Examples` with 2–3
-entries. For each entry:
+Return:
 
-1. **Original:** the original bullet text excerpt from the user’s
-   history.
-2. **Enhanced:** the rewritten version, using strong verbs and
-   quantifiable outcomes. Include at least one ★★ or ★★★ keyword. If
-   the original bullet lacks specific metrics, insert a placeholder such
-   as `[User to Insert Metric]`.
+## Bullet Enhancement Examples
 
-## Example (for pattern reference; do not copy verbatim)
+Provide 2-3 entries. For each entry:
 
-**Original:** "Responsible for managing the project budget and
-reporting to donors."
+- **Role** (if identifiable from the user history; otherwise use [Role]):
+- **Original:** "<verbatim excerpt>"
+- **Enhanced:** "<rewritten bullet>"
+- **High-priority term(s) integrated:** term1; term2
 
-**Enhanced:** "Managed a USD [X]M project budget across [N] funding
-streams, producing quarterly donor reports that achieved a 100%
-compliance rate and strengthened partnerships with [Donor Name]."
+Guidance:
+- Enhanced bullet should be **one sentence** whenever possible.
+- Use placeholders for missing specifics (e.g., [User to Insert Metric], [Tool], [Donor], [Country]).
+- Prefer “action + scope + result + metric” structure.
 
 ## Rules
 
-- Do not invent responsibilities or achievements absent from the
-  original text. If context is insufficient to produce a strong result,
-  shorten the original bullet and add a placeholder instead of
-  guessing.
-- Keep each enhanced bullet concise—ideally one sentence.
-- Maintain professional tone consistent with UN/international vacancy
-  bullet style (e.g. “led”, “oversaw”, “delivered”).
+- Do not invent responsibilities or achievements, employers, dates, tools, budgets, or metrics. absent from the original text.
+- If a metric is missing, add a placeholder rather than guessing.
+- Avoid vague starts like “Responsible for…”. Prefer strong verbs (Led, Coordinated, Delivered, Analysed, Negotiated, Streamlined).
+- Do not include star symbols (★) inside the Enhanced bullet.
 
 ## Steps
 
-1. Parse the job history to identify 2–3 bullets or sentences that map
-   to high‑priority keywords (★★ or ★★★).
-2. For each selected bullet, draft an enhanced version with:
-   - A strong action verb
-   - A quantifiable outcome (use placeholder if needed)
-   - Integration of at least one high‑star keyword
-   - Formal tone
-3. Output the originals and enhanced versions as described.
+1. Select 2–3 bullets/sentences from USER_JOB_HISTORY_TEXT that best align with high-priority JD terms.
+2. Rewrite each bullet:
+   - Start with a strong action verb.
+   - Clarify scope (what, who, where).
+   - Add an outcome and metric if present; otherwise add a placeholder.
+   - Integrate 1–2 high-priority term(s) naturally (term text only).
+3. Output entries in the required format.

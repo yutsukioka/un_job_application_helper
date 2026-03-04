@@ -1,14 +1,34 @@
 model: GPT-5.3-Codex
 quality: Extra High
 interface:
-  display_name: "Apex ▸ Output Lint"
-  short_description: "Final compliance pass: single spaces, ASCII punctuation, no bullets/tabs, correct newline separation."
+  display_name: "Apex ▸ Output Lint (Profile-based)"
+  short_description: "Final compliance pass using lint profiles: INSPIRA_FIELD, UNICEF_FIELD, IOM_RA (apply only to paste-into-field outputs)."
   default_prompt: |
-    Validate and fix formatting of the text below to meet strict e-recruitment field constraints:
-    - Single spaces; ASCII punctuation only; no fancy ellipsis (use "...")
-    - No bullets/tabs or accidental numbering
-    - One paragraph per item (if multiple items, preserve exactly one newline between items)
-    Do not invent facts; only minimal formatting fixes and placeholders if strictly necessary.
-    If character limits apply, use the capel-fit skill/scripts for deterministic counting.
-    Text:
+    Follow AGENTS.md and apex-guardrails. Lint/validate the provided text
+    for paste-into-field compliance using the correct profile.
+
+    Choose lint profile:
+    - If the user specifies a profile, use it.
+    - Else infer from inputs/application_context.md ## LIMITS TARGET_SYSTEM:
+      - INSPIRA -> INSPIRA_FIELD
+      - UNICEF  -> UNICEF_FIELD
+      - IOM     -> IOM_RA
+      - OTHER   -> ask user to specify, or choose the closest match based
+        on structure (field paragraph vs RA headings/bullets).
+
+    Profiles:
+    - INSPIRA_FIELD: single paragraph, ASCII punctuation, no bullets/tabs,
+      strict whitespace.
+    - UNICEF_FIELD: similar to Inspira but allows longer paragraphs; still
+      plain-text safe.
+    - IOM_RA: allows headings and hyphen bullets for 
+      Responsibilities/Achievements sections.
+
+    Do NOT change substantive meaning; do NOT invent facts. Only:
+    - Normalize to ASCII punctuation.
+    - Collapse whitespace to single spaces (except allowed line breaks per profile).
+    - Remove/convert illegal bullets/tabs.
+    - Ensure one paragraph per item where required.
+
+    Input text to lint:
     [PASTE TEXT HERE]

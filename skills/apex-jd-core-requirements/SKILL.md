@@ -1,6 +1,10 @@
 ---
 name: apex-jd-core-requirements
-description: Identify the top 5–7 core requirements from the job description and requirements text, incorporating star weights if available. Use this skill during Phase 1.2 or when the user asks to extract critical requirements. Do not generate other documents.
+description: >-
+  Identify the top 5–7 core requirements from the job description and requirements text,
+  and separately list any explicit knockout/eligibility criteria (degree, years, languages, licenses).
+  Use this skill during Phase 1.2 or when the user asks to extract critical requirements.
+  Do not generate other documents.
 ---
 
 # apex-jd-core-requirements
@@ -9,10 +13,10 @@ description: Identify the top 5–7 core requirements from the job description a
 
 This skill analyzes the job description and requirements to extract
 the most critical skills, experiences and qualifications. These
-requirements form the foundation for mapping evidence and tailoring
-application materials.
+requirements form the foundation for evidence mapping, keyword strategy, and tailoring writing.
 
-## Shared definitions
+This skill also flags explicit knockout/eligibility criteria (when present), since these are
+often used as automated screening requirements.
 
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, and guiding principles defined in `apex-guardrails`.
@@ -30,38 +34,58 @@ Optional:
 
 ## Output format
 
-Return a Markdown section titled `## Core Requirements (Top 5–7)`.
-For each requirement, include:
+Return the following sections in a Markdown
 
-* **Requirement:** A concise phrasing of the requirement.
-* **Why it is core:** A brief explanation referencing where it appears
-  in the JD (no long quotes).
-* **Star weight:** The star rating (e.g. ★★★★) if the term appears in
-  the term extractor; otherwise indicate “not starred / unknown”.
+## Knockout / Eligibility Criteria (if explicitly stated)
+- Education:
+- Minimum years of experience:
+- Languages:
+- Other (licenses, certifications, nationality, security clearance, etc.):
+
+If a category is not stated, write "Not explicitly stated."
+
+## Core Requirements (Top 5–7)
+For each requirement include:
+- **Requirement:** A concise phrasing of the requirement.
+- **Why it is core:** A brief explanation referencing where it appears in the JD (no long quotes).
+- **Star weight:** From `TERM_EXTRACTOR` if applicable; otherwise indicate “not starred / unknown”.
+- **Evidence signals to look for:** 2–4 examples of what would count as strong evidence (e.g., “authored donor reports”, “managed USD budget”, “supervised X staff”)
+
+## Supervision / Management Signals (if stated or strongly implied)
+Summarize whether the JD emphasizes:
+- supervisory responsibilities,
+- team leadership,
+- direct reports,
+- budget/resource accountability,
+- inter-agency coordination.
+
+If not present, write "Not emphasized in JD."
 
 ## Selection rules
 
-- Look for responsibilities or qualifications described as “required,”
-  “essential” or repeated across sections.
-- Prioritize requirements central to the role title and top duties.
-- Include gatekeeping qualifications (e.g., degree, years of
-  experience, certifications) if present.
-- Exclude generic behavioral competencies unless explicitly central to
-  this role.
+- Prioritize required/essential language and repeated duties which are central to the role title and top duties.
+- Include gatekeeping qualifications (e.g., degree, years of experience, certifications) when explicitly stated.
+- Include supervision/management responsibility as a core requirement if emphasized.
+- Exclude generic behavioral competencies unless they are explicitly central and repeated in the JD.
 
 ## Steps
 
-1. Scan the job description and requirements for candidate
-   requirements (10–15 items).
-2. For each candidate requirement, internally assess (do not print):
+1. Scan the JD and requirements to extract 10-15 candidate requirements.
+2. Identify any explicit knockout criteria (education, years, languages, etc.).
+3. Score each candidate requirement internally (do not print) for:
    a. **Gatekeeping?** Is it stated as "required" or "essential"?
    b. **Repetition?** How many times does it appear across JD sections?
-   c. **Star weight?** Does it appear in the term extractor at
-      ★★★ or above?
-   d. **Role centrality?** Is it directly tied to the role title or
+   c. **Role centrality?** Is it directly tied to the role title or
       top-listed duties?
-   Assign an internal priority score based on these four factors.
-3. Select the top 5–7 requirements, ensuring coverage across domains
-   (technical skills, tools, UN frameworks, high‑impact duties,
-   essential qualifications).
-4. Output each requirement with its justification and star weight.
+   d. **Star weight?** Does it allign with `TERM_EXTRACTOR` high-priority terms (if available)
+3. Select the top 5–7 requirements, ensuring coverage across
+   - technical/functional domain,
+   - skills
+   - key deliverables,
+   - stakeholder coordination,
+   - tools/systems (if central),
+   supervision/management (if relevant),
+   - compliance/policy (if relevant),
+   - UN frameworks,
+   - high‑impact duties.
+4. Output in the required format.

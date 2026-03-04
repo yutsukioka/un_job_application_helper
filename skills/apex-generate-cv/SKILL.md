@@ -1,6 +1,6 @@
 ---
 name: apex-generate-cv
-description: Generate a comprehensive CV (résumé) in plain text, including header, summary statement, experience, education, and skills/certifications, based on user inputs. Use this skill only when the user selects Option 2 of Phase 8 or explicitly requests a CV. Do not generate other documents in this skill.
+description: Generate a full plain-text comprehensive CV (résumé) in document format, including header, summary statement, experience, education, and skills/certifications, based on user inputs. Use this skill only when the user selects Option 2 of Phase 8 or explicitly requests a CV. Do not generate other documents in this skill.
 ---
 
 # apex-generate-cv
@@ -15,8 +15,9 @@ oriented bullets and appropriate keyword embedding.
 ## Shared definitions
 
 Apply the expert lens, collaboration rules, guardrails, quality loop
-protocol, internal CAPEL generation technique, guiding principles, and
-error handling patterns defined in `apex-guardrails`.
+protocol, guiding principles, and error handling patterns defined in `apex-guardrails`.
+
+Format profile: `cv_document`.
 
 ## Inputs
 
@@ -28,10 +29,14 @@ Required:
 Optional:
 
 - `USER_ADMIN_PROFILE_TEXT`: to align entries with the Admin Profile.
-- `TERM_EXTRACTOR`: for keyword insertion.
-- `apex-keyword-insertion-map` output.
-- `apex-bullet-enhancer` output.
-- `apex-uvp-statement` output for the summary statement.
+- `TERM_EXTRACTOR`: ive high-priority terms from a job description with star
+  ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in
+  a strict four-line format.
+- `JD_KEYWORD_BANK`: an expanded 20–40 phrase keyword bank.
+- `apex-keyword-insertion-map`: a list of must‑use JD phrases and specify where to insert them across Phase 8 outputs.
+- `apex-bullet-enhancer` Enhanced 2–3 existing job history bullet points by rewriting them using strong action verbs, quantifiable outcomes, and integration of high-priority JD terms (from TERM_EXTRACTOR).
+- `apex-uvp-statement` A concise 1–2 sentence Unique Value Proposition (UVP) statement tailored to the role and organization using only the candidate’s evidence. 
+- `SKILLS_TAXONOMY`: A structured list of skills.
 
 ## Output format
 
@@ -64,18 +69,13 @@ Produce plain text with the following sections:
 - Keep section headings simple (e.g., `Experience`, `Education`, `Skills`).
   Do not include any Markdown headings (e.g., `#`, `##`) in the final
   CV text; the output should be ready to copy-paste into a document.
-- Use a dash `-` or bullet point to start each CV bullet.
+- Use a dash `-` to start each CV bullet.
 - Ensure verb tense consistency (past tense for past roles; present for
   current roles).
 - Integrate keywords identified in Phase 2 naturally; avoid obvious
   keyword stuffing.
 - Maintain a professional and factual tone throughout.
-- **Initial acknowledgment:** Begin with "Understood. Generating your
-  updated CV based on our strategy. This may take a moment..."
-- **Conclusion:** Finish by saying: "Here is the draft of your
-  updated CV. Please review it carefully, fill in any placeholders,
-  and make any further personal adjustments to ensure it perfectly
-  represents you."
+- Do not include star symbols (★).
 
 ## Recursive self-evaluation (internal only; do not print)
 
@@ -92,8 +92,9 @@ integration.
 2. Draft the summary statement using the UVP or derive one from the
    strongest matches between the candidate’s experience and the job’s
    needs.
-3. For each role, create bullet points using existing descriptions and
-   enhanced bullets where available; integrate keywords appropriately.
+3. For each role, write 2–6 bullets mixing:
+   - impact achievements (prefer metrics),
+   - key responsibilities aligned to the JD.
 4. Build the education and skills/certifications sections from
    available data.
 5. Output the CV with clear headings and consistent formatting.

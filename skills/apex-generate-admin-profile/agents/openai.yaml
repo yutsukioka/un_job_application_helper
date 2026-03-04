@@ -1,11 +1,30 @@
 model: GPT-5.3-Codex
 quality: Extra High
 interface:
-  display_name: "Apex ▸ Generate Admin Profile"
-  short_description: "Create a headline and one-paragraph-per-job Admin Profile with strict character limits."
+  display_name: "Apex ▸ Generate Admin Profile (Option 1)"
+  short_description: "Generate INSPIRA/UNICEF-style Admin Profile outputs (character-limited, paste-ready), using TARGET_SYSTEM limits."
   default_prompt: |
-    Generate an Admin Profile from inputs/application_context.md.
-    Output:
-    1. A one-line headline summarizing the candidate’s professional focus and alignment with the role.
-    2. One paragraph per job in the format "Job Title: duties and achievements", with exactly one newline between jobs.
-    Use insights from keyword insertion mapping and bullet enhancements to write concise, results-oriented paragraphs. Use placeholders for missing metrics or specifics. Apply CAPEL character control for each paragraph, aiming for TARGET_LOW–TARGET_HIGH characters (with spaces) and never exceeding CHAR_LIMIT. Use single spaces and ASCII punctuation only. Do not include employer names, dates or headings.
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    generate the Admin Profile outputs for Option 1.
+
+    TARGET_SYSTEM behavior (read from ## LIMITS):
+    - If TARGET_SYSTEM is INSPIRA or UNICEF: produce paste-ready field text
+      with strict character limits when provided.
+    - If CHAR_LIMIT is UNLIMITED (or no numeric limit is provided):
+      prioritize content quality and completeness over compression;
+      do not CAPEL-fit.
+    - Maintain strict Duties vs Achievements logic internally even
+      if the field is a single “responsibilities” field: responsibilities
+      establish scope; achievements demonstrate impact with metrics/placeholders.
+
+    Output expectations (follow apex-generate-admin-profile/SKILL.md as the
+    contract), but ensure:
+    - Content is ATS-safe and Inspira/UNICEF paste-safe: ASCII punctuation,
+      no fancy bullets/tabs, single spaces.
+    - Include supervisory scope/direct reports when the user evidence supports
+      it; otherwise insert placeholders.
+    - Provide "Reason for Leaving" text as a separate, short, diplomatic line
+      per role if the workflow/context expects it; use standard UN-appropriate
+      phrasing and avoid grievances (use placeholders if unknown).
+
+    Do not invent employers, dates, tools, budgets, metrics, or outcomes.

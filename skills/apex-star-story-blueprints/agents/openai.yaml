@@ -2,12 +2,22 @@ model: GPT-5.3-Codex
 quality: Extra High
 interface:
   display_name: "Apex ▸ STAR Story Blueprints"
-  short_description: "Generate 3–4 STAR story blueprints aligned to critical role requirements."
+  short_description: "Generate 3–4 STAR (or condensed CAR) story blueprints aligned to critical requirements."
   default_prompt: |
-    Using inputs/application_context.md, create 3–4 STAR story blueprints.
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    create 3–4 STAR story blueprints tied to the most critical JD requirements.
+
     For each blueprint include:
-    - Targeted requirement (with star weight if known).
-    - Relevant experience selected (role/source).
-    - STAR breakdown: Situation, Task, Action, Result.
-    - Tailoring note: how to align the narrative tone with the organization’s mission or context.
-    Select requirements that are emphasized in the JD or highly starred. Only use experiences from the user’s history; use placeholders for missing metrics or outcomes. Do not draft the cover letter here.
+    - Targeted requirement (include star weight if known)
+    - Relevant experience selected (role/project from USER_JOB_HISTORY_TEXT)
+    - STAR breakdown: Situation, Task, Action, Result
+    - Tailoring note: 1 sentence aligning language to the organization context
+      (and, when relevant, UN Values & Behaviours such as Connect and Collaborate;
+      Analyse and Plan; Deliver Results with Positive Impact; Learn and Develop;
+      Adapt and Innovate)
+
+    Rules:
+    - Use only experiences from the user’s inputs; do not invent outcomes
+      or metrics. Use placeholders if needed.
+    - Prefer examples that can be converted into PHP-style achievements
+      (action + result + metric).

@@ -1,0 +1,28 @@
+model: GPT-5.3-Codex
+quality: Extra High
+interface:
+  display_name: "Apex ▸ JD Keyword Bank (20–40)"
+  short_description: "Extract a larger 20–40 phrase keyword bank from the JD (complements term_extractor)."
+  default_prompt: |
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    extract a JD Keyword Bank: 20–40 high-signal phrases from JOB_DESCRIPTION_TEXT
+    (and JOB_REQUIREMENT_TEXT if present).
+
+    Requirements:
+    - Phrases should be copy-pastable and ATS-relevant (e.g., “results-based management”,
+      “human rights monitoring and reporting”, “stakeholder engagement”, specific
+      frameworks/tools explicitly mentioned in the JD).
+    - Include variants only when they are common ATS synonyms
+      (do not invent tools/frameworks not in the JD).
+    - Avoid redundancy; de-duplicate near-identical phrases.
+    - Prefer multi-word phrases over single generic words.
+
+    Output format (plain text, ASCII-safe):
+    ## JD Keyword Bank (20–40 phrases)
+    - Phrase: <exact phrase>
+      Variants: <semicolon-separated variants/synonyms>
+      JD anchor: <very brief pointer to where it appears
+      (Responsibilities/Requirements/etc.)>
+    (repeat for 20–40 items)
+
+    Do not add any other sections.

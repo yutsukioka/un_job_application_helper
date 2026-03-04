@@ -9,6 +9,8 @@ The agent operates in two stages:
 1. **Strategy Report (Phases 1–7):** Deep analysis of the target role, candidate evidence mapping, keyword optimization, STAR story blueprints, UVP crafting, and coaching reflections.
 2. **Document Generation (Phase 8):** On-demand generation of up to 6 application documents, individually or in any combination.
 
+> **Note:** This agent supports multiple UN / international organization e‑recruitment systems (e.g., **INSPIRA**, **UNICEF**, **IOM/Oracle-style**). Set `TARGET_SYSTEM` in `inputs/application_context.md` under `## LIMITS`.
+
 ### Phase 8 Document Menu
 
 | # | Document | Description |
@@ -23,16 +25,18 @@ The agent operates in two stages:
 ## Architecture
 
 ```
-skills/                   # 21 AI agent skills
+skills/                   # AI agent skills
 ├── apex-orchestrator-report/   # Main orchestrator (Phases 1-8)
 ├── apex-guardrails/            # Non-negotiable quality constraints
 ├── apex-build-context-pack/    # Assembles inputs/application_context.md
 │
 ├── term_extractor/                   # Extract 5 high-priority terms with synonyms & examples
+├── apex-jd-keyword-bank/             # Extract 20–40 expanded JD keyword phrases (optional)
 ├── apex-jd-core-requirements/        # Phase 1.2 — Core requirement extraction
 ├── apex-candidate-evidence-bank/     # Phase 1.3 — Evidence mapping & gap analysis
 ├── apex-keyword-insertion-map/       # Phase 2.2 — Keyword placement guidance
 ├── apex-bullet-enhancer/             # Phase 2.3 — Bullet point enhancement
+├── apex-headline-summary/            # Phase 2.1 — Headline / summary optimization
 ├── apex-star-story-blueprints/       # Phase 3  — STAR story blueprints
 ├── apex-uvp-statement/               # Phase 4  — Unique Value Proposition
 ├── apex-cover-letter-pointers/       # Phase 5  — Cover letter strategy
@@ -46,8 +50,9 @@ skills/                   # 21 AI agent skills
 ├── apex-generate-admin-profile-ra-split/  # Option 5
 ├── apex-generate-competency-mapping/      # Option 6
 │
-├── apex-output-lint/     # Final formatting validation
-└── capel-fit/            # Deterministic character-limit enforcement
+├── apex-cross-doc-consistency/  # Cross-document consistency checks (optional)
+├── apex-output-lint/            # Final formatting validation (profile-based)
+└── capel-fit/                   # Deterministic character-limit enforcement
     └── scripts/
         ├── normalize_text.py
         ├── charcount.py
@@ -87,6 +92,12 @@ The context file requires 11 input sections:
 - `SKILLS_TAXONOMY` — Skills categorization
 - `CHAR_LIMIT` / `TARGET_LOW` / `TARGET_HIGH` / `WORD_TARGET` — Length constraints
 
+Optional (recommended for improved ATS/keyword work):
+- `JD_KEYWORD_BANK` — Expanded JD keyword phrases (20–40 phrases)
+
+Also set the target application system in `## LIMITS`:
+- `TARGET_SYSTEM: INSPIRA | UNICEF | IOM | OTHER`
+
 #### Guide: How to write `USER_JOB_HISTORY_TEXT`
 
 The `USER_JOB_HISTORY_TEXT` section is the foundation of your application. The quality of the agent's output depends directly on the detail and structure of this input.
@@ -125,7 +136,11 @@ sound reasonable for the JD. Then proceed to the next step. If you are not
 confident in the terms, do not include the `application_context.md` file
 and re-run extraction with adjusted inputs.**
 
-Once you are satisfied, paste the output into the `TERM_EXTRACTOR` section
+Optional (recommended):
+Optional (recommended):
+> "Run `apex-jd-keyword-bank` on the job description in my context file and paste it into `JD_KEYWORD_BANK`."
+
+Once you are satisfied, paste the output into the `JD_KEYWORD_BANK` section
 of `inputs/application_context.md` (or let the agent do it for you).
 
 ### 3. Run the orchestrator

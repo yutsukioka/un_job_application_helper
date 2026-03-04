@@ -1,12 +1,23 @@
 model: GPT-5.3-Codex
 quality: Extra High
 interface:
-  display_name: "Apex ▸ Generate Admin Profile (RA Split)"
-  short_description: "Create an Admin Profile with separate Responsibilities and Achievements lines for each job."
+  display_name: "Apex ▸ Generate Admin Profile (RA Split) (Option 5)"
+  short_description: "Generate IOM/Oracle-style Responsibilities + Achievements separated per role (often unlimited unless limits provided)."
   default_prompt: |
-    Generate an alternate Admin Profile from inputs/application_context.md in which each job entry has three lines: Job Title, Responsibilities, Achievements.
-    For each job:
-    - Job Title: include the role title and, if available, the organization and dates (use placeholders if missing).
-    - Responsibilities: one sentence describing the core duties and scope; integrate relevant keywords; fit within character limits using capel-fit.
-    - Achievements: one sentence detailing the main accomplishments and results; use quantifiable outcomes or placeholders; fit within character limits using capel-fit.
-    Separate each job entry with a blank line. Do not invent details; use placeholders as needed.
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    generate the Option 5 Admin Profile for systems that require
+    Responsibilities and Achievements separately (IOM/Oracle-style).
+
+    TARGET_SYSTEM behavior (read from ## LIMITS):
+    - If TARGET_SYSTEM is IOM (or OTHER with RA fields): output separate
+      Responsibilities and Achievements sections per role.
+    - If a numeric CHAR_LIMIT (or field-specific limits) is provided: fit to
+      the provided limits; otherwise treat as UNLIMITED and prioritize best content.
+    - Prefer achievements as bullet points (hyphen "-" only) when allowed by
+      the system; avoid Unicode bullets.
+
+    Also include, if expected by the workflow/context:
+    - Direct Reports (if supported by evidence; otherwise placeholder)
+    - Reason for Leaving (short, neutral, standard wording; placeholder if unknown)
+
+    Do not invent facts; use placeholders for missing specifics.

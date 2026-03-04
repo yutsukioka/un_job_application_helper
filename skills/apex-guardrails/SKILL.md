@@ -3,11 +3,10 @@ name: apex-guardrails
 description: >-
   Central authority for the Exceptional Candidate workflow: shared expert
   identity, non-negotiable constraints, recursive quality loop protocol,
-  CAPEL generation technique, guiding principles, and active output
+  CAPEL generation technique, guiding principles, , output format profiles,
   validation. Every other skill must reference this file rather than
-  duplicating these sections. Use this skill to wrap any application
-  analysis or drafting task to ensure compliance. Do not use it for
-  unrelated coding tasks.
+  and active output validation. Every other skill must reference this file
+  rather than duplicating these sections.
 ---
 
 # apex-guardrails
@@ -23,9 +22,10 @@ shared by every skill in the ApexStrategist workflow. It defines:
 4. The **Internal CAPEL Generation Technique** (LLM-side length control
    during drafting -- distinct from the deterministic `capel-fit` scripts
    used for post-generation validation).
-5. The **Guiding Principles** (quality checklist).
-6. An **Active Validation Mode** for checking outputs against these rules.
-7. **Error Handling and Fallback Patterns** for edge cases.
+5. The **Output Format Profiles** (system-appropriate formatting rules).
+6. The **Guiding Principles** (quality checklist).
+7. An **Active Validation Mode** for profile-based output checks.
+8. **Error Handling and Fallback Patterns** for edge cases.
 
 Other skills reference this file with:
 > Apply the expert lens, collaboration rules, guardrails, quality loop
@@ -91,6 +91,65 @@ in the shared `inputs/application_context.md` file.
 
 ---
 
+## Output Format Profiles (IMPORTANT)
+
+Different platforms require different paste-safe formats. Every generation task should be treated as one of these profiles.
+
+### Profile A: inspira_field_strict
+Use for Inspira-style single text fields with strict limits (often 1000 chars incl. spaces).
+- Single paragraph per field (no internal line breaks).
+- ASCII punctuation only; use straight quotes and hyphens; use "..." not ellipsis.
+- No bullets, no tabs, no decorative characters.
+- Single spaces only (no double spaces).
+- If numeric limits are provided: validate with capel-fit.
+
+### Profile B: unicef_field_strict
+Use for UNICEF-style responsibilities fields (often ~2500 chars incl. spaces).
+- Default to one paragraph unless the user explicitly wants multiple paragraphs.
+- Same punctuation/whitespace safety as Inspira.
+- If numeric limits are provided: validate with capel-fit.
+
+### Profile C: iom_ra_split
+Use for IOM/Oracle-style separate Responsibilities and Achievements (often unlimited).
+- Headings like "Responsibilities:" and "Achievements:" allowed.
+- Hyphen bullets "- " allowed.
+- Blank line between sections allowed.
+- Still keep punctuation plain and copy/paste safe (avoid fancy bullets/quotes).
+- If numeric limits are provided anyway: respect them.
+
+### Profile D: cv_document
+Use for CV output.
+- Plain text headings allowed (no Markdown # headings in the final CV).
+- Hyphen bullets allowed.
+- Line breaks allowed and expected.
+
+### Profile E: cover_letter_document
+Use for cover letters.
+- Plain text business-letter layout (date line, address lines, salutation, paragraphs, sign-off).
+- Line breaks allowed and expected.
+
+### Profile F: strategy_markdown
+Use for strategy report outputs.
+- Markdown headings and bullets are allowed.
+
+---
+
+## Reason for Leaving (Standard Wording Guidance)
+
+When drafting a "Reason for leaving" field, keep it short, factual, and diplomatic.
+Preferred standard phrases (select the best fit; do not add negative commentary):
+- End of fixed-term contract.
+- End of consultancy assignment.
+- Project funding concluded.
+- Organizational restructuring / downsizing.
+- Career progression / seeking increased responsibility.
+- Relocation (family reasons).
+- Full-time study (degree/programme).
+
+If unknown: provide 2–3 safe options and mark "Select one".
+
+---
+
 ## Recursive Self-Evaluation Loop Protocol
 
 Every skill that generates a major output block (strategy report
@@ -123,34 +182,20 @@ Do not output the loop, rubrics, or scores.
 
 ## Internal CAPEL Generation Technique
 
-This section describes an **LLM-internal** drafting technique for
-controlling paragraph length. It is distinct from the deterministic
-`capel-fit` Python scripts used for post-generation validation and
-adjustment.
-
-**How to use during generation:**
+Use this only for numeric character-limited fields (Profile A/B or any time CHAR_LIMIT is numeric).
 
 1. Before drafting a character-limited block, calculate an internal word
    budget: `WORD_TARGET` = `CHAR_LIMIT` / average characters per word
    (typically 6.5 for English).
-2. Silently simulate a countdown from `WORD_TARGET` down to 1, pairing
-   each content word with one step in the countdown.
-3. For each step, add exactly one meaningful English word (with optional
-   punctuation). Do not waste steps on filler or repetition.
-4. When the countdown reaches 1, complete the current sentence so the
-   paragraph is coherent and self-contained, then stop generating new
-   sentences.
-5. Never output visible countdown markers.
+2. Silently draft with a "word budget countdown" mindset to avoid rambling.
+3. After drafting, validate and adjust deterministically with `capel-fit` Python scripts used for post-generation validation and
+adjustment. (see `capel-fit/SKILL.md`).
 
-**After generation**, validate and adjust with the `capel-fit` scripts
-(see `capel-fit/SKILL.md`).
+If CHAR_LIMIT is UNLIMITED or missing, do not force CAPEL constraints.
 
 ---
 
 ## Guiding Principles for All Outputs (Quality Control Checklist)
-
-In addition to the guardrails above, every output must satisfy the
-following six principles:
 
 1. **Embody Excellence:** Every output (analysis, profile, CV, letter,
    answers, etc.) must reflect a top-tier candidate profile: insightful
@@ -202,31 +247,48 @@ When issues arise during generation, follow these rules:
 3. **Insufficient evidence for a requirement:** Do not fabricate
    evidence. Leave the evidence section blank, note the gap, and propose
    mitigation strategies.
-4. **Format compliance failure:** If the output fails to meet format
-   rules after 5 self-evaluation cycles, output the best version
-   achieved and append: `[Format target not fully met -- please review]`.
+4. **Unknown/ambiguous format target:** Default to the safest profile:
+   - If the user is pasting into an application field: use inspira_field_strict unless told otherwise.
+   - If generating CV/cover letter: use document profile.
 
 ---
 
-## Active Validation Mode
+## Active Validation Mode (Profile-Based)
 
-When this skill is invoked with an output text to validate, perform the
-following checks and return a structured report:
+When invoked to validate output text, require (or infer) a FORMAT_PROFILE and produce a structured validation report.
 
-1. **Source-grounding:** Flag any claims, metrics, dates, or employer
-   names that do not appear in the provided inputs.
-2. **Placeholder completeness:** Flag any location where details appear
-   to be missing but no placeholder was inserted.
-3. **Keyword stuffing:** Flag any keyword that appears more than 3 times
-   in a single paragraph or entry.
-4. **Chain-of-thought leakage:** Flag any exposed reasoning, scoring,
-   rubric text, or cycle commentary.
-5. **Format compliance:** Check against the 5 hard output constraints
-   (text only, one paragraph per item, no bullets/tabs/extra breaks,
-   single spaces, ASCII punctuation).
+Inputs for validation invocation:
+- FORMAT_PROFILE: inspira_field_strict | unicef_field_strict | iom_ra_split | cv_document | cover_letter_document | strategy_markdown
+- Text to validate
 
-Return each flag with its location and a brief explanation. End with an
-overall PASS or FAIL verdict.
+Validation checks (choose by profile):
+
+### inspira_field_strict / unicef_field_strict checks
+1. **Source-grounding:** Flag any claims, metrics, dates, or employer names that do not appear in the provided inputs.
+2. **Placeholder completeness:** Flag any location where details appear to be missing but no placeholder was inserted.
+3. **Keyword stuffing:** Flag any keyword that appears more than 3 times in a single paragraph or entry.
+4. **Chain-of-thought leakage:** Flag any exposed reasoning, scoring, rubric text, or cycle commentary.
+5. **Format compliance:** Check against the 5 hard output constraints (text only, one paragraph per item, no bullets/tabs/extra breaks, single spaces, ASCII punctuation).
+
+### iom_ra_split checks
+1. **Source-grounding:**
+2. **Placeholder completeness:**
+3. **Keyword stuffing:**
+4. **Chain-of-thought leakage:**
+5. **No fancy bullets/quotes:** Bullets must be "- "
+6. **Section integrity:** Responsibilities and Achievements are clearly separated and internally consistent.
+
+### cv_document / cover_letter_document checks
+1. **Source-grounding:**
+2. **Placeholder completeness:**
+3. **Keyword stuffing:**
+4. **Chain-of-thought leakage:**
+5. **No Markdown artifacts:** Ensure no Markdown syntax is present if plain text is requested.
+6. **Structure integrity:** Check headings and bullets for CV; letter structure for cover letter.
+
+Return:
+- FLAGS with brief descriptions and locations with a brief explanation
+- An overall PASS or FAIL verdict
 
 ---
 
@@ -234,8 +296,8 @@ overall PASS or FAIL verdict.
 
 - **Standalone invocation:** Return a short acknowledgement that
   guardrails, expert identity, and quality loop protocol are loaded.
-- **Combined with another skill:** Enforce all constraints, the expert
+- **Combined with another skill:** Enforce constraints, the expert
   lens, and guiding principles on the target task. Do not add new
-  content beyond minimal corrections or placeholders.
+  content beyond minimal corrections or placeholders. Apply the appropriate format profile.
 - **Validation invocation:** When given output text, run the Active
-  Validation Mode checks and return the structured report.
+  Profile-based Validation Mode checks and return the structured report.
