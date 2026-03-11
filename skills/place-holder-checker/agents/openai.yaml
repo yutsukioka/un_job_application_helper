@@ -1,0 +1,83 @@
+name: place-holder-checker
+description: >-
+  Scan generated application documents and strategy reports for unresolved
+  placeholders, group findings by file, and write a deterministic
+  consolidated report to `0x_place_holders.txt`.
+
+model: GPT-5.4
+quality: Extra High
+
+entry_conditions:
+  - One or more generated files exist under `output/`, `generated/`, `applications/`, or match `phase1_7_strategy_report*.md`.
+  - Use when the user asks to find placeholders, missing information, unresolved inserts, or a consolidated placeholder report.
+  - Recommended after Phase 8 document generation and before final manual review or submission.
+  - May be run after a single generated file or after multiple outputs.
+
+execution:
+  mode: deterministic_scan
+  output_artifact: "0x_place_holders.txt"
+  instructions:
+    - Scan default roots recursively in this order: `output/`, `generated/`, `applications/`.
+    - Also scan repository-root files matching `phase1_7_strategy_report*.md` when present.
+    - Restrict default scanning to text-like files: `.md`, `.txt`, `.markdown`.
+    - Ignore `.agents/`, `inputs/`, `.git/`, `node_modules/`, `.venv/`, `__pycache__/`, binary files, and hidden OS files unless explicitly requested.
+    - Detect placeholders by regex/pattern only. Do not rely on semantic inference.
+    - Capture each matched placeholder with first line number and concise same-line context.
+    - De-duplicate placeholder entries per file while preserving first-seen order.
+    - Create or overwrite `0x_place_holders.txt` even when no placeholders are found.
+    - Do not rewrite, fill, or remove placeholders in source files.
+
+interface:
+  display_name: "Utility ▸ Placeholder Checker"
+  short_description: "Scan generated outputs for unresolved placeholders and write a centralized 0x_place_holders.txt report."
+  default_prompt: |
+    Follow AGENTS.md and apex-guardrails. Execute `place-holder-checker` as a deterministic post-generation scan.
+
+    Objective:
+    - Scan generated application documents for unresolved placeholders.
+    - Include default scan roots: `output/`, `generated/`, `applications/`, plus repository-root `phase1_7_strategy_report*.md` when present.
+    - Create or overwrite `0x_place_holders.txt` in the repository root.
+
+    Detection rules:
+    - Use regex/pattern matching only; do NOT rely on semantic inference.
+    - Detect at minimum:
+      - `[TBD]`
+      - `[INSERT ...]`
+      - `[ADD ...]`
+      - `[MISSING ...]`
+      - `[Confirm ...]`
+      - `[If applicable]`
+      - `[User to Insert ...]`
+      - `[PASTE HERE]`
+      - `[Select one ...]`
+      - `<<ALL_CAPS_MARKER>>`
+    - Also flag standalone square-bracket tokens unless excluded because they are likely Markdown links, Markdown images, or numeric citations.
+
+    Processing rules:
+    - Scan text-like files only: `.md`, `.txt`, `.markdown`.
+    - Ignore `.agents/`, `inputs/`, `.git/`, `node_modules/`, `.venv/`, `__pycache__/`, binary files, and hidden OS files unless explicitly requested.
+    - Group findings by repository-relative file path.
+    - For each unique placeholder entry in a file, record the first line number and a short same-line context.
+    - Avoid duplicate entries within the same file.
+    - Do not rewrite, fill, or remove placeholders.
+    - If no placeholders are found, still create `0x_place_holders.txt` and write a PASS-style report stating that no placeholders were detected.
+    - If no candidate files are found, still create `0x_place_holders.txt` and report that no candidate generated files were found.
+
+    Required output artifact:
+    `0x_place_holders.txt`
+
+    Required report format:
+    PLACEHOLDER REPORT
+    Generated: <ISO timestamp>
+    Scanned roots: <comma-separated roots/globs>
+    Scanned files: <N>
+    Files with placeholders: <M>
+
+    FILE: <repo-relative-path>
+    --------------------------------
+    - L<line> | <placeholder entry>
+
+    SUMMARY
+    --------------------------------
+    Unique files with placeholders: <M>
+    Unique placeholder entries: <K>

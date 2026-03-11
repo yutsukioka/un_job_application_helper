@@ -1,0 +1,27 @@
+model: GPT-5.4
+quality: Extra High
+interface:
+  display_name: "Apex ▸ Progression & Metric Ledger"
+  short_description: "Detect same-organization promotion chains, classify safe metric roll-ups, and create reusable progression-aware fragments."
+  default_prompt: |
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    identify same-organization promotion chains and build a Promotion-Group Metric Ledger.
+
+    Goals:
+    - Detect promotions / role-progression chains within the same organization.
+    - Extract explicit quantitative evidence across related roles.
+    - Classify additivity as EXACT_ADD, PERIOD_ADD, DISTINCT_SCOPE_ADD,
+      NONADDITIVE_RESTATE, OVERLAP_UNCERTAIN, or SEMANTIC_MIXED.
+    - Preserve verb semantics (managed vs mobilized vs oversaw vs audited).
+    - Produce reusable fragments for qualification answers and other outputs.
+
+    Requirements:
+    - Use only explicit source evidence; do not invent numbers or infer overlap safety.
+    - If additivity is uncertain, output DO NOT SUM and explain why.
+    - Default the narrative anchor to the highest-seniority relevant role in the chain.
+    - If JOB_QUALIFICATION_QUESTIONS or JD/requirements indicate "progressively responsible",
+      leadership, governance, supervision, or resource-accountability requirements,
+      prioritize those signals when selecting the anchor role.
+
+    Output must follow apex-progression-metric-ledger/SKILL.md exactly.
+
