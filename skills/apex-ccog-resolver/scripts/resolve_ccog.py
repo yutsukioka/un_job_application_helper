@@ -25,7 +25,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 ENTRY_SPLIT_RE = re.compile(r"(?m)^###\s+")
 HEADER_RE = re.compile(r"^(?P<code>.+?)\s+[—-]\s+(?P<title>.+?)\s*$")
-FIELD_RE = re.compile(r"^\*\*(?P<label>[^*]+)\*\*:\s*(?P<value>.+?)\s*$")
+# Match both **Label:** value (colon inside bold) and **Label**: value (colon outside)
+FIELD_RE = re.compile(r"^\*\*(?P<label>[^*:]+):?\*\*:?\s*(?P<value>.+?)\s*$")
 WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9./-]*")
 
 VACANCY_TYPE_HINTS: Dict[str, Sequence[str]] = {

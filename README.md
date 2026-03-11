@@ -4,10 +4,28 @@ An AI-powered multi-skill agent that helps candidates craft exceptional applicat
 
 ## How It Works
 
-The agent operates in two stages:
+This is a set of **AI agent skills** designed for VS Code Copilot, GitHub Copilot Coding Agent (Codex), and compatible agent runtimes. The skills can be invoked individually or orchestrated as a pipeline. No standalone app or web UI is required — you chat with the agent, and it reads your inputs, runs skills, and writes output files directly.
 
-1. **Strategy Report (Phases 1–7):** Deep analysis of the target role, candidate evidence mapping, keyword optimization, STAR story blueprints, UVP crafting, and coaching reflections.
-2. **Document Generation (Phase 8):** On-demand generation of up to 7 application documents, individually or in any combination.
+**Compatible runtimes:**
+- **VS Code Copilot** — Chat with the agent in the editor. Skills are discovered automatically from the `.agents/skills/` directory.
+- **GitHub Copilot Coding Agent (Codex)** — Run skills in a cloud sandbox via GitHub Issues or PR comments. The agent reads `AGENTS.md` for workflow rules.
+- **Any agent runtime** supporting the `.agents/skills/` convention with `SKILL.md` + `agents/openai.yaml` per skill.
+
+**Workflow overview:**
+
+1. **Prepare inputs** — Place your employment history, the target job description, requirements, and screening questions into `inputs/application_context.md` (a structured template).
+2. **Run the orchestrator** — Ask the agent to run `apex-orchestrator-report`. It chains ~15 analysis skills automatically:
+   - Extracts core requirements and keyword targets from the JD
+   - Resolves ICSC occupational classifications (CCOG) for register-matching
+   - Maps your evidence to each requirement, identifies gaps, and proposes mitigations
+   - Builds STAR story blueprints, a Unique Value Proposition, and cover letter strategy
+   - Produces tone/language tips and coaching reflection questions
+3. **Review the strategy report** — The agent outputs a comprehensive Phases 1–7 report. You can provide feedback or fill evidence gaps before generating documents.
+4. **Generate documents** — Select from the Phase 8 menu below. Each document is tailored to the target role, grounded in your evidence, and optimized for the specific e-recruitment system (INSPIRA, UNICEF, IOM, etc.).
+
+You can also run individual skills directly (e.g., `term_extractor`, `capel-fit`, `apex-application-audit`) without the full orchestrator pipeline.
+
+All personal data stays local — only the reusable skill definitions are in this git repository.
 
 > **Note:** This agent supports multiple UN / international organization e‑recruitment systems (e.g., **INSPIRA**, **UNICEF**, **IOM/Oracle-style**). Set `TARGET_SYSTEM` in `inputs/application_context.md` under `## LIMITS`.
 
