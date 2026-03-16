@@ -1,0 +1,24 @@
+name: evidence-ranking-engine
+
+description: >
+  Ranks candidate evidence to ensure the strongest
+  information is used in outputs.
+
+trigger:
+  - evidence_selection_event
+
+inputs:
+  - evidence_bank
+  - job_requirements
+
+process:
+  steps:
+    - evaluate_responsibility_level
+    - measure_relevance
+    - detect_metrics
+    - calculate_evidence_score
+    - select_top_evidence
+
+output:
+  file: 0x_evidence_selection_log.md
+  format: markdowns

@@ -1,0 +1,24 @@
+name: deterministic-skill-router
+
+description: >
+  Routes agent tasks using deterministic rules
+  to prevent incorrect skill selection.
+
+trigger:
+  - skill_routing_event
+
+inputs:
+  - user_request
+  - routing_rules
+  - skill_registry
+
+process:
+  steps:
+    - detect_intent
+    - match_routing_rule
+    - select_skill
+    - log_routing
+
+output:
+  file: 0x_skill_routing_log.md
+  format: markdown

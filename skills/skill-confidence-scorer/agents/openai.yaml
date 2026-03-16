@@ -1,0 +1,23 @@
+name: skill-confidence-scorer
+
+description: >
+  Calculates confidence scores for skill selection.
+
+trigger:
+  - skill_selection_event
+
+inputs:
+  - user_request
+  - available_skills
+  - context
+
+process:
+  steps:
+    - calculate_relevance
+    - check_instruction_alignment
+    - verify_context_requirements
+    - compute_confidence_score
+
+output:
+  file: 0x_skill_confidence_scores.md
+  format: markdown

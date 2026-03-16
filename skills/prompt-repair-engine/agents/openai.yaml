@@ -1,0 +1,24 @@
+name: prompt-repair-engine
+
+description: >
+  Detects prompt weaknesses and automatically
+  generates improved instructions.
+
+trigger:
+  - prompt_validation_event
+  - repeated_skill_failure
+
+inputs:
+  - skill_prompt
+  - generated_output
+  - skill_definition
+
+process:
+  steps:
+    - detect_prompt_ambiguity
+    - identify_instruction_conflicts
+    - generate_repaired_prompt
+
+output:
+  file: 0x_prompt_repair_log.md
+  format: markdown
