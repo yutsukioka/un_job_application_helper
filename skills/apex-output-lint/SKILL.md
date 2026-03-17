@@ -1,7 +1,7 @@
 ---
 name: apex-output-lint
 description: >-
-   Perform a final compliance check and minimal formatting fixes on application outputs. Supports multiple link profiles (INSPIRA_FIELD, UNICEF_FIELD, IOM_RA) to meet e‑recruitment system constraints. Use this skill only when the user asks to validate or lint output formatting. Do not generate new substantive content.
+   Perform a final compliance check and minimal formatting fixes on application outputs. Supports multiple link profiles (INSPIRA_FIELD, UNICEF_FIELD, IOM_RA, ATS_DRA) to meet e‑recruitment system constraints. Use this skill only when the user asks to validate or lint output formatting. Do not generate new substantive content.
 ---
 
 # apex-output-lint
@@ -23,6 +23,7 @@ Optional:
   - `INSPIRA_FIELD` (strict single-paragraph field; typically ~1000 chars)
   - `UNICEF_FIELD` (strict field; typically longer e.g., ~2500 chars)
   - `IOM_RA` (Responsibilities/Achievements sections; bullets allowed)
+  - `ATS_DRA` (Duties/Responsibilities/Achievements sections; bullets allowed)
   - `AUTO` (default): infer from the text structure; if uncertain, behave like INSPIRA_FIELD.
 - If numeric character limits apply:
   - `CHAR_LIMIT`, `TARGET_LOW`, `TARGET_HIGH`, `WORD_TARGET` (optional)
@@ -56,6 +57,15 @@ Allowed:
 Still required:
 - **ASCII punctuation only:**
 
+### Profile: ATS_DRA
+Use when the system expects separate Duties, Responsibilities, and Achievements sections.
+Allowed:
+- **Headings:** "Duties:", "Responsibilities:", and "Achievements:"
+- **Bullets:** Hyphen bullets using "- " only
+- **Blank lines:** Blank line between sections
+Still required:
+- **ASCII punctuation only:**
+
 ## Behavior
 
 1. Normalize punctuation:
@@ -71,6 +81,9 @@ Still required:
      - Remove internal line breaks (convert to spaces) to enforce one paragraph.
      - Remove leading bullet markers ("-", "*", "•") at line starts.
    - IOM_RA:
+     - Preserve line breaks.
+     - Convert any bullet glyphs ("•") or "*" bullets into "- " bullets.
+   - ATS_DRA:
      - Preserve line breaks.
      - Convert any bullet glyphs ("•") or "*" bullets into "- " bullets.
 4. If numeric limits are provided (CHAR_LIMIT/TARGET_*):

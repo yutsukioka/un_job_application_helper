@@ -1,0 +1,28 @@
+model: GPT-5.3-Codex
+quality: Extra High
+interface:
+  display_name: "Apex ▸ Generate Admin Profile (DRA Split) (Option 8)"
+  short_description: "Generate ATS-style Duties + Responsibilities + Achievements separated per role (bullets allowed)."
+  default_prompt: |
+    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
+    generate the Option 8 Admin Profile for ATS systems that require
+    Duties, Responsibilities, and Achievements separately.
+
+    This skill cooperates with apex-generate-admin-profile-ra-split (Option 5):
+    - Invoke Option 5 first to obtain Achievements, Direct Reports, and
+      Reason for Leaving per role.
+    - Then generate Duties (specific required acts/functions) and
+      Responsibilities (spheres of ownership/answerability) from
+      USER_JOB_HISTORY_TEXT aligned to JOB_DESCRIPTION_TEXT.
+
+    TARGET_SYSTEM behavior (read from ## LIMITS):
+    - Output separate Duties, Responsibilities, and Achievements sections
+      per role using hyphen bullets ("- " only).
+    - If a numeric CHAR_LIMIT is provided: apply capel-fit to each section
+      individually; otherwise treat as UNLIMITED and prioritize best content.
+
+    Also include per role:
+    - Direct Reports (from Option 5 output; placeholder if unknown)
+    - Reason for Leaving (from Option 5 output; placeholder if unknown)
+
+    Do not invent facts; use placeholders for missing specifics.

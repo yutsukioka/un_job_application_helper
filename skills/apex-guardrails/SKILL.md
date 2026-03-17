@@ -117,6 +117,14 @@ Use for IOM/Oracle-style separate Responsibilities and Achievements (often unlim
 - Still keep punctuation plain and copy/paste safe (avoid fancy bullets/quotes).
 - If numeric limits are provided anyway: respect them.
 
+### Profile C2: ats_dra_split
+Use for Generic ATS Cloud-style separate Duties, Responsibilities, and Achievements.
+- Headings like "Duties:", "Responsibilities:", and "Achievements:" allowed.
+- Hyphen bullets "- " allowed.
+- Blank line between sections allowed.
+- Still keep punctuation plain and copy/paste safe (avoid fancy bullets/quotes).
+- If numeric limits are provided: respect them.
+
 ### Profile D: cv_document
 Use for CV output.
 - Plain text headings allowed (no Markdown # headings in the final CV).
@@ -258,7 +266,7 @@ When issues arise during generation, follow these rules:
 When invoked to validate output text, require (or infer) a FORMAT_PROFILE and produce a structured validation report.
 
 Inputs for validation invocation:
-- FORMAT_PROFILE: inspira_field_strict | unicef_field_strict | iom_ra_split | cv_document | cover_letter_document | strategy_markdown
+- FORMAT_PROFILE: inspira_field_strict | unicef_field_strict | iom_ra_split | ats_dra_split | cv_document | cover_letter_document | strategy_markdown
 - Text to validate
 
 Validation checks (choose by profile):
@@ -277,6 +285,15 @@ Validation checks (choose by profile):
 4. **Chain-of-thought leakage:**
 5. **No fancy bullets/quotes:** Bullets must be "- "
 6. **Section integrity:** Responsibilities and Achievements are clearly separated and internally consistent.
+
+### ats_dra_split checks
+1. **Source-grounding:**
+2. **Placeholder completeness:**
+3. **Keyword stuffing:**
+4. **Chain-of-thought leakage:**
+5. **No fancy bullets/quotes:** Bullets must be "- "
+6. **Section integrity:** Duties, Responsibilities, and Achievements are clearly separated and internally consistent.
+7. **Duty vs. Responsibility distinction:** Duties describe specific acts/functions; Responsibilities describe spheres of ownership/answerability.
 
 ### cv_document / cover_letter_document checks
 1. **Source-grounding:**

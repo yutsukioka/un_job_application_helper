@@ -51,7 +51,7 @@ stop and recommend running `apex-build-context-pack`.
 
 - Use Markdown headings for Phases 1–7.
 - Provide concise, actionable bullets (avoid walls of text).
-- Conclude with the Phase 8 menu (6 items, multi-select).
+- Conclude with the Phase 8 menu (8 items, multi-select).
 - Do not generate Phase 8 documents until user chooses.
 
 ## Output format
@@ -59,7 +59,7 @@ stop and recommend running `apex-build-context-pack`.
 The strategy report must be structured with clear **Markdown headings and
 bullet points** for readability. The report is advisory/strategic and may
 use structured formatting. Conclude the report with the Phase 8 document
-generation menu (6 selectable items, multi-select). Do not generate any
+generation menu (8 selectable items, multi-select). Do not generate any
 documents listed in the menu until the user selects.
 
 ## Steps
@@ -133,6 +133,9 @@ Select one or more documents to generate. You may choose any combination
 6. **Competency Mapping**
    Skills per job with relevance scores and total experience per skill.
 
+8. **Admin Profile (ATS Duties, Responsibilities & Achievements separated)**
+   Per role: Duties, Responsibilities, and Achievements as separate sections (bullets allowed), plus Direct Reports and Reason for Leaving. Cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
+
 Reply with your selection(s). I will generate only the selected items.
 
 ---
@@ -152,6 +155,8 @@ When generating documents, apply the correct format profiles:
 - Option 5: `iom_ra_split` (bullets allowed). Use `apex-output-lint` only if the user requests IOM-style linting.
 
 - Option 6: mapping document output; no strict lint by default.
+
+- Option 8: `ats_dra_split` (bullets allowed). Cooperates with Option 5 (`apex-generate-admin-profile-ra-split`) for Achievements, Direct Reports, and Reason for Leaving. Use `apex-output-lint` only if user requests linting.
 
 If the user generates multiple documents, recommend running `apex-cross-doc-consistency` to flag any mismatches.
 
