@@ -17,7 +17,7 @@ description: >-
 ## Purpose
 
 Resolve a compact, vacancy-specific subset of CCOG occupational definitions
-from the full ICSC CCOG database (~338 entries). The resolved subset represents
+from the full ICSC CCOG database (221 entries). The resolved subset represents
 the **vacancy's target register** — the occupational language the JD expects —
 and is used by downstream skills for register alignment, verb bank construction,
 and register mismatch detection.
@@ -51,6 +51,16 @@ analysis gets a fresh resolution tailored to the specific JD.
 | `JOB_REQUIREMENT_TEXT` | `application_context.md` | YES |
 | `VACANCY_TYPE_CLASSIFICATION` | Output of `apex-jd-core-requirements` (user-confirmed) | YES |
 
+## Preconditions
+
+- If the vacancy type/classification has not been confirmed or explicitly
+  overridden by the user, stop and ask for confirmation before resolving.
+- If `resource/ccog_reference_full.md` is missing or still a
+  stub/template, stop and report that production resolution cannot
+  proceed.
+- Score entries using only the JD, requirements text, and confirmed
+  vacancy type. Do not use candidate history in resolver scoring.
+
 ## Resource
 
 The full CCOG database is stored at:
@@ -58,7 +68,7 @@ The full CCOG database is stored at:
 .agents/skills/apex-ccog-resolver/resource/ccog_reference_full.md
 ```
 
-This file contains all ~338 CCOG entries in the following structured format:
+This file contains all 221 CCOG entries in the following structured format:
 
 ```markdown
 ### <code> — <title>
@@ -74,16 +84,18 @@ This file contains all ~338 CCOG entries in the following structured format:
 1. Extract text from the ICSC CCOG 2015 PDF (77 pages) using pdfplumber or equivalent.
 2. Parse each occupational group definition into the structured format above.
 3. Clean PDF line-break artifacts, normalise whitespace, and fix encoding issues.
-4. Validate completeness: count entries against the known ~338 definitions.
+4. Validate completeness: count entries against the known 221 definitions.
 5. Save to `resource/ccog_reference_full.md`.
 
 ## Resolution procedure
 
 ### Stage 1 — Input collection
 
-1. Read the full CCOG database from `resource/ccog_reference_full.md`.
-2. Collect the JD text and vacancy-type classification.
-3. Extract from the JD:
+1. Verify the confirmed vacancy classification and the presence of the
+   full CCOG resource.
+2. Read the full CCOG database from `resource/ccog_reference_full.md`.
+3. Collect the JD text and vacancy-type classification.
+4. Extract from the JD:
    - All action verbs (from responsibilities, duties, and competencies sections)
    - All scope nouns (programmes, policies, missions, systems, etc.)
    - Department/agency name
@@ -142,6 +154,8 @@ For each CCOG entry in the full database:
 ## Resolved on: <date>
 ## Vacancy type: <confirmed type>
 ## Total entries: <count>
+## Primary family: <family code — family name>
+## Secondary families: <family code — family name>; <family code — family name>
 
 ### Political/Diplomatic Register
 <entries>
@@ -167,7 +181,11 @@ For each CCOG entry in the full database:
 
 2. **Clear the full CCOG database from the context window.** The full database
    should not be retained after this point — only the resolved subset persists.
-3. Report to the user: "Resolved <N> CCOG entries for this vacancy. Primary
+3. If filesystem access is available, prefer running the resolver script
+   in `scripts/resolve_ccog.py` and writing the resolved file to the
+   current output working directory. Do not hard-code a conflicting output
+   path when the caller provides a different working directory.
+4. Report to the user: "Resolved <N> CCOG entries for this vacancy. Primary
    register: <family>. See `ccog_reference_resolved.md`."
 
 ## Register grouping reference
@@ -206,6 +224,7 @@ contain candidate-side CCOG mappings.
 
 And a brief summary message to the user confirming:
 - Number of entries resolved
+- Vacancy title and confirmed vacancy type
 - Primary and secondary register families
 - Any JD functions with no CCOG match
 

@@ -1,5 +1,5 @@
 ---
-name: term_extractor
+name: term-extractor
 description: >-
   Extract exactly five high-priority terms from a job description with star
   ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in
@@ -8,7 +8,7 @@ description: >-
   user asks for keyword extraction from a JD.
 ---
 
-# term_extractor
+# term-extractor
 
 ## Purpose
 

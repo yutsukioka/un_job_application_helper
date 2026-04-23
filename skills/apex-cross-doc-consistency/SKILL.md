@@ -26,7 +26,7 @@ It does not rewrite documents; it flags issues with specific locations and sugge
 
 Required:
 
-- At least two generated documents from Phase 8 (any combination of Option 1–6).
+- At least two generated documents from Phase 8 (any combination of Options 1–8).
 
 Optional:
 
@@ -40,19 +40,19 @@ Optional:
 1. **Job titles:** Verify that the same role is titled identically
    across all documents. Flag any discrepancies (e.g., "Programme
    Manager" in the CV vs. "Project Manager" in the Cover Letter).
-2. **Dates and timelines:** Verify that employment dates, project
+2. **Employer and organization names:** Verify spelling and naming
+   consistency across documents.
+3. **Dates and timelines:** Verify that employment dates, project
    durations, and chronological order are consistent across documents.
-3. **Achievements and metrics:** Verify that quantified claims (e.g.,
+4. **Achievements and metrics:** Verify that quantified claims (e.g.,
    "USD 5M budget", "12 countries") match across documents and against
    source inputs. Flag any conflicting numbers.
-4. **Keyword usage:** Verify that high-priority keywords (★★★ and
+5. **Keyword usage:** Verify that high-priority keywords (★★★ and
    above) appear consistently across documents. Flag any document that
    omits a critical keyword present in others.
-5. **Narrative coherence:** Verify that the UVP, STAR stories, and key
+6. **Narrative coherence:** Verify that the UVP, STAR stories, and key
    selling points referenced in the strategy report are reflected in
    the generated documents. Flag missing narrative threads.
-6. **Employer and organization names:** Verify spelling and naming
-   consistency across documents.
 7. **Format compliance (only if strict-field outputs included):** If Option 1 or Option 4 outputs are included, flag bullets/line breaks/curly quotes that violate strict paste rules.
 
 ## Output format

@@ -10,10 +10,12 @@ description: >-
 
 This skill produces ATS-style role entries where Duties, Responsibilities, and Achievements
 are entered as three separate sections. The output uses headings and hyphen bullets for skimmability.
+This is Phase 8 Option 8.
 
 This skill **cooperates** with `apex-generate-admin-profile-ra-split` (Option 5):
 - **This skill** generates the **Duties** and **Responsibilities** sections.
-- `apex-generate-admin-profile-ra-split` generates the **Responsibilities** and **Achievements** sections, plus **Direct Reports** and **Reason for Leaving**.
+- `apex-generate-admin-profile-ra-split` generates the **Achievements**
+  section, plus **Direct Reports** and **Reason for Leaving**.
 - The final combined output uses:
   - **Duties** — from this skill
   - **Responsibilities** — from this skill
@@ -124,6 +126,8 @@ If unknown, provide 2–3 safe options separated by " / " and append "(Select on
 - **JD terminology:** Use JD terminology naturally; do not paste star symbols (★). Maintain professional tone and integrate high-priority keywords naturally.
 - **Coverage:** Include every job from USER_JOB_HISTORY_TEXT and/or USER_ADMIN_PROFILE_TEXT; do not omit, merge, or skip any roles or contracts. Preserve the source chronology (default: newest to oldest, unless specified otherwise).
 - **Duty vs. Responsibility distinction:** Maintain a clear separation. If a source bullet is ambiguous, classify it based on whether it describes a specific act/function (→ Duty) or a sphere of ownership/answerability (→ Responsibility). When in doubt, prefer Responsibility.
+- If limits are missing or unlimited, generate comprehensive but
+  non-redundant bullets rather than compressing aggressively.
 
 ## Recursive self-evaluation (internal only; do not print)
 
@@ -136,10 +140,11 @@ Additional self-check for this skill:
 
 ## Steps
 
-1. Invoke `apex-generate-admin-profile-ra-split` to produce Responsibilities, Achievements, Direct Reports, and Reason for Leaving per role. Retain the Achievements, Direct Reports, and Reason for Leaving from this output.
+1. Invoke `apex-generate-admin-profile-ra-split` to produce
+   Achievements, Direct Reports, and Reason for Leaving per role.
 2. Extract roles and dates from USER_JOB_HISTORY_TEXT; preserve chronology.
 3. Build **Duties** bullets per role — identify specific required acts, functions, and recurring mandated activities from the job history. Align to JOB_DESCRIPTION_TEXT language.
-4. Build **Responsibilities** bullets per role — identify spheres of ownership, areas of accountability, and answerability for outcomes. Align to JOB_DESCRIPTION_TEXT language. Cross-check against the Responsibilities produced by RA-split for completeness.
+4. Build **Responsibilities** bullets per role — identify spheres of ownership, areas of accountability, and answerability for outcomes. Align to JOB_DESCRIPTION_TEXT language.
 5. Adopt **Achievements** bullets from the RA-split output (Step 1).
 6. Adopt **Direct Reports** and **Reason for Leaving** from the RA-split output (Step 1).
 7. If character limits are specified, apply `capel-fit` to Duties, Responsibilities, and Achievements sections individually.

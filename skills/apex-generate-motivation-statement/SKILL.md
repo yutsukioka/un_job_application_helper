@@ -59,9 +59,9 @@ Optional:
 
 ## Output format
 
-Return the Motivation Statement as **one continuous plain-text block**
-(no Markdown headings, no bullets, no internal line breaks). Paragraphs
-are separated by a single blank line within the text field.
+Return the Motivation Statement as a **single plain-text block suitable
+for Inspira** (no Markdown headings, no bullets, ASCII punctuation only).
+Paragraphs are separated by a single blank line within the text field.
 
 The statement follows the **VACC four-paragraph architecture**:
 
@@ -118,7 +118,7 @@ Draft using an internal CAPEL word budget targeting ~1950 characters
 deterministically with `capel-fit`:
 
 ```
-python3 capel-fit/scripts/fit_entry.py \
+python3 skills/capel-fit/scripts/fit_entry.py \
   --char-limit 2000 --target-low 1950 --target-high 2000 \
   --mode auto --print-report
 ```
@@ -185,7 +185,7 @@ Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 - SDG or agency-priority reference in Paragraph 3.
 - UN Core Values named in Paragraph 4.
 - Diplomatic tone; no private-sector jargon or platitudes.
-- Character count within 1900–2000 band (via `capel-fit`).
+- Character count within 1950–2000 band (via `capel-fit`).
 - ASCII punctuation only; no line breaks within paragraphs.
 
 ## Steps
@@ -205,12 +205,8 @@ Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
    - P3: ~90 words
    - P4: ~45 words
 6. Run `capel-fit` on the full statement with `--char-limit 2000
-   --target-low 1900 --target-high 2000 --mode auto --print-report`.
+   --target-low 1950 --target-high 2000 --mode auto --print-report`.
    Iterate until STATUS: OK.
 7. Run the recursive self-evaluation loop (domain-specific checks
    above). Revise if needed; re-run `capel-fit` after any revision.
 8. Output the final plain-text statement.
-9. After the statement, add:
-   `Here is your drafted Motivation Statement. Please verify that the
-   JO title/reference, dates, metrics, and employer details match your
-   actual experience, and edit as necessary.`

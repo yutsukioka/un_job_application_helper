@@ -26,7 +26,7 @@ makes it possible to:
 
 It can run:
 - **Standalone** — to trace a single skill invocation and its context.
-- **As a sub-module of `agent_test_suite`** — called iteratively during
+- **As a sub-module of `agent-test-suite`** — called iteratively during
   Step 3 (Pipeline Execution Trace) to build the full graph.
 
 ## Shared definitions

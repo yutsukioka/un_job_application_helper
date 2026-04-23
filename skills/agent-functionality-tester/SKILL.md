@@ -21,7 +21,7 @@ comparison, and records a compliance verdict.
 
 It can run:
 - **Standalone** — to validate a single skill's output.
-- **As a sub-module of `agent_test_suite`** — called once per artifact
+- **As a sub-module of `agent-test-suite`** — called once per artifact
   during Step 4 (Output Format Compliance).
 
 ## Shared definitions
@@ -48,7 +48,7 @@ Optional:
 - `format_profile_override`: force a specific format profile (A–F)
   instead of inferring from the SKILL.md.
 - `checkpoint_number`: sequential checkpoint ID when called in a batch
-  by `agent_test_suite` (default: 1).
+  by `agent-test-suite` (default: 1).
 
 ---
 
@@ -156,7 +156,7 @@ If the SKILL.md specifies a character limit or references `capel-fit`:
 
 File: `output/tmp/test_suite/0x_agent_trace_log.md`
 
-When called multiple times (e.g., by `agent_test_suite`), each
+When called multiple times (e.g., by `agent-test-suite`), each
 invocation appends a new checkpoint entry.
 
 ### Output Format

@@ -1,24 +1,7 @@
-name: deterministic-skill-router
-
-description: >
-  Routes agent tasks using deterministic rules
-  to prevent incorrect skill selection.
-
-trigger:
-  - skill_routing_event
-
-inputs:
-  - user_request
-  - routing_rules
-  - skill_registry
-
-process:
-  steps:
-    - detect_intent
-    - match_routing_rule
-    - select_skill
-    - log_routing
-
-output:
-  file: 0x_skill_routing_log.md
-  format: markdown
+interface:
+  display_name: "Diagnostics ▸ Deterministic Skill Router"
+  short_description: "Route requests to the correct ApexStrategist skill using the deterministic rule table."
+  default_prompt: |
+    Use this skill to route requests to the correct ApexStrategist skill.
+    Follow AGENTS.md, apex-guardrails, and deterministic-skill-router/SKILL.md.
+    Treat deterministic-skill-router/SKILL.md as the canonical behavior and output contract.

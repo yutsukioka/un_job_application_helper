@@ -17,14 +17,15 @@ It is used as:
 - the seed for a CV summary statement.
 
 Important:
-- `TERM_EXTRACTOR` start ratings are internal: use the term text, not start symbols, in the headline.
+- `TERM_EXTRACTOR` star ratings are internal: use the term text, not star symbols, in the headline.
 
-##Shared definitions
+## Shared definitions
 
 Apply the expert lens, collaboration rules, guardrails, quality loop
 protocol, and guiding principles defined in `apex-guardrails`.
 
-Default format profile: `strategy_markdown (but output is a single plain line).
+Default format profile: `strategy_markdown` (but the final output is a
+single plain line).
 
 ## Inputs
 
@@ -45,13 +46,15 @@ Optional:
 
 ## Output format (STRICT)
 
-Return exactly one line containing the headline text only (no prefix labels like "Headline:")
+Return exactly one line containing the headline text only. Do not add
+any label prefix.
 
 Constraints:
 - 10-20 words
 - noun phrase or concise statement (not a full paragraph)
 - includes at least one high-priority JD term (term text only)
 - no line breaks
+- no extra commentary before or after the line
 
 Example (pattern reference only; do not copy):
 Senior Programme Management Specialist | Results-Based Management, Partner Coordination Field Operations with 12+ years leading multi-sector UN development initiatives across [N] countries

@@ -50,6 +50,8 @@ subsections:
   humanitarian, policy, tech) based on cues from the job description.
 - Emphasize the importance of a final review to catch errors and
   maintain coherence.
+- In the final review advice, explicitly cover consistency, accuracy,
+  narrative cohesion, unresolved placeholders, and keyword overuse.
 
 ## Steps
 

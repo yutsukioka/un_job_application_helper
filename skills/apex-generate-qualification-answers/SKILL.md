@@ -81,6 +81,7 @@ beneficiary targeting accuracy.
 - Use placeholders like `[User to Insert Specific Metric]` for missing
   data instead of inventing details.
 - Under no circumstances should an answer exceed 1000 characters.
+- Keep each answer to one paragraph only.
 - **Required qualifications:** If the question asks for a required
   qualification (e.g., a certain number of years of experience or a
   specific degree), explicitly confirm the candidate meets it and
@@ -109,17 +110,12 @@ Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 
 1. For each question, determine the relevant experience(s) in the
    user’s history.
-2. Begin with: "Understood. Drafting targeted answers for your job
-   qualification questions. This may take a moment..."
-3. Plan the answer with an internal word budget (~150 words). Use
+2. Plan the answer with an internal word budget (~150 words). Use
    CAPEL-style countdown to manage length and ensure the most
    important details appear early.
-4. Write the two-part answer following the format and rules above.
-5. Count characters (with spaces). If exceeding 1000, compress the
+3. Write the two-part answer following the format and rules above.
+4. Count characters (with spaces). If exceeding 1000, compress the
    answer by removing filler and combining sentences; if below ~800
    characters, enrich with additional specific details.
-6. Present each question with its answer, separated by a blank line
+5. Present each question with its answer, separated by a blank line
    between pairs.
-7. After all answers, add a note: "Here are your drafted responses.
-   Please double-check that all dates, employer names, and specifics
-   match your actual experience, and edit as necessary."

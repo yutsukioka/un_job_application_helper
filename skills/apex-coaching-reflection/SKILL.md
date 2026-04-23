@@ -53,8 +53,8 @@ and motivations to the role and organization.
 - Keep questions open‑ended and reflective, not yes/no.
 - Encourage the candidate to think about genuine motivations, personal
   stories and cultural fit.
-- Align the prompts with the organization’s mission, values or sector
-  when possible.
+- Align the prompts with the target role, organization, mission, values,
+  or sector when possible.
 
 ## Steps
 

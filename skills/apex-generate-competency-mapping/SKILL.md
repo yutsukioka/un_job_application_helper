@@ -35,7 +35,7 @@ Divide the document into two sections with exactly these headings:
 1. `## Job title and skills`
    - For each job, output two lines:
      * **Job Title:** `Job Title — Organization — Dates` (use placeholders if missing).
-     * **Skills:** a comma‑separated list oin descending relevance, formatted as `SkillName (3)` / `SkillName (2)` / `SkillName (1)`
+     * **Skills:** a comma‑separated list in descending relevance, formatted as `SkillName (3)` / `SkillName (2)` / `SkillName (1)`
    - Insert a blank line between each job entry.
 
 2. `## Total years of experiences per skills with Skill Type`
@@ -78,6 +78,9 @@ Do not add any other headings or narrative text.
 - Only list skills present in SKILLS_TAXONOMY.
 - Do not invent dates or durations.
 - Do not include commentary outside the two required sections.
+- If a role evidences many skills, limit the per-role list to the top
+  10–12 most relevant skills unless the user explicitly asks for
+  exhaustive coverage.
 
 ## Recursive self-evaluation (internal only; do not print)
 

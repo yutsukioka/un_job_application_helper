@@ -15,6 +15,13 @@ This skill consolidates all required user inputs into a single Markdown file (`i
 reference.
 It does not perform any analysis or generate documents; it simply organizes the raw data in a standard structure with paste-ready blocks.
 
+## Shared definitions
+
+Follow `AGENTS.md` and the source-grounding, placeholder, and format-safety
+rules defined in `apex-guardrails`.
+
+Treat this `SKILL.md` as the canonical behavior contract for the skill.
+
 ## Inputs
 
 Provide the following data when invoking this skill (either by
@@ -31,6 +38,9 @@ pasting directly or referencing existing files in the repo):
 
 If any section is missing, use a placeholder block with `[PASTE HERE]` to
 indicate that the user must supply it later.
+
+Use only content the user provides directly or via referenced repository
+files. Do not fabricate or silently infer missing facts.
 
 Optional (recommended for improved ATS/keyword work):
 - `JD_KEYWORD_BANK` (20–40 phrases from `apex-jd-keyword-bank`)
@@ -100,7 +110,18 @@ Optional (recommended for improved ATS/keyword work):
    IOM_ACHIEVEMENTS_CHAR_LIMIT: UNLIMITED
    ```
 
-3. After writing the file, run the **Pre-flight Validation** below.
+3. In `## LIMITS`, always include:
+   - `TARGET_SYSTEM`
+   - `CHAR_LIMIT`
+   - `TARGET_LOW`
+   - `TARGET_HIGH`
+   - `WORD_TARGET`
+4. If an existing context pack already contains additional limit keys
+   (for example field-specific overrides), preserve and merge them rather
+   than deleting unknown keys.
+5. After writing the file, run the **Pre-flight Validation** below and
+   output only a concise pre-flight checklist table plus any critical
+   blockers.
 
 ## Pre-flight Validation
 
@@ -131,3 +152,10 @@ If any required section is missing, list it and recommend the user supply the da
 
 Use this skill whenever the raw context needs to be assembled or refreshed.
 Run it before other analytical or generation skills if the context file is missing or outdated.
+
+## Rules
+
+1. Preserve user-provided text verbatim inside fenced code blocks.
+2. Use `[PASTE HERE]` for missing sections rather than fabricating.
+3. Preserve unknown `## LIMITS` keys already present in the file.
+4. Do not proceed to the orchestrator when critical sections are missing.

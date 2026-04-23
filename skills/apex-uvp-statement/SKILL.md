@@ -9,7 +9,9 @@ description: Produce a concise 1–2 sentence Unique Value Proposition (UVP) sta
 
 This skill synthesizes the candidate’s strongest matches to the job
 requirements into a concise, high-impact UVP statement. It highlights
-unique strengths and alignment with the organization’s mission and sound specific, evidence-based, and aligned to the target role’s mission and deliverables.
+unique strengths and alignment with the organization’s mission. The
+statement should sound specific, evidence-based, and aligned to the
+target role’s mission and deliverables.
 
 ## Shared definitions
 
@@ -34,12 +36,13 @@ Recommended (for higher quality):
 
 ## Output format (STRICT)
 
-Return exactly one paragraph (1–2 sentences), with no prefix label like “UVP:”.
+Return exactly one paragraph (1–2 sentences), with no prefix label.
 Constraints:
 - 35–60 words (guideline): Describing why the candidate is an exceptional fit.
 - Include 1–2 high-priority JD terms (term text only): Use JD language naturally without keyword stuffing. If a key detail (metric, technology, scope) is missing, insert a placeholder.
 - Plain ASCII punctuation
 - No line breaks
+- No extra commentary before or after the paragraph
 
 ## Example (for pattern reference; do not copy verbatim)
 

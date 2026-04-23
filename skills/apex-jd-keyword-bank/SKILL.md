@@ -3,7 +3,7 @@ name: apex-jd-keyword-bank
 description: >-
   Extract an expanded 20–40 phrase keyword bank from JOB_DESCRIPTION_TEXT and JOB_REQUIREMENT_TEXT,
   grouped by category (technical/functional, deliverables, stakeholders, tools/systems, compliance/frameworks).
-  Use this skill to complement term_extractor when deeper ATS phrase coverage is needed.
+  Use this skill to complement term-extractor when deeper ATS phrase coverage is needed.
 ---
 
 # apex-jd-keyword-bank
@@ -62,6 +62,8 @@ Return exactly this structure in Markdown:
 Rules:
 - Each phrase must be JD-grounded (explicitly present or clearly implied by repeated language).
 - Prefer exact JD phrases when possible.
+- Prefer multi-word phrases over generic single words.
+- Avoid redundancy and near-duplicate phrases.
 - Add variants only when common and safe (e.g., acronyms and spelled-out versions if the JD uses them).
 - Do not include star symbols in this output.
 - Do not invent tools or frameworks not in the JD.

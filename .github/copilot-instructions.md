@@ -41,6 +41,10 @@ un_job_application_helper/          ← VS Code workspace root (NOT a git repo)
    - `develop` — active work; push new skill additions and edits here first.
    - Feature branches from `develop` for large changes.
 
+5. **Skill metadata review hygiene:**
+   - When scanning or dumping repo metadata, exclude `.agents/.venv`, `.agents/.git`, `agent_sync/`, and `logs/`.
+   - Skip large resource files unless they are directly needed for the task being reviewed.
+
 ## Workflow for syncing local files to repo
 
 ```bash

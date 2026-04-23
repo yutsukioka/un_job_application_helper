@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diagnostics ▸ Agent Test Suite"
+  short_description: "Run an end-to-end diagnostic suite for ApexStrategist skill wiring and outputs."
+  default_prompt: |
+    Use this skill to run the end-to-end ApexStrategist diagnostic suite.
+    Follow AGENTS.md, apex-guardrails, and agent-test-suite/SKILL.md.
+    Treat agent-test-suite/SKILL.md as the canonical behavior and output contract.

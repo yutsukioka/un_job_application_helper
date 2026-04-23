@@ -1,7 +1,10 @@
 ---
 name: apex-generate-admin-profile-ra-split
 description: >-
-  Generate IOM/Oracle Recruiting Cloud-style employment-record content where each role is split into Responsibilities and Achievements sections with bullets point aloowed, plus Direct Reports and Reason for Leaving. Option 5 of Phase 8.
+  Generate IOM/Oracle Recruiting Cloud-style employment-record content where
+  each role is split into Responsibilities and Achievements sections with
+  bullet points allowed, plus Direct Reports and Reason for Leaving.
+  Option 5 of Phase 8.
 ---
 
 # apex-generate-admin-profile-ra-split
@@ -16,6 +19,8 @@ Core intent:
 - Achievements = impact (“what changed because of your actions”), using condensed CAR/STAR bullets
 - Integrate JD language and high-priority terms naturally without keyword stuffing
 - Include Direct Reports and Reason for Leaving per role
+- Use this skill for IOM/Oracle-style systems that separate
+  Responsibilities and Achievements.
 
 ## Shared definitions
 
@@ -43,7 +48,8 @@ Optional:
 
 ## Output format
 
-For each job, (newest to oldest unless user specifies), output exactly four lines:
+For each job (newest to oldest unless user specifies), output exactly
+these sections:
 
 1. **ROLE:** <Job Title> — <Organization> — <Dates> (use placeholders if missing)
 2. **DIRECT_REPORTS:** <short line; number + type if known; otherwise placeholder>
@@ -90,8 +96,8 @@ Use standard, diplomatic phrases (do not criticize employer):
 If unknown, provide 2–3 safe options separated by " / " and append "(Select one)".
 ## Length & Character Limits
 
-- IF NO LIMIT IS SPECIFIED (or user specifies "Unlimited"): Generate as many distinct, high-value bullets as necessary. Focus on comprehensive coverage without redundancy. 
-- IF A NUMERIC LIMIT IS SPECIFIED (`CHAR_LIMIT`): Strictly adhere to the user's limit by using `capel-fit`. Prioritize the most impactful points, keep phrasing concise, and reduce the total bullet count to fit within the constraint.
+- IF NO LIMIT IS SPECIFIED (or user specifies "Unlimited"): Generate as many distinct, high-value bullets as necessary. Focus on comprehensive coverage without redundancy.
+- IF A NUMERIC OR FIELD-SPECIFIC LIMIT IS SPECIFIED: Strictly adhere to the user's limit by using `capel-fit`. Prioritize the most impactful points, keep phrasing concise, and reduce the total bullet count to fit within the constraint.
 - Formatting constraint: Even when under strict limits, do not abandon the bulleted format to save space (e.g., do not cram text into a dense paragraph) unless the user explicitly requests paragraph-only mode.
 
 ## Rules
@@ -99,6 +105,7 @@ If unknown, provide 2–3 safe options separated by " / " and append "(Select on
 - **No invention:** Do not fabricate organization names, dates or results, metrics, budgets, tools, or headcounts; use placeholders such as `[Org Name]`, `[Dates]`, `[User to Insert Metric]` as needed.
 - **JD terminology:** Use JD terminology naturally; do not paste star symbols (★). Maintain professional tone and integrate high-priority keywords naturally.
 - **Coverage:** Include every job from USER_JOB_HISTORY_TEXT and/or USER_ADMIN_PROFILE_TEXT; do not omit, merge, or skip any roles or contracts. Preserve the source chronology (default: newest to oldest, unless specified otherwise).
+- Use hyphen bullets only.
 
 ## Recursive self-evaluation (internal only; do not print)
 
@@ -111,4 +118,3 @@ Apply the recursive self-evaluation loop protocol from `apex-guardrails`.
 3. Build Achievements bullets per role using CAR/STAR compression and metrics/placeholders.
 4. Add Direct Reports and Reason for Leaving lines.
 5. Output using the exact headings and bullet format.
-

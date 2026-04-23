@@ -1,34 +1,7 @@
-model: GPT-5.3-Codex
-quality: Extra High
 interface:
   display_name: "Apex ▸ Output Lint (Profile-based)"
-  short_description: "Final compliance pass using lint profiles: INSPIRA_FIELD, UNICEF_FIELD, IOM_RA (apply only to paste-into-field outputs)."
+  short_description: "Final compliance pass using lint profiles: INSPIRA_FIELD, UNICEF_FIELD, IOM_RA, ATS_DRA."
   default_prompt: |
-    Follow AGENTS.md and apex-guardrails. Lint/validate the provided text
-    for paste-into-field compliance using the correct profile.
-
-    Choose lint profile:
-    - If the user specifies a profile, use it.
-    - Else infer from inputs/application_context.md ## LIMITS TARGET_SYSTEM:
-      - INSPIRA -> INSPIRA_FIELD
-      - UNICEF  -> UNICEF_FIELD
-      - IOM     -> IOM_RA
-      - OTHER   -> ask user to specify, or choose the closest match based
-        on structure (field paragraph vs RA headings/bullets).
-
-    Profiles:
-    - INSPIRA_FIELD: single paragraph, ASCII punctuation, no bullets/tabs,
-      strict whitespace.
-    - UNICEF_FIELD: similar to Inspira but allows longer paragraphs; still
-      plain-text safe.
-    - IOM_RA: allows headings and hyphen bullets for 
-      Responsibilities/Achievements sections.
-
-    Do NOT change substantive meaning; do NOT invent facts. Only:
-    - Normalize to ASCII punctuation.
-    - Collapse whitespace to single spaces (except allowed line breaks per profile).
-    - Remove/convert illegal bullets/tabs.
-    - Ensure one paragraph per item where required.
-
-    Input text to lint:
-    [PASTE TEXT HERE]
+    Use this skill to lint text for the appropriate application-field format profile.
+    Follow AGENTS.md, apex-guardrails, and apex-output-lint/SKILL.md.
+    Treat apex-output-lint/SKILL.md as the canonical behavior and output contract.

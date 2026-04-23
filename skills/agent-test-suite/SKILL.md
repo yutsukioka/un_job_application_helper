@@ -1,5 +1,5 @@
 ---
-name: agent_test_suite
+name: agent-test-suite
 description: >-
   Run a controlled end-to-end diagnostic of the ApexStrategist pipeline.
   Executes the orchestrator workflow against a test context pack, records
@@ -11,7 +11,7 @@ description: >-
   application documents.
 ---
 
-# agent_test_suite
+# agent-test-suite
 
 ## Purpose
 
@@ -32,6 +32,15 @@ pipeline. It:
 
 The goal is to give developers a concrete, actionable report explaining
 what the agent did correctly and where it deviated.
+
+## Diagnostic sources
+
+The suite consolidates these diagnostic artifacts when available:
+
+- `0x_agent_execution_graph.md`
+- `0x_agent_reasoning_trace.md`
+- `0x_agent_trace_log.md`
+- `0x_skill_failure_analysis.md`
 
 ## Shared definitions
 
@@ -60,6 +69,14 @@ Optional:
 - `test_scope`: which phases to test — `full` (Phases 0-7, default),
   `phase8_only` (requires a prior strategy report), or a comma-separated
   list (e.g., `1,2,3`).
+
+## Status codes
+
+Use these final status codes exactly:
+
+- `PASS`
+- `PARTIAL`
+- `FAIL`
 
 ---
 

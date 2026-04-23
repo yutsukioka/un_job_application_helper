@@ -10,5 +10,11 @@ __pycache__/
 bak_*
 apex_skills_dump.txt
 proposed_changes.md
+skills/apex-ccog-resolver/resource/
 skills/apex-ccog-resolver/resource/CCOG_9_2015.pdf
 skills/apex-ccog-resolver/resource/ccog_reference_full.md
+# === Multi-agent log files ===
+logs/
+
+.bak
+agent_sync/

@@ -1,33 +1,7 @@
-model: GPT-5.4
-quality: Extra High
 interface:
   display_name: "Apex ▸ Application Audit"
   short_description: "Panel-style post-generation audit: alignment matrix, framing diagnosis, vulnerabilities, verification checklist."
   default_prompt: |
+    Use this skill to audit generated application documents from a panel-reviewer perspective.
     Follow AGENTS.md, apex-guardrails, and apex-application-audit/SKILL.md.
-
-    Objective:
-    - Audit one or more generated application documents from a panel-reviewer
-      perspective.
-    - Do not assign numeric scores.
-    - Do not predict shortlist chances.
-
-    Inputs to use when available:
-    - Generated Phase 8 documents
-    - apex-jd-core-requirements output
-    - apex-candidate-evidence-bank output
-    - ccog_reference_resolved.md
-    - apex-cross-doc-consistency output
-
-    Output exactly these sections:
-    1) Alignment Matrix
-    2) Framing Diagnosis
-    3) Structural Vulnerabilities
-    4) Verification Checklist
-    5) Consistency Flags
-
-    Requirements:
-    - Be concrete about what is strong, partial, weak, or absent
-    - Diagnose register mismatch separately from experience gaps
-    - Surface every remaining claim that still needs candidate confirmation
-    - If a document type was not provided, mark it `Not provided`
+    Treat apex-application-audit/SKILL.md as the canonical behavior and output contract.

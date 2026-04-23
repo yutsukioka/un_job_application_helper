@@ -29,7 +29,7 @@ test suite directory.
 
 It can run:
 - **Standalone** — to audit a single skill invocation.
-- **As a sub-module of `agent_test_suite`** — called once per skill
+- **As a sub-module of `agent-test-suite`** — called once per skill
   during a full pipeline test pass.
 
 ## Shared definitions
@@ -54,7 +54,7 @@ Optional:
 - `execution_context`: pipeline state at the time of invocation (which
   phase, prior outputs available).
 - `checkpoint_number`: sequential ID when called in a batch by
-  `agent_test_suite` (default: 1).
+  `agent-test-suite` (default: 1).
 - `input_sections_available`: which `application_context.md` sections
   were present — helps judge whether deviations were caused by missing
   inputs.

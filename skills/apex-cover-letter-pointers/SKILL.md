@@ -65,6 +65,8 @@ Provide 2–4 short paragraphs or bullets, each focused on one of:
 - Ensure suggestions align with the organization’s tone and the
   analysis from earlier phases.
 - Use term text only (no star symbols).
+- Mention UN Values & Behaviours only when they are credible and
+  supported by the candidate's evidence.
 
 ## Steps
 

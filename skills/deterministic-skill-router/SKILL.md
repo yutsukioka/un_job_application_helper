@@ -47,8 +47,8 @@ case-insensitive substring or keyword matches against the user request.
 | # | Pattern (any of) | Routed Skill | Notes |
 |---|---|---|---|
 | 1 | "build context", "context pack", "assemble inputs" | `apex-build-context-pack` | Must run before analysis |
-| 2 | "term extract", "keyword extract", "five terms" | `term_extractor` | Phase 0 prerequisite |
-| 3 | "keyword bank", "20-40 phrases", "expanded keywords" | `apex-jd-keyword-bank` | Optional complement to term_extractor |
+| 2 | "term extract", "keyword extract", "five terms" | `term-extractor` | Phase 0 prerequisite |
+| 3 | "keyword bank", "20-40 phrases", "expanded keywords" | `apex-jd-keyword-bank` | Optional complement to term-extractor |
 | 4 | "ccog", "occupational group", "ICSC" | `apex-ccog-resolver` | Phase 1 CCOG resolution |
 | 5 | "core requirement", "top 5", "knockout criteria" | `apex-jd-core-requirements` | Phase 1.2 |
 | 6 | "evidence bank", "evidence map", "gap mitigation" | `apex-candidate-evidence-bank` | Phase 1.3 |
@@ -70,18 +70,19 @@ case-insensitive substring or keyword matches against the user request.
 | 22 | "iom", "ra split", "responsibilities and achievements" | `apex-generate-admin-profile-ra-split` | Phase 8 Option 5 |
 | 23 | "competency map", "skills per job", "relevance score" | `apex-generate-competency-mapping` | Phase 8 Option 6 |
 | 24 | "motivation statement", "inspira motivation" | `apex-generate-motivation-statement` | Phase 8 Option 7 |
-| 25 | "lint", "format check", "paste-ready" | `apex-output-lint` | Post-generation utility |
-| 26 | "capel", "character fit", "char limit" | `capel-fit` | Post-generation utility |
-| 27 | "placeholder", "missing info", "unresolved" | `place-holder-checker` | Post-generation utility |
-| 28 | "audit", "application review" | `apex-application-audit` | Post-generation review |
-| 29 | "cross-doc", "consistency check" | `apex-cross-doc-consistency` | Post-generation review |
-| 30 | "test suite", "diagnostic", "pipeline test" | `agent_test_suite` | Testing skill |
-| 31 | "trace log", "output compliance", "checkpoint audit" | `agent-functionality-tester` | Testing sub-skill |
-| 32 | "execution graph", "execution trace", "skill invocation log" | `agent-execution-tracer` | Testing sub-skill |
-| 33 | "reasoning audit", "reasoning trace", "instruction interpretation" | `agent-reasoning-auditor` | Testing sub-skill |
-| 34 | "failure analysis", "root cause", "skill failure" | `skill-failure-analyzer` | Testing sub-skill |
+| 25 | "dra split", "duties responsibilities achievements", "duties, responsibilities, and achievements", "ats dra" | `apex-generate-admin-profile-dra-split` | Phase 8 Option 8 |
+| 26 | "lint", "format check", "paste-ready" | `apex-output-lint` | Post-generation utility |
+| 27 | "capel", "character fit", "char limit" | `capel-fit` | Post-generation utility |
+| 28 | "placeholder", "missing info", "unresolved" | `place-holder-checker` | Post-generation utility |
+| 29 | "audit", "application review" | `apex-application-audit` | Post-generation review |
+| 30 | "cross-doc", "consistency check" | `apex-cross-doc-consistency` | Post-generation review |
+| 31 | "test suite", "diagnostic", "pipeline test" | `agent-test-suite` | Testing skill |
+| 32 | "trace log", "output compliance", "checkpoint audit" | `agent-functionality-tester` | Testing sub-skill |
+| 33 | "execution graph", "execution trace", "skill invocation log" | `agent-execution-tracer` | Testing sub-skill |
+| 34 | "reasoning audit", "reasoning trace", "instruction interpretation" | `agent-reasoning-auditor` | Testing sub-skill |
+| 35 | "failure analysis", "root cause", "skill failure" | `skill-failure-analyzer` | Testing sub-skill |
 
-### Compound-pattern rules (rows 18-19)
+### Compound-pattern rules (rows 18-25)
 
 When the request matches a primary keyword but also contains a
 disqualifying keyword, the rule does not fire and evaluation continues
@@ -115,7 +116,7 @@ If no rule fires:
 
 1. Read the user request (or list of requests in batch mode).
 2. Normalize the request to lowercase for pattern matching.
-3. Evaluate the routing rule table top-down (rows 1-30).
+3. Evaluate the routing rule table top-down (rows 1-35).
 4. If a rule fires, record the match and proceed to Step 6.
 5. If no rule fires, run the fallback keyword-overlap comparison against
    skill descriptions. Record the top 3 candidates with scores.

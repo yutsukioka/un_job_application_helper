@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Term Extractor"
+  short_description: "Extract exactly 5 JD-grounded screening terms with stars, ATS synonyms, rationale, and resume-ready examples (strict 4-line format)."
+  default_prompt: |
+    Use this skill to extract exactly five high-priority JD terms.
+    Follow AGENTS.md, apex-guardrails, and term-extractor/SKILL.md.
+    Treat term-extractor/SKILL.md as the canonical behavior and output contract.

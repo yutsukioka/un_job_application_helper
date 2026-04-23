@@ -75,7 +75,11 @@ format:
 - Integrate at least one STAR story aligned to high‑priority
   requirements; insert placeholders for missing metrics or specific
   outcomes.
+- Include values/behaviours alignment only where it is credible and
+  supported by evidence.
 - Do not repeat bullet points verbatim; provide narrative context.
+- Do not apply strict output-lint profiles unless the user explicitly
+  requests paste-into-field formatting.
 - **Sign-off:** Use a professional closing ("Sincerely," or "Best
   regards,") followed by the candidate's name. If applicable, indicate
   any enclosures (e.g., "Enclosure: Resume").

@@ -42,6 +42,9 @@ heuristics. The scripts aim to fit the text within the target band and
 never exceed the character limit. They use placeholders to expand
 under‑length text when needed.
 
+If `CHAR_LIMIT` is missing or `UNLIMITED`, do not fit the text unless the
+user explicitly requests normalization only.
+
 ## Scripts
 
 This skill includes a `scripts/` directory with:
@@ -62,3 +65,25 @@ character limits, such as Admin Profile entries or qualification
 answers. After manual drafting in another skill, call `capel-fit` to
 validate and adjust the text. Do not use it to generate new
 substantive content.
+
+Example CLI usage:
+
+```bash
+python3 skills/capel-fit/scripts/normalize_text.py < input.txt
+python3 skills/capel-fit/scripts/charcount.py < input.txt
+python3 skills/capel-fit/scripts/fit_entry.py \
+  --char-limit 1000 \
+  --target-low 900 \
+  --target-high 1000 \
+  --mode auto \
+  --print-report < input.txt
+```
+
+## Rules
+
+1. If numeric limits exist, use the deterministic scripts in this order:
+   `normalize_text.py`, `charcount.py`, then `fit_entry.py`.
+2. Do not add substantive content; only apply safe normalization,
+   conservative compression, or placeholder-based expansion.
+3. If `CHAR_LIMIT` is missing or `UNLIMITED`, skip fitting unless the
+   user explicitly asks for normalization-only output.

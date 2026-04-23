@@ -1,12 +1,7 @@
-model: GPT-5.3-Codex
-quality: Extra High
 interface:
   display_name: "Apex ▸ Coaching Reflection Prompts"
-  short_description: "Pose 1–2 open‑ended questions to help the candidate reflect on motivations, values and cultural fit."
+  short_description: "Pose 1-2 open-ended questions to help the candidate reflect on motivations, values, and cultural fit."
   default_prompt: |
-    Using inputs/application_context.md, craft 1–2 open‑ended coaching reflection questions that encourage the candidate to consider their personal motivations, values and cultural fit for the target role and organization.
-    Each question should invite reflection rather than yes/no answers.
-    Output:
-    ## Coaching Reflection Prompts
-    - <Question 1>
-    - <Question 2>
+    Use this skill to produce 1-2 coaching reflection prompts.
+    Follow AGENTS.md, apex-guardrails, and apex-coaching-reflection/SKILL.md.
+    Treat apex-coaching-reflection/SKILL.md as the canonical behavior and output contract.

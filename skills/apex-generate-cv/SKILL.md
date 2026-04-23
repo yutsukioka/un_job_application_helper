@@ -29,7 +29,7 @@ Required:
 Optional:
 
 - `USER_ADMIN_PROFILE_TEXT`: to align entries with the Admin Profile.
-- `TERM_EXTRACTOR`: ive high-priority terms from a job description with star
+- `TERM_EXTRACTOR`: five high-priority terms from a job description with star
   ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in
   a strict four-line format.
 - `JD_KEYWORD_BANK`: an expanded 20–40 phrase keyword bank.
@@ -50,14 +50,14 @@ Produce plain text with the following sections:
    role:
    - Start with `Job Title, Organization, Location, Dates` on one
      line (use placeholders if information is missing).
-   - Follow with 2–4 bullet points highlighting achievements and
+   - Follow with 2–5 bullet points highlighting achievements and
      responsibilities, using strong action verbs and quantifiable
      outcomes. Incorporate high‑priority keywords naturally. Each bullet
      should be one concise sentence. Use the enhanced bullets where
      available.
 4. **Education:** If provided in the inputs, list degrees, institutions,
    and graduation years. Use one line per degree.
-5. **Skills/Certifications:** Include technical skills, languages, tools
+5. **Skills/Certifications/Languages:** Include technical skills, languages, tools
    and certifications relevant to the role. List them in categories if
    helpful. Only include skills present in the user’s inputs or the
    approved taxonomy.
@@ -70,12 +70,15 @@ Produce plain text with the following sections:
   Do not include any Markdown headings (e.g., `#`, `##`) in the final
   CV text; the output should be ready to copy-paste into a document.
 - Use a dash `-` to start each CV bullet.
+- Use `-` only for bullets.
 - Ensure verb tense consistency (past tense for past roles; present for
   current roles).
 - Integrate keywords identified in Phase 2 naturally; avoid obvious
   keyword stuffing.
 - Maintain a professional and factual tone throughout.
 - Do not include star symbols (★).
+- Do not apply strict output-lint profiles unless the user explicitly
+  requests field-safe output.
 
 ## Recursive self-evaluation (internal only; do not print)
 
@@ -92,9 +95,9 @@ integration.
 2. Draft the summary statement using the UVP or derive one from the
    strongest matches between the candidate’s experience and the job’s
    needs.
-3. For each role, write 2–6 bullets mixing:
+3. For each role, write 2–5 bullets mixing:
    - impact achievements (prefer metrics),
    - key responsibilities aligned to the JD.
-4. Build the education and skills/certifications sections from
+4. Build the education and skills/certifications/languages sections from
    available data.
 5. Output the CV with clear headings and consistent formatting.

@@ -1,7 +1,7 @@
 ---
 name: apex-output-lint
 description: >-
-   Perform a final compliance check and minimal formatting fixes on application outputs. Supports multiple link profiles (INSPIRA_FIELD, UNICEF_FIELD, IOM_RA, ATS_DRA) to meet e‑recruitment system constraints. Use this skill only when the user asks to validate or lint output formatting. Do not generate new substantive content.
+   Perform a final compliance check and minimal formatting fixes on application outputs. Supports multiple lint profiles (INSPIRA_FIELD, UNICEF_FIELD, IOM_RA, ATS_DRA) to meet e‑recruitment system constraints. Use this skill only when the user asks to validate or lint output formatting. Do not generate new substantive content.
 ---
 
 # apex-output-lint
@@ -24,7 +24,7 @@ Optional:
   - `UNICEF_FIELD` (strict field; typically longer e.g., ~2500 chars)
   - `IOM_RA` (Responsibilities/Achievements sections; bullets allowed)
   - `ATS_DRA` (Duties/Responsibilities/Achievements sections; bullets allowed)
-  - `AUTO` (default): infer from the text structure; if uncertain, behave like INSPIRA_FIELD.
+  - `AUTO` (default): infer from the text structure and `TARGET_SYSTEM`.
 - If numeric character limits apply:
   - `CHAR_LIMIT`, `TARGET_LOW`, `TARGET_HIGH`, `WORD_TARGET` (optional)
 
@@ -101,6 +101,14 @@ Still required:
 - Do not rewrite substantive content beyond minimal formatting fixes.
 - Preserve placeholders of [User to Insert Metric] or [Confirm detail].
 - If the user wants to lint CV or cover letter outputs, require them to specify a profile; otherwise recommend not linting document outputs with strict-field rules.
+- Profile inference order:
+  - explicit user profile wins
+  - otherwise infer from `TARGET_SYSTEM`
+  - `INSPIRA` -> `INSPIRA_FIELD`
+  - `UNICEF` -> `UNICEF_FIELD`
+  - `IOM` -> `IOM_RA`
+  - DRA structure -> `ATS_DRA`
+  - `OTHER` -> ask the user or choose the closest structure-safe profile
 
 ## When to use
 

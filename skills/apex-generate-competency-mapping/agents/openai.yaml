@@ -1,22 +1,7 @@
-model: GPT-5.3-Codex
-quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Competency Mapping (Option 6)"
   short_description: "Map SKILLS_TAXONOMY skills to roles with relevance scores and compute total experience per skill (avoid overlap double-counting)."
   default_prompt: |
-    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
-    create a competency mapping document with two sections (exact headings
-    as defined in apex-generate-competency-mapping/SKILL.md):
-
-    1) Job title and skills:
-    - For each role, list the job title (with org/dates if available) and
-      the relevant skills FROM SKILLS_TAXONOMY with relevance scores (3/2/1).
-      Limit to top 10–12 skills per role, ordered by relevance.
-
-    2) Total years of experiences per skills with Skill Type:
-    - Aggregate time per skill across roles (do not double-count overlapping dates).
-    - Express totals in years and months (days only if exact).
-    - Assign Skill Type using the provided categories.
-
-    Do not infer skills not present in SKILLS_TAXONOMY. Use conservative scoring 
-    if evidence is weak.
+    Use this skill to generate the Option 6 competency mapping document.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-competency-mapping/SKILL.md.
+    Treat apex-generate-competency-mapping/SKILL.md as the canonical behavior and output contract.

@@ -121,6 +121,10 @@ For each promotion group, output:
 - If action verbs differ across metrics but the scope is still safely
   combinable, use a generalized label such as `programme/funding accountability`
   in the roll-up rather than overstating direct management.
+- If the JD or qualification questions emphasize progressively
+  responsible experience, leadership, governance, supervision, or
+  resource accountability, prioritize those signals when selecting the
+  narrative anchor role.
 
 ## Steps
 

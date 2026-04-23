@@ -25,7 +25,7 @@ the actual output, it:
 
 It can run:
 - **Standalone** — to analyze a single skill failure.
-- **As a sub-module of `agent_test_suite`** — called during Step 6
+- **As a sub-module of `agent-test-suite`** — called during Step 6
   (Failure Classification) to produce detailed analysis for each
   FAIL/WARN item.
 

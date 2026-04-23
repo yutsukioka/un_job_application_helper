@@ -84,6 +84,7 @@ Do not scan these locations unless explicitly requested:
 - `.git/`
 - `node_modules/`
 - `.venv/`
+- `.agents/.venv/`
 - `__pycache__/`
 - hidden OS metadata files
 - binary files
@@ -116,22 +117,17 @@ Do not rely on semantic inference.
 
 Use case-sensitive regex matching for these placeholder classes:
 
-- `$begin:math:display$TBD$end:math:display$`
-- `$begin:math:display$INSERT\[\^$end:math:display$\r\n]*\]`
-- `$begin:math:display$ADD\[\^$end:math:display$\r\n]*\]`
-- `$begin:math:display$MISSING\[\^$end:math:display$\r\n]*\]`
-- `$begin:math:display$Confirm\[\^$end:math:display$\r\n]*\]`
-- `$begin:math:display$If applicable$end:math:display$`
-- `$begin:math:display$User to Insert\[\^$end:math:display$\r\n]*\]`
-- `$begin:math:display$PASTE HERE$end:math:display$`
-- `$begin:math:display$Select one\[\^$end:math:display$\r\n]*\]`
+- `\[TBD\]`
+- `\[(INSERT|ADD|MISSING|Confirm|User to Insert|Select one)[^\r\n]*\]`
+- `\[If applicable\]`
+- `\[PASTE HERE\]`
 - `<<[A-Z0-9_ -]+>>`
 
 ### Generic fallback
 
 Also treat a standalone square-bracket token as a placeholder when it matches:
 
-- `$begin:math:display$\[\^$end:math:display$\r\n]{1,80}\]`
+- `\[[^\]\r\n]{1,80}\]`
 
 Apply these exclusion rules to the generic fallback:
 - ignore a match immediately followed by `(` because it is likely Markdown link text;
@@ -153,6 +149,9 @@ Create or overwrite:
 
 Default location:
 - repository root
+
+Always create or overwrite the report, even when no placeholders or no
+candidate files are found.
 
 ## Output format
 
@@ -178,3 +177,7 @@ SUMMARY
 --------------------------------
 Unique files with placeholders: <M>
 Unique placeholder entries: <K>
+```
+
+If no placeholders are found, still write the report with zero counts and
+an explicit PASS-style summary.

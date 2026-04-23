@@ -1,7 +1,12 @@
 ---
 name: apex-orchestrator-report
 description: >-
-   Produce the full Exceptional Application Strategy Report (Phases 1-7) and then present the Phase 8 document generation menu. This orchestrator sequences: core requirements, evidence mapping, headline optimization, keyword planning, bullet enhancements, STAR blueprints, UVP, cover pointers, impression tips, and coarching reflections. It then stops and wait for the user's Phase 8 selections.
+   Produce the full Exceptional Application Strategy Report (Phases 1-7)
+   and then present the Phase 8 document generation menu. This
+   orchestrator sequences: core requirements, evidence mapping, headline
+   optimization, keyword planning, bullet enhancements, STAR blueprints,
+   UVP, cover pointers, impression tips, and coaching reflections. It
+   then stops and waits for the user's Phase 8 selections.
 ---
 
 # apex-orchestrator-report
@@ -51,16 +56,8 @@ stop and recommend running `apex-build-context-pack`.
 
 - Use Markdown headings for Phases 1–7.
 - Provide concise, actionable bullets (avoid walls of text).
-- Conclude with the Phase 8 menu (8 items, multi-select).
+- Conclude with the Phase 8 menu (8 selectable items).
 - Do not generate Phase 8 documents until user chooses.
-
-## Output format
-
-The strategy report must be structured with clear **Markdown headings and
-bullet points** for readability. The report is advisory/strategic and may
-use structured formatting. Conclude the report with the Phase 8 document
-generation menu (8 selectable items, multi-select). Do not generate any
-documents listed in the menu until the user selects.
 
 ## Steps
 
@@ -77,14 +74,14 @@ documents listed in the menu until the user selects.
 1.1 Assimilation: synthesize job history + JD + requirements + TERM_EXTRACTOR.
 1.2 Use `apex-jd-core-requirements` to identify the top 5-7
 core requirements + knockout criteria if present.
-1.3 Use `apex-candidate-evidence-bank` to map candidate's evidence to each core requirement and identify gaps with 1-2 concreate mitigation strategies per gap.
+1.3 Use `apex-candidate-evidence-bank` to map candidate's evidence to each core requirement and identify gaps with 1-2 concrete mitigation strategies per gap.
 
-(Optional) If JD is complex and JD_KEYWORD_BANK is missing, recommend running:
+(Optional) If the JD is complex and `JD_KEYWORD_BANK` is missing, recommend running:
 - `apex-jd-keyword-bank` and pasting into JD_KEYWORD_BANK.
 
 ### Phase 2 — Admin Profile enhancement protocol
 2.1 Use `apex-headline-summary` to generate one headline line.
-2.2 Use `apex-keyword-insertion-map` (and JD_KEYWORD_BANK if available) to define 5-10 must-use phrases and specify where to insert them.
+2.2 Use `apex-keyword-insertion-map` (and JD_KEYWORD_BANK if available) to define 8-12 must-use phrases and specify where to insert them.
 2.3 Use `apex-bullet-enhancer` to produce 2–3 example rewrites.
 
 ### Phase 3 — STAR story blueprints
@@ -111,30 +108,32 @@ Present the menu below and stop.
 
 **Phase 8: Document Generation (User-Activated)**
 
-Select one or more documents to generate. You may choose any combination
-(e.g., "1, 3, 4" or "all"):
+Select one or more of these 8 items to generate. You may choose any
+combination (for example, "1, 3, 4" or "all"):
 
-1. **Admin Profile (INSPIRA | UNICEF fields)**
-   Per role: a paste-ready Duties/Responsibilities field (character-controlled if limits exist), plus Direct Reports and Reason for Leaving.
+1. **`apex-generate-admin-profile` — Option 1**
+   Admin Profile (INSPIRA | UNICEF fields): per role, paste-ready Duties/Responsibilities field, character-controlled if numeric limits exist, plus Direct Reports and Reason for Leaving when expected by the workflow/context.
 
-2. **Updated CV**
-   Full CV with header, summary, experience, education,
-   and skills (document format).
+2. **`apex-generate-cv` — Option 2**
+   Updated CV: full CV with header, summary, experience, education, skills/certifications/languages as available.
 
-3. **Cover Letter**
-   Tailored business-letter format (document format).
+3. **`apex-generate-cover-letter` — Option 3**
+   Cover Letter: tailored business-letter format.
 
-4. **Job Qualification Answers**
-   Answers to screening questions (strict 1000-character limit per answer where required).
+4. **`apex-generate-qualification-answers` — Option 4**
+   Job Qualification Answers: screening-question answers, strict 1000-character limit per answer where required.
 
-5. **Admin Profile (IOM Responsibilities & Achievements separated)**
-   Per role: Responsibilities and Achievements as separate sections (bullets allowed), plus Direct Reports and Reason for Leaving. Unlimited unless numeric limits are provided.
+5. **`apex-generate-admin-profile-ra-split` — Option 5**
+   Admin Profile (IOM/Oracle Responsibilities & Achievements separated): per role, Responsibilities and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving.
 
-6. **Competency Mapping**
-   Skills per job with relevance scores and total experience per skill.
+6. **`apex-generate-competency-mapping` — Option 6**
+   Competency Mapping: skills per job with relevance scores and total experience per skill.
 
-8. **Admin Profile (ATS Duties, Responsibilities & Achievements separated)**
-   Per role: Duties, Responsibilities, and Achievements as separate sections (bullets allowed), plus Direct Reports and Reason for Leaving. Cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
+7. **`apex-generate-motivation-statement` — Option 7**
+   Motivation Statement: Inspira-style VACC framework motivation statement, max 2000 characters with spaces.
+
+8. **`apex-generate-admin-profile-dra-split` — Option 8**
+   Admin Profile (ATS Duties, Responsibilities & Achievements separated): per role, Duties, Responsibilities, and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving. It cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
 
 Reply with your selection(s). I will generate only the selected items.
 
@@ -156,6 +155,9 @@ When generating documents, apply the correct format profiles:
 
 - Option 6: mapping document output; no strict lint by default.
 
+- Option 7: `inspira_field_strict`; validate with `capel-fit` in the
+  1950–2000 band.
+
 - Option 8: `ats_dra_split` (bullets allowed). Cooperates with Option 5 (`apex-generate-admin-profile-ra-split`) for Achievements, Direct Reports, and Reason for Leaving. Use `apex-output-lint` only if user requests linting.
 
 If the user generates multiple documents, recommend running `apex-cross-doc-consistency` to flag any mismatches.
@@ -165,4 +167,3 @@ If the user generates multiple documents, recommend running `apex-cross-doc-cons
 - Do not invent facts; use placeholders.
 - Do not paste star symbols (★) into final application text outputs.
 - Do not generate Phase 8 documents until the user selects.
-

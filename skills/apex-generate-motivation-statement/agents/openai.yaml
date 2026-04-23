@@ -1,47 +1,7 @@
-model: GPT-5.4
-quality: Extra High
 interface:
   display_name: "Apex ▸ Generate Motivation Statement"
   short_description: "Draft a VACC-framework Inspira Motivation Statement (max 2000 characters) with condensed CAR/Micro-STAR evidence and diplomatic tone."
   default_prompt: |
-    Follow AGENTS.md and apex-guardrails. Using inputs/application_context.md,
-    draft a UN Inspira Motivation Statement for the target Job Opening.
-
-    Structure: four VACC paragraphs in a single plain-text block.
-
-    Paragraph 1 — Values (~400 chars):
-    - Name the exact JO title and reference number.
-    - Link the candidate's professional driver to the hiring entity's mandate.
-
-    Paragraph 2 — Alignment (~700 chars):
-    - Do NOT chronologically restate duties from the CV or Admin Profile.
-    - Highlight 1-2 major quantifiable achievements that mirror the JO requirements.
-    - Use condensed CAR/Micro-STAR: fuse Context+Action into one clause, follow
-      with a quantified Result.
-    - If a same-organization promotion chain exists, use the safe roll-up from
-      apex-progression-metric-ledger rather than a single-role figure.
-
-    Paragraph 3 — Contribution (~600 chars):
-    - Demonstrate awareness of the geopolitical/institutional context of the role.
-    - Articulate how the candidate's skills advance specific SDGs or agency priorities.
-    - If a hardship/non-family duty station, address resilience and adaptability.
-
-    Paragraph 4 — Context (~300 chars):
-    - Brief, confident, forward-looking.
-    - Reaffirm commitment to UN Core Values: Integrity, Professionalism,
-      Respect for Diversity.
-    - Close with a clean diplomatic statement; no sales-pitch phrasing.
-
-    Constraints:
-    - Final output: 1950-2000 characters with spaces. Validate with capel-fit
-      (--char-limit 2000 --target-low 1950 --target-high 2000).
-    - inspira_field_strict profile: ASCII punctuation only, no bullets, no
-      internal line breaks within paragraphs, single spaces only.
-    - Use UN Values and Behaviours Framework action verbs (facilitated, mediated,
-      formulated, spearheaded, streamlined, pioneered, coordinated, governed).
-    - Avoid corporate platitudes, private-sector jargon, unexplained acronyms,
-      absolute terminology, and AI-generated text hallmarks.
-    - Use placeholders for missing specifics (e.g., [JO Title], [JO Ref#],
-      [User to Insert Metric]).
-
-    Output the final plain-text statement only. No Markdown formatting.
+    Use this skill to draft the Option 7 motivation statement.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-motivation-statement/SKILL.md.
+    Treat apex-generate-motivation-statement/SKILL.md as the canonical behavior and output contract.

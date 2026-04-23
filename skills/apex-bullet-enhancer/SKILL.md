@@ -59,14 +59,17 @@ Guidance:
 
 ## Rules
 
-- Do not invent responsibilities or achievements, employers, dates, tools, budgets, or metrics. absent from the original text.
+- Copy the original text exactly from `USER_JOB_HISTORY_TEXT`.
+- Do not invent responsibilities or achievements, employers, dates, tools, budgets, or metrics absent from the original text.
 - If a metric is missing, add a placeholder rather than guessing.
 - Avoid vague starts like “Responsible for…”. Prefer strong verbs (Led, Coordinated, Delivered, Analysed, Negotiated, Streamlined).
 - Do not include star symbols (★) inside the Enhanced bullet.
+- Integrate at least one high-priority term when possible, but use the term text only.
+- Use ASCII-safe punctuation. If bullets are needed, use hyphen bullets only.
 
 ## Steps
 
-1. Select 2–3 bullets/sentences from USER_JOB_HISTORY_TEXT that best align with high-priority JD terms.
+1. Select 2–3 bullets or sentences from `USER_JOB_HISTORY_TEXT` that best align with high-priority JD terms.
 2. Rewrite each bullet:
    - Start with a strong action verb.
    - Clarify scope (what, who, where).

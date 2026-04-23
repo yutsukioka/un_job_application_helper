@@ -34,7 +34,7 @@ Required:
 
 Optional:
 
-- Output from `apex-jd-core-requirements`: prefferd source of identified requirements.
+- Output from `apex-jd-core-requirements`: preferred source of identified requirements.
 - `TERM_EXTRACTOR`: to flag high‑starred terms.
 - `JD_KEYWORD_BANK`: an expanded 20–40 phrase keyword bank.
 - `USER_ADMIN_PROFILE_TEXT`: user's current administrative profile.
@@ -83,11 +83,17 @@ For each role identified in `USER_JOB_HISTORY_TEXT`, output:
 
 - Extract only evidence explicitly present in the user’s inputs. Do
   not invent employers, dates, tools, budgets or outcomes.
+- Use `apex-jd-core-requirements` output when available; otherwise
+  extract the core requirements directly from the JD text.
 - When no evidence exists for a requirement, leave the “Strong
   evidence” section blank and focus on the gap and mitigation.
+- Express missing metrics, tools, scope, or stakeholder detail as
+  bracketed placeholders.
 - Mitigation strategies must derive from the candidate’s existing
   background (e.g., transferable skills, related certifications,
   personal projects) and should be specific to the requirement.
+- Keep mitigation strategies realistic and grounded in the candidate's
+  actual background.
 - Keep each snippet concise—one sentence or phrase. Use the role
   title to tag the evidence (e.g., “Project Manager: led team of
   X”).
@@ -104,7 +110,8 @@ For each role identified in `USER_JOB_HISTORY_TEXT`, output:
    - **Weak/Gap**: no direct evidence found.
    Use this classification to determine whether the "Strong evidence"
    section should be populated or left blank.
-4. Identify gaps where the requirement is not fully met.
+4. Identify gaps where the requirement is not fully met and express
+   missing proof as bracketed placeholders.
 5. For each gap, propose 1–2 mitigation strategies drawing on
    transferable skills, certifications, personal projects or other
    relevant experiences from the user's history.

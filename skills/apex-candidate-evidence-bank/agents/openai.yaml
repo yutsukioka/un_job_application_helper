@@ -1,26 +1,7 @@
-model: GPT-5.3-Codex
-quality: Extra High
 interface:
   display_name: "Apex ▸ Candidate Evidence Bank"
-  short_description: "Map job-history evidence to JD requirements; identify gaps and mitigation strategies."
+  short_description: "Map job-history evidence to JD requirements and identify gaps with mitigation strategies."
   default_prompt: |
-    Follow AGENTS.md and apex-guardrails. Build an Evidence Bank using
-    inputs/application_context.md.
-
-    Use core requirements (from apex-jd-core-requirements output if present;
-    otherwise extract them from JOB_DESCRIPTION_TEXT/JOB_REQUIREMENT_TEXT).
-    For each requirement:
-    - Requirement (include star weight if known)
-    - Strong evidence: 2–5 concise snippets from USER_JOB_HISTORY_TEXT
-    (tag each with the role title)
-    - Gap / Missing proof: list missing tools/metrics/scopes as bracketed
-    placeholders (do not guess)
-    - Mitigation strategies: 1–2 concrete, realistic actions grounded in
-    the candidate’s existing background (transferable skills, training,
-    portfolio artifacts, etc.)
-
-    Then output:
-    ## Metrics & Specifics Needed
-    - A consolidated list of all placeholders the user should fill.
-
-    Do not invent employers, dates, tools, budgets, outputs, or results.
+    Use this skill to map candidate evidence to JD core requirements.
+    Follow AGENTS.md, apex-guardrails, and apex-candidate-evidence-bank/SKILL.md.
+    Treat apex-candidate-evidence-bank/SKILL.md as the canonical behavior and output contract.

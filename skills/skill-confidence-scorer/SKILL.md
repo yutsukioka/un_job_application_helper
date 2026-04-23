@@ -128,7 +128,7 @@ inputs can be resolved.
    skill in the registry (or override set) so the full ranking is
    visible.
 2. **Source-grounded scoring.** Base relevance scores on the skill's
-   actual YAML `description:` and `## Purpose` section, not on
+   actual `SKILL.md` frontmatter and `## Purpose` section, not on
    assumptions about what the skill might do.
 3. **Conflict penalty.** If a skill explicitly states "do not use for
    <scenario>" and the user's request matches that scenario, apply a

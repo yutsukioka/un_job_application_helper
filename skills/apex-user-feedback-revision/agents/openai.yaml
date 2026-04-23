@@ -1,76 +1,7 @@
-model: GPT-5.4
-quality: Extra High
-
 interface:
   display_name: "Apex ▸ User Feedback Revision (Phase 7.5)"
   short_description: "Extract gaps and metrics-needed from the strategy report, then evaluate user edits/ad-hoc updates with a non-golden-record gate."
   default_prompt: |
-    Follow AGENTS.md and apex-guardrails.
-
-    Execute `apex-user-feedback-revision` as a review-and-gate skill between
-    `apex-orchestrator-report` and Phase 8 generation.
-
-    Objective:
-    - Extract and present the most actionable missing-proof items from the latest
-      `phase1_7_strategy_report*.md`.
-    - Surface:
-      (a) Gap / Missing proof
-      (b) Mitigation strategies
-      (c) Metrics & Specifics Needed
-    - Evaluate any user ad-hoc additions or user-edited strategy-report changes
-      WITHOUT blindly treating them as source truth.
-
-    File selection:
-    - Prefer `output/phase1_7_strategy_report*.md`.
-    - If none exist, search `generated/`, then the repository root.
-    - If both baseline and revised report paths are provided, compare them and
-      isolate user-added or materially changed claims.
-
-    Hard non-golden-record policy:
-    - Default `USER_INTENT_APPLY_UPDATES` to NO unless the user explicitly asks
-      to apply, revise, regenerate, or update downstream documents.
-    - Mere presence of pasted user text is NOT permission to modify outputs.
-    - If intent is NO:
-      - evaluate the updates,
-      - produce the review artifact,
-      - do not create the integration patch.
-    - If intent is YES:
-      - evaluate first,
-      - then create a structured integration patch for downstream generators.
-
-    Candidate Assertion Ledger:
-    - Break user additions or revised-report deltas into atomic claims.
-    - For each claim classify:
-      - Type: CORRECTION | ADDITION | REPHRASE_ONLY | INSTRUCTION | OPINION_OR_FRAMING
-      - Evidence status: SUPPORTED | UNSUPPORTED_BUT_PLAUSIBLE | CONFLICTING | AMBIGUOUS
-      - Integration decision: OK_TO_INTEGRATE | INTEGRATE_WITH_CONFIRM_TAG |
-        HOLD_AS_PLACEHOLDER | DO_NOT_INTEGRATE
-    - Also check role anchor, timeframe anchor, metric-unit clarity, duplicate
-      risk, action-verb integrity, and double-counting risk.
-
-    Required artifacts:
-    - Always write: `output/0x_user_feedback_revision.md`
-    - Write `inputs/user_feedback_updates.md` only when
-      `USER_INTENT_APPLY_UPDATES: YES`
-
-    Required structure for `output/0x_user_feedback_revision.md`:
-    1) What is missing from the strategy report
-    2) User additions / edits evaluated
-    3) Regeneration guidance
-
-    Required structure for `inputs/user_feedback_updates.md` when applying:
-    - APPROVED_UPDATES
-    - UPDATES_REQUIRING_CONFIRMATION
-    - HOLD_AS_PLACEHOLDER
-    - DO_NOT_INTEGRATE_UNTIL_RESOLVED
-    - NOTES_FOR_GENERATORS
-
-    Rules:
-    - Do not invent facts.
-    - Do not silently resolve conflicts.
-    - Do not regenerate Phase 8 outputs in this skill.
-    - Use placeholders or confirm-tags when evidence is incomplete.
-
-    USER_ADHOC_ENTRY_TEXT (if provided):
-    [PASTE HERE]
-
+    Use this skill to evaluate strategy-report gaps and user updates before regeneration.
+    Follow AGENTS.md, apex-guardrails, and apex-user-feedback-revision/SKILL.md.
+    Treat apex-user-feedback-revision/SKILL.md as the canonical behavior and output contract.

@@ -67,6 +67,8 @@ If not present, write "Not emphasized in JD."
 - Include gatekeeping qualifications (e.g., degree, years of experience, certifications) when explicitly stated.
 - Include supervision/management responsibility as a core requirement if emphasized.
 - Exclude generic behavioral competencies unless they are explicitly central and repeated in the JD.
+- Focus on actual work and screening criteria, not generic soft skills,
+  unless the JD clearly emphasizes them.
 
 ## Steps
 
@@ -88,4 +90,4 @@ If not present, write "Not emphasized in JD."
    - compliance/policy (if relevant),
    - UN frameworks,
    - high‑impact duties.
-4. Output in the required format.
+4. Output only JD-grounded requirements and knockout criteria; do not invent missing requirements.

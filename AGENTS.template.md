@@ -6,6 +6,21 @@
 - Prefer using repo skills over ad-hoc writing whenever a request matches a skill description.
 - If a requested skill is not visible in the current session, assume skill discovery is stale and recommend restarting Codex.
 
+## Skill contract source of truth
+
+For every skill, `SKILL.md` is the canonical behavior contract.
+
+`agents/openai.yaml` is a runtime adapter for Codex/OpenAI UI metadata,
+default prompt framing, invocation policy, and dependencies. It must not
+contain operational requirements that are absent from `SKILL.md`.
+
+When `SKILL.md` and `agents/openai.yaml` conflict, `SKILL.md` wins.
+Update `agents/openai.yaml` to match `SKILL.md`.
+
+GitHub Copilot should rely on `SKILL.md`. Any file Copilot must read
+should be linked or referenced from `SKILL.md`; do not require Copilot
+to read `agents/openai.yaml` during normal skill execution.
+
 ## Ad-hoc user inputs are NOT a "golden record" (IMPORTANT)
 
 Users may paste extra facts, metrics, rewrites, or corrections in chat, or may edit
@@ -121,6 +136,7 @@ High-level behavior:
 - `INSPIRA_FIELD`: single paragraph, ASCII punctuation, no bullets/tabs, strict whitespace.
 - `UNICEF_FIELD`: similar to Inspira but tuned for longer fields (still plain-text safe).
 - `IOM_RA`: allows headings and hyphen bullets for Responsibilities/Achievements sections.
+- `ATS_DRA`: allows headings and hyphen bullets for Duties/Responsibilities/Achievements sections.
 
 Use output linting only when strict paste-into-field constraints apply.
 Do NOT lint CV or cover letter unless the user explicitly asks.
@@ -128,13 +144,13 @@ Do NOT lint CV or cover letter unless the user explicitly asks.
 ## Skills
 
 - `apex-build-context-pack`: Build or refresh `inputs/application_context.md` with all raw application inputs.
-- `term_extractor`: Extract exactly five high-priority terms from a job description with star ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in a strict four-line format.
-- `apex-jd-keyword-bank`: Extract a larger 20-40 phrase keyword bank from the JD (optional; complements `term_extractor`).
-- `apex-ccog-resolver`: Dynamically resolve relevant CCOG entries from the full ICSC database for a specific vacancy. Reads the full database, scores entries against JD and candidate history, selects a compact 10-20 entry subset, and clears the full database from context.
+- `term-extractor`: Extract exactly five high-priority terms from a job description with star ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in a strict four-line format.
+- `apex-jd-keyword-bank`: Extract a larger 20-40 phrase keyword bank from the JD (optional; complements `term-extractor`).
+- `apex-ccog-resolver`: Dynamically resolve relevant CCOG entries from the full ICSC database for a specific vacancy. Reads the full database, scores entries against JD signals and the user-confirmed vacancy-type classification only, selects a compact 10-20 entry subset, and clears the full database from context.
 
 - `apex-jd-core-requirements`: Extract the top 5-7 core requirements (and any knockout criteria) from the job description and requirement text.
 - `apex-candidate-evidence-bank`: Map job-history evidence to JD core requirements and identify gaps with mitigation ideas.
-- `apex-keyword-insertion-map`: Identify must-use phrases and specify where to place them in Admin Profile entries.
+- `apex-keyword-insertion-map`: Identify 8–12 must-use phrases and specify where to place them across relevant Phase 8 outputs.
 - `apex-bullet-enhancer`: Rewrite 2-3 existing job bullets with stronger action verbs, measurable outcomes, and keyword alignment.
 - `apex-star-story-blueprints`: Generate 3-4 STAR story blueprints tied to critical requirements.
 - `apex-uvp-statement`: Produce a concise 1-2 sentence UVP tailored to the role and organization.
@@ -145,12 +161,14 @@ Do NOT lint CV or cover letter unless the user explicitly asks.
 
 Phase 8 document generation options (current mapping):
 
-- `apex-generate-admin-profile` (Option 1): INSPIRA + UNICEF style fields (character-limited; paste-ready). May include Direct Reports and Reason for Leaving as separate outputs if requested by the user/workflow.
-- `apex-generate-cv` (Option 2): CV (document format; bullets allowed).
-- `apex-generate-cover-letter` (Option 3): Cover Letter (document format).
-- `apex-generate-qualification-answers` (Option 4): Qualification answers (1000-char limit; used by Inspira and other systems).
-- `apex-generate-admin-profile-ra-split` (Option 5): IOM (Responsibilities + Achievements separated; often unlimited unless limits provided).
-- `apex-generate-competency-mapping` (Option 6): Skills per job with relevance scores and experience totals.
+- `apex-generate-admin-profile` (Option 1): Admin Profile (INSPIRA | UNICEF fields): per role, paste-ready Duties/Responsibilities field, character-controlled if numeric limits exist, plus Direct Reports and Reason for Leaving when expected by the workflow/context.
+- `apex-generate-cv` (Option 2): Updated CV: full CV with header, summary, experience, education, skills/certifications/languages as available.
+- `apex-generate-cover-letter` (Option 3): Cover Letter: tailored business-letter format.
+- `apex-generate-qualification-answers` (Option 4): Job Qualification Answers: screening-question answers, strict 1000-character limit per answer where required.
+- `apex-generate-admin-profile-ra-split` (Option 5): Admin Profile (IOM/Oracle Responsibilities & Achievements separated): per role, Responsibilities and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving.
+- `apex-generate-competency-mapping` (Option 6): Competency Mapping: skills per job with relevance scores and total experience per skill.
+- `apex-generate-motivation-statement` (Option 7): Motivation Statement: Inspira-style VACC framework motivation statement, max 2000 characters with spaces.
+- `apex-generate-admin-profile-dra-split` (Option 8): Admin Profile (ATS Duties, Responsibilities & Achievements separated): per role, Duties, Responsibilities, and Achievements as separate sections, bullets allowed, plus Direct Reports and Reason for Leaving. It cooperates with Option 5 for Achievements, Direct Reports, and Reason for Leaving.
 
 Utilities / enforcement:
 

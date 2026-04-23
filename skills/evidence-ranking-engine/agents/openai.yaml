@@ -1,24 +1,7 @@
-name: evidence-ranking-engine
-
-description: >
-  Ranks candidate evidence to ensure the strongest
-  information is used in outputs.
-
-trigger:
-  - evidence_selection_event
-
-inputs:
-  - evidence_bank
-  - job_requirements
-
-process:
-  steps:
-    - evaluate_responsibility_level
-    - measure_relevance
-    - detect_metrics
-    - calculate_evidence_score
-    - select_top_evidence
-
-output:
-  file: 0x_evidence_selection_log.md
-  format: markdowns
+interface:
+  display_name: "Diagnostics ▸ Evidence Ranking Engine"
+  short_description: "Rank evidence snippets before downstream generation."
+  default_prompt: |
+    Use this skill to rank evidence snippets before downstream generation.
+    Follow AGENTS.md, apex-guardrails, and evidence-ranking-engine/SKILL.md.
+    Treat evidence-ranking-engine/SKILL.md as the canonical behavior and output contract.

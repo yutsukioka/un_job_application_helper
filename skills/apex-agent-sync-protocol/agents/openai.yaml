@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex Agent Sync Protocol"
+  short_description: "Define the coordination contract for ApexStrategist multi-agent runs."
+  default_prompt: |
+    Use this skill for ApexStrategist multi-agent coordination rules and round semantics.
+    Follow AGENTS.md, apex-guardrails, and apex-agent-sync-protocol/SKILL.md.
+    Treat apex-agent-sync-protocol/SKILL.md as the canonical behavior and output contract.

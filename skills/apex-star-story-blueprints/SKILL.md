@@ -46,8 +46,12 @@ For each blueprint, include:
   - Task: (1 sentence)
   - Action: (3–5 bullets)
   - Result: (1–2 sentences;quantify if supported; otherwise placeholders)
+- **Condensed achievement bullet:** one reusable line for CV/Admin
+  Profile/qualification-answer reuse.
 - **Tailoring note:** a one‑sentence suggestion on how to align the
-  language and tone with the organization’s mission or context.
+  language and tone with the organization’s mission or context. This may
+  reference UN Values & Behaviours when relevant and supported by the
+  evidence.
 
 ## Example (for pattern reference; do not copy verbatim)
 
@@ -80,5 +84,8 @@ For each blueprint, include:
 1. Select 3–4 high-impact requirements emphasized in the JD.
 2. Match each to the strongest evidence instance from the user’s history.
 3. Draft STAR components with brevity and clarity.
-4. Write one condensed achievement bullet per story suitable for CV/IOM achievements.
-5. Add one tailoring note per story focused on JD language mirroring.
+4. Write one condensed achievement bullet per story suitable for CV,
+   INSPIRA/UNICEF field use, IOM achievements, qualification answers, or
+   cover letter reuse.
+5. Add one tailoring note per story focused on JD language mirroring and
+   supported values/behaviours alignment.

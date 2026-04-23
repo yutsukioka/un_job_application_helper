@@ -1,23 +1,7 @@
-name: skill-confidence-scorer
-
-description: >
-  Calculates confidence scores for skill selection.
-
-trigger:
-  - skill_selection_event
-
-inputs:
-  - user_request
-  - available_skills
-  - context
-
-process:
-  steps:
-    - calculate_relevance
-    - check_instruction_alignment
-    - verify_context_requirements
-    - compute_confidence_score
-
-output:
-  file: 0x_skill_confidence_scores.md
-  format: markdown
+interface:
+  display_name: "Diagnostics ▸ Skill Confidence Scorer"
+  short_description: "Score how confidently each skill matches a user request."
+  default_prompt: |
+    Use this skill to score how well each skill matches a request.
+    Follow AGENTS.md, apex-guardrails, and skill-confidence-scorer/SKILL.md.
+    Treat skill-confidence-scorer/SKILL.md as the canonical behavior and output contract.
