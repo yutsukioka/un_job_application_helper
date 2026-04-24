@@ -1,6 +1,6 @@
 # Runnable copy of the v2 multi-agent server manifest.
 #
-# Source of truth (design): multi-agent-version2/topology/server_manifest.yaml
+# Source of truth (design): .agents/topology/server_manifest.yaml
 # This file is the runtime mirror used by:
 #   - .agents/prompts/v2/*.prompt.md (PORT references)
 #   - any future orchestrator or scope verifier

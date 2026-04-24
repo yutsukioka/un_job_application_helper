@@ -34,7 +34,7 @@ Write scope on S1 (HARD):
 - <OUTDIR>/screening-lead/phase1_7_strategy_report.md
 - <OUTDIR>/_discussion/advisor_notes_S1.md   (writer or qa-auditor only)
 
-Forbidden (will be flagged by check_scope):
+Forbidden (qa-auditor will flag in TEST):
 - <OUTDIR>/technical-lead/**
 - <OUTDIR>/ats-format-lead/**
 - <OUTDIR>/phase1_7_strategy_report.md   (consensus output — C1's job)
@@ -52,9 +52,13 @@ Round plan on S1:
      screening lens (competency framing, evidence-density-first,
      qualification-question alignment).
    - Every core requirement maps to evidence, a placeholder, or a gap note.
-   - Call `go-test`.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: stay live; qa-auditor consumes advisor traffic into ADVISOR_NOTES.
-3. DISCUSS: submit one structured `discuss`; do NOT close.
+3. DISCUSS: submit one structured `discuss`, then call `discuss-done`
+   **without** `--next-impl` so the DISCUSS barrier can advance:
+     python .agents/agent_sync/client_v6.py discuss   screening-lead "<text>" --port 9811
+     python .agents/agent_sync/client_v6.py discuss-done screening-lead --port 9811
 4. IMPLEMENT pass 2 (if qa-auditor loops):
    - **First action: read ADVISOR_NOTES.** Address blockers, re-emit draft.
 5. Loop bounded by `MAX_REVISION_PASSES`.

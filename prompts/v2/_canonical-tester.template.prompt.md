@@ -6,7 +6,11 @@ Before doing anything:
 2. Load `apex-agent-sync-protocol`.
 3. Load `.agents/.github/agents/qa-auditor.agent.md` and apply its
    **Role 1 — Canonical tester on every author server** section.
-4. Join the coordination server with:
+4. Confirm the writer has already joined and is the implementer:
+   python .agents/agent_sync/client_v6.py status --port <PORT>
+   Continue only when `implementer` is `<WRITER_NAME>`. If it is empty,
+   wait for the writer to join first.
+5. Join the coordination server with:
    python .agents/agent_sync/client_v6.py join qa-auditor --port <PORT>
 
 AGENT_NAME = qa-auditor
@@ -17,7 +21,13 @@ ROLE       = canonical-tester
 
 You are the ONLY agent on this server allowed to:
 - call `test-result` (advances TEST -> DISCUSS)
-- call `discuss-done --next-impl <writer | shutdown-marker>` (canonical phase closer)
+- call `discuss-done --next-impl <writer-name>` (loops the round)
+- call the separate `shutdown --reason "..."` command to end the stage
+
+NOTE: `--next-impl shutdown` is NOT a valid value in stock server_v6.py.
+The server only changes implementer when the value is an allowed agent
+name. To end the stage, close DISCUSS with a normal `discuss-done` and
+then call `shutdown` as a separate command.
 
 TEST-phase responsibilities:
 1. Loop with the writer to consume incoming `send` / `broadcast` advisor
@@ -38,9 +48,12 @@ TEST-phase responsibilities:
 DISCUSS-phase responsibilities:
 1. Submit one structured `discuss`.
 2. Call `get-discussion`; append result to advisor_notes_<SERVER>.md.
-3. Decide based on `revision_pass < MAX_REVISION_PASSES` (in `## BUDGETS`):
-   - loop: `discuss-done --next-impl <WRITER_NAME>`
-   - end:  `discuss-done --next-impl shutdown`
+3. Wait until the writer and advisors have called `discuss-done` without
+   `--next-impl`; confirm with `status` (`discuss_done` should list them).
+4. Decide based on `revision_pass < MAX_REVISION_PASSES` (in `## BUDGETS`):
+   - loop: `discuss-done qa-auditor --next-impl <WRITER_NAME> --port <PORT>`
+   - end:  `discuss-done qa-auditor --port <PORT>`  (no `--next-impl`),
+           then `shutdown --reason "<SERVER> complete" --port <PORT>`
 
 Pre-shutdown checklist (mandatory — do not shut down if any fails):
 - [ ] advisor_notes_<SERVER>.md exists and is non-empty.
@@ -55,6 +68,6 @@ Use this job input:
 - JOB_SLUG = <JOB_SLUG>
 
 Start now:
-- join
+- confirm writer-first join order, then join
 - check status
 - enter listening loop during TEST

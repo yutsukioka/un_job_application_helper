@@ -14,7 +14,8 @@ SERVER     = C1
 PORT       = 9820
 ROLE       = writer (consensus)
 NOTE       = No separate canonical-tester on C1. You are both writer
-             and the only valid `test-result` / `discuss-done` caller.
+             and the only valid `test-result` / `discuss-done --next-impl`
+             caller.
 
 Co-residents on this server:
 - advisors: screening-lead, technical-lead, ats-format-lead
@@ -45,7 +46,7 @@ Forbidden:
 
 Consensus discipline (do NOT pick winners on style):
 - Merge per the per-section default-lead table at
-  `multi-agent-version2/templates/per_section_default_leads.md`.
+  `.agents/prompts/v2/templates/per_section_default_leads.md`.
 - All advisor flags (in advisor_notes_S*.md) must be addressed or
   explicitly dismissed with reason in `disagreement_log.md`.
 - Merged section must pass lint, char, placeholder, and metric-lineage
@@ -59,13 +60,21 @@ Round plan on C1:
    - Merge into `phase1_7_strategy_report.md`.
    - Write `_discussion/round2_consensus.md` summarizing merge decisions.
    - Append unresolved disagreements to `_discussion/disagreement_log.md`.
-   - Call `go-test`.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: you are both writer and tester. Run validation checks; submit
    `test-result` accordingly.
 3. DISCUSS: advisors submit one structured `discuss` each. Read via
    `get-discussion`; append to a working notes file under `_discussion/`.
-4. Close with `discuss-done --next-impl <writer>` to loop, or
-   `discuss-done --next-impl shutdown` to end.
+4. Wait until all three advisors have called `discuss-done` without
+   `--next-impl`; confirm with `status`. Then close phase normally with
+   `discuss-done` (with `--next-impl <writer>` to loop or without to end
+   the loop), then end the stage with the separate `shutdown` command:
+     python .agents/agent_sync/client_v6.py discuss-done qa-auditor --next-impl qa-auditor --port 9820   # loop
+     python .agents/agent_sync/client_v6.py discuss-done qa-auditor --port 9820                          # close, no loop
+     python .agents/agent_sync/client_v6.py shutdown --reason "C1 complete" --port 9820                  # end stage
+   NOTE: `discuss-done --next-impl shutdown` is NOT a valid shutdown
+   trigger in stock server_v6.py. Use the explicit `shutdown` command.
 
 Post-shutdown:
 - The canonical `phase1_7_strategy_report.md` is now READ-ONLY for all

@@ -78,7 +78,7 @@ ApexStrategist output, not a persona-tagged memo.
 # v2 multi-agent additions
 
 The sections below activate only when running in v2 ensemble mode
-(see `multi-agent-version2/` design spec). In single-agent linear mode
+(see `.agents/` design spec). In single-agent linear mode
 (default), they are inert.
 
 ## Context Scoping
@@ -118,7 +118,7 @@ declared writer. Phase rules:
 | Phase | Allowed | Forbidden |
 |---|---|---|
 | IMPLEMENT | (silent) | any tool call |
-| TEST | `send` (writer-targeted), `broadcast` | `test-result`, any file write |
+| TEST | `broadcast` preferred; or `send` the same note to writer and `qa-auditor` | `test-result`, any file write |
 | DISCUSS | one structured `discuss`, `discuss-done` (without `--next-impl`) | `discuss-done --next-impl`, any file write |
 
 Message prefix (prompt-level convention): every advisor message starts

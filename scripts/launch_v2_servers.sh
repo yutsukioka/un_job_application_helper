@@ -34,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SERVER_PY="${REPO_ROOT}/.agents/agent_sync/server_v6.py"
 RUN_BASE="${REPO_ROOT}/tmp/agent_sync"
+PYTHON_BIN=""
 
 # id -> port lookup (must match .agents/topology/server_manifest.yaml).
 # Implemented as a function for compatibility with macOS system bash 3.2,
@@ -54,6 +55,30 @@ port_for() {
   esac
 }
 
+# Per-server agent registry. server_v6.py reads this from the AGENTS_LIST
+# env var at process start (default: agent-a,agent-b). It MUST contain
+# every agent that will join the server: writer + advisors + canonical
+# tester (qa-auditor). Order does not matter.
+#
+# Source: .agents/topology/server_manifest.yaml (writer + advisors +
+# canonical_tester). Consensus servers C1, C2 have qa-auditor as writer
+# and three advisors; no separate canonical tester.
+agents_for() {
+  case "$1" in
+    P0a) echo "screening-lead,technical-lead,ats-format-lead,qa-auditor" ;;
+    P0b) echo "technical-lead,screening-lead,ats-format-lead,qa-auditor" ;;
+    S1)  echo "screening-lead,technical-lead,ats-format-lead,qa-auditor" ;;
+    S2)  echo "technical-lead,screening-lead,ats-format-lead,qa-auditor" ;;
+    S3)  echo "ats-format-lead,screening-lead,technical-lead,qa-auditor" ;;
+    C1)  echo "qa-auditor,screening-lead,technical-lead,ats-format-lead" ;;
+    D1)  echo "screening-lead,technical-lead,ats-format-lead,qa-auditor" ;;
+    D2)  echo "technical-lead,screening-lead,ats-format-lead,qa-auditor" ;;
+    D3)  echo "ats-format-lead,screening-lead,technical-lead,qa-auditor" ;;
+    C2)  echo "qa-auditor,screening-lead,technical-lead,ats-format-lead" ;;
+    *)   echo "" ;;
+  esac
+}
+
 stage_servers() {
   case "$1" in
     prep1)      echo "P0a" ;;
@@ -68,7 +93,14 @@ stage_servers() {
 }
 
 ensure_runtime() {
-  command -v python >/dev/null 2>&1 || { echo "python not on PATH" >&2; exit 3; }
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  else
+    echo "python3 or python not on PATH" >&2
+    exit 3
+  fi
   [[ -f "${SERVER_PY}" ]] || { echo "missing ${SERVER_PY}" >&2; exit 3; }
 }
 
@@ -76,9 +108,16 @@ start_one() {
   local id="$1"
   local port
   port="$(port_for "$id")"
+  local agents
+  agents="$(agents_for "$id")"
   local rundir="${RUN_BASE}/${id}"
   local pidfile="${RUN_BASE}/${id}.pid"
   local logfile="${RUN_BASE}/${id}.log"
+
+  if [[ -z "${agents}" ]]; then
+    echo "[${id}] no AGENTS_LIST mapping; aborting" >&2
+    return 1
+  fi
 
   mkdir -p "${rundir}"
 
@@ -92,11 +131,11 @@ start_one() {
     return 1
   fi
 
-  ( cd "${rundir}" && nohup python "${SERVER_PY}" --port "${port}" \
+  ( cd "${rundir}" && AGENTS_LIST="${agents}" nohup "${PYTHON_BIN}" "${SERVER_PY}" --port "${port}" \
       >>"${logfile}" 2>&1 & echo $! >"${pidfile}" )
   sleep 0.3
   if kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
-    echo "[${id}] started (pid $(cat "${pidfile}"), port ${port}, log ${logfile})"
+    echo "[${id}] started (pid $(cat "${pidfile}"), port ${port}, agents=${agents}, log ${logfile})"
   else
     echo "[${id}] FAILED to start; see ${logfile}" >&2
     return 1
@@ -144,6 +183,10 @@ main() {
   if [[ -z "${action}" || -z "${stage}" ]]; then
     grep '^# ' "$0" | sed 's/^# \{0,1\}//'
     exit 1
+  fi
+  if [[ "${stage}" == "all" && "${action}" != "status" ]]; then
+    echo "stage 'all' is only supported for status; start/stop stages in runbook order" >&2
+    exit 2
   fi
   mkdir -p "${RUN_BASE}"
   local id

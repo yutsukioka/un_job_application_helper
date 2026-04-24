@@ -14,7 +14,8 @@ SERVER     = C2
 PORT       = 9840
 ROLE       = writer (consensus)
 NOTE       = No separate canonical-tester on C2. You are both writer
-             and the only valid `test-result` / `discuss-done` caller.
+             and the only valid `test-result` / `discuss-done --next-impl`
+             caller.
 
 Co-residents on this server:
 - advisors: screening-lead, technical-lead, ats-format-lead
@@ -48,7 +49,7 @@ Forbidden:
 
 Consensus discipline:
 - Merge per the per-section default-lead table at
-  `multi-agent-version2/templates/per_section_default_leads.md`.
+  `.agents/prompts/v2/templates/per_section_default_leads.md`.
 - Every advisor flag in advisor_notes_D*.md must be addressed or
   dismissed with reason in `disagreement_log.md`.
 - Merged section must pass lint (active TARGET_SYSTEM profile),
@@ -63,13 +64,21 @@ Round plan on C2:
    - Merge into canonical `option*.md` files at the flat path.
    - Run `capel-fit` and `apex-output-lint` per profile.
    - Write `_discussion/round4_consensus.md`; append disagreements.
-   - Call `go-test`.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: writer + tester role. Run E2 JD-coverage floor check
    (`JD_COVERAGE_FLOOR` in `## RUN_MODE`).
 3. DISCUSS: read advisor `discuss` via `get-discussion`; append to
    working notes.
-4. Close with `discuss-done --next-impl <writer>` to loop or
-   `discuss-done --next-impl shutdown` to end.
+4. Wait until all three advisors have called `discuss-done` without
+   `--next-impl`; confirm with `status`. Then close phase normally with
+   `discuss-done` (with `--next-impl <writer>` to loop or without to end
+   the loop), then end the stage with the separate `shutdown` command:
+     python .agents/agent_sync/client_v6.py discuss-done qa-auditor --next-impl qa-auditor --port 9840   # loop
+     python .agents/agent_sync/client_v6.py discuss-done qa-auditor --port 9840                          # close, no loop
+     python .agents/agent_sync/client_v6.py shutdown --reason "C2 complete" --port 9840                  # end stage
+   NOTE: `discuss-done --next-impl shutdown` is NOT a valid shutdown
+   trigger in stock server_v6.py. Use the explicit `shutdown` command.
 
 Post-shutdown:
 - Canonical option*.md files are the deliverables.

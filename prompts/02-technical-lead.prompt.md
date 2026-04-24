@@ -1,3 +1,12 @@
+# Mode guard
+
+Use this prompt only when `## RUN_MODE` in `inputs/application_context.md`
+has empty ensemble lists (single-agent linear mode). If
+`ENSEMBLE_PHASE_1_7` or `ENSEMBLE_PHASE_8` is non-empty, use the
+server-specific prompts under `.agents/prompts/v2/` instead.
+
+---
+
 You are operating in the `un_job_application_helper/` workspace root.
 
 The git-tracked repo is `.agents/`.

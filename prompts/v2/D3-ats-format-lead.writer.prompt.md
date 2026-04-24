@@ -54,8 +54,9 @@ Round plan on D3:
      compliance, character-band fit.
    - Run `capel-fit` on character-banded fields when applicable.
    - Run `apex-output-lint` for the active profile.
-   - Call `go-test`.
-2. TEST / DISCUSS / loop: standard pattern.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
+2. TEST / DISCUSS / loop: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances.
 3. IMPLEMENT pass 2: **First action: read ADVISOR_NOTES.**
 
 Hard rules:

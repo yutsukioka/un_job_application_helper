@@ -3,14 +3,21 @@
 Per-server, per-role prompt files for the v2 ensemble topology.
 
 - Topology: [`.agents/topology/server_manifest.yaml`](../../topology/server_manifest.yaml)
-- Design spec: [`multi-agent-version2/`](../../../multi-agent-version2/)
-- Runbook: [`multi-agent-version2/topology/runbook.md`](../../../multi-agent-version2/topology/runbook.md)
+- Design spec: [`.agents/`](../../../.agents/)
+- Runbook: [`.agents/topology/runbook.md`](../../../.agents/topology/runbook.md)
 
 ## When to use these prompts
 
 Only when `## RUN_MODE` in `inputs/application_context.md` declares
 non-empty `ENSEMBLE_PHASE_1_7` or `ENSEMBLE_PHASE_8`. Otherwise use the
 v1 prompts in the parent directory (single-agent linear mode).
+
+## Phase 8 ensemble scope
+
+Ensemble v2 generation currently covers **Phase 8 Options 1-4 only**
+(Admin Profile, CV, Cover Letter, Qualification Answers). For
+Options 5-8 (RA Split, Competency Mapping, Motivation Statement,
+DRA Split), fall back to v1 single-agent generation skills.
 
 ## File naming
 
@@ -49,6 +56,11 @@ non-writer authoring agent) + 1 canonical-tester instance (qa-auditor).
 
 Consensus servers C1 and C2 do NOT use a canonical-tester instance —
 the writer is qa-auditor. They use 3 advisor instances.
+
+Join order is operationally significant. Stock `server_v6.py` assigns the
+first joining agent as implementer. Start the writer prompt first, then
+start advisor and canonical-tester prompts only after `status --port <PORT>`
+shows `implementer` equal to that server's writer.
 
 ## Cross-references
 

@@ -113,6 +113,61 @@ Purpose:
 
 ---
 
+## v2 ensemble topology (RUN_MODE-gated)
+
+This section applies **only when `## RUN_MODE` in
+`inputs/application_context.md` has a non-empty `ENSEMBLE_PHASE_1_7` or
+`ENSEMBLE_PHASE_8` list**. Otherwise the canonical linear rounds above
+apply.
+
+### Activation
+- Read `## RUN_MODE` from the context pack.
+- If `MODE: ensemble_v2` (or either ensemble list is non-empty), use the
+  per-server prompts under `.agents/prompts/v2/` and the launcher at
+  `.agents/scripts/launch_v2_servers.sh`.
+- Per-server registry, ports, writer/advisors and canonical tester are
+  defined in `.agents/topology/server_manifest.yaml`. The launcher
+  injects `AGENTS_LIST` per server based on this manifest.
+
+### Servers (writer / canonical tester)
+- `P0a` 9800 — screening-lead writer / qa-auditor canonical tester
+- `P0b` 9801 — technical-lead writer / qa-auditor canonical tester
+- `S1`  9811 — screening-lead writer / qa-auditor canonical tester
+- `S2`  9812 — technical-lead writer / qa-auditor canonical tester
+- `S3`  9813 — ats-format-lead writer / qa-auditor canonical tester
+- `C1`  9820 — qa-auditor writer (consensus, no separate canonical tester)
+- `D1`  9831 — screening-lead writer / qa-auditor canonical tester
+- `D2`  9832 — technical-lead writer / qa-auditor canonical tester
+- `D3`  9833 — ats-format-lead writer / qa-auditor canonical tester
+- `C2`  9840 — qa-auditor writer (consensus, no separate canonical tester)
+
+P0a runs first, then the human confirmation gate, then P0b.
+S1/S2/S3 run in parallel and feed C1.
+D1/D2/D3 run in parallel and feed C2.
+
+### Phase 8 ensemble scope
+Ensemble v2 generation currently covers Phase 8 Options 1-4 only.
+For Options 5-8, fall back to v1 single-agent generation skills.
+
+### Closer rule (v2)
+- All writer agents on author servers (P0a/P0b/S1/S2/S3/D1/D2/D3) call
+  `discuss-done` **without** `--next-impl` so the DISCUSS barrier
+  advances.
+- `qa-auditor` is the canonical tester on all author servers and uses
+  `discuss-done --next-impl <writer>` to loop revision passes, or
+  `discuss-done` (no `--next-impl`) followed by the separate
+  `shutdown --reason "<server> complete"` command to end the stage.
+- `discuss-done --next-impl shutdown` is **not** a valid shutdown
+  trigger in stock `server_v6.py`; the explicit `shutdown` command is
+  required.
+
+### Advisor notes ownership
+For each server, `_discussion/advisor_notes_<server>.md` is owned by
+`qa-auditor`. Advisors and writers may read it; only qa-auditor appends
+or rewrites it.
+
+---
+
 ## Phase semantics
 
 ## IMPLEMENT

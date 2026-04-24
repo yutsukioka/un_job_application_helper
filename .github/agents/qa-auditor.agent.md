@@ -75,7 +75,7 @@ Your discuss note must:
 # v2 multi-agent additions
 
 The sections below activate only when running in v2 ensemble mode
-(see `multi-agent-version2/` design spec). In single-agent linear mode
+(see `.agents/` design spec). In single-agent linear mode
 (default), they are inert. In v2, this agent plays two distinct
 runtime roles depending on which server it is co-resident on.
 
@@ -86,8 +86,10 @@ Co-resident on: P0a, P0b, S1, S2, S3, D1, D2, D3.
 This agent is the **only** agent on the server allowed to:
 
 - Call `test-result` (advances TEST → DISCUSS).
-- Call `discuss-done --next-impl <writer | shutdown>` (canonical phase
-  closer per `apex-agent-sync-protocol`).
+- Call `discuss-done --next-impl <writer-name>` (canonical loop decision
+  per `apex-agent-sync-protocol`).
+- Call the separate `shutdown --reason "<server> complete"` command after
+  closing DISCUSS when the stage is finished.
 
 ### TEST-phase responsibilities
 
@@ -105,9 +107,14 @@ This agent is the **only** agent on the server allowed to:
 1. Submit one structured `discuss` message.
 2. Call `get-discussion` and append result to
    `_discussion/advisor_notes_<server>.md`.
-3. Decide based on `revision_pass < MAX_REVISION_PASSES`:
-   - loop: `discuss-done --next-impl <writer-name>`
-   - end: `discuss-done --next-impl <shutdown-marker>`
+3. Wait until all non-QA residents have called `discuss-done` without
+   `--next-impl`; confirm with `status` before closing. Stock `server_v6.py`
+   uses the final `discuss-done` caller's `--next-impl` value.
+4. Decide based on `revision_pass < MAX_REVISION_PASSES`:
+   - loop: `discuss-done qa-auditor --next-impl <writer-name>`
+   - end: `discuss-done qa-auditor` (no `--next-impl`), then call the
+     separate `shutdown --reason "<server> complete"` to terminate the
+     stage. (`--next-impl shutdown` is NOT a valid stock-server value.)
 
 ### Pre-shutdown checklist (mandatory)
 
@@ -143,7 +150,7 @@ When designated writer on C1 or C2:
   `ats-format-lead/`).
 - Read the corresponding `_discussion/advisor_notes_*.md` files.
 - Merge per the per-section default-lead table
-  (`multi-agent-version2/templates/per_section_default_leads.md`).
+  (`.agents/prompts/v2/templates/per_section_default_leads.md`).
 - Log unresolved disagreements to `_discussion/disagreement_log.md`.
 - Write the canonical flat-path output(s).
 

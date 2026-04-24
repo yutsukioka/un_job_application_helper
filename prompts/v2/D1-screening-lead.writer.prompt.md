@@ -56,8 +56,9 @@ Round plan on D1:
    - Generate the requested Option drafts through your screening lens:
      competency framing, evidence-density-first sentence shape,
      qualification-question coverage.
-   - Call `go-test`.
-2. TEST / DISCUSS / loop: standard pattern. qa-auditor closes.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
+2. TEST / DISCUSS / loop: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances. qa-auditor closes.
 3. IMPLEMENT pass 2: **First action: read ADVISOR_NOTES.**
 
 Hard rules:

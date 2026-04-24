@@ -39,11 +39,15 @@ Round plan on P0a:
      metrics, scope facts, aggregation notes.
    - Run `apex-jd-core-requirements`; write `phase1_2_core_requirements.md`.
    - Write `classification_proposal.md` (Mode A vs Mode B vacancy classification).
-   - Call `go-test`.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: stay live. Co-resident `qa-auditor` will consume advisor messages
    into `_discussion/advisor_notes_P0a.md` and submit `test-result`.
 3. DISCUSS: read `_discussion/advisor_notes_P0a.md`. Submit one structured
-   `discuss`. Do NOT call `discuss-done --next-impl`.
+   `discuss`, then call `discuss-done` **without** `--next-impl` so the
+   DISCUSS barrier can advance (qa-auditor adds `--next-impl`).
+     python .agents/agent_sync/client_v6.py discuss   screening-lead "<text>" --port 9800
+     python .agents/agent_sync/client_v6.py discuss-done screening-lead --port 9800
 4. IMPLEMENT pass 2 (if qa-auditor loops): re-read advisor_notes_P0a.md,
    address blockers, re-emit drafts.
 5. Loop bounded by `MAX_REVISION_PASSES` in `## BUDGETS`.

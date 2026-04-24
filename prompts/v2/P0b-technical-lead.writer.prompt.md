@@ -37,8 +37,9 @@ Round plan on P0b:
 1. IMPLEMENT pass 1:
    - Run `apex-ccog-resolver` against the confirmed classification.
    - Write `ccog_reference_resolved.md` (compact 10-20 entry subset).
-   - Call `go-test`.
-2. TEST / DISCUSS / loop pattern: same as P0a but for this single artifact.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
+2. TEST / DISCUSS / loop pattern: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances. (same as P0a) but for this single artifact.
 
 Post-shutdown freeze:
 - After P0b SHUTDOWN the four prep artifacts are READ-ONLY for all

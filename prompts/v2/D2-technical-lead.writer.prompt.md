@@ -51,8 +51,9 @@ Round plan on D2:
    - Generate the requested Option drafts through your technical lens:
      register-correct CCOG terms, programmatic scope/scale, methodology
      specificity, named frameworks.
-   - Call `go-test`.
-2. TEST / DISCUSS / loop: standard pattern.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
+2. TEST / DISCUSS / loop: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances.
 3. IMPLEMENT pass 2: **First action: read ADVISOR_NOTES.**
 
 Hard rules:

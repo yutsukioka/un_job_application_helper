@@ -6,7 +6,11 @@ Before doing anything:
 2. Load `apex-agent-sync-protocol`.
 3. Load your own `.agent.md` file in `.agents/.github/agents/<AGENT_NAME>.agent.md`
    and apply its **Advisor Mode (v2)** section.
-4. Join the coordination server with:
+4. Confirm the writer has already joined and is the implementer:
+   python .agents/agent_sync/client_v6.py status --port <PORT>
+   Continue only when `implementer` is `<WRITER_NAME>`. If it is empty,
+   wait for the writer to join first.
+5. Join the coordination server with:
    python .agents/agent_sync/client_v6.py join <AGENT_NAME> --port <PORT>
 
 AGENT_NAME = <AGENT_NAME>
@@ -17,7 +21,9 @@ ROLE       = advisor
 
 Hard rules on this server:
 - You are NOT the writer. Do not edit any file.
-- You may send `send` (writer-targeted) or `broadcast` messages during TEST.
+- During TEST, prefer `broadcast` so both the writer and qa-auditor receive
+  the note. If you use `send`, send the same note to both `<WRITER_NAME>` and
+  `qa-auditor`; otherwise QA cannot export it to advisor_notes_<SERVER>.md.
 - You may send exactly one structured `discuss` message during DISCUSS.
 - You MUST prefix every advisor message with `ADVISOR_TO=<WRITER_NAME>`.
 - Do not call `test-result`.
@@ -38,8 +44,8 @@ Use this job input:
 - JOB_SLUG = <JOB_SLUG>
 
 Start now:
-- join
+- confirm writer-first join order, then join
 - check status
 - remain silent during IMPLEMENT
-- review and send during TEST
+- review and broadcast during TEST
 - one structured `discuss` during DISCUSS, then `discuss-done` (no `--next-impl`)

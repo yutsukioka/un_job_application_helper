@@ -52,8 +52,9 @@ Round plan on S3:
      lens: keyword-density first, JD-phrase mirroring where feasible,
      ATS-safe punctuation, plain-text parseability.
    - Write `ats-format-lead/phase1_7_strategy_report.md`.
-   - Call `go-test`.
-2. TEST / DISCUSS / loop: same pattern as S1, S2.
+   - Call `impl-done` (advances IMPLEMENT -> TEST):
+     python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
+2. TEST / DISCUSS / loop: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances. (same pattern as S1, S2).
 3. IMPLEMENT pass 2: **First action: read ADVISOR_NOTES.**
 
 Hard rules:
