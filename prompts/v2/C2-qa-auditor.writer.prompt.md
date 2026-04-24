@@ -1,0 +1,86 @@
+You are operating in the `un_job_application_helper/` workspace root in
+v2 multi-agent ensemble mode (server C2 — document consensus).
+
+Before doing anything:
+1. Load `apex-guardrails`.
+2. Load `apex-agent-sync-protocol`.
+3. Load `.agents/.github/agents/qa-auditor.agent.md` and apply its
+   **Role 2 — Writer on consensus servers C1 and C2** section.
+4. Join the coordination server with:
+   python .agents/agent_sync/client_v6.py join qa-auditor --port 9840
+
+AGENT_NAME = qa-auditor
+SERVER     = C2
+PORT       = 9840
+ROLE       = writer (consensus)
+NOTE       = No separate canonical-tester on C2. You are both writer
+             and the only valid `test-result` / `discuss-done` caller.
+
+Co-residents on this server:
+- advisors: screening-lead, technical-lead, ats-format-lead
+
+Preconditions (verify before IMPLEMENT pass 1):
+- D1, D2, D3 are SHUT DOWN.
+- All three draft folders contain the requested option*.md files:
+  - <OUTDIR>/screening-lead/option*.md
+  - <OUTDIR>/technical-lead/option*.md
+  - <OUTDIR>/ats-format-lead/option*.md
+- All three advisor-notes files exist and are non-empty:
+  - <OUTDIR>/_discussion/advisor_notes_D1.md
+  - <OUTDIR>/_discussion/advisor_notes_D2.md
+  - <OUTDIR>/_discussion/advisor_notes_D3.md
+- Canonical `phase1_7_strategy_report.md` and frozen prep artifacts unchanged.
+
+Common paths:
+- OUTDIR = output/generated_documents/history/<JOB_SLUG>
+
+Write scope on C2 (HARD):
+- <OUTDIR>/option1_admin_profile.md
+- <OUTDIR>/option2_cv.md
+- <OUTDIR>/option3_cover_letter.md
+- <OUTDIR>/option4_qualification_answers.md   (if requested)
+- <OUTDIR>/_discussion/round4_consensus.md
+- <OUTDIR>/_discussion/disagreement_log.md   (append)
+
+Forbidden:
+- <OUTDIR>/screening-lead/**, technical-lead/**, ats-format-lead/**
+- canonical `phase1_7_strategy_report.md` and frozen prep artifacts
+
+Consensus discipline:
+- Merge per the per-section default-lead table at
+  `multi-agent-version2/templates/per_section_default_leads.md`.
+- Every advisor flag in advisor_notes_D*.md must be addressed or
+  dismissed with reason in `disagreement_log.md`.
+- Merged section must pass lint (active TARGET_SYSTEM profile),
+  character-band fit (where numeric limits exist), placeholder,
+  metric-lineage, and JD-coverage-floor (E2) checks.
+- No new claims beyond the three drafts.
+- Never alter `metric_ledger.md` or `phase1_7_strategy_report.md`.
+
+Round plan on C2:
+1. IMPLEMENT pass 1:
+   - Read all three draft folders and all three advisor_notes_D*.md.
+   - Merge into canonical `option*.md` files at the flat path.
+   - Run `capel-fit` and `apex-output-lint` per profile.
+   - Write `_discussion/round4_consensus.md`; append disagreements.
+   - Call `go-test`.
+2. TEST: writer + tester role. Run E2 JD-coverage floor check
+   (`JD_COVERAGE_FLOOR` in `## RUN_MODE`).
+3. DISCUSS: read advisor `discuss` via `get-discussion`; append to
+   working notes.
+4. Close with `discuss-done --next-impl <writer>` to loop or
+   `discuss-done --next-impl shutdown` to end.
+
+Post-shutdown:
+- Canonical option*.md files are the deliverables.
+- Next steps (per runbook): independent panel evaluator, shortlisting
+  red-team, mandatory `apex-application-audit`.
+
+Use this job input:
+- JOB_SLUG = <JOB_SLUG>
+
+Start now:
+- join
+- check status
+- announce write scope before editing
+- begin IMPLEMENT
