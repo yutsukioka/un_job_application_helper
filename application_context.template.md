@@ -31,3 +31,25 @@ CHAR_LIMIT: 2000
 TARGET_LOW: 1800
 TARGET_HIGH: 1950
 WORD_TARGET: 300
+
+## RUN_MODE
+# v2 multi-agent ensemble configuration. Empty lists = single-agent linear mode (default).
+# Authority: multi-agent-version2/spec/01_tier_a_ensemble_workflow.md §A2.
+#
+# One name = that name is writer; remaining authoring agents participate as advisors on each server.
+# Two or three names = ensemble fold launched per phase.
+# qa-auditor is always co-resident on author servers as canonical tester regardless of RUN_MODE.
+ENSEMBLE_PHASE_1_7: []                                                    # e.g., [screening-lead, technical-lead, ats-format-lead]
+ENSEMBLE_PHASE_8:   []                                                    # same shape
+MAX_REVISION_PASSES: 1                                                    # critic-author cap inside each author server
+JD_COVERAGE_FLOOR:  0.70                                                  # E2; 0.0 to disable
+
+## BUDGETS
+# v2 operational safety budgets. Read at Phase 0 by apex-orchestrator-report.
+# Authority: multi-agent-version2/spec/07_tier_g_safety_budgets.md.
+# Counter file convention: tmp/_budget_<server>.json
+MAX_ROUND_TOOL_CALLS: 40            # per IMPLEMENT round, per writer
+MAX_ROUND_TOKENS:     120000        # approximate, per round, per writer
+MAX_ADVISOR_MESSAGES: 8             # per advisor per round (prompt-level convention)
+MAX_REVISION_PASSES:  2             # critic-author loop cap; also referenced in RUN_MODE
+ON_BUDGET_EXCEEDED:   DEGRADE_AND_FLAG    # alternatives: HARD_STOP | ASK_USER

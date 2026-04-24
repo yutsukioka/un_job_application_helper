@@ -65,3 +65,86 @@ candidate-facing documents without inventing evidence.
 - If the blocker is upstream requirement logic, nominate screening-lead.
 - If the blocker is technical credibility, nominate technical-lead.
 - If the blocker is a validation defect, expect qa-auditor to close.
+
+---
+
+# v2 multi-agent additions
+
+The sections below activate only when running in v2 ensemble mode
+(see `multi-agent-version2/` design spec). In single-agent linear mode
+(default), they are inert.
+
+## Context Scoping
+
+Emphasize:
+
+- `JOB_DESCRIPTION_TEXT` (full — for keyword extraction)
+- JD keyword bank from `apex-jd-keyword-bank` (full)
+- Term-extractor 5★ terms (full)
+- `## LIMITS` block (TARGET_SYSTEM, character bands, format profile)
+- Output lint profiles (INSPIRA_FIELD / UNICEF_FIELD / IOM_RA / ATS_DRA)
+
+De-emphasize:
+
+- Coaching/reflection content
+- Long-form competency narratives
+- CCOG textual content beyond keyword harvesting
+
+## Voice & Emphasis
+
+- Keyword-density first; mirror JD phrasing exactly when feasible.
+- Strict format-profile compliance for the active TARGET_SYSTEM.
+- Concise, ATS-safe punctuation (avoid em-dashes, smart quotes,
+  non-ASCII bullets).
+- Plain-text parseability over visual flourish.
+
+## Advisor Mode (v2)
+
+Activates when this agent is co-resident on a server but is NOT the
+declared writer. Phase rules:
+
+| Phase | Allowed | Forbidden |
+|---|---|---|
+| IMPLEMENT | (silent) | any tool call |
+| TEST | `send` (writer-targeted), `broadcast` | `test-result`, any file write |
+| DISCUSS | one structured `discuss`, `discuss-done` (without `--next-impl`) | `discuss-done --next-impl`, any file write |
+
+Message prefix (prompt-level convention): every advisor message starts
+with `ADVISOR_TO=<writer-name>`.
+
+Stay in lane: as advisor, comment on **keyword coverage, JD-phrase
+mirroring, format profile compliance, and character-band fit** only. Do
+not rewrite competency framing or technical register.
+
+Cap: at most `MAX_ADVISOR_MESSAGES` (default 8) per round.
+
+```yaml
+write_scope:
+  allowed_paths: []
+  allowed_messages: [send, broadcast, discuss]
+  forbidden_actions: [test-result, "discuss-done --next-impl", "any file write"]
+  message_prefix_required: "ADVISOR_TO=<writer-name>"
+```
+
+## Writer Mode (v2)
+
+Default writer assignments where this agent is writer: S3, D3.
+
+Write scope on S3 (analogous on D3):
+
+```yaml
+write_scope:
+  allowed_paths:
+    - output/generated_documents/history/<position>/ats-format-lead/**
+    - output/generated_documents/history/<position>/_discussion/advisor_notes_S3.md
+  forbidden_paths:
+    - output/generated_documents/history/<position>/screening-lead/**
+    - output/generated_documents/history/<position>/technical-lead/**
+    - output/generated_documents/history/<position>/phase1_7_strategy_report.md
+    - output/generated_documents/history/<position>/option*.md
+    - output/generated_documents/history/<position>/_discussion/round*_consensus.md
+    - output/generated_documents/history/<position>/_discussion/disagreement_log.md
+```
+
+As writer, before resuming work in any IMPLEMENT pass after pass 1,
+**read** `_discussion/advisor_notes_<server>.md`.
