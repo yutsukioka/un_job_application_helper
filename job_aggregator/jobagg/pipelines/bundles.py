@@ -8,6 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from jobagg.classification import classify_database
 from jobagg.db import JobDatabase
 from jobagg.models import OrganizationSource, SyncResult
 from jobagg.pipelines.exports import export_jobs
@@ -101,6 +102,7 @@ def write_source_bundle(
     refresh_all_details: bool = False,
     close_missing: bool = True,
     missing_run_threshold: int = 3,
+    classify: bool = True,
 ) -> BundleResult:
     """Sync one source into a five-file bundle."""
 
@@ -129,6 +131,8 @@ def write_source_bundle(
             close_missing=close_missing,
             missing_run_threshold=missing_run_threshold,
         )
+    if classify:
+        classify_database(db, source_id=source.id)
     export_bundle(db, paths=paths, source_id=source.id)
     return BundleResult(
         source=source,

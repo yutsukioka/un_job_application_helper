@@ -1,0 +1,48 @@
+countries:
+  AR: {iso3: ARG, name: Argentina, region: Latin America and Caribbean, subregion: South America}
+  AT: {iso3: AUT, name: Austria, region: Europe, subregion: Western Europe}
+  BD: {iso3: BGD, name: Bangladesh, region: Asia, subregion: Southern Asia}
+  BO: {iso3: BOL, name: Bolivia, region: Latin America and Caribbean, subregion: South America}
+  BR: {iso3: BRA, name: Brazil, region: Latin America and Caribbean, subregion: South America}
+  CH: {iso3: CHE, name: Switzerland, region: Europe, subregion: Western Europe}
+  CL: {iso3: CHL, name: Chile, region: Latin America and Caribbean, subregion: South America}
+  CN: {iso3: CHN, name: China, region: Asia, subregion: Eastern Asia}
+  CO: {iso3: COL, name: Colombia, region: Latin America and Caribbean, subregion: South America}
+  DK: {iso3: DNK, name: Denmark, region: Europe, subregion: Northern Europe}
+  EG: {iso3: EGY, name: Egypt, region: Africa, subregion: Northern Africa}
+  ET: {iso3: ETH, name: Ethiopia, region: Africa, subregion: Eastern Africa}
+  FJ: {iso3: FJI, name: Fiji, region: Oceania, subregion: Melanesia}
+  FR: {iso3: FRA, name: France, region: Europe, subregion: Western Europe}
+  GB: {iso3: GBR, name: United Kingdom, region: Europe, subregion: Northern Europe, aliases: [UK]}
+  GH: {iso3: GHA, name: Ghana, region: Africa, subregion: Western Africa}
+  GT: {iso3: GTM, name: Guatemala, region: Latin America and Caribbean, subregion: Central America}
+  HT: {iso3: HTI, name: Haiti, region: Latin America and Caribbean, subregion: Caribbean}
+  ID: {iso3: IDN, name: Indonesia, region: Asia, subregion: South-eastern Asia}
+  IN: {iso3: IND, name: India, region: Asia, subregion: Southern Asia}
+  IT: {iso3: ITA, name: Italy, region: Europe, subregion: Southern Europe}
+  JO: {iso3: JOR, name: Jordan, region: Asia, subregion: Western Asia}
+  JP: {iso3: JPN, name: Japan, region: Asia, subregion: Eastern Asia}
+  KE: {iso3: KEN, name: Kenya, region: Africa, subregion: Eastern Africa}
+  LB: {iso3: LBN, name: Lebanon, region: Asia, subregion: Western Asia}
+  ML: {iso3: MLI, name: Mali, region: Africa, subregion: Western Africa}
+  MX: {iso3: MEX, name: Mexico, region: Latin America and Caribbean, subregion: Central America}
+  MM: {iso3: MMR, name: Myanmar, region: Asia, subregion: South-eastern Asia}
+  NG: {iso3: NGA, name: Nigeria, region: Africa, subregion: Western Africa}
+  NP: {iso3: NPL, name: Nepal, region: Asia, subregion: Southern Asia}
+  PA: {iso3: PAN, name: Panama, region: Latin America and Caribbean, subregion: Central America}
+  PE: {iso3: PER, name: Peru, region: Latin America and Caribbean, subregion: South America}
+  PH: {iso3: PHL, name: Philippines, region: Asia, subregion: South-eastern Asia}
+  PK: {iso3: PAK, name: Pakistan, region: Asia, subregion: Southern Asia}
+  RW: {iso3: RWA, name: Rwanda, region: Africa, subregion: Eastern Africa}
+  SD: {iso3: SDN, name: Sudan, region: Africa, subregion: Northern Africa}
+  SN: {iso3: SEN, name: Senegal, region: Africa, subregion: Western Africa}
+  SO: {iso3: SOM, name: Somalia, region: Africa, subregion: Eastern Africa}
+  SS: {iso3: SSD, name: South Sudan, region: Africa, subregion: Eastern Africa}
+  TH: {iso3: THA, name: Thailand, region: Asia, subregion: South-eastern Asia}
+  TR: {iso3: TUR, name: Türkiye, region: Asia, subregion: Western Asia, aliases: [Turkey]}
+  UG: {iso3: UGA, name: Uganda, region: Africa, subregion: Eastern Africa}
+  UA: {iso3: UKR, name: Ukraine, region: Europe, subregion: Eastern Europe}
+  US: {iso3: USA, name: United States, region: Americas, subregion: Northern America, aliases: [United States of America, USA]}
+  VE: {iso3: VEN, name: Venezuela, region: Latin America and Caribbean, subregion: South America}
+  VN: {iso3: VNM, name: Viet Nam, region: Asia, subregion: South-eastern Asia, aliases: [Vietnam]}
+  YE: {iso3: YEM, name: Yemen, region: Asia, subregion: Western Asia}

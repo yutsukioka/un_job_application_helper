@@ -1,0 +1,157 @@
+rules:
+  - code: "1.A.05"
+    label: "Information systems and communication technology specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bict officer\\b"
+      - "\\binformation technology\\b"
+      - "\\bai solutions developer\\b"
+      - "\\bai adoption\\b"
+      - "\\bproduct manager\\b"
+      - "\\bscrum master\\b"
+      - "\\bdigital innovation\\b"
+      - "\\bcyber\\b"
+    keywords: [technology, software, systems, data platform, AI, automation]
+  - code: "1.A.09.c"
+    label: "Logistics specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\blogistics officer\\b"
+      - "\\blogistics specialist\\b"
+      - "\\bsupply chain officer\\b"
+    keywords: [logistics, supply chain, inventory, warehouse, fleet, transport]
+  - code: "2.2.06"
+    label: "Procurement, supply and logistics support"
+    required_part: "2"
+    title_patterns:
+      - "\\blogistics assistant\\b"
+      - "\\bprocurement assistant\\b"
+      - "\\bsupply assistant\\b"
+      - "\\basistente de logística\\b"
+      - "\\basistente de adquisiciones\\b"
+      - "\\balmacenista\\b"
+    keywords: [procurement support, inventory, warehouse, stock, shipping]
+  - code: "1.A.02.e"
+    label: "Programme specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bprogramme officer\\b"
+      - "\\bprogram officer\\b"
+      - "\\bprogramme policy officer\\b"
+      - "\\bprogramme adviser\\b"
+      - "\\barea coordinator\\b"
+      - "\\bproject officer\\b"
+    keywords: [programme implementation, project management, results framework, coordination]
+  - code: "2.2.01"
+    label: "Programme assistance"
+    required_part: "2"
+    title_patterns:
+      - "\\bprogramme associate\\b"
+      - "\\bprogram associate\\b"
+      - "\\bprogramme assistant\\b"
+      - "\\basistente de programas\\b"
+    keywords: [programme support, monitoring, reporting, coordination support]
+  - code: "1.A.12"
+    label: "Administrative officers"
+    required_part: "1"
+    title_patterns:
+      - "\\badministrative officer\\b"
+      - "\\badministration officer\\b"
+      - "\\boperations manager\\b"
+    keywords: [administration, operations, administrative management]
+  - code: "2.1.02.a"
+    label: "Administrative assistance"
+    required_part: "2"
+    title_patterns:
+      - "\\badministrative assistant\\b"
+      - "\\badministrative associate\\b"
+      - "\\badmin assistant\\b"
+      - "\\bexecutive assistant\\b"
+      - "\\bchauffeur\\b"
+      - "\\bdriver\\b"
+    keywords: [administrative support, office support]
+  - code: "1.A.01"
+    label: "Financial management specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bfinance officer\\b"
+      - "\\bfinancial control officer\\b"
+      - "\\bcontrollers.*finance officer\\b"
+      - "\\bportfolio management officer\\b"
+    keywords: [finance, financial, budget, accounting, treasury]
+  - code: "2.1.03"
+    label: "Financial management-related"
+    required_part: "2"
+    title_patterns:
+      - "\\bfinance assistant\\b"
+      - "\\bfinancial assistant\\b"
+      - "\\basistente de finanzas\\b"
+    keywords: [finance support, accounting support]
+  - code: "1.A.06"
+    label: "Human resources management specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bhuman resources officer\\b"
+      - "\\bhr officer\\b"
+      - "\\brecruitment officer\\b"
+    keywords: [human resources, recruitment, staffing]
+  - code: "2.1.06"
+    label: "Human resources management-related"
+    required_part: "2"
+    title_patterns:
+      - "\\bhr associate\\b"
+      - "\\bhuman resources assistant\\b"
+      - "\\bhr assistant\\b"
+    keywords: [human resources support, recruitment support]
+  - code: "1.A.10.c"
+    label: "Donor-relations and fund-raising specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bfund raising officer\\b"
+      - "\\bfundraising officer\\b"
+      - "\\bdonor relations\\b"
+      - "\\bacquisition lead\\b"
+    keywords: [fundraising, donor relations, resource mobilization]
+  - code: "1.I"
+    label: "Medical and health related specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bpublic health\\b"
+      - "\\breproductive health\\b"
+      - "\\bmedical officer\\b"
+      - "\\bhealth adviser\\b"
+      - "\\bepidemiologist\\b"
+    keywords: [medical, health, epidemiology, public health]
+  - code: "2.2.02"
+    label: "Medical related"
+    required_part: "2"
+    title_patterns:
+      - "\\bmedical assistant\\b"
+      - "\\bmedical escort\\b"
+    keywords: [medical support, health support]
+  - code: "1.S.01"
+    label: "Emergency relief specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bemergency\\b"
+      - "\\bhumanitarian\\b"
+      - "\\brelief\\b"
+      - "\\bfood security\\b"
+    keywords: [humanitarian, relief, emergency, food security]
+  - code: "1.L.09"
+    label: "Economists"
+    required_part: "1"
+    title_patterns:
+      - "\\beconomist\\b"
+      - "\\beconomic affairs\\b"
+      - "\\baccess to finance\\b"
+    keywords: [economics, economic, finance, market]
+  - code: "1.A.21.a"
+    label: "Investigation, compliance and ethics specialists"
+    required_part: "1"
+    title_patterns:
+      - "\\bintegrity officer\\b"
+      - "\\binvestigation\\b"
+      - "\\bcompliance\\b"
+      - "\\bethics\\b"
+    keywords: [investigation, compliance, ethics, integrity]

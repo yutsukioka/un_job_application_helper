@@ -1,0 +1,29 @@
+unv_categories:
+  - normalized: un_community_volunteer
+    display: "UN Community Volunteer"
+    source_codes: [COMMUNITY]
+    source_labels: [Community]
+  - normalized: un_university_volunteer
+    display: "UN University Volunteer"
+    source_codes: [UNIVERSITY, UNIVERSITY_VOLUNTEER]
+    source_labels: [University, University Volunteer]
+  - normalized: un_youth_volunteer
+    display: "UN Youth Volunteer"
+    source_codes: [YOUTH, YOUTH_VOLUNTEER]
+    source_labels: [Youth, Youth Volunteer]
+  - normalized: un_volunteer_specialist
+    display: "UN Volunteer Specialist"
+    source_codes: [SPECIALIST]
+    source_labels: [Specialist]
+  - normalized: un_volunteer_expert
+    display: "UN Volunteer Expert"
+    source_codes: [EXPERT]
+    source_labels: [Expert]
+  - normalized: other_unv
+    display: "Other UNV"
+    source_codes: [ASSOCIATE]
+    source_labels: [Associate]
+  - normalized: unknown
+    display: "Unknown"
+    source_codes: []
+    source_labels: []

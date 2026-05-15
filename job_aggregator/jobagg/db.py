@@ -115,6 +115,152 @@ class JobDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_source_runs_source_observed
                     ON source_runs (source_id, observed_at);
+
+                CREATE TABLE IF NOT EXISTS vacancy_source_features (
+                    vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
+                    source_id TEXT NOT NULL,
+                    ats_family TEXT NOT NULL,
+                    raw_title TEXT,
+                    raw_description TEXT,
+                    raw_location TEXT,
+                    raw_department TEXT,
+                    raw_employment_type TEXT,
+                    source_grade TEXT,
+                    source_grade_field TEXT,
+                    source_contract_type TEXT,
+                    source_contract_field TEXT,
+                    source_job_family_code TEXT,
+                    source_job_family_label TEXT,
+                    source_job_network_code TEXT,
+                    source_job_network_label TEXT,
+                    source_recruitment_type TEXT,
+                    source_staff_category TEXT,
+                    source_seniority TEXT,
+                    source_country_code TEXT,
+                    source_city TEXT,
+                    source_region TEXT,
+                    source_work_modality TEXT,
+                    source_unv_category_code TEXT,
+                    source_unv_category_label TEXT,
+                    source_unv_volunteer_type TEXT,
+                    source_unv_work_location TEXT,
+                    source_unv_work_arrangement TEXT,
+                    source_unv_assignment_duration TEXT,
+                    source_unv_hours_week TEXT,
+                    source_unv_host_entity TEXT,
+                    source_unv_sdg TEXT,
+                    source_unv_expertise_areas TEXT,
+                    evidence TEXT,
+                    extracted_at TEXT NOT NULL,
+                    extractor_version TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS vacancy_classifications (
+                    vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
+                    ccog_primary_code TEXT,
+                    ccog_primary_label TEXT,
+                    ccog_family_code TEXT,
+                    ccog_family_label TEXT,
+                    ccog_part TEXT,
+                    ccog_confidence REAL,
+                    ccog_method TEXT,
+                    contract_category TEXT,
+                    contract_subtype TEXT,
+                    contract_confidence REAL,
+                    national_international TEXT,
+                    national_international_confidence REAL,
+                    grade_system TEXT,
+                    grade_family TEXT,
+                    grade_code TEXT,
+                    grade_level TEXT,
+                    staff_category TEXT,
+                    min_years_experience INTEGER,
+                    grade_confidence REAL,
+                    country TEXT,
+                    country_iso2 TEXT,
+                    country_iso3 TEXT,
+                    city TEXT,
+                    region TEXT,
+                    subregion TEXT,
+                    location_confidence REAL,
+                    work_modality TEXT,
+                    work_modality_confidence REAL,
+                    unv_category TEXT,
+                    unv_raw_category TEXT,
+                    unv_volunteer_type TEXT,
+                    unv_assignment_duration TEXT,
+                    unv_work_arrangement TEXT,
+                    unv_hours_per_week TEXT,
+                    unv_host_entity TEXT,
+                    unv_sdg TEXT,
+                    unv_expertise_areas TEXT,
+                    needs_review INTEGER NOT NULL DEFAULT 0,
+                    classification_version TEXT NOT NULL,
+                    evidence TEXT,
+                    classified_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_class_ccog_code
+                    ON vacancy_classifications (ccog_primary_code);
+                CREATE INDEX IF NOT EXISTS idx_class_ccog_family
+                    ON vacancy_classifications (ccog_family_code);
+                CREATE INDEX IF NOT EXISTS idx_class_contract
+                    ON vacancy_classifications (contract_category);
+                CREATE INDEX IF NOT EXISTS idx_class_grade
+                    ON vacancy_classifications (grade_family, grade_code);
+                CREATE INDEX IF NOT EXISTS idx_class_country
+                    ON vacancy_classifications (country_iso3);
+                CREATE INDEX IF NOT EXISTS idx_class_city
+                    ON vacancy_classifications (city);
+                CREATE INDEX IF NOT EXISTS idx_class_region
+                    ON vacancy_classifications (region);
+                CREATE INDEX IF NOT EXISTS idx_class_modality
+                    ON vacancy_classifications (work_modality);
+                CREATE INDEX IF NOT EXISTS idx_class_scope
+                    ON vacancy_classifications (national_international);
+                CREATE INDEX IF NOT EXISTS idx_class_unv_category
+                    ON vacancy_classifications (unv_category);
+                CREATE INDEX IF NOT EXISTS idx_class_review
+                    ON vacancy_classifications (needs_review);
+
+                CREATE TABLE IF NOT EXISTS vacancy_locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vacancy_id TEXT NOT NULL REFERENCES jobs(job_key),
+                    city TEXT,
+                    city_key TEXT,
+                    country TEXT,
+                    country_iso2 TEXT,
+                    country_iso3 TEXT,
+                    region TEXT,
+                    subregion TEXT,
+                    location_type TEXT NOT NULL,
+                    is_primary INTEGER NOT NULL DEFAULT 0,
+                    is_remote INTEGER NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0.0,
+                    source_field TEXT,
+                    evidence TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_vacloc_city_key
+                    ON vacancy_locations (city_key);
+                CREATE INDEX IF NOT EXISTS idx_vacloc_country_iso3
+                    ON vacancy_locations (country_iso3);
+                CREATE INDEX IF NOT EXISTS idx_vacloc_city_country
+                    ON vacancy_locations (city_key, country_iso3);
+                CREATE INDEX IF NOT EXISTS idx_vacloc_type
+                    ON vacancy_locations (location_type);
+                CREATE INDEX IF NOT EXISTS idx_vacloc_vacancy
+                    ON vacancy_locations (vacancy_id);
+
+                CREATE TABLE IF NOT EXISTS classification_overrides (
+                    vacancy_id TEXT NOT NULL REFERENCES jobs(job_key),
+                    field_name TEXT NOT NULL,
+                    override_value TEXT NOT NULL,
+                    reason TEXT,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT,
+                    PRIMARY KEY (vacancy_id, field_name)
+                );
                 """
             )
             self._ensure_column(
@@ -481,3 +627,209 @@ class JobDatabase:
                 data = dict(row)
                 data["raw"] = json.loads(data.pop("raw_json") or "{}")
                 yield data
+
+    def iter_jobs_with_classification(
+        self,
+        source_id: str | None = None,
+        *,
+        status: str | None = None,
+    ) -> Iterable[dict[str, Any]]:
+        query = """
+            SELECT
+                j.*,
+                c.ccog_primary_code,
+                c.ccog_primary_label,
+                c.ccog_family_code,
+                c.ccog_family_label,
+                c.ccog_part,
+                c.ccog_confidence,
+                c.ccog_method,
+                c.contract_category,
+                c.contract_subtype,
+                c.contract_confidence,
+                c.national_international,
+                c.national_international_confidence,
+                c.grade_system,
+                c.grade_family,
+                c.grade_code,
+                c.grade_level,
+                c.staff_category,
+                c.min_years_experience,
+                c.grade_confidence,
+                c.country,
+                c.country_iso2,
+                c.country_iso3,
+                c.city,
+                c.region,
+                c.subregion,
+                c.location_confidence,
+                c.work_modality,
+                c.work_modality_confidence,
+                c.unv_category,
+                c.unv_raw_category,
+                c.unv_volunteer_type,
+                c.unv_assignment_duration,
+                c.unv_work_arrangement,
+                c.unv_hours_per_week,
+                c.unv_host_entity,
+                c.unv_sdg,
+                c.unv_expertise_areas,
+                c.needs_review,
+                c.classification_version,
+                c.classified_at
+            FROM jobs j
+            LEFT JOIN vacancy_classifications c ON c.vacancy_id = j.job_key
+        """
+        clauses = []
+        params = []
+        if source_id:
+            clauses.append("j.source_id = ?")
+            params.append(source_id)
+        if status:
+            clauses.append("j.status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY j.source_id, j.title"
+        try:
+            with self.connect() as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        except sqlite3.OperationalError:
+            yield from self.iter_jobs(source_id=source_id, status=status)
+            return
+        for row in rows:
+            data = dict(row)
+            data["raw"] = json.loads(data.pop("raw_json") or "{}")
+            if data.get("unv_expertise_areas"):
+                data["unv_expertise_areas"] = json.loads(data["unv_expertise_areas"])
+            data["needs_review"] = bool(data["needs_review"]) if data.get("needs_review") is not None else None
+            yield data
+
+    def upsert_vacancy_source_features(self, features: Any) -> None:
+        from jobagg.classification.pipeline import feature_to_row
+
+        row = feature_to_row(features)
+        columns = list(row)
+        placeholders = ", ".join("?" for _ in columns)
+        updates = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "vacancy_id")
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO vacancy_source_features ({", ".join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(vacancy_id) DO UPDATE SET {updates}
+                """,
+                tuple(row[column] for column in columns),
+            )
+
+    def upsert_vacancy_classification(self, classification: Any) -> None:
+        from jobagg.classification.pipeline import classification_to_row
+
+        row = classification_to_row(classification)
+        columns = list(row)
+        placeholders = ", ".join("?" for _ in columns)
+        updates = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "vacancy_id")
+        with self.connect() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO vacancy_classifications ({", ".join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(vacancy_id) DO UPDATE SET {updates}
+                """,
+                tuple(row[column] for column in columns),
+            )
+
+    def replace_vacancy_locations(self, vacancy_id: str, locations: Iterable[Any]) -> None:
+        from jobagg.classification.pipeline import location_to_row
+
+        rows = [location_to_row(location) for location in locations]
+        columns = [
+            "vacancy_id",
+            "city",
+            "city_key",
+            "country",
+            "country_iso2",
+            "country_iso3",
+            "region",
+            "subregion",
+            "location_type",
+            "is_primary",
+            "is_remote",
+            "confidence",
+            "source_field",
+            "evidence",
+        ]
+        with self.connect() as conn:
+            conn.execute("DELETE FROM vacancy_locations WHERE vacancy_id = ?", (vacancy_id,))
+            if not rows:
+                return
+            placeholders = ", ".join("?" for _ in columns)
+            conn.executemany(
+                f"""
+                INSERT INTO vacancy_locations ({", ".join(columns)})
+                VALUES ({placeholders})
+                """,
+                [tuple(row[column] for column in columns) for row in rows],
+            )
+
+    def iter_vacancy_locations(self, vacancy_id: str) -> Iterable[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM vacancy_locations
+                WHERE vacancy_id = ?
+                ORDER BY is_primary DESC, confidence DESC, id
+                """,
+                (vacancy_id,),
+            ).fetchall()
+        for row in rows:
+            data = dict(row)
+            data["is_primary"] = bool(data["is_primary"])
+            data["is_remote"] = bool(data["is_remote"])
+            data["evidence"] = json.loads(data["evidence"] or "{}")
+            yield data
+
+    def classification_overrides(self, vacancy_id: str) -> dict[str, str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT field_name, override_value
+                FROM classification_overrides
+                WHERE vacancy_id = ?
+                """,
+                (vacancy_id,),
+            ).fetchall()
+        return {row["field_name"]: row["override_value"] for row in rows}
+
+    def upsert_classification_override(
+        self,
+        *,
+        vacancy_id: str,
+        field_name: str,
+        override_value: str,
+        reason: str | None = None,
+        created_by: str | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO classification_overrides (
+                    vacancy_id, field_name, override_value, reason, created_at, created_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(vacancy_id, field_name) DO UPDATE SET
+                    override_value = excluded.override_value,
+                    reason = excluded.reason,
+                    created_at = excluded.created_at,
+                    created_by = excluded.created_by
+                """,
+                (
+                    vacancy_id,
+                    field_name,
+                    override_value,
+                    reason,
+                    _dt(datetime.now(tz=UTC)),
+                    created_by,
+                ),
+            )

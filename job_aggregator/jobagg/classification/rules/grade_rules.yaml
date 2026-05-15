@@ -1,0 +1,57 @@
+grade_patterns:
+  - system: UN
+    family: P
+    regex: "\\bP[-\\s]?(1|2|3|4|5)\\b"
+    staff_category: professional
+  - system: UN
+    family: D
+    regex: "\\bD[-\\s]?(1|2)\\b"
+    staff_category: director
+  - system: UN
+    family: G
+    regex: "\\bG[-\\s]?(1|2|3|4|5|6|7)\\b"
+    staff_category: general_service
+  - system: UN
+    family: GS
+    regex: "\\bGS[-\\s]?(1|2|3|4|5|6|7)\\b"
+    staff_category: general_service
+  - system: UN
+    family: "NO"
+    regex: "\\bNO[-\\s]?(A|B|C|D|1|2|3|4)\\b|\\bNOA\\b|\\bNOB\\b|\\bNOC\\b|\\bNOD\\b"
+    staff_category: national_professional_officer
+  - system: UN
+    family: FS
+    regex: "\\bFS[-\\s]?(4|5|6|7)\\b"
+    staff_category: field_service
+  - system: WFP_SERVICE_CONTRACT
+    family: SSA
+    regex: "\\bSSA\\s?(\\d+)\\b"
+    staff_category: service_contract
+  - system: WFP_SERVICE_CONTRACT
+    family: SC
+    regex: "\\bSC\\s?(\\d+)\\b"
+    staff_category: service_contract
+  - system: UNOPS
+    family: IICA
+    regex: "\\bIICA[-\\s]?(1|2|3|4)\\b"
+    staff_category: international_individual_contractor
+  - system: UNOPS
+    family: LICA
+    regex: "\\bLICA[-\\s]?([1-9]|10)\\b"
+    staff_category: local_individual_contractor
+  - system: UNOPS
+    family: ICS
+    regex: "\\bICS[-\\s]?(9|10|11|12)\\b"
+    staff_category: individual_contractor
+  - system: IOM
+    family: UG
+    regex: "\\bUG\\d*\\b"
+    staff_category: unknown_grade
+  - system: UN
+    family: INTERN
+    regex: "\\bI[-\\s]?1\\b|\\bINTERN\\b"
+    staff_category: intern
+  - system: UN
+    family: CONSULTANT
+    regex: "\\bCON\\b"
+    staff_category: consultant
