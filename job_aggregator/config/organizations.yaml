@@ -1,0 +1,976 @@
+# Starter registry. Keep source IDs stable; they are part of job identity keys.
+sources:
+  - id: wfp_workday
+    name: World Food Programme
+    ats_family: workday
+    base_url: https://wd3.myworkdaysite.com/recruiting/wfp/job_openings
+    enabled: true
+    extra:
+      output_slug: wfp
+      cxs_base_url: https://wd3.myworkdaysite.com/wday/cxs/wfp/job_openings
+      page_size: 20
+      max_pages: 25
+      fetch_details: false
+
+  - id: imf_workday
+    name: International Monetary Fund
+    ats_family: workday
+    base_url: https://imf.wd5.myworkdayjobs.com/IMF
+    enabled: true
+    extra:
+      output_slug: imf
+      cxs_base_url: https://imf.wd5.myworkdayjobs.com/wday/cxs/imf/IMF
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: tbi_workday
+    name: Tony Blair Institute
+    ats_family: workday
+    base_url: https://tbinstitute.wd3.myworkdayjobs.com/TBI
+    enabled: true
+    extra:
+      output_slug: tbi
+      cxs_base_url: https://tbinstitute.wd3.myworkdayjobs.com/wday/cxs/tbinstitute/TBI
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: unhcr_workday
+    name: UNHCR
+    ats_family: workday
+    base_url: https://unhcr.wd3.myworkdayjobs.com/External
+    enabled: true
+    extra:
+      output_slug: unhcr
+      cxs_base_url: https://unhcr.wd3.myworkdayjobs.com/wday/cxs/unhcr/External
+      page_size: 20
+      max_pages: 25
+      fetch_details: false
+
+  - id: wef_workday
+    name: World Economic Forum
+    ats_family: workday
+    base_url: https://weforum.wd3.myworkdayjobs.com/Forum_Careers
+    enabled: true
+    extra:
+      output_slug: wef
+      cxs_base_url: https://weforum.wd3.myworkdayjobs.com/wday/cxs/weforum/Forum_Careers
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: wto_workday
+    name: World Trade Organization
+    ats_family: workday
+    base_url: https://wto.wd103.myworkdayjobs.com/External
+    enabled: true
+    extra:
+      output_slug: wto
+      cxs_base_url: https://wto.wd103.myworkdayjobs.com/wday/cxs/wto/External
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: globalfund_workday
+    name: The Global Fund
+    ats_family: workday
+    base_url: https://theglobalfund.wd1.myworkdayjobs.com/External
+    enabled: true
+    extra:
+      output_slug: globalfund
+      cxs_base_url: https://theglobalfund.wd1.myworkdayjobs.com/wday/cxs/theglobalfund/External
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: wipo_taleo
+    name: World Intellectual Property Organization
+    ats_family: taleo
+    base_url: https://wipo.taleo.net/careersection/wp_2/jobsearch.ftl
+    enabled: true
+    extra:
+      output_slug: wipo
+      search_url: https://wipo.taleo.net/careersection/wp_2/jobsearch.ftl
+      search_api_url: https://wipo.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233
+      detail_url_template: https://wipo.taleo.net/careersection/wp_2/jobdetail.ftl?job={job_id_url}
+      tz: GMT+02:00
+      tzname: Europe/Zurich
+      column_fields:
+        - title
+        - job_level
+        - department
+        - external_id
+        - employment_type
+        - job_category
+        - location
+        - employee_status
+        - closingDate
+      max_pages: 25
+      fetch_details: false
+      search_payload:
+        multilineEnabled: true
+        sortingSelection:
+          sortBySelectionParam: "2"
+          ascendingSortingOrder: "true"
+        fieldData:
+          fields:
+            KEYWORD: ""
+            JOB_TITLE: ""
+          valid: true
+        filterSelectionParam:
+          searchFilterSelections:
+            - id: POSTING_DATE
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_LEVEL
+              selectedValues: []
+        advancedSearchFiltersSelectionParam:
+          searchFilterSelections:
+            - id: ORGANIZATION
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_NUMBER
+              selectedValues: []
+            - id: URGENT_JOB
+              selectedValues: []
+            - id: STUDY_LEVEL
+              selectedValues: []
+        pageNo: 1
+
+  - id: who_taleo
+    name: World Health Organization
+    ats_family: taleo
+    base_url: https://careers.who.int/careersection/ex/jobsearch.ftl
+    enabled: true
+    extra:
+      output_slug: who
+      search_url: https://careers.who.int/careersection/ex/jobsearch.ftl
+      search_api_url: https://careers.who.int/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233
+      detail_url_template: https://careers.who.int/careersection/ex/jobdetail.ftl?job={job_id_url}
+      tz: GMT+02:00
+      tzname: Europe/Zurich
+      column_fields:
+        - title
+        - external_id
+        - location
+        - job_level
+        - employment_type
+        - closingDate
+        - department
+      max_pages: 25
+      fetch_details: false
+      search_payload:
+        multilineEnabled: true
+        sortingSelection:
+          sortBySelectionParam: "3"
+          ascendingSortingOrder: "false"
+        fieldData:
+          fields:
+            KEYWORD: ""
+            LOCATION: ""
+          valid: true
+        filterSelectionParam:
+          searchFilterSelections:
+            - id: POSTING_DATE
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_TYPE
+              selectedValues: []
+            - id: JOB_SCHEDULE
+              selectedValues: []
+            - id: JOB_LEVEL
+              selectedValues: []
+            - id: EMPLOYEE_STATUS
+              selectedValues: []
+        advancedSearchFiltersSelectionParam:
+          searchFilterSelections:
+            - id: ORGANIZATION
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_NUMBER
+              selectedValues: []
+            - id: URGENT_JOB
+              selectedValues: []
+            - id: EMPLOYEE_STATUS
+              selectedValues: []
+            - id: JOB_SCHEDULE
+              selectedValues: []
+            - id: JOB_TYPE
+              selectedValues: []
+            - id: JOB_LEVEL
+              selectedValues: []
+        pageNo: 1
+
+  - id: iaea_taleo
+    name: International Atomic Energy Agency
+    ats_family: taleo
+    base_url: https://iaea.taleo.net/careersection/ex/jobsearch.ftl
+    enabled: true
+    extra:
+      output_slug: iaea
+      search_url: https://iaea.taleo.net/careersection/ex/jobsearch.ftl
+      search_api_url: https://iaea.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=8105100373
+      detail_url_template: https://iaea.taleo.net/careersection/ex/jobdetail.ftl?job={job_id_url}
+      tz: GMT+02:00
+      tzname: Europe/Vienna
+      column_fields:
+        - title
+        - location
+        - closingDate
+      max_pages: 25
+      fetch_details: false
+      search_payload:
+        multilineEnabled: false
+        sortingSelection:
+          sortBySelectionParam: "3"
+          ascendingSortingOrder: "false"
+        fieldData:
+          fields:
+            KEYWORD: ""
+            LOCATION: ""
+          valid: true
+        filterSelectionParam:
+          searchFilterSelections:
+            - id: POSTING_DATE
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_TYPE
+              selectedValues: []
+            - id: JOB_SCHEDULE
+              selectedValues: []
+            - id: JOB_LEVEL
+              selectedValues: []
+        advancedSearchFiltersSelectionParam:
+          searchFilterSelections:
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_NUMBER
+              selectedValues: []
+            - id: EMPLOYEE_STATUS
+              selectedValues: []
+            - id: STUDY_LEVEL
+              selectedValues: []
+            - id: WILL_TRAVEL
+              selectedValues: []
+        pageNo: 1
+
+  - id: fao_taleo
+    name: Food and Agriculture Organization
+    ats_family: taleo
+    base_url: https://jobs.fao.org/careersection/fao_external/jobsearch.ftl
+    enabled: true
+    extra:
+      output_slug: fao
+      search_url: https://jobs.fao.org/careersection/fao_external/jobsearch.ftl
+      search_api_url: https://jobs.fao.org/careersection/rest/jobboard/searchjobs?lang=en&portal=8105120163
+      detail_url_template: https://jobs.fao.org/careersection/fao_external/jobdetail.ftl?job={job_id_url}
+      tz: GMT+02:00
+      tzname: Europe/Rome
+      column_fields:
+        - title
+        - external_id
+        - job_category
+        - employment_type
+        - location
+        - postedDate
+        - closingDate
+      max_pages: 25
+      fetch_details: false
+      search_payload:
+        multilineEnabled: true
+        sortingSelection:
+          sortBySelectionParam: "1"
+          ascendingSortingOrder: "false"
+        fieldData:
+          fields:
+            KEYWORD: ""
+            LOCATION: ""
+            JOB_TITLE: ""
+          valid: true
+        filterSelectionParam:
+          searchFilterSelections:
+            - id: JOB_TYPE
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: POSTING_DATE
+              selectedValues: []
+        advancedSearchFiltersSelectionParam:
+          searchFilterSelections:
+            - id: ORGANIZATION
+              selectedValues: []
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_NUMBER
+              selectedValues: []
+            - id: URGENT_JOB
+              selectedValues: []
+        pageNo: 1
+
+  - id: adb_taleo
+    name: Asian Development Bank
+    ats_family: taleo
+    base_url: https://adb.taleo.net/careersection/1/jobsearch.ftl
+    enabled: true
+    extra:
+      output_slug: adb
+      search_url: https://adb.taleo.net/careersection/1/jobsearch.ftl
+      search_api_url: https://adb.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=8115010145
+      detail_url_template: https://adb.taleo.net/careersection/1/jobdetail.ftl?job={job_id_url}
+      tz: GMT+08:00
+      tzname: Asia/Manila
+      column_fields:
+        - title
+        - department
+        - closingDate
+      max_pages: 25
+      fetch_details: false
+      search_payload:
+        multilineEnabled: false
+        sortingSelection:
+          sortBySelectionParam: "4"
+          ascendingSortingOrder: "false"
+        fieldData:
+          fields: {}
+          valid: true
+        filterSelectionParam:
+          searchFilterSelections:
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: POSTING_DATE
+              selectedValues: []
+        advancedSearchFiltersSelectionParam:
+          searchFilterSelections:
+            - id: LOCATION
+              selectedValues: []
+            - id: JOB_FIELD
+              selectedValues: []
+            - id: JOB_NUMBER
+              selectedValues: []
+            - id: URGENT_JOB
+              selectedValues: []
+            - id: EMPLOYEE_STATUS
+              selectedValues: []
+            - id: WILL_TRAVEL
+              selectedValues: []
+            - id: JOB_SHIFT
+              selectedValues: []
+        pageNo: 1
+
+  - id: nato_taleo
+    name: North Atlantic Treaty Organization
+    ats_family: taleo
+    base_url: https://nato.taleo.net/careersection/2/jobsearch.ftl
+    # NATO uses the older stateful jobsearch.ajax flow; keep disabled until that
+    # legacy path is implemented and verified.
+    enabled: false
+    extra:
+      output_slug: nato
+      search_url: https://nato.taleo.net/careersection/2/jobsearch.ftl
+      detail_url_template: https://nato.taleo.net/careersection/2/jobdetail.ftl?job={job_id_url}
+      tz: GMT+02:00
+      tzname: Europe/Brussels
+      fetch_details: false
+
+  - id: unicef_pageup
+    name: UNICEF
+    ats_family: pageup
+    base_url: https://jobs.unicef.org/en-us/listing/
+    enabled: true
+    extra:
+      output_slug: unicef
+      listing_url: https://jobs.unicef.org/en-us/listing/
+      filter_url: https://jobs.unicef.org/en-us/filter/
+      page_size: 20
+      max_pages: 25
+      fetch_details: false
+      query:
+        search-keyword: ""
+
+  - id: un_inspira
+    name: United Nations Careers
+    ats_family: inspira
+    base_url: https://careers.un.org/jobopening
+    enabled: true
+    extra:
+      output_slug: un
+      search_url: https://careers.un.org/jobopening
+      list_url: https://careers.un.org/api/public/opening/jo/list/filteredV2/en
+      detail_api_url_template: https://careers.un.org/api/public/opening/joV2/{job_id}/en
+      detail_url_template: https://careers.un.org/jobSearchDescription/{job_id}?language=en
+      page_size: 50
+      max_pages: 25
+      sort_by: startDate
+      sort_direction: -1
+      fetch_details: false
+      filter_config: {}
+
+  - id: worldbank_csod
+    name: World Bank Group
+    ats_family: csod
+    base_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup
+    enabled: false
+    extra:
+      output_slug: worldbank
+      requires_bearer_token: true
+      context_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup&lang=en-US
+      api_url: https://us.api.csod.com/rec-job-search/external/jobs
+      legacy_api_url: https://worldbankgroup.csod.com/services/x/career-site/v1/search
+      detail_api_url_template: https://worldbankgroup.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=1
+      detail_url_template: https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/{job_id}?c=worldbankgroup
+      page_size: 25
+      max_pages: 10
+      fetch_details: false
+      search_payload:
+        careerSiteId: 1
+        careerSitePageId: 1
+        cultureId: 1
+        cultureName: en-US
+        searchText: ""
+        states: []
+        countryCodes: []
+        cities: []
+        placeID: ""
+        radius: null
+        postingsWithinDays: null
+        customFieldCheckboxKeys: []
+        customFieldDropdowns: []
+        customFieldRadios: []
+
+  - id: unv_uvp
+    name: United Nations Volunteers
+    ats_family: unv
+    base_url: https://app.unv.org
+    enabled: true
+    extra:
+      output_slug: unv
+      api_url: https://app.unv.org/api/doa/doa/SearchDoaAsyncByAzureCognitive
+      detail_api_url_template: https://app.unv.org/api/doa/doa/{job_id}
+      detail_url_template: https://app.unv.org/api/doa/doa/{job_id}
+      page_size: 50
+      max_pages: 10
+      fetch_details: false
+      search_payload: {}
+
+  - id: unops_avature
+    name: UNOPS
+    ats_family: avature
+    base_url: https://careers.unops.org
+    enabled: true
+    extra:
+      output_slug: unops
+      listing_url: https://careers.unops.org/careersmarketplace/SearchJobs
+      page_size: 6
+      max_pages: 75
+      fetch_details: false
+
+  - id: icao_oracle_hcm
+    name: International Civil Aviation Organization
+    ats_family: oracle_hcm
+    base_url: https://estm.fa.em2.oraclecloud.com
+    enabled: true
+    extra:
+      output_slug: icao
+      site_number: CX_3001
+      detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_3001/job/{job_id}
+      fallback_listing_url: https://icaocareers.icao.int/careers
+      oracle_dns_preflight: true
+      page_size: 25
+      max_pages: 12
+      fetch_details: false
+
+  - id: paho_workday
+    name: Pan American Health Organization
+    ats_family: workday
+    base_url: https://paho.wd5.myworkdayjobs.com/pahocareers
+    enabled: true
+    extra:
+      output_slug: paho
+      cxs_base_url: https://paho.wd5.myworkdayjobs.com/wday/cxs/paho/pahocareers
+      page_size: 20
+      max_pages: 10
+      fetch_details: false
+
+  - id: unfpa_oracle_hcm
+    name: UNFPA
+    ats_family: oracle_hcm
+    base_url: https://estm.fa.em2.oraclecloud.com
+    enabled: true
+    extra:
+      output_slug: unfpa
+      site_number: CX_2003
+      detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2003/job/{job_id}
+      fallback_listing_url: https://www.unfpa.org/jobs
+      fallback_parser: unfpa_official
+      fallback_max_pages: 12
+      oracle_dns_preflight: true
+      fraud_warning: UNFPA does not charge application, processing, training, interviewing, testing, or other recruitment fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
+      page_size: 25
+      max_pages: 10
+      fetch_details: false
+
+  - id: undp_oracle_hcm
+    name: UNDP
+    ats_family: oracle_hcm
+    base_url: https://estm.fa.em2.oraclecloud.com
+    enabled: true
+    extra:
+      output_slug: undp
+      site_number: CX_1
+      detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/{job_id}
+      fallback_listing_url: https://jobs.undp.org/cj_view_jobs.cfm
+      fallback_parser: undp_official
+      fallback_max_pages: 1
+      oracle_dns_preflight: true
+      fraud_warning: UNDP does not charge recruitment-related fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
+      page_size: 25
+      max_pages: 12
+      fetch_details: false
+
+  - id: unwomen_oracle_hcm
+    name: UN Women
+    ats_family: oracle_hcm
+    base_url: https://estm.fa.em2.oraclecloud.com
+    enabled: true
+    extra:
+      output_slug: unwomen
+      site_number: CX_1001
+      detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/{job_id}
+      fallback_listing_url: https://www.unwomen.org/en/jobs/unwomen
+      fallback_parser: generic_official
+      oracle_dns_preflight: true
+      page_size: 25
+      max_pages: 10
+      fetch_details: false
+
+  - id: wmo_oracle_hcm
+    name: World Meteorological Organization
+    ats_family: oracle_hcm
+    base_url: https://estm.fa.em2.oraclecloud.com
+    enabled: true
+    extra:
+      output_slug: wmo
+      site_number: CX_5001
+      detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_5001/job/{job_id}
+      fallback_listing_url: https://wmo.int/jobs
+      oracle_dns_preflight: true
+      page_size: 25
+      max_pages: 10
+      fetch_details: false
+
+  - id: iom_oracle_hcm
+    name: International Organization for Migration
+    ats_family: oracle_hcm
+    base_url: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com
+    enabled: false
+    extra:
+      output_slug: iom
+      site_number: CX_1001
+      detail_url_template: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?keyword={job_id}
+      page_size: 25
+      max_pages: 12
+      fetch_details: false
+
+  - id: itu_successfactors
+    name: International Telecommunication Union
+    ats_family: successfactors_rmk
+    base_url: https://jobs.itu.int
+    enabled: true
+    extra:
+      output_slug: itu
+      search_url: https://jobs.itu.int/go/View-all-categories/8942455/
+      max_pages: 3
+      fetch_details: false
+
+  - id: ilo_successfactors
+    name: International Labour Organization
+    ats_family: successfactors_rmk
+    base_url: https://jobs.ilo.org
+    enabled: false
+    extra:
+      output_slug: ilo
+      rss_url: https://jobs.ilo.org/services/rss/category/?catid=2842101
+
+  - id: unido_successfactors
+    name: UNIDO
+    ats_family: successfactors_rmk
+    base_url: https://careers.unido.org
+    enabled: true
+    extra:
+      output_slug: unido
+      search_url: https://careers.unido.org/search/?q=
+      max_pages: 1
+
+  - id: unesco_successfactors
+    name: UNESCO
+    ats_family: successfactors_rmk
+    base_url: https://careers.unesco.org
+    enabled: true
+    extra:
+      output_slug: unesco
+      search_url: https://careers.unesco.org/search/?q=
+      max_pages: 5
+
+  - id: icrc_successfactors
+    name: International Committee of the Red Cross
+    ats_family: successfactors_rmk
+    base_url: https://careers.icrc.org
+    enabled: true
+    extra:
+      output_slug: icrc
+      search_url: https://careers.icrc.org/go/All-Jobs/3807301/
+      max_pages: 1
+
+  - id: au_successfactors
+    name: African Union
+    ats_family: successfactors_rmk
+    base_url: https://jobs.au.int
+    enabled: false
+    extra:
+      output_slug: au
+      api_url: https://jobs.au.int/services/recruiting/v1/jobs
+      detail_url_template: https://jobs.au.int/job/{url_title}/{job_id}-en_US
+      page_size: 10
+      max_pages: 10
+      search_payload:
+        locale: en_US
+        sortBy: ""
+        keywords: ""
+        location: ""
+        facetFilters: {}
+        brand: ""
+        skills: []
+        categoryId: 0
+        alertId: ""
+        rcmCandidateId: ""
+
+  - id: ideglobal_workable
+    name: iDE Global
+    ats_family: workable
+    base_url: https://apply.workable.com/ide-global
+    enabled: false
+    extra:
+      output_slug: ideglobal
+      account: ide-global
+      fetch_details: false
+      search_payload:
+        query: ""
+        department: []
+        location: []
+        workplace: []
+        worktype: []
+
+  - id: cern_smartrecruiters
+    name: CERN
+    ats_family: smartrecruiters
+    base_url: https://jobs.smartrecruiters.com/CERN
+    enabled: false
+    extra:
+      output_slug: cern
+      company: CERN
+      page_size: 100
+      max_pages: 2
+      fetch_details: false
+
+  - id: cern_custom_html
+    name: CERN
+    ats_family: custom_html
+    base_url: https://careers.cern/jobs/
+    enabled: true
+    extra:
+      output_slug: cern
+      job_link_selector_hint: careers.cern/jobs/
+
+  - id: osce_custom_html
+    name: OSCE
+    ats_family: osce_custom_html
+    adapter: static_html
+    base_url: https://vacancies.osce.org/latest-jobs
+    enabled: true
+    extra:
+      output_slug: osce
+      listing_url: https://vacancies.osce.org/latest-jobs
+      parser: public_links
+      job_link_selector_hint: /jobs/
+      exclude_link_selector_hint: /other-jobs-matching/
+      fetch_details: true
+
+  - id: unaids_sharepoint
+    name: UNAIDS
+    ats_family: custom_html
+    base_url: https://unaids.sharepoint.com/
+    enabled: false
+    extra:
+      output_slug: unaids
+
+  - id: ctbto_successfactors_legacy
+    name: Comprehensive Nuclear-Test-Ban Treaty Organization
+    ats_family: successfactors_legacy
+    base_url: https://career2.successfactors.eu
+    enabled: true
+    extra:
+      output_slug: ctbto
+      search_url: https://career2.successfactors.eu/career?company=ctbtoprepa&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
+      max_pages: 1
+      fetch_details: false
+
+  - id: icc_successfactors_legacy
+    name: International Criminal Court
+    ats_family: successfactors_legacy
+    base_url: https://career5.successfactors.eu
+    enabled: true
+    extra:
+      output_slug: icc
+      search_url: https://career5.successfactors.eu/career?company=1657261P&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
+      max_pages: 1
+      fetch_details: false
+
+  - id: icddrb_custom_html
+    name: icddr,b
+    ats_family: icddrb_custom_html
+    base_url: https://career.icddrb.org/
+    enabled: true
+    extra:
+      output_slug: icddrb
+      opportunities_url: https://career.icddrb.org/get-current-opportunities
+      employee_type_ids:
+        - 3
+        - 2
+      fetch_details: true
+
+  - id: ifad_peoplesoft
+    name: International Fund for Agricultural Development
+    ats_family: peoplesoft
+    base_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL
+    enabled: true
+    extra:
+      output_slug: ifad
+      listing_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?Page=HRS_APP_SCHJOB_FL&Action=U
+      fetch_details: false
+
+  - id: imo_api
+    name: International Maritime Organization
+    ats_family: imo_api
+    base_url: https://recruit.imo.org
+    enabled: true
+    extra:
+      output_slug: imo
+      api_url: https://recruit.imo.org/api/CurrentJobVacancies
+      detail_url_template: https://recruit.imo.org/vacancies/{job_id}
+      fetch_details: false
+
+  - id: ipu_static_html
+    name: Inter-Parliamentary Union
+    ats_family: ipu_static_html
+    adapter: static_html
+    base_url: https://www.ipu.org/about-ipu/work-with-us/vacancies
+    enabled: true
+    extra:
+      output_slug: ipu
+      listing_url: https://www.ipu.org/about-ipu/work-with-us/vacancies
+      parser: public_links
+      job_link_selector_hint: /work-with-ipu/vacancies/
+      fetch_details: true
+
+  - id: itcilo_custom_html
+    name: International Training Centre of the ILO
+    ats_family: itcilo_custom_html
+    adapter: static_html
+    base_url: https://jobs.itcilo.org/
+    enabled: true
+    extra:
+      output_slug: itcilo
+      listing_url: https://jobs.itcilo.org/
+      parser: public_links
+      job_link_hints:
+        - /jobs/
+        - /job/
+      fetch_details: true
+
+  - id: itlos_static_html
+    name: International Tribunal for the Law of the Sea
+    ats_family: itlos_static_html
+    adapter: static_html
+    base_url: https://www.itlos.org/en/main/the-registry/employment-opportunities/
+    enabled: true
+    extra:
+      output_slug: itlos
+      listing_url: https://www.itlos.org/en/main/the-registry/employment-opportunities/
+      parser: public_links
+      job_link_hints:
+        - /fileadmin/itlos/documents/registry/
+        - /employment-opportunities/
+      exclude_link_selector_hint:
+        - /P.11_Personal_History_Form
+        - /training/
+      fetch_details: false
+
+  - id: opcw_talentsoft_candidatespace
+    name: Organisation for the Prohibition of Chemical Weapons
+    ats_family: opcw_talentsoft_candidatespace
+    adapter: static_html
+    base_url: https://jobs.opcw.org/job/list-of-jobs.aspx
+    enabled: true
+    extra:
+      output_slug: opcw
+      listing_url: https://jobs.opcw.org/job/list-of-jobs.aspx
+      parser: public_links
+      job_link_selector_hint: /job/job-
+      fetch_details: true
+
+  - id: unssc_drupal_custom
+    name: United Nations System Staff College
+    ats_family: unssc_drupal_custom
+    adapter: static_html
+    base_url: https://www.unssc.org/about/employment-opportunities
+    enabled: true
+    extra:
+      output_slug: unssc
+      listing_url: https://www.unssc.org/about/employment-opportunities
+      parser: unssc_drupal
+      fetch_details: false
+
+  - id: unu_recruitee
+    name: United Nations University
+    ats_family: unu_recruitee
+    adapter: static_html
+    base_url: https://careers.unu.edu/
+    enabled: true
+    extra:
+      output_slug: unu
+      listing_url: https://careers.unu.edu/
+      parser: public_links
+      job_link_selector_hint: /o/
+      fetch_details: true
+
+  - id: isa_inspira_split
+    name: International Seabed Authority
+    ats_family: inspira
+    base_url: https://careers.un.org/jobopening
+    enabled: false
+    extra:
+      output_slug: isa
+      coverage_note: Covered by un_inspira until a reliable ISA-only Inspira filter is confirmed.
+
+  - id: itc_inspira_split
+    name: International Trade Centre
+    ats_family: inspira
+    base_url: https://careers.un.org/jobopening
+    enabled: false
+    extra:
+      output_slug: itc
+      coverage_note: Covered by un_inspira until a reliable ITC-only Inspira filter is confirmed.
+
+  - id: untourism_custom
+    name: UN Tourism
+    ats_family: custom_html
+    base_url: https://www.unwto.org/work-with-us
+    enabled: false
+    extra:
+      output_slug: untourism
+      coverage_note: Disabled until an accessible source page or HAR with vacancy content is available.
+
+  - id: sample_workday
+    name: Sample Workday Organization
+    ats_family: workday
+    base_url: https://example.wd1.myworkdayjobs.com
+    enabled: false
+    extra:
+      api_url: https://example.wd1.myworkdayjobs.com/wday/cxs/example/site/jobs
+      site: site
+
+  - id: sample_taleo
+    name: Sample Taleo Organization
+    ats_family: taleo
+    base_url: https://example.taleo.net
+    enabled: false
+    extra:
+      search_url: https://example.taleo.net/careersection/external/jobsearch.ftl
+
+  - id: sample_successfactors_rmk
+    name: Sample SuccessFactors RMK Organization
+    ats_family: successfactors_rmk
+    base_url: https://jobs.example.com
+    enabled: false
+    extra:
+      careers_path: /go/External-Career-Site
+
+  - id: sample_oracle_hcm
+    name: Sample Oracle HCM Organization
+    ats_family: oracle_hcm
+    base_url: https://example.fa.us2.oraclecloud.com
+    enabled: false
+    extra:
+      api_url: https://example.fa.us2.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions
+
+  - id: sample_smartrecruiters
+    name: Sample SmartRecruiters Organization
+    ats_family: smartrecruiters
+    base_url: https://jobs.smartrecruiters.com
+    enabled: false
+    extra:
+      company: ExampleCompany
+
+  - id: sample_workable
+    name: Sample Workable Organization
+    ats_family: workable
+    base_url: https://apply.workable.com/example
+    enabled: false
+    extra:
+      account: example
+
+  - id: sample_pageup
+    name: Sample PageUp Organization
+    ats_family: pageup
+    base_url: https://example.pageuppeople.com
+    enabled: false
+    extra:
+      api_url: https://example.pageuppeople.com/jobs/search.json
+
+  - id: sample_icims
+    name: Sample iCIMS Organization
+    ats_family: icims
+    base_url: https://careers-example.icims.com
+    enabled: false
+    extra:
+      search_url: https://careers-example.icims.com/jobs/search
+
+  - id: sample_csod
+    name: Sample Cornerstone Organization
+    ats_family: csod
+    base_url: https://example.csod.com
+    enabled: false
+    extra:
+      api_url: https://example.csod.com/ux/ats/careersite/search
+
+  - id: sample_custom_html
+    name: Sample Legacy Careers Page
+    ats_family: custom_html
+    base_url: https://example.org/careers
+    enabled: false
+    extra:
+      job_link_selector_hint: /jobs/

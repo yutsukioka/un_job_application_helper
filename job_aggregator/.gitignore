@@ -1,0 +1,13 @@
+.DS_Store
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+__pycache__/
+*.pyc
+output/
+output_archive*/
+*.sqlite3
+*.db
+*.har
+*.jsonl

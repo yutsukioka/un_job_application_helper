@@ -1,0 +1,143 @@
+default:
+  user_agent: "jobagg/0.1 (+https://example.invalid/contact)"
+  honor_robots_txt: true
+  request_timeout_seconds: 30
+  min_delay_seconds: 2.0
+  max_pages_per_source: 25
+  max_jobs_per_source: 1000
+
+domains:
+  # Workday CXS endpoints can be consumed by the public careers frontend but may
+  # still be disallowed by robots.txt. Keep this true unless you have a vetted
+  # reason and permission to override it for low-rate internal monitoring.
+  wd3.myworkdaysite.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  imf.wd5.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  tbinstitute.wd3.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  unhcr.wd3.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  weforum.wd3.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  wto.wd103.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  theglobalfund.wd1.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  paho.wd5.myworkdayjobs.com:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  jobs.itu.int:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  icaocareers.icao.int:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  wmo.int:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  www.unwomen.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  wipo.taleo.net:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  careers.who.int:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  iaea.taleo.net:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  jobs.fao.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  adb.taleo.net:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  nato.taleo.net:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  jobs.unicef.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  careers.un.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  career2.successfactors.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  career5.successfactors.eu:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  career.icddrb.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  job.ifad.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  recruit.imo.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  www.ipu.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  jobs.itcilo.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  www.itlos.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  jobs.opcw.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  vacancies.osce.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  www.unssc.org:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  careers.unu.edu:
+    honor_robots_txt: true
+    min_delay_seconds: 2.0
+
+  example.invalid:
+    honor_robots_txt: true
+    min_delay_seconds: 5.0
