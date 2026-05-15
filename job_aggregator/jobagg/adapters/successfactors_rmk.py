@@ -39,6 +39,8 @@ _TILE_RE = re.compile(
     r'<li[^>]+class="[^"]*\bjob-tile\b[^"]*"[^>]*>(?P<html>.*?)(?=<li[^>]+class="[^"]*\bjob-tile\b|</ul>)',
     re.IGNORECASE | re.DOTALL,
 )
+
+
 @register_adapter
 class SuccessFactorsRMKAdapter(JobAdapter):
     family = "successfactors_rmk"
@@ -237,6 +239,7 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     location=_extract_class_text(item_html, "jobLocation"),
                     department=_extract_class_text(item_html, "jobDepartment"),
                     employment_type=_extract_class_text(item_html, "jobFacility"),
+                    posted_at=_extract_class_text(item_html, "jobDate"),
                     closes_at=_extract_class_text(item_html, "jobShifttype"),
                     apply_url=detail_url,
                     source_url=detail_url,
@@ -402,12 +405,16 @@ def _application_deadline(html_text: str | None) -> str | None:
 def _next_page_url(html_text: str, current_url: str) -> str | None:
     current_start = _startrow(current_url)
     candidates: list[tuple[int, str]] = []
-    for match in re.finditer(r'href="(?P<href>[^"]*startrow=\d+[^"]*)"', html_text, re.I):
-        href = html.unescape(match.group("href"))
-        url = urljoin(current_url, href)
-        start = _startrow(url)
-        if start > current_start:
-            candidates.append((start, url))
+    for pattern in (
+        r'href="(?P<href>[^"]*startrow=\d+[^"]*)"',
+        r'href="(?P<href>[^"]*/go/[^"]*/\d+/\d+/?[^"]*)"',
+    ):
+        for match in re.finditer(pattern, html_text, re.I):
+            href = html.unescape(match.group("href"))
+            url = urljoin(current_url, href)
+            start = _startrow(url)
+            if start > current_start:
+                candidates.append((start, url))
     if not candidates:
         return None
     return min(candidates, key=lambda item: item[0])[1]
@@ -416,6 +423,12 @@ def _next_page_url(html_text: str, current_url: str) -> str | None:
 def _startrow(url: str) -> int:
     query = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
     try:
-        return int(query.get("startrow") or 0)
+        query_start = query.get("startrow")
+        if query_start:
+            return int(query_start)
+        path_match = re.search(r"/go/[^/]+/\d+/(?P<start>\d+)/?$", urlsplit(url).path)
+        if path_match:
+            return int(path_match.group("start"))
+        return 0
     except ValueError:
         return 0

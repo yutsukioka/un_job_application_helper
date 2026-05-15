@@ -11,6 +11,7 @@ from jobagg.adapters.smartrecruiters import SmartRecruitersAdapter
 from jobagg.adapters.static_html import StaticHTMLAdapter, parse_detail_page, parse_unssc_jobs
 from jobagg.adapters.successfactors_rmk import SuccessFactorsRMKAdapter
 from jobagg.adapters.successfactors_rmk import SuccessFactorsLegacyAdapter
+from jobagg.adapters.successfactors_rmk import _next_page_url
 from jobagg.adapters.unv import UNVAdapter
 from jobagg.adapters.workable import WorkableAdapter
 from jobagg.http import JobAggHTTPClient
@@ -477,6 +478,7 @@ def test_successfactors_parses_table_html():
           <td><span class="jobLocation">Vienna, Austria</span></td>
           <td><span class="jobDepartment">International Professionals</span></td>
           <td><span class="jobFacility">P5</span></td>
+          <td><span class="jobDate">May 10, 2026</span></td>
           <td><span class="jobShifttype">4-Jun-26</span></td>
         </tr>
         """
@@ -484,7 +486,20 @@ def test_successfactors_parses_table_html():
 
     assert jobs[0].external_id == "1352289055"
     assert jobs[0].employment_type == "P5"
+    assert jobs[0].posted_at.isoformat() == "2026-05-10T00:00:00+00:00"
     assert jobs[0].closes_at.isoformat() == "2026-06-04T00:00:00+00:00"
+
+
+def test_successfactors_follows_go_path_pagination():
+    next_url = _next_page_url(
+        """
+        <a href="/go/View-all-categories/8942455/">1</a>
+        <a href="/go/View-all-categories/8942455/25/?q=&sortColumn=referencedate">2</a>
+        """,
+        "https://jobs.itu.int/go/View-all-categories/8942455/",
+    )
+
+    assert next_url == "https://jobs.itu.int/go/View-all-categories/8942455/25/?q=&sortColumn=referencedate"
 
 
 def test_unv_parses_search_payload():
