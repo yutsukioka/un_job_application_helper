@@ -79,7 +79,7 @@ class JobAggHTTPClient:
             except urllib.error.HTTPError as exc:
                 self._last_request_at = time.monotonic()
                 response_body = exc.read().decode("utf-8", errors="replace")
-                if exc.code in {429, 503} and attempt < self.max_retries:
+                if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_seconds(exc.headers.get("Retry-After"))
                     delay = retry_after or self.backoff_base_seconds * (2**attempt)
                     time.sleep(self._with_jitter(delay))

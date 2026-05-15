@@ -53,5 +53,5 @@ grade_patterns:
     staff_category: intern
   - system: UN
     family: CONSULTANT
-    regex: "\\bCON\\b"
+    regex: "^(CON)$|\\b(?:CONSULTANT|CONSULTANCY|INDIVIDUAL CONSULTANT)\\b"
     staff_category: consultant

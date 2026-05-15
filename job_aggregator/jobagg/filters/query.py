@@ -305,8 +305,16 @@ def _add_date_clause(
 ) -> None:
     if value is None:
         return
-    clauses.append(f"{column} {operator} ?")
-    params.append(value.isoformat() if isinstance(value, date) else value)
+    normalized = value.isoformat() if isinstance(value, date) else value
+    if _is_date_only(normalized):
+        clauses.append(f"date({column}) {operator} date(?)")
+    else:
+        clauses.append(f"{column} {operator} ?")
+    params.append(normalized)
+
+
+def _is_date_only(value: str) -> bool:
+    return len(value) == 10 and value[4] == "-" and value[7] == "-"
 
 
 def _normalize_country_iso3(value: str) -> str | None:
@@ -370,18 +378,10 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
     if filters.needs_review is not None:
         clauses.append("c.needs_review = ?")
         params.append(1 if filters.needs_review else 0)
-    if filters.posted_date_from:
-        clauses.append("j.posted_at >= ?")
-        params.append(filters.posted_date_from)
-    if filters.posted_date_to:
-        clauses.append("j.posted_at <= ?")
-        params.append(filters.posted_date_to)
-    if filters.closing_date_from:
-        clauses.append("j.closes_at >= ?")
-        params.append(filters.closing_date_from)
-    if filters.closing_date_to:
-        clauses.append("j.closes_at <= ?")
-        params.append(filters.closing_date_to)
+    _add_date_clause(clauses, params, "j.posted_at", ">=", filters.posted_date_from)
+    _add_date_clause(clauses, params, "j.posted_at", "<=", filters.posted_date_to)
+    _add_date_clause(clauses, params, "j.closes_at", ">=", filters.closing_date_from)
+    _add_date_clause(clauses, params, "j.closes_at", "<=", filters.closing_date_to)
     if filters.text:
         clauses.append(
             "(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ? OR j.department LIKE ?)"

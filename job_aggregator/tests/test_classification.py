@@ -4,8 +4,8 @@ from jobagg.classification import classify_database
 from jobagg.classification.classifiers.ccog import ccog_tree
 from jobagg.db import JobDatabase
 from jobagg.filters.facets import facet_counts
-from jobagg.filters.query import search_vacancies
-from jobagg.filters.schemas import VacancyFilters
+from jobagg.filters.query import search_collected_jobs, search_vacancies
+from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
 from jobagg.models import OrganizationSource
 from jobagg.normalize import build_job
 
@@ -102,6 +102,33 @@ def test_classifies_unv_specialist_and_filters_facets(tmp_path):
     assert facets["unv_categories"]["un_volunteer_specialist"] == 1
 
 
+def test_spanish_con_does_not_imply_consultant_grade_or_contract(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="wfp_workday",
+        name="World Food Programme",
+        ats_family="workday",
+        base_url="https://example.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Asistente de logística con experiencia - G5",
+            external_id="spanish-con",
+            location="Panama City, Panama",
+            description="Trabaja con equipos de logística y almacén.",
+            apply_url="https://example.org/jobs/spanish-con",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="wfp_workday"))
+
+    assert row["grade_code"] == "G5"
+    assert row["contract_category"] != "consultant"
+
+
 def test_classification_schema_and_manual_override(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -134,6 +161,34 @@ def test_classification_schema_and_manual_override(tmp_path):
     classify_database(db)
     overridden = next(db.iter_jobs_with_classification(source_id="unicef_pageup"))
     assert overridden["ccog_primary_code"] == "1.A.01"
+    assert overridden["ccog_primary_label"] == "Financial management specialists"
+    assert overridden["ccog_family_code"] == "1.A"
+    assert overridden["ccog_family_label"] == "Administrative specialists"
+    assert overridden["ccog_confidence"] == 1.0
+
+    db.upsert_classification_override(
+        vacancy_id=job.identity_key(),
+        field_name="city",
+        override_value="Nairobi",
+        reason="test location correction",
+    )
+    db.upsert_classification_override(
+        vacancy_id=job.identity_key(),
+        field_name="country_iso3",
+        override_value="KEN",
+        reason="test location correction",
+    )
+    classify_database(db)
+    locations = list(db.iter_vacancy_locations(job.identity_key()))
+    response = search_collected_jobs(
+        db,
+        VacancySearchRequest(cities=["Nairobi"], countries_iso3=["KEN"]),
+    )
+    assert len(locations) == 1
+    assert locations[0]["source_field"] == "manual_override"
+    assert locations[0]["city_key"] == "nairobi"
+    assert locations[0]["country_iso3"] == "KEN"
+    assert response.total == 1
 
     with sqlite3.connect(db.path) as conn:
         tables = {

@@ -13,6 +13,7 @@ from jobagg.pipelines.bundles import (
     write_source_bundle,
 )
 from jobagg.robots import RobotsPolicy
+from jobagg.scheduler import main
 
 
 @register_adapter
@@ -182,6 +183,37 @@ def test_write_source_bundle_seeds_existing_canonical_database(tmp_path):
 
     assert result.sync_result.inserted == 0
     assert result.sync_result.unchanged == 1
+
+
+def test_sync_bundles_returns_error_for_any_missing_requested_source(tmp_path):
+    config = tmp_path / "organizations.yaml"
+    config.write_text(
+        """
+sources:
+  - id: org_static_bundle
+    name: Org
+    ats_family: static_bundle_test
+    base_url: https://example.org
+    enabled: true
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--source-id",
+            "org_static_bundle",
+            "--source-id",
+            "missing_source",
+            "--output-dir",
+            str(tmp_path / "output"),
+        ]
+    )
+
+    assert exit_code == 1
 
 
 def _staged_result(tmp_path, *, source_id, slug, fetched):

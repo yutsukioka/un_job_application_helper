@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from jobagg.classification.classifiers.ccog import classify_ccog
+from jobagg.classification.classifiers.ccog import ccog_tree, classify_ccog
 from jobagg.classification.classifiers.contract import classify_contract
 from jobagg.classification.classifiers.grade import classify_grade
 from jobagg.classification.classifiers.location import classify_location
@@ -30,6 +30,18 @@ from jobagg.classification.models import (
     WorkModality,
 )
 from jobagg.db import JobDatabase
+from jobagg.filters.normalization import country_for_city, country_info, display_city, normalize_city
+
+
+LOCATION_OVERRIDE_FIELDS = {
+    "country",
+    "country_iso2",
+    "country_iso3",
+    "city",
+    "region",
+    "subregion",
+    "location_confidence",
+}
 
 
 def classify_database(
@@ -54,7 +66,9 @@ def classify_and_store(
 ) -> ClassificationResult:
     features, result, locations = classify_job_with_locations(vacancy, version=version)
     db.upsert_vacancy_source_features(features)
-    result = apply_overrides(result, db.classification_overrides(result.vacancy_id))
+    overrides = db.classification_overrides(result.vacancy_id)
+    result = apply_overrides(result, overrides)
+    locations = apply_location_overrides(locations, result, overrides)
     db.upsert_vacancy_classification(result)
     db.replace_vacancy_locations(result.vacancy_id, locations)
     return result
@@ -158,8 +172,114 @@ def apply_overrides(
         current = getattr(result, field_name)
         setattr(result, field_name, _coerce_override(value, current))
     if overrides:
+        _apply_ccog_dependencies(result, overrides)
         result.evidence.setdefault("manual_overrides", {}).update(overrides)
     return result
+
+
+def apply_location_overrides(
+    locations: list[VacancyLocation],
+    result: ClassificationResult,
+    overrides: dict[str, str],
+) -> list[VacancyLocation]:
+    if not (LOCATION_OVERRIDE_FIELDS & set(overrides)):
+        return locations
+
+    city_key = normalize_city(result.city)
+    has_country_override = bool({"country", "country_iso2", "country_iso3"} & set(overrides))
+    if "city" in overrides and not has_country_override:
+        country = country_for_city(city_key)
+    else:
+        country_lookup = (
+            result.country_iso3
+            if "country_iso3" in overrides
+            else result.country_iso2
+            if "country_iso2" in overrides
+            else result.country
+            if "country" in overrides
+            else result.country_iso3 or result.country_iso2 or result.country
+        )
+        country = country_info(country_lookup)
+    if country is None and city_key:
+        country = country_for_city(city_key)
+
+    if country is not None:
+        result.country = country.name
+        result.country_iso2 = result.country_iso2 if "country_iso2" in overrides else country.iso2
+        result.country_iso3 = result.country_iso3 if "country_iso3" in overrides else country.iso3
+        if "region" not in overrides:
+            result.region = country.region
+        if "subregion" not in overrides:
+            result.subregion = country.subregion
+
+    if result.city:
+        result.city = display_city(result.city) or result.city
+
+    if not (result.city or result.country_iso3 or result.country):
+        return locations
+
+    if "location_confidence" not in overrides:
+        result.location_confidence = 1.0
+
+    result.evidence.setdefault("manual_overrides", {}).update(
+        {field: overrides[field] for field in sorted(LOCATION_OVERRIDE_FIELDS & set(overrides))}
+    )
+    return [
+        VacancyLocation(
+            vacancy_id=result.vacancy_id,
+            city=result.city,
+            city_key=city_key,
+            country=result.country or (country.name if country else None),
+            country_iso2=result.country_iso2 or (country.iso2 if country else None),
+            country_iso3=result.country_iso3 or (country.iso3 if country else None),
+            region=result.region or (country.region if country else None),
+            subregion=result.subregion or (country.subregion if country else None),
+            location_type="primary",
+            is_primary=True,
+            is_remote=False,
+            confidence=result.location_confidence,
+            source_field="manual_override",
+            evidence={
+                "manual_override": {
+                    field: overrides[field]
+                    for field in sorted(LOCATION_OVERRIDE_FIELDS & set(overrides))
+                }
+            },
+        )
+    ]
+
+
+def _apply_ccog_dependencies(
+    result: ClassificationResult,
+    overrides: dict[str, str],
+) -> None:
+    tree = {entry["code"]: entry for entry in ccog_tree()}
+    if "ccog_primary_code" in overrides and result.ccog_primary_code:
+        entry = tree.get(result.ccog_primary_code)
+        if entry:
+            _set_if_not_overridden(result, overrides, "ccog_primary_label", entry.get("label"))
+            _set_if_not_overridden(result, overrides, "ccog_family_code", entry.get("family_code"))
+            _set_if_not_overridden(result, overrides, "ccog_family_label", entry.get("family_label"))
+            _set_if_not_overridden(result, overrides, "ccog_part", entry.get("part"))
+        _set_if_not_overridden(result, overrides, "ccog_confidence", 1.0)
+        _set_if_not_overridden(result, overrides, "ccog_method", "manual_override")
+
+    if "ccog_family_code" in overrides and result.ccog_family_code:
+        entry = tree.get(result.ccog_family_code)
+        if entry:
+            _set_if_not_overridden(result, overrides, "ccog_family_label", entry.get("label"))
+            _set_if_not_overridden(result, overrides, "ccog_part", entry.get("part"))
+
+
+def _set_if_not_overridden(
+    result: ClassificationResult,
+    overrides: dict[str, str],
+    field_name: str,
+    value: object,
+) -> None:
+    if field_name in overrides or value in (None, ""):
+        return
+    setattr(result, field_name, value)
 
 
 def classification_to_row(result: ClassificationResult) -> dict[str, Any]:

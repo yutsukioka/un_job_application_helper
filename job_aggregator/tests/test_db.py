@@ -168,3 +168,44 @@ def test_change_events_snapshots_missing_closed_and_reopened(tmp_path):
 
     assert events == ["created", "updated", "missing", "reopened", "created", "closed"]
     assert snapshots["count"] == 4
+
+
+def test_adapter_reported_status_transition_records_change_event(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="org_api",
+        name="Example Org",
+        ats_family="oracle_hcm",
+        base_url="https://example.org",
+    )
+    open_job = build_job(
+        source,
+        title="Role",
+        external_id="status-1",
+        location="Geneva",
+        closes_at="2026-05-30",
+        description="Same content",
+        apply_url="https://example.org/job/status-1",
+    )
+    closed_job = build_job(
+        source,
+        title="Role",
+        external_id="status-1",
+        location="Geneva",
+        closes_at="2026-05-30",
+        description="Same content",
+        status="closed",
+        apply_url="https://example.org/job/status-1",
+    )
+
+    assert db.upsert_job(open_job) == "inserted"
+    assert db.upsert_job(closed_job) == "updated"
+
+    with db.connect() as conn:
+        events = [
+            row["change_type"]
+            for row in conn.execute("SELECT change_type FROM change_events ORDER BY id")
+        ]
+    assert events == ["created", "closed"]
+    assert db.get_job("org_api:status-1")["status"] == "closed"

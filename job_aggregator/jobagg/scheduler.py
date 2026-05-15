@@ -355,6 +355,8 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
         )
 
     sources = _bundle_sources(args)
+    if getattr(args, "_missing_source_ids", []):
+        return 1
     if not sources:
         LOGGER.error("No sources selected for sync-bundles")
         return 1
@@ -1104,6 +1106,7 @@ def _bundle_sources(args: argparse.Namespace) -> list[OrganizationSource]:
         missing = sorted(selected_ids - found_ids - skipped_ids)
         for source_id in missing:
             LOGGER.error("No configured source found for source_id=%s", source_id)
+        setattr(args, "_missing_source_ids", missing)
     return sources
 
 

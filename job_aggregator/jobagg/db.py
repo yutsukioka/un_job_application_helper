@@ -291,6 +291,11 @@ class JobDatabase:
                 event_type = "reopened"
                 first_seen_at = current["first_seen_at"]
                 old_hash = current["normalized_hash"]
+            elif current["status"] != job.status:
+                change_type = "updated"
+                event_type = job.status if job.status in {"closed", "missing"} else "status_changed"
+                first_seen_at = current["first_seen_at"]
+                old_hash = current["normalized_hash"]
             elif current["normalized_hash"] != job.normalized_hash:
                 change_type = "updated"
                 event_type = "updated"
@@ -789,6 +794,35 @@ class JobDatabase:
             data["is_remote"] = bool(data["is_remote"])
             data["evidence"] = json.loads(data["evidence"] or "{}")
             yield data
+
+    def vacancy_locations_by_vacancy(
+        self,
+        vacancy_ids: Iterable[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        ids = list(dict.fromkeys(vacancy_ids))
+        locations = {vacancy_id: [] for vacancy_id in ids}
+        if not ids:
+            return locations
+        with self.connect() as conn:
+            for index in range(0, len(ids), 900):
+                chunk = ids[index : index + 900]
+                placeholders = ", ".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM vacancy_locations
+                    WHERE vacancy_id IN ({placeholders})
+                    ORDER BY vacancy_id, is_primary DESC, confidence DESC, id
+                    """,
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    data = dict(row)
+                    data["is_primary"] = bool(data["is_primary"])
+                    data["is_remote"] = bool(data["is_remote"])
+                    data["evidence"] = json.loads(data["evidence"] or "{}")
+                    locations.setdefault(data["vacancy_id"], []).append(data)
+        return locations
 
     def classification_overrides(self, vacancy_id: str) -> dict[str, str]:
         with self.connect() as conn:

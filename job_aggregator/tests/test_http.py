@@ -54,6 +54,23 @@ class ForbiddenOpener:
         )
 
 
+class ServerErrorThenSuccessOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def open(self, request, timeout):
+        self.calls += 1
+        if self.calls == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                502,
+                "Bad Gateway",
+                {},
+                io.BytesIO(b"gateway timeout"),
+            )
+        return FakeResponse()
+
+
 def test_transient_url_error_retries_then_succeeds():
     client = JobAggHTTPClient(max_retries=2, backoff_base_seconds=0, jitter_ratio=0)
     opener = RetryThenSuccessOpener()
@@ -63,6 +80,17 @@ def test_transient_url_error_retries_then_succeeds():
 
     assert response.text == "ok"
     assert opener.calls == 3
+
+
+def test_transient_http_5xx_retries_then_succeeds():
+    client = JobAggHTTPClient(max_retries=1, backoff_base_seconds=0, jitter_ratio=0)
+    opener = ServerErrorThenSuccessOpener()
+    client._opener = opener
+
+    response = client.get("https://example.org")
+
+    assert response.text == "ok"
+    assert opener.calls == 2
 
 
 def test_http_403_is_not_retried():

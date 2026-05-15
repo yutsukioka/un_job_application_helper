@@ -32,6 +32,12 @@ jobagg = "jobagg.scheduler:main"
 where = ["."]
 include = ["jobagg*"]
 
+[tool.setuptools.package-data]
+jobagg = [
+  "classification/rules/*.md",
+  "classification/rules/*.yaml"
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -39,4 +45,3 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-

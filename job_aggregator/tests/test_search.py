@@ -3,8 +3,8 @@ import sqlite3
 
 from jobagg.classification import classify_database
 from jobagg.db import JobDatabase
-from jobagg.filters.query import search_collected_jobs
-from jobagg.filters.schemas import VacancySearchRequest
+from jobagg.filters.query import search_collected_jobs, search_vacancies
+from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
 from jobagg.models import OrganizationSource
 from jobagg.normalize import build_job
 from jobagg.scheduler import main
@@ -318,6 +318,35 @@ def test_search_cli_writes_markdown_for_combined_criteria(tmp_path):
     assert "| Title | Organization | Location | Grade |" in text
     assert "[Partnerships Officer, P-2, Outposted to Nairobi, Kenya]" in text
     assert "Administrative Assistant" not in text
+
+
+def test_date_only_upper_bounds_include_same_day_datetimes(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    db.upsert_job(
+        build_job(
+            source,
+            title="Programme Officer, P-4, Nairobi, Kenya",
+            external_id="same-day-close",
+            location="Kenya",
+            closes_at="2026-06-07T15:30:00+00:00",
+            posted_at="2026-05-20T09:00:00+00:00",
+            apply_url="https://jobs.unicef.org/jobs/same-day-close",
+        )
+    )
+    classify_database(db)
+
+    collected = search_collected_jobs(
+        db,
+        VacancySearchRequest(closing_date_to="2026-06-07", posted_date_to="2026-05-20"),
+    )
+    legacy = search_vacancies(
+        db,
+        VacancyFilters(closing_date_to="2026-06-07", posted_date_to="2026-05-20"),
+    )
+
+    assert collected.total == 1
+    assert len(legacy) == 1
 
 
 def test_filter_cli_writes_markdown_for_unv_facets(tmp_path):

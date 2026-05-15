@@ -51,7 +51,7 @@ jobagg search-debug --job-key unicef_pageup:12345 --city Nairobi --country KE --
 Audit all open jobs:
 
 ```bash
-jobagg audit-classification --all --format markdown --output reports/classification_audit.md
+jobagg audit-classification --all --format markdown --output output/classification_audit.md
 ```
 
 Audit one source:
@@ -71,13 +71,13 @@ jobagg saved-search add nairobi-international-p2-p4 --city Nairobi --country KE 
 Run it:
 
 ```bash
-jobagg saved-search run nairobi-international-p2-p4 --format markdown --output outputs/nairobi_p2_p4.md
+jobagg saved-search run nairobi-international-p2-p4 --format markdown --output output/nairobi_p2_p4.md
 ```
 
 Run all saved searches:
 
 ```bash
-jobagg saved-search run --all --format json --output outputs/saved_search_runs.json
+jobagg saved-search run --all --format json --output output/saved_search_runs.json
 ```
 
 List and remove saved searches:

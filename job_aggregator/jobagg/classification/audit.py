@@ -71,14 +71,19 @@ def audit_classification(
     )
     overall = ClassificationAuditBucket(source_id="__all__")
 
-    for row in db.iter_jobs_with_classification(status=status):
+    rows = [
+        row
+        for row in db.iter_jobs_with_classification(status=status)
+        if not selected_sources or str(row["source_id"]) in selected_sources
+    ]
+    locations_by_vacancy = db.vacancy_locations_by_vacancy(str(row["job_key"]) for row in rows)
+
+    for row in rows:
         source_id = str(row["source_id"])
-        if selected_sources and source_id not in selected_sources:
-            continue
         bucket = buckets[source_id]
         if not bucket.source_id:
             bucket.source_id = source_id
-        locations = list(db.iter_vacancy_locations(str(row["job_key"])))
+        locations = locations_by_vacancy.get(str(row["job_key"]), [])
         _add_row(bucket, row, locations, low_confidence_threshold)
         _add_row(overall, row, locations, low_confidence_threshold)
 

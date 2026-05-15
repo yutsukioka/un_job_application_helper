@@ -14,7 +14,6 @@ contract_rules:
       - "retainer"
       - "ssa"
       - "cfa"
-      - " con "
   temporary_appointment_staff:
     keywords:
       - "temporary appointment"

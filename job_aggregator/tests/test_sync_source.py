@@ -64,6 +64,47 @@ class SelectiveDetailFailureTestAdapter(JobAdapter):
         )
 
 
+@register_adapter
+class CapTestAdapter(JobAdapter):
+    family = "cap_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="Fetched Role 1",
+                external_id="A1",
+                location="Geneva",
+                apply_url="https://example.org/jobs/A1",
+            ),
+            build_job(
+                self.source,
+                title="Fetched Role 2",
+                external_id="A2",
+                location="Rome",
+                apply_url="https://example.org/jobs/A2",
+            ),
+        ]
+
+
+@register_adapter
+class PageCapTestAdapter(JobAdapter):
+    family = "page_cap_test"
+
+    def fetch_jobs(self):
+        max_pages = self.source.extra.get("max_pages")
+        fallback_max_pages = self.source.extra.get("fallback_max_pages")
+        return [
+            build_job(
+                self.source,
+                title="Page Cap Role",
+                external_id="PAGE",
+                apply_url="https://example.org/jobs/PAGE",
+                raw={"max_pages": max_pages, "fallback_max_pages": fallback_max_pages},
+            )
+        ]
+
+
 def test_zero_fetch_first_run_is_allowed_and_recorded(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -152,6 +193,48 @@ def test_selective_detail_failure_keeps_listing_job_and_records_error(tmp_path):
     assert detailed["description"] == "Detailed responsibilities."
 
 
+def test_capped_sync_uses_full_seen_set_for_missing_marking(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("cap_source", "cap_test")
+    existing = build_job(
+        source,
+        title="Fetched Role 2",
+        external_id="A2",
+        location="Rome",
+        apply_url="https://example.org/jobs/A2",
+    )
+    db.upsert_job(existing)
+
+    result = sync_source(
+        source,
+        db=db,
+        policy=_policy(max_jobs_per_source=1),
+        missing_run_threshold=1,
+    )
+
+    assert result.fetched == 1
+    assert "above max_jobs_per_source=1" in result.errors[0]
+    assert db.get_job("cap_source:A2")["status"] == "open"
+
+
+def test_policy_max_pages_is_applied_to_adapter_source_extra(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "page_cap_source",
+        "page_cap_test",
+        max_pages=10,
+        fallback_max_pages=8,
+    )
+
+    sync_source(source, db=db, policy=_policy(max_pages_per_source=2))
+
+    stored = db.get_job("page_cap_source:PAGE")
+    assert stored["raw"]["max_pages"] == 2
+    assert stored["raw"]["fallback_max_pages"] == 2
+
+
 def _source(source_id, family, **extra):
     return OrganizationSource(
         id=source_id,
@@ -162,5 +245,7 @@ def _source(source_id, family, **extra):
     )
 
 
-def _policy():
-    return RobotsPolicy(honor_robots_txt=False, min_delay_seconds=0)
+def _policy(**overrides):
+    values = {"honor_robots_txt": False, "min_delay_seconds": 0}
+    values.update(overrides)
+    return RobotsPolicy(**values)
