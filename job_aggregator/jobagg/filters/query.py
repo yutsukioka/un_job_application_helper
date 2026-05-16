@@ -17,6 +17,44 @@ from jobagg.filters.normalization import (
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest, VacancySearchResponse
 
 
+# FTS5 reserves a small set of characters in query expressions. We escape
+# user-supplied free-text by wrapping it as a quoted phrase and doubling
+# any embedded double-quotes; the result is always a valid FTS5 phrase
+# expression regardless of input.
+def _fts_phrase(text: str) -> str:
+    return '"' + text.replace('"', '""') + '"'
+
+
+def _add_text_clause(
+    clauses: list[str],
+    params: list[Any],
+    text: str,
+    *,
+    include_department: bool = False,
+) -> None:
+    """Add a free-text predicate, preferring FTS5 with a LIKE fallback.
+
+    The FTS5 path uses ``jobs_fts MATCH ?`` against the rowid mirror; the
+    LIKE branch is kept for environments where FTS5 is not available and
+    so existing test fixtures (which don't drive text search) keep
+    behaving identically.
+    """
+
+    fts_columns = "{title description department location}" if include_department else "{title description location}"
+    phrase = _fts_phrase(text)
+    clauses.append(
+        "(j.rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?)"
+        " OR j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
+        + (" OR j.department LIKE ?" if include_department else "")
+        + ")"
+    )
+    needle = f"%{text}%"
+    params.append(f"{fts_columns} : {phrase}")
+    params.extend([needle, needle, needle])
+    if include_department:
+        params.append(needle)
+
+
 def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str, Any]]:
     query = """
         SELECT
@@ -243,9 +281,7 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
     _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
     if request.text:
-        clauses.append("(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?)")
-        needle = f"%{request.text}%"
-        params.extend([needle, needle, needle])
+        _add_text_clause(clauses, params, request.text)
     location_clause, location_params = _location_exists_clause(request)
     if location_clause:
         clauses.append(location_clause)
@@ -275,9 +311,7 @@ def _jobs_only_conditions(request: VacancySearchRequest) -> tuple[list[str], lis
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
     _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
     if request.text:
-        clauses.append("(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?)")
-        needle = f"%{request.text}%"
-        params.extend([needle, needle, needle])
+        _add_text_clause(clauses, params, request.text)
     return clauses, params
 
 
@@ -481,11 +515,7 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
     _add_date_clause(clauses, params, "j.closes_at", ">=", filters.closing_date_from)
     _add_date_clause(clauses, params, "j.closes_at", "<=", filters.closing_date_to)
     if filters.text:
-        clauses.append(
-            "(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ? OR j.department LIKE ?)"
-        )
-        needle = f"%{filters.text}%"
-        params.extend([needle, needle, needle, needle])
+        _add_text_clause(clauses, params, filters.text, include_department=True)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:

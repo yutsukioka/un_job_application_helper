@@ -41,9 +41,15 @@ class WorkdayAdapter(JobAdapter):
         fetch_details = _as_bool(self.source.extra.get("fetch_details"), default=False)
 
         jobs: list[JobRecord] = []
+        seen_keys: set[str] = set()
         offset = 0
         pages = 0
         expected_total: int | None = None
+        # When ``expected_total`` shrinks between pages by more than one page
+        # the listing is being mutated under us; older pages we already
+        # consumed may be duplicates re-shifted into the next window.
+        # We tolerate small fluctuations (vendor-side caching) but break out
+        # if a page comes back fully duplicate of what we already have.
         while pages < max_pages:
             payload = self.post_json(
                 jobs_url,
@@ -57,13 +63,26 @@ class WorkdayAdapter(JobAdapter):
             rows = _jobs_from_payload(payload)
             if not rows:
                 break
+            new_in_page = 0
             for item in rows:
                 if fetch_details:
                     detail = self._fetch_detail(item)
                     if detail is not None:
-                        jobs.extend(self.parse_jobs(detail))
+                        for parsed in self.parse_jobs(detail):
+                            key = parsed.identity_key()
+                            if key in seen_keys:
+                                continue
+                            seen_keys.add(key)
+                            jobs.append(parsed)
+                            new_in_page += 1
                         continue
-                jobs.append(self.parse_listing_item(item))
+                parsed = self.parse_listing_item(item)
+                key = parsed.identity_key()
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                jobs.append(parsed)
+                new_in_page += 1
 
             page_total = _as_int(
                 payload.get("total") if isinstance(payload, dict) else None,
@@ -73,6 +92,10 @@ class WorkdayAdapter(JobAdapter):
                 expected_total = page_total
             offset += page_size
             pages += 1
+            if new_in_page == 0:
+                # Page was fully duplicate of jobs we already collected;
+                # the listing is either looping or shrinking under us.
+                break
             if expected_total is not None and offset >= expected_total:
                 break
             if expected_total is None and len(rows) < page_size:

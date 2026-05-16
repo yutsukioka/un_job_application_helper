@@ -84,6 +84,7 @@ class CSODAdapter(JobAdapter):
             page_jobs = self.parse_jobs(response_payload)
             if not page_jobs:
                 break
+            new_in_page = 0
             for job in page_jobs:
                 if fetch_details:
                     detail_job = self.fetch_detail_for_listing_item(job.raw)
@@ -94,6 +95,12 @@ class CSODAdapter(JobAdapter):
                     continue
                 seen_keys.add(key)
                 jobs.append(job)
+                new_in_page += 1
+            if new_in_page == 0:
+                # All rows on this page were duplicates; stop to avoid
+                # an infinite loop on a vendor paging bug or shrinking
+                # result set.
+                break
             total_count = self._total_count(response_payload) or total_count
             if total_count is not None and page_number * page_size >= total_count:
                 break

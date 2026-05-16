@@ -52,11 +52,21 @@ class JobRecord:
     employment_type: str | None = None
     posted_at: datetime | None = None
     closes_at: datetime | None = None
+    # ``closes_at`` is normalized to UTC for sorting and indexing, but the
+    # vendor-supplied wall-clock time and IANA timezone are also kept so
+    # downstream consumers can render a faithful local deadline.
+    closes_at_local: str | None = None
+    closes_tz: str | None = None
     source_url: str | None = None
     description: str | None = None
     status: str = "open"
     raw: dict[str, Any] = field(default_factory=dict)
     normalized_hash: str | None = None
+    # Coarse cross-source dedup key. Computed by ``ensure_posting_fingerprint``
+    # in the persistence layer and intentionally excluded from
+    # ``hash_payload`` so that adding/changing the fingerprint algorithm
+    # does not invalidate every existing ``normalized_hash``.
+    posting_fingerprint: str | None = None
     first_seen_at: datetime = field(default_factory=utc_now)
     last_seen_at: datetime = field(default_factory=utc_now)
 

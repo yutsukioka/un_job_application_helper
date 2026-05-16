@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from jobagg.hashing import ensure_job_hash
+from jobagg.hashing import ensure_job_hash, posting_fingerprint
 from jobagg.models import ChangeEvent, JobRecord, SyncResult
 
 
@@ -328,6 +328,88 @@ class JobDatabase:
                 "source_hash",
                 "TEXT",
             )
+            # Vendor-supplied wall-clock closing time (kept verbatim) and
+            # the IANA timezone identifier used to interpret it. ``closes_at``
+            # remains the normalized UTC value used for sorting/indexing.
+            self._ensure_column(
+                conn,
+                "jobs",
+                "closes_at_local",
+                "TEXT",
+            )
+            self._ensure_column(
+                conn,
+                "jobs",
+                "closes_tz",
+                "TEXT",
+            )
+            # Cross-source posting fingerprint: a stable hash over
+            # canonicalized (title, org, location, description-prefix) used
+            # to identify the same vacancy republished on multiple boards.
+            self._ensure_column(
+                conn,
+                "jobs",
+                "posting_fingerprint",
+                "TEXT",
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_posting_fingerprint "
+                "ON jobs (posting_fingerprint)"
+            )
+            self._ensure_fts(conn)
+
+    def _ensure_fts(self, conn: sqlite3.Connection) -> None:
+        """Create the FTS5 mirror of ``jobs`` and keep it in sync via triggers.
+
+        The mirror is intentionally a *contentless* FTS5 table backed by
+        ``jobs`` (``content='jobs'``, ``content_rowid='rowid'``). This avoids
+        duplicating the description payload and lets us populate it from
+        the existing rows on the first migration. Any later inserts /
+        updates / deletes propagate via triggers.
+        """
+
+        try:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
+                    title,
+                    description,
+                    department,
+                    location,
+                    content='jobs',
+                    content_rowid='rowid',
+                    tokenize='unicode61'
+                )
+                """
+            )
+        except sqlite3.OperationalError:
+            # FTS5 not compiled into this sqlite build; free-text queries
+            # will fall back to LIKE in the query layer.
+            return
+        conn.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS jobs_ai_fts AFTER INSERT ON jobs BEGIN
+                INSERT INTO jobs_fts(rowid, title, description, department, location)
+                VALUES (new.rowid, new.title, new.description, new.department, new.location);
+            END;
+            CREATE TRIGGER IF NOT EXISTS jobs_ad_fts AFTER DELETE ON jobs BEGIN
+                INSERT INTO jobs_fts(jobs_fts, rowid, title, description, department, location)
+                VALUES('delete', old.rowid, old.title, old.description, old.department, old.location);
+            END;
+            CREATE TRIGGER IF NOT EXISTS jobs_au_fts AFTER UPDATE ON jobs BEGIN
+                INSERT INTO jobs_fts(jobs_fts, rowid, title, description, department, location)
+                VALUES('delete', old.rowid, old.title, old.description, old.department, old.location);
+                INSERT INTO jobs_fts(rowid, title, description, department, location)
+                VALUES (new.rowid, new.title, new.description, new.department, new.location);
+            END;
+            """
+        )
+        # Backfill on first migration (FTS table just created and still empty).
+        existing = conn.execute("SELECT COUNT(*) AS c FROM jobs_fts").fetchone()
+        if existing is not None and existing["c"] == 0:
+            jobs_count = conn.execute("SELECT COUNT(*) AS c FROM jobs").fetchone()
+            if jobs_count is not None and jobs_count["c"] > 0:
+                conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES('rebuild')")
 
     def upsert_job(self, job: JobRecord) -> str:
         job_key = job.identity_key()
@@ -340,6 +422,8 @@ class JobDatabase:
                 self._merge_existing_detail_fields(job, current)
 
             ensure_job_hash(job)
+            if job.posting_fingerprint is None:
+                job.posting_fingerprint = posting_fingerprint(job)
             if current is None:
                 change_type = "inserted"
                 event_type = "created"
@@ -371,10 +455,12 @@ class JobDatabase:
                 INSERT INTO jobs (
                     job_key, source_id, org_id, ats_family, external_id, title,
                     location, department, employment_type, posted_at, closes_at,
+                    closes_at_local, closes_tz,
                     apply_url, source_url, description, status, normalized_hash,
+                    posting_fingerprint,
                     raw_json, first_seen_at, last_seen_at, missing_run_count
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_key) DO UPDATE SET
                     org_id = excluded.org_id,
                     title = excluded.title,
@@ -383,11 +469,14 @@ class JobDatabase:
                     employment_type = excluded.employment_type,
                     posted_at = excluded.posted_at,
                     closes_at = excluded.closes_at,
+                    closes_at_local = excluded.closes_at_local,
+                    closes_tz = excluded.closes_tz,
                     apply_url = excluded.apply_url,
                     source_url = excluded.source_url,
                     description = excluded.description,
                     status = excluded.status,
                     normalized_hash = excluded.normalized_hash,
+                    posting_fingerprint = excluded.posting_fingerprint,
                     raw_json = excluded.raw_json,
                     last_seen_at = excluded.last_seen_at,
                     missing_run_count = 0
@@ -404,11 +493,14 @@ class JobDatabase:
                     job.employment_type,
                     _dt(job.posted_at),
                     _dt(job.closes_at),
+                    job.closes_at_local,
+                    job.closes_tz,
                     job.apply_url,
                     job.source_url,
                     job.description,
                     job.status,
                     job.normalized_hash,
+                    job.posting_fingerprint,
                     json.dumps(job.raw, sort_keys=True, ensure_ascii=True),
                     first_seen_at,
                     _dt(job.last_seen_at),
@@ -452,6 +544,10 @@ class JobDatabase:
             job.posted_at = _parse_dt(current["posted_at"])
         if job.closes_at is None:
             job.closes_at = _parse_dt(current["closes_at"])
+        if job.closes_at_local is None and "closes_at_local" in current.keys():
+            job.closes_at_local = current["closes_at_local"]
+        if job.closes_tz is None and "closes_tz" in current.keys():
+            job.closes_tz = current["closes_tz"]
         if job.description is None:
             job.description = current["description"]
 
@@ -476,6 +572,45 @@ class JobDatabase:
                 (source_id,),
             ).fetchone()
             return row is not None
+
+    def find_cross_source_duplicates(
+        self,
+        *,
+        status: str | None = "open",
+    ) -> list[list[dict[str, Any]]]:
+        """Group jobs sharing a posting fingerprint across >=2 sources.
+
+        Each returned group is a list of job dicts (one per source) that
+        appear to describe the same vacancy. Groups with only a single
+        source are excluded.
+        """
+
+        clauses = ["posting_fingerprint IS NOT NULL", "posting_fingerprint <> ''"]
+        params: list[Any] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        where = " AND ".join(clauses)
+        with self.connect() as conn:
+            fingerprint_rows = conn.execute(
+                f"""
+                SELECT posting_fingerprint
+                FROM jobs
+                WHERE {where}
+                GROUP BY posting_fingerprint
+                HAVING COUNT(DISTINCT source_id) > 1
+                """,
+                params,
+            ).fetchall()
+            groups: list[list[dict[str, Any]]] = []
+            for fp_row in fingerprint_rows:
+                fp = fp_row["posting_fingerprint"]
+                rows = conn.execute(
+                    f"SELECT * FROM jobs WHERE posting_fingerprint = ? AND {where}",
+                    [fp, *params],
+                ).fetchall()
+                groups.append([dict(r) for r in rows])
+            return groups
 
     def upsert_jobs(self, jobs: Iterable[JobRecord]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0, "unchanged": 0}

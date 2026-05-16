@@ -139,15 +139,40 @@ def sync_source_with_selective_details(
 
     cutoff = datetime.now(tz=UTC) + timedelta(days=deadline_refresh_days)
     jobs = []
+    detail_attempts = 0
+    detail_failures = 0
+    detail_aborted = False
+    # Threshold guard: a systemic detail-fetch failure (auth wall, schema
+    # change, blocked CDN) can otherwise look like a long quiet stream of
+    # per-job warnings. Once we have a meaningful sample (>=5 attempts) and
+    # at least half are failing, stop calling the detail endpoint and
+    # surface a single high-signal error instead.
+    DETAIL_MIN_SAMPLE = 5
+    DETAIL_FAILURE_RATIO = 0.5
     for job in listing_jobs:
         detail_job = None
-        if refresh_all_details or _needs_detail_refresh(db, job.identity_key(), cutoff, listing_job=job):
+        if (
+            not detail_aborted
+            and (refresh_all_details or _needs_detail_refresh(db, job.identity_key(), cutoff, listing_job=job))
+        ):
             fetch_detail = getattr(adapter, "fetch_detail_for_listing_item", None)
             if callable(fetch_detail):
+                detail_attempts += 1
                 try:
                     detail_job = fetch_detail(job.raw)
                 except Exception as exc:
+                    detail_failures += 1
                     result.errors.append(f"{_job_detail_label(job)} detail refresh failed: {exc}")
+                    if (
+                        detail_attempts >= DETAIL_MIN_SAMPLE
+                        and detail_failures / detail_attempts >= DETAIL_FAILURE_RATIO
+                    ):
+                        detail_aborted = True
+                        result.errors.append(
+                            f"detail refresh aborted for {source.id}: "
+                            f"{detail_failures}/{detail_attempts} attempts failed "
+                            f">= {int(DETAIL_FAILURE_RATIO * 100)}% threshold"
+                        )
         jobs.append(detail_job or job)
 
     result.fetched = len(jobs)

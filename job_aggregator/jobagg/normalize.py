@@ -14,6 +14,17 @@ _LOGGER = logging.getLogger(__name__)
 
 _SPACE_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# Strip ``<script>``/``<style>`` blocks (including their contents) before
+# the generic tag regex; otherwise the body of the block leaks into the
+# normalized text and creates spurious diffs when sites change inline JS.
+_SCRIPT_OR_STYLE_RE = re.compile(
+    r"<(script|style)\b[^>]*>.*?</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+# Zero-width and BOM-like characters that frequently appear in copy-pasted
+# job descriptions and would otherwise produce noisy hash differences.
+_INVISIBLE_RE = re.compile(r"[\u00ad\u200b-\u200f\u2028\u2029\ufeff]")
 _NUMERIC_DATE_RE = re.compile(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$")
 _VALID_DATE_LOCALES = {None, "ISO", "US", "EU"}
 _TRACKING_PARAMS = {
@@ -32,6 +43,30 @@ def clean_text(value: object | None) -> str | None:
         return None
     text = html.unescape(str(value))
     text = _TAG_RE.sub(" ", text)
+    text = _SPACE_RE.sub(" ", text).strip()
+    return text or None
+
+
+def text_for_hash(value: object | None) -> str | None:
+    """Aggressive normalization for content-hash inputs.
+
+    Free-text fields like ``description`` carry HTML markup, inline scripts
+    and styles, HTML comments, NBSP, and zero-width characters. Hashing
+    them as-is causes spurious ``updated`` change events when a vendor
+    re-renders the same content with cosmetic differences. This helper is
+    intentionally separate from :func:`clean_text` so display formatting
+    is unaffected.
+    """
+
+    if value is None:
+        return None
+    text = str(value)
+    text = _SCRIPT_OR_STYLE_RE.sub(" ", text)
+    text = _HTML_COMMENT_RE.sub(" ", text)
+    text = html.unescape(text)
+    text = _TAG_RE.sub(" ", text)
+    text = _INVISIBLE_RE.sub("", text)
+    text = text.replace("\u00a0", " ")
     text = _SPACE_RE.sub(" ", text).strip()
     return text or None
 

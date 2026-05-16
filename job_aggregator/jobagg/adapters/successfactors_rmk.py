@@ -70,12 +70,19 @@ class SuccessFactorsRMKAdapter(JobAdapter):
             page_jobs = self.parse_jobs_from_api(response_payload)
             if not page_jobs:
                 break
+            new_in_page = 0
             for job in page_jobs:
                 key = job.identity_key()
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 jobs.append(job)
+                new_in_page += 1
+            if new_in_page == 0:
+                # All rows on this page were duplicates of jobs we already
+                # collected; stop to avoid an infinite loop on a vendor
+                # paging bug or shrinking result set.
+                break
             total_jobs = _as_int(response_payload.get("totalJobs"), default=total_jobs or 0) if isinstance(response_payload, dict) else total_jobs
             if total_jobs is not None and (page_number + 1) * page_size >= total_jobs:
                 break

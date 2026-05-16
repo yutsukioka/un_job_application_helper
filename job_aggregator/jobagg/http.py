@@ -9,6 +9,7 @@ import random
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from http.cookiejar import CookieJar
@@ -65,7 +66,11 @@ class JobAggHTTPClient:
         self.backoff_base_seconds = backoff_base_seconds
         self.jitter_ratio = jitter_ratio
         self.max_response_bytes = int(max_response_bytes)
-        self._last_request_at = 0.0
+        # Per-host last-request timestamp. Robots policies promise "one
+        # request per host every ``min_delay_seconds``" — a single shared
+        # timestamp would over-throttle when the same client straddles
+        # multiple hosts (e.g. listing API + CDN attachment fetch).
+        self._last_request_at_by_host: dict[str, float] = {}
         self._cookie_jar = CookieJar()
         self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._cookie_jar))
 
@@ -84,8 +89,9 @@ class JobAggHTTPClient:
         }
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
         for attempt in range(self.max_retries + 1):
-            self._respect_min_delay()
+            self._respect_min_delay(host)
             try:
                 with self._opener.open(request, timeout=self.timeout_seconds) as response:
                     declared = response.headers.get("Content-Length")
@@ -110,7 +116,7 @@ class JobAggHTTPClient:
                     )
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
-                    self._last_request_at = time.monotonic()
+                    self._mark_request(host)
                     return HttpResponse(
                         url=response.geturl(),
                         status_code=response.status,
@@ -118,7 +124,7 @@ class JobAggHTTPClient:
                         text=text,
                     )
             except urllib.error.HTTPError as exc:
-                self._last_request_at = time.monotonic()
+                self._mark_request(host)
                 error_bytes = _decode_content_encoding(
                     exc.read(),
                     exc.headers.get("Content-Encoding") if exc.headers else None,
@@ -134,7 +140,7 @@ class JobAggHTTPClient:
                     f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}"
                 ) from exc
             except urllib.error.URLError as exc:
-                self._last_request_at = time.monotonic()
+                self._mark_request(host)
                 if _is_transient_url_error(exc) and attempt < self.max_retries:
                     delay = self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
@@ -144,13 +150,19 @@ class JobAggHTTPClient:
 
         raise HTTPError(f"{method} {url} failed after retries")
 
-    def _respect_min_delay(self) -> None:
+    def _respect_min_delay(self, host: str) -> None:
         if self.min_delay_seconds <= 0:
             return
-        elapsed = time.monotonic() - self._last_request_at
+        last = self._last_request_at_by_host.get(host)
+        if last is None:
+            return
+        elapsed = time.monotonic() - last
         remaining = self.min_delay_seconds - elapsed
         if remaining > 0:
             time.sleep(remaining)
+
+    def _mark_request(self, host: str) -> None:
+        self._last_request_at_by_host[host] = time.monotonic()
 
     def _with_jitter(self, delay: float) -> float:
         if delay <= 0 or self.jitter_ratio <= 0:
