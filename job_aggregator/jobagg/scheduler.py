@@ -508,11 +508,12 @@ def handle_search_debug(args: argparse.Namespace) -> int:
     db = JobDatabase(args.db)
     db.initialize()
     explanation = explain_job_match(db, args.job_key, _search_request_from_args(args))
+    exit_code = 0 if explanation.get("found") and explanation.get("matched") else 1
     if args.format == "json":
         _write_text(json.dumps(explanation, indent=2, ensure_ascii=True) + "\n", args.output)
-        return 0 if explanation.get("job_key") else 1
+        return exit_code
     _write_text(explain_to_text(explanation), args.output)
-    return 0 if explanation.get("checks") else 1
+    return exit_code
 
 
 def handle_saved_search_add(args: argparse.Namespace) -> int:

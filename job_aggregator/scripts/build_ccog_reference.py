@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build the packaged CCOG markdown reference from the source PDF.
+"""Build a generated CCOG markdown reference from the source PDF.
 
 This script is intentionally dependency-light. It uses Ghostscript's txtwrite
 device, which is available on this Mac, to extract the attached ICSC CCOG PDF.
-The packaged runtime reads the generated markdown, not the PDF directly.
+The full generated markdown is a local development artifact and should not be
+committed or packaged.
 """
 
 from __future__ import annotations
@@ -18,9 +19,7 @@ from pathlib import Path
 DEFAULT_PDF = Path(__file__).resolve().parents[3] / "inputs" / "CCOG_9_2015.pdf"
 DEFAULT_OUTPUT = (
     Path(__file__).resolve().parents[1]
-    / "jobagg"
-    / "classification"
-    / "rules"
+    / "output"
     / "ccog_reference_full.md"
 )
 EXPECTED_PAGES = 77
@@ -238,19 +237,25 @@ def pdf_page_count(path: Path) -> int:
     command = [
         "gs",
         "-q",
-        "-dNOSAFER",
+        "-dSAFER",
         "-dNODISPLAY",
         "-c",
-        f"({path}) (r) file runpdfbegin pdfpagecount = quit",
+        f"{_postscript_literal(path)} (r) file runpdfbegin pdfpagecount = quit",
     ]
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     return int(result.stdout.strip())
 
 
 def extract_text(path: Path) -> str:
-    command = ["gs", "-q", "-dNOSAFER", "-sDEVICE=txtwrite", "-o", "-", str(path)]
+    command = ["gs", "-q", "-dSAFER", "-sDEVICE=txtwrite", "-o", "-", str(path)]
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     return result.stdout
+
+
+def _postscript_literal(path: Path) -> str:
+    text = str(path)
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return f"({escaped})"
 
 
 def parse_entries(text: str) -> list[Entry]:

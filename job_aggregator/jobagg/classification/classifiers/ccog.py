@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from jobagg.classification.models import CCOGResult, ContractResult, FeatureBundle, GradeResult, UNVResult
-from jobagg.classification.rules import load_rule_file, rules_path
+from jobagg.classification.rules import load_rule_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,51 +188,20 @@ def _hydrate(result: CCOGResult) -> CCOGResult:
 
 @lru_cache(maxsize=1)
 def _ccog_entries() -> dict[str, CCOGEntry]:
-    path = rules_path("ccog_reference_full.md")
-    if not path.is_file():
-        return {}
-    text = path.read_text(encoding="utf-8")
+    data = load_rule_file("ccog_reference.yaml")
     entries: dict[str, CCOGEntry] = {}
-    blocks = re.split(r"(?m)^###\s+", text)
-    for block in blocks[1:]:
-        lines = [line.rstrip() for line in block.splitlines() if line.strip()]
-        if not lines:
+    for item in data.get("entries", []):
+        code = _normalize_code(str(item.get("code") or ""))
+        if not code:
             continue
-        header = lines[0]
-        match = re.match(r"(?P<code>.+?)\s+[—-]\s+(?P<title>.+)", header)
-        if not match:
-            continue
-        fields = _parse_fields(lines[1:])
-        family = fields.get("Family", "")
-        family_code, family_label = _split_family(family)
-        code = _normalize_code(match.group("code"))
         entries[code] = CCOGEntry(
             code=code,
-            title=match.group("title").strip(),
-            family_code=family_code,
-            family_label=family_label,
-            level_signal=fields.get("Level signal", ""),
+            title=str(item.get("label") or ""),
+            family_code=str(item.get("family_code") or _parent_family_code(code) or ""),
+            family_label=str(item.get("family_label") or item.get("label") or ""),
+            level_signal=str(item.get("level_signal") or ""),
         )
     return entries
-
-
-def _parse_fields(lines: list[str]) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for line in lines:
-        match = re.match(r"^\*\*(?P<label>[^*:]+):?\*\*:?\s*(?P<value>.+?)\s*$", line)
-        if match:
-            fields[match.group("label")] = match.group("value")
-    return fields
-
-
-def _split_family(value: str) -> tuple[str, str]:
-    if "—" in value:
-        code, label = value.split("—", 1)
-    elif "-" in value:
-        code, label = value.split("-", 1)
-    else:
-        return value.strip(), value.strip()
-    return code.strip(), label.strip()
 
 
 def _parent_family_code(code: str | None) -> str | None:

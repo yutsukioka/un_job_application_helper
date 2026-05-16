@@ -290,8 +290,10 @@ def _add_ccog_family_clause(
         return
     parts = []
     for family in cleaned:
-        parts.append("(c.ccog_family_code = ? OR c.ccog_primary_code LIKE ?)")
-        params.extend([family, f"{family}.%"])
+        parts.append(
+            "(c.ccog_family_code = ? OR c.ccog_primary_code = ? OR c.ccog_primary_code LIKE ?)"
+        )
+        params.extend([family, family, f"{family}.%"])
     clauses.append("(" + " OR ".join(parts) + ")")
 
 
@@ -366,8 +368,10 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
         clauses.append("c.ccog_primary_code = ?")
         params.append(filters.ccog_code)
     if filters.ccog_family:
-        clauses.append("(c.ccog_family_code = ? OR c.ccog_primary_code LIKE ?)")
-        params.extend([filters.ccog_family, f"{filters.ccog_family}.%"])
+        clauses.append(
+            "(c.ccog_family_code = ? OR c.ccog_primary_code = ? OR c.ccog_primary_code LIKE ?)"
+        )
+        params.extend([filters.ccog_family, filters.ccog_family, f"{filters.ccog_family}.%"])
     if filters.max_min_years_experience is not None:
         clauses.append("(c.min_years_experience IS NULL OR c.min_years_experience <= ?)")
         params.append(filters.max_min_years_experience)

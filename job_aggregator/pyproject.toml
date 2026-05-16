@@ -34,7 +34,6 @@ include = ["jobagg*"]
 
 [tool.setuptools.package-data]
 jobagg = [
-  "classification/rules/*.md",
   "classification/rules/*.yaml"
 ]
 

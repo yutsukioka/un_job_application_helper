@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from jobagg.db import JobDatabase
@@ -23,6 +24,7 @@ def explain_job_match(
     if row is None:
         return {
             "job_key": job_key,
+            "found": False,
             "matched": False,
             "reason": "job_key not found",
             "checks": [],
@@ -32,6 +34,7 @@ def explain_job_match(
     matched = all(check["matched"] for check in checks)
     return {
         "job_key": job_key,
+        "found": True,
         "title": row.get("title"),
         "matched": matched,
         "reason": "matched all filters" if matched else _first_failed_reason(checks),
@@ -94,7 +97,6 @@ def _evaluate_checks(
         row.get("unv_volunteer_type"),
         request.unv_volunteer_types,
     )
-    _add_list_check(checks, "region", row.get("region"), request.regions)
     _add_text_check(checks, row, request.text)
     _add_date_check(checks, "closing_date_from", row.get("closes_at"), ">=", request.closing_date_from)
     _add_date_check(checks, "closing_date_to", row.get("closes_at"), "<=", request.closing_date_to)
@@ -192,7 +194,10 @@ def _add_ccog_family_check(
         return
     family = row.get("ccog_family_code")
     code = row.get("ccog_primary_code")
-    matched = any(family == value or str(code or "").startswith(f"{value}.") for value in expected)
+    matched = any(
+        family == value or code == value or str(code or "").startswith(f"{value}.")
+        for value in expected
+    )
     checks.append(
         {
             "filter": "ccog_family",
@@ -241,9 +246,9 @@ def _add_date_check(
     if expected is None:
         return
     actual_text = str(actual or "")
-    expected_text = expected.isoformat() if hasattr(expected, "isoformat") else str(expected)
-    matched = bool(actual_text) and (
-        actual_text >= expected_text if operator == ">=" else actual_text <= expected_text
+    actual_value, expected_value, expected_text = _date_comparison_values(actual_text, expected)
+    matched = bool(actual_value) and (
+        actual_value >= expected_value if operator == ">=" else actual_value <= expected_value
     )
     checks.append(
         {
@@ -317,6 +322,26 @@ def _location_matches(
     if not request.include_low_confidence and float(location.get("confidence") or 0) < request.min_location_confidence:
         return False
     return True
+
+
+def _date_comparison_values(actual_text: str, expected: object) -> tuple[str, str, str]:
+    expected_text = expected.isoformat() if isinstance(expected, date) else str(expected)
+    if _is_date_only(expected_text):
+        return _date_part(actual_text), expected_text, expected_text
+    return actual_text, expected_text, expected_text
+
+
+def _date_part(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return value[:10] if _is_date_only(value[:10]) else value
+
+
+def _is_date_only(value: str) -> bool:
+    return len(value) == 10 and value[4] == "-" and value[7] == "-"
 
 
 def _job_with_classification(db: JobDatabase, job_key: str) -> dict[str, Any] | None:

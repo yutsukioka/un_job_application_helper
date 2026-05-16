@@ -19,7 +19,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 jobagg init-db
 jobagg sync --config config/organizations.yaml
-jobagg export --format json --output jobs.json
+jobagg export --format json --output output/jobs.json
 ```
 
 For regular WFP monitoring, use stable output paths rather than timestamped
@@ -102,8 +102,9 @@ Persistence rules:
 - Past closing date and not seen: status becomes `closed`.
 
 HTTP behavior is intentionally conservative: the pipeline is sequential per
-source, so per-domain concurrency is effectively one; requests apply the
-configured crawl delay with jitter; HTTP 429 and 503 use exponential backoff;
+source, so per-domain concurrency is effectively one; requests enforce the
+configured minimum crawl delay before every attempt without jitter; transient
+HTTP 429, 500, 502, 503, and 504 responses use bounded exponential backoff.
 HTTP 403 is not retried and stops the current source sync.
 
 For one-off implementation testing across disabled real sources, use:

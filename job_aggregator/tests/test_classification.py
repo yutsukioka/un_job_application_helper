@@ -5,6 +5,7 @@ from jobagg.classification.classifiers.ccog import _keyword_score, ccog_tree
 from jobagg.classification.classifiers.contract import classify_contract
 from jobagg.classification.models import ContractCategory, FeatureBundle, GradeResult
 from jobagg.db import JobDatabase
+from jobagg.filters.explain import explain_job_match
 from jobagg.filters.facets import facet_counts
 from jobagg.filters.query import search_collected_jobs, search_vacancies
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
@@ -43,6 +44,41 @@ def test_classifies_wfp_logistics_assistant(tmp_path):
     assert row["work_modality"] == "multiple_locations"
     assert row["ccog_primary_code"] == "2.2.06"
     assert row["needs_review"] is False
+    assert search_collected_jobs(db, VacancySearchRequest(ccog_families=["2.2.06"])).total == 1
+    assert len(search_vacancies(db, VacancyFilters(ccog_family="2.2.06"))) == 1
+    explanation = explain_job_match(
+        db,
+        "wfp_workday:JR1",
+        VacancySearchRequest(ccog_families=["2.2.06"]),
+    )
+    assert explanation["matched"] is True
+
+
+def test_city_only_location_recomputes_onsite_modality(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Programme Officer, P-3",
+            external_id="city-only",
+            location="Nairobi",
+            apply_url="https://jobs.unicef.org/jobs/city-only",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="unicef_pageup"))
+
+    assert row["city"] == "Nairobi"
+    assert row["country_iso3"] == "KEN"
+    assert row["work_modality"] == "onsite"
 
 
 def test_classifies_unv_specialist_and_filters_facets(tmp_path):
@@ -204,8 +240,22 @@ def test_classification_schema_and_manual_override(tmp_path):
     assert {"vacancy_source_features", "vacancy_classifications", "vacancy_locations"} <= tables
 
 
-def test_ccog_resource_tree_has_expected_count():
-    assert len(ccog_tree()) == 221
+def test_ccog_resource_tree_contains_runtime_subset():
+    tree = {entry["code"]: entry for entry in ccog_tree()}
+
+    assert 10 <= len(tree) < 221
+    assert {
+        "1.A.01",
+        "1.A.05",
+        "1.A.09.a",
+        "1.A.09.c",
+        "1.L.09",
+        "2.1.02.a",
+        "2.2.06",
+    } <= set(tree)
+    assert tree["1.A.01"]["label"] == "Financial management specialists"
+    assert tree["1.A.01"]["family_code"] == "1.A"
+    assert tree["1.A.01"]["family_label"] == "Administrative specialists"
 
 
 def test_ccog_short_keywords_require_word_boundaries():

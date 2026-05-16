@@ -2,10 +2,11 @@ import json
 import sqlite3
 
 from jobagg.classification import classify_database
+from jobagg.classification.models import VacancyLocation
 from jobagg.db import JobDatabase
+from jobagg.filters.explain import explain_job_match
 from jobagg.filters.query import search_collected_jobs, search_vacancies
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
-from jobagg.classification.models import VacancyLocation
 from jobagg.models import OrganizationSource
 from jobagg.normalize import build_job
 from jobagg.scheduler import main
@@ -245,8 +246,13 @@ def test_region_search_uses_matching_vacancy_location_for_multi_location_jobs(tm
     )
 
     response = search_collected_jobs(db, VacancySearchRequest(regions=["Africa"]))
+    explanation = explain_job_match(db, job.identity_key(), VacancySearchRequest(regions=["Africa"]))
 
     assert response.total == 1
+    assert explanation["matched"] is True
+    explanation_filters = {check["filter"] for check in explanation["checks"]}
+    assert "location" in explanation_filters
+    assert "region" not in explanation_filters
     assert response.results[0]["duty_station"] == "Nairobi, Kenya"
     assert response.results[0]["match_evidence"]["location"]["source_field"] == "test.outposted"
 
@@ -396,6 +402,12 @@ def test_date_only_upper_bounds_include_same_day_datetimes(tmp_path):
 
     assert collected.total == 1
     assert len(legacy) == 1
+    explanation = explain_job_match(
+        db,
+        "unicef_pageup:same-day-close",
+        VacancySearchRequest(closing_date_to="2026-06-07", posted_date_to="2026-05-20"),
+    )
+    assert explanation["matched"] is True
 
 
 def test_filter_cli_writes_markdown_for_unv_facets(tmp_path):
@@ -574,9 +586,44 @@ def test_search_explain_and_debug_show_filter_evaluation(tmp_path):
     )
 
     debug = json.loads(debug_output.read_text(encoding="utf-8"))
-    assert exit_code == 0
+    assert exit_code == 1
+    assert debug["found"] is True
     assert debug["matched"] is False
     assert "grade_code" in debug["reason"]
+
+    no_filter_output = tmp_path / "debug_no_filters.txt"
+    exit_code = main(
+        [
+            "--db",
+            str(db.path),
+            "search-debug",
+            "--job-key",
+            "unicef_pageup:unicef-explain-p4",
+            "--output",
+            str(no_filter_output),
+        ]
+    )
+    assert exit_code == 0
+    assert "Final: matched" in no_filter_output.read_text(encoding="utf-8")
+
+    missing_output = tmp_path / "debug_missing.json"
+    exit_code = main(
+        [
+            "--db",
+            str(db.path),
+            "search-debug",
+            "--job-key",
+            "unicef_pageup:missing",
+            "--format",
+            "json",
+            "--output",
+            str(missing_output),
+        ]
+    )
+    missing = json.loads(missing_output.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert missing["found"] is False
+    assert missing["reason"] == "job_key not found"
 
 
 def test_saved_search_add_list_run_and_remove(tmp_path):

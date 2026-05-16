@@ -99,6 +99,7 @@ def classify_job_with_locations(
     best_location = best_vacancy_location(locations)
     if best_location is not None and best_location.confidence >= location.confidence:
         location = location_result_from_vacancy_location(best_location)
+        modality = classify_modality(features, location)
     unv = classify_unv(features)
     ccog = classify_ccog(features, grade, contract, unv)
     needs_review = (
