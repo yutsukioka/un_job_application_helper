@@ -162,8 +162,15 @@ def _keyword_score(text: str, keywords: list[str]) -> tuple[float, list[str]]:
     if not text or not keywords:
         return 0.0, []
     normalized = text.casefold()
-    matches = [keyword for keyword in keywords if str(keyword).casefold() in normalized]
+    matches = [keyword for keyword in keywords if _keyword_matches(normalized, str(keyword))]
     return min(1.0, len(matches) / 2), matches
+
+
+def _keyword_matches(text: str, keyword: str) -> bool:
+    normalized = keyword.casefold().strip()
+    if not normalized:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text) is not None
 
 
 def _hydrate(result: CCOGResult) -> CCOGResult:
@@ -174,9 +181,8 @@ def _hydrate(result: CCOGResult) -> CCOGResult:
         result.family_label = result.label
         return result
     result.label = result.label or entry.title
-    result.family_code = _parent_family_code(entry.code)
-    parent = entries.get(result.family_code or "")
-    result.family_label = parent.title if parent else entry.family_label
+    result.family_code = entry.family_code or _parent_family_code(entry.code)
+    result.family_label = entry.family_label
     return result
 
 

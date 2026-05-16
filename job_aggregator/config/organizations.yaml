@@ -692,6 +692,7 @@ sources:
     extra:
       output_slug: cern
       company: CERN
+      api_url: https://api.smartrecruiters.com/v1/companies/CERN/postings
       page_size: 100
       max_pages: 2
       fetch_details: false

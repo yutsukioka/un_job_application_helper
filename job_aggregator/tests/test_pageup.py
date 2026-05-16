@@ -151,3 +151,62 @@ def test_pageup_fetches_paginated_filter_results():
     assert [job.external_id for job in jobs] == ["593001", "593002"]
     assert "page=1" in http.urls[0]
     assert "page=2" in http.urls[1]
+
+
+def test_pageup_fetches_detail_html_with_get_for_listing_url():
+    class Response:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeHTTP:
+        def __init__(self):
+            self.post_urls = []
+            self.get_urls = []
+
+        def post_form(self, url, payload=None, *, headers=None):
+            self.post_urls.append(url)
+            return Response(
+                """{
+                  "results": "<div class=\\"list-view--item\\"><a class=\\"job-link\\" href=\\"/en-us/job/589086/example\\">Listing Role #589086</a><span class=\\"location\\">Kenya</span></div>",
+                  "page": 1,
+                  "pageitems": 1,
+                  "count": 1
+                }"""
+            )
+
+        def get(self, url, *, headers=None):
+            self.get_urls.append(url)
+            return Response(
+                """
+                <h2>Technical Manager, P-4, Nairobi #589086</h2>
+                <p>
+                  <b>Job no:</b> <span class="job-externalJobNo">589086</span><br>
+                  <b>Contract type:</b> <span class="work-type">Fixed Term Appointment</span><br>
+                  <b>Location:</b> <span class="location">Kenya</span><br>
+                </p>
+                <div id="job-details"><p>Full role text.</p></div>
+                """
+            )
+
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+        extra={
+            "filter_url": "https://jobs.unicef.org/en-us/filter/",
+            "fetch_details": True,
+            "page_size": 1,
+            "max_pages": 1,
+        },
+    )
+    http = FakeHTTP()
+    adapter = PageUpAdapter(AdapterContext(source=source, http=http))
+
+    jobs = adapter.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert http.get_urls == ["https://jobs.unicef.org/en-us/job/589086/example"]
+    assert jobs[0].title == "Technical Manager, P-4, Nairobi #589086"
+    assert jobs[0].employment_type == "Fixed Term Appointment"
+    assert jobs[0].description == "Technical Manager, P-4, Nairobi #589086 Job no: 589086 Contract type: Fixed Term Appointment Location: Kenya Full role text."

@@ -1,7 +1,9 @@
 import sqlite3
 
 from jobagg.classification import classify_database
-from jobagg.classification.classifiers.ccog import ccog_tree
+from jobagg.classification.classifiers.ccog import _keyword_score, ccog_tree
+from jobagg.classification.classifiers.contract import classify_contract
+from jobagg.classification.models import ContractCategory, FeatureBundle, GradeResult
 from jobagg.db import JobDatabase
 from jobagg.filters.facets import facet_counts
 from jobagg.filters.query import search_collected_jobs, search_vacancies
@@ -151,6 +153,8 @@ def test_classification_schema_and_manual_override(tmp_path):
     assert stored["grade_code"] == "NOB"
     assert stored["contract_category"] == "fixed_term_appointment_staff"
     assert stored["ccog_primary_code"] == "1.A.10.c"
+    assert stored["ccog_family_code"] == "1.A"
+    assert stored["ccog_family_label"] == "Administrative specialists"
 
     db.upsert_classification_override(
         vacancy_id=job.identity_key(),
@@ -202,3 +206,39 @@ def test_classification_schema_and_manual_override(tmp_path):
 
 def test_ccog_resource_tree_has_expected_count():
     assert len(ccog_tree()) == 221
+
+
+def test_ccog_short_keywords_require_word_boundaries():
+    score, matches = _keyword_score("maintain training records", ["AI"])
+    assert score == 0
+    assert matches == []
+
+    score, matches = _keyword_score("AI adoption for case management", ["AI"])
+    assert score > 0
+    assert matches == ["AI"]
+
+
+def test_contract_specific_internship_signals_override_generic_title():
+    unpaid = classify_contract(
+        FeatureBundle(
+            vacancy_id="job-1",
+            source_id="unicef_pageup",
+            ats_family="pageup",
+            title="Internship - Communications",
+            description="This internship offers no remuneration.",
+        ),
+        GradeResult(),
+    )
+    paid_source = classify_contract(
+        FeatureBundle(
+            vacancy_id="job-2",
+            source_id="unicef_pageup",
+            ats_family="pageup",
+            title="Internship - Data",
+            contract_raw="Paid Internship",
+        ),
+        GradeResult(),
+    )
+
+    assert unpaid.category is ContractCategory.INTERNSHIP_UNPAID
+    assert paid_source.category is ContractCategory.INTERNSHIP_PAID

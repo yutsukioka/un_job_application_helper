@@ -15,9 +15,10 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
             confidence=0.99,
             evidence={"source_id": features.source_id},
         )
+    candidates: list[ContractResult] = []
     explicit = _source_contract(features.contract_raw)
     if explicit.category is not ContractCategory.UNKNOWN:
-        return explicit
+        candidates.append(explicit)
     text_fields = [
         ("title", features.title),
         ("employment_type", features.employment_type),
@@ -26,8 +27,11 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
     for field_name, text in text_fields:
         result = _match_rules(text, field_name)
         if result.category is not ContractCategory.UNKNOWN:
-            result.subtype = result.subtype or _grade_contract_subtype(grade)
-            return result
+            candidates.append(result)
+    if candidates:
+        result = _best_candidate(candidates)
+        result.subtype = result.subtype or _grade_contract_subtype(grade)
+        return result
     subtype = _grade_contract_subtype(grade)
     if subtype and grade.family in {"SSA"}:
         return ContractResult(
@@ -56,6 +60,11 @@ def _source_contract(value: str | None) -> ContractResult:
     text = (value or "").strip().casefold()
     if not text:
         return ContractResult()
+    rule_match = _match_rules(value, "source_contract")
+    if rule_match.category is not ContractCategory.UNKNOWN:
+        rule_match.subtype = value
+        rule_match.confidence = 0.94
+        return rule_match
     mappings = {
         "consultant": ContractCategory.CONSULTANT,
         "consultancy": ContractCategory.CONSULTANT,
@@ -77,6 +86,25 @@ def _source_contract(value: str | None) -> ContractResult:
                 evidence={"source_contract": value, "matched": needle},
             )
     return ContractResult()
+
+
+def _best_candidate(candidates: list[ContractResult]) -> ContractResult:
+    return max(candidates, key=lambda result: (_specificity(result.category), result.confidence))
+
+
+def _specificity(category: ContractCategory) -> int:
+    if category in {ContractCategory.INTERNSHIP_PAID, ContractCategory.INTERNSHIP_UNPAID}:
+        return 4
+    if category in {
+        ContractCategory.FIXED_TERM_APPOINTMENT_STAFF,
+        ContractCategory.TEMPORARY_APPOINTMENT_STAFF,
+        ContractCategory.CONSULTANT,
+        ContractCategory.VOLUNTEERING_UNV,
+    }:
+        return 3
+    if category is ContractCategory.INTERNSHIP_UNKNOWN:
+        return 1
+    return 0
 
 
 def _match_rules(text: str | None, field_name: str) -> ContractResult:

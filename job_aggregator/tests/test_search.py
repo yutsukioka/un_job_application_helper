@@ -5,6 +5,7 @@ from jobagg.classification import classify_database
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs, search_vacancies
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
+from jobagg.classification.models import VacancyLocation
 from jobagg.models import OrganizationSource
 from jobagg.normalize import build_job
 from jobagg.scheduler import main
@@ -200,6 +201,54 @@ def test_multiple_locations_placeholder_does_not_match_city_search(tmp_path):
     locations = list(db.iter_vacancy_locations("wfp_workday:wfp-1"))
     assert locations[0]["location_type"] == "multiple_unknown"
     assert locations[0]["city_key"] is None
+
+
+def test_region_search_uses_matching_vacancy_location_for_multi_location_jobs(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    job = build_job(
+        source,
+        title="Programme Officer, P-3",
+        external_id="multi-region",
+        location="Bangkok, Thailand",
+        apply_url="https://jobs.unicef.org/jobs/multi-region",
+    )
+    db.upsert_job(job)
+    classify_database(db)
+    db.replace_vacancy_locations(
+        job.identity_key(),
+        [
+            VacancyLocation(
+                vacancy_id=job.identity_key(),
+                city="Bangkok",
+                city_key="bangkok",
+                country="Thailand",
+                country_iso3="THA",
+                region="Asia",
+                location_type="primary",
+                is_primary=True,
+                confidence=0.95,
+                source_field="test.primary",
+            ),
+            VacancyLocation(
+                vacancy_id=job.identity_key(),
+                city="Nairobi",
+                city_key="nairobi",
+                country="Kenya",
+                country_iso3="KEN",
+                region="Africa",
+                location_type="outposted",
+                confidence=0.90,
+                source_field="test.outposted",
+            ),
+        ],
+    )
+
+    response = search_collected_jobs(db, VacancySearchRequest(regions=["Africa"]))
+
+    assert response.total == 1
+    assert response.results[0]["duty_station"] == "Nairobi, Kenya"
+    assert response.results[0]["match_evidence"]["location"]["source_field"] == "test.outposted"
 
 
 def test_location_confidence_thresholds_can_be_relaxed(tmp_path):

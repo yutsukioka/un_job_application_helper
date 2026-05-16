@@ -145,12 +145,16 @@ class PageUpAdapter(JobAdapter):
         detail_url = item.get("_pageup_detail_url")
         if not detail_url:
             return None
-        payload = self._post_pageup_json(str(detail_url))
-        if not isinstance(payload, dict):
-            return None
-        detail_html = payload.get("results")
-        if not isinstance(detail_html, str):
-            return None
+        detail_text = self.fetch_text(str(detail_url))
+        try:
+            payload = json.loads(detail_text)
+        except json.JSONDecodeError:
+            detail_html = detail_text
+        else:
+            if isinstance(payload, dict) and isinstance(payload.get("results"), str):
+                detail_html = payload["results"]
+            else:
+                return None
         return self.parse_detail_html(detail_html, str(detail_url))
 
     def parse_detail_html(self, detail_html: str, detail_url: str) -> JobRecord:

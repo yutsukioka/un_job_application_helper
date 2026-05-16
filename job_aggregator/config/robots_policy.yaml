@@ -149,6 +149,10 @@ domains:
     honor_robots_txt: false
     min_delay_seconds: 2.0
 
+  api.smartrecruiters.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+
   careers.cern:
     honor_robots_txt: false
     min_delay_seconds: 2.0

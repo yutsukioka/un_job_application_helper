@@ -93,6 +93,35 @@ def test_transient_http_5xx_retries_then_succeeds():
     assert opener.calls == 2
 
 
+def test_retry_attempts_respect_min_delay(monkeypatch):
+    now = [100.0]
+    sleeps = []
+
+    def fake_monotonic():
+        return now[0]
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr("jobagg.http.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("jobagg.http.time.sleep", fake_sleep)
+    client = JobAggHTTPClient(
+        max_retries=1,
+        backoff_base_seconds=0,
+        jitter_ratio=0,
+        min_delay_seconds=2,
+    )
+    opener = ServerErrorThenSuccessOpener()
+    client._opener = opener
+
+    response = client.get("https://example.org")
+
+    assert response.text == "ok"
+    assert opener.calls == 2
+    assert sleeps == [2]
+
+
 def test_http_403_is_not_retried():
     client = JobAggHTTPClient(max_retries=3, backoff_base_seconds=0, jitter_ratio=0)
     opener = ForbiddenOpener()

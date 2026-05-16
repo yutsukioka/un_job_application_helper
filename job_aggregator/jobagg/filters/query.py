@@ -221,7 +221,6 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
     _add_in_clause(clauses, params, "c.work_modality", request.work_modalities)
     _add_in_clause(clauses, params, "c.unv_category", request.unv_categories)
     _add_in_clause(clauses, params, "c.unv_volunteer_type", request.unv_volunteer_types)
-    _add_in_clause(clauses, params, "c.region", request.regions)
     _add_date_clause(clauses, params, "j.closes_at", ">=", request.closing_date_from)
     _add_date_clause(clauses, params, "j.closes_at", "<=", request.closing_date_to)
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
@@ -449,6 +448,8 @@ def _matched_location(
         _add_in_clause(clauses, params, "city_key", city_keys)
     if countries:
         _add_in_clause(clauses, params, "country_iso3", countries)
+    if request.regions:
+        _add_in_clause(clauses, params, "region", request.regions)
     if request.location_types:
         _add_in_clause(clauses, params, "location_type", request.location_types)
     if not request.include_low_confidence:
@@ -462,7 +463,7 @@ def _matched_location(
         LIMIT 1
     """
     row = conn.execute(query, tuple(params)).fetchone()
-    if row is None and (city_keys or countries):
+    if row is None and (city_keys or countries or request.regions):
         return None
     if row is None:
         row = conn.execute(

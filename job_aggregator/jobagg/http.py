@@ -58,14 +58,11 @@ class JobAggHTTPClient:
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
     ) -> HttpResponse:
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < self.min_delay_seconds:
-            time.sleep(self._with_jitter(self.min_delay_seconds - elapsed))
-
         request_headers = {"User-Agent": self.user_agent, "Accept": "*/*"}
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         for attempt in range(self.max_retries + 1):
+            self._respect_min_delay()
             try:
                 with self._opener.open(request, timeout=self.timeout_seconds) as response:
                     body = response.read().decode(response.headers.get_content_charset() or "utf-8")
@@ -82,7 +79,8 @@ class JobAggHTTPClient:
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_seconds(exc.headers.get("Retry-After"))
                     delay = retry_after or self.backoff_base_seconds * (2**attempt)
-                    time.sleep(self._with_jitter(delay))
+                    if delay > 0:
+                        time.sleep(self._with_jitter(delay))
                     continue
                 raise HTTPError(
                     f"{method} {url} failed with HTTP {exc.code}: {response_body[:300]}"
@@ -91,11 +89,20 @@ class JobAggHTTPClient:
                 self._last_request_at = time.monotonic()
                 if _is_transient_url_error(exc) and attempt < self.max_retries:
                     delay = self.backoff_base_seconds * (2**attempt)
-                    time.sleep(self._with_jitter(delay))
+                    if delay > 0:
+                        time.sleep(self._with_jitter(delay))
                     continue
                 raise HTTPError(f"{method} {url} failed: {exc.reason}") from exc
 
         raise HTTPError(f"{method} {url} failed after retries")
+
+    def _respect_min_delay(self) -> None:
+        if self.min_delay_seconds <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        remaining = self.min_delay_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
     def _with_jitter(self, delay: float) -> float:
         if delay <= 0 or self.jitter_ratio <= 0:
