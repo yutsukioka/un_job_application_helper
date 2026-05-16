@@ -488,6 +488,19 @@ def handle_search(args: argparse.Namespace) -> int:
     if getattr(args, "explain", False):
         for result in response.results:
             result["filter_evaluation"] = explain_job_match(db, result["job_key"], request)["checks"]
+    score_path = getattr(args, "score_against", None)
+    min_score = getattr(args, "min_score", None)
+    if score_path or min_score is not None:
+        from jobagg.scoring import load_strategy_signals, score_jobs
+
+        if not score_path:
+            raise SystemExit("--min-score requires --score-against")
+        signals = load_strategy_signals(score_path)
+        scored = score_jobs(response.results, signals)
+        if min_score is not None:
+            scored = [job for job in scored if job["score"] >= min_score]
+        scored.sort(key=lambda job: job["score"], reverse=True)
+        response.results = scored
     if args.format == "json":
         payload = json.dumps(response_to_dict(response), indent=2, ensure_ascii=True)
         _write_text(payload + "\n", args.output)
@@ -886,6 +899,26 @@ def _add_search_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["closing_date_asc", "closing_date_desc", "posted_date_desc"],
         default="closing_date_asc",
         help="Sort order.",
+    )
+    parser.add_argument(
+        "--score-against",
+        dest="score_against",
+        default=None,
+        help=(
+            "Path to a strategy report (markdown) or signals JSON. When set, "
+            "results are scored against the contained terms / CCOG codes and "
+            "annotated with `score` and `score_reasons` fields."
+        ),
+    )
+    parser.add_argument(
+        "--min-score",
+        dest="min_score",
+        type=float,
+        default=None,
+        help=(
+            "Drop results whose strategy fit score is below this threshold "
+            "(0..1). Implies --score-against."
+        ),
     )
 
 

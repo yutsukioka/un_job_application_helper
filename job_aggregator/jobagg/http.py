@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import errno
+import gzip
 import json
 import random
 import socket
 import time
 import urllib.error
 import urllib.request
+import zlib
 from http.cookiejar import CookieJar
 from dataclasses import dataclass
 from typing import Any
+
+try:  # pragma: no cover - optional dependency
+    import brotli  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - exercised only when brotli is missing
+    brotli = None
 
 
 @dataclass(slots=True)
@@ -58,24 +65,38 @@ class JobAggHTTPClient:
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
     ) -> HttpResponse:
-        request_headers = {"User-Agent": self.user_agent, "Accept": "*/*"}
+        request_headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "*/*",
+            "Accept-Encoding": _default_accept_encoding(),
+        }
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         for attempt in range(self.max_retries + 1):
             self._respect_min_delay()
             try:
                 with self._opener.open(request, timeout=self.timeout_seconds) as response:
-                    body = response.read().decode(response.headers.get_content_charset() or "utf-8")
+                    raw_bytes = response.read()
+                    decoded_bytes = _decode_content_encoding(
+                        raw_bytes,
+                        response.headers.get("Content-Encoding"),
+                    )
+                    charset = response.headers.get_content_charset() or "utf-8"
+                    text = decoded_bytes.decode(charset, errors="replace")
                     self._last_request_at = time.monotonic()
                     return HttpResponse(
                         url=response.geturl(),
                         status_code=response.status,
                         headers=dict(response.headers.items()),
-                        text=body,
+                        text=text,
                     )
             except urllib.error.HTTPError as exc:
                 self._last_request_at = time.monotonic()
-                response_body = exc.read().decode("utf-8", errors="replace")
+                error_bytes = _decode_content_encoding(
+                    exc.read(),
+                    exc.headers.get("Content-Encoding") if exc.headers else None,
+                )
+                response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                     retry_after = _retry_after_seconds(exc.headers.get("Retry-After"))
                     delay = retry_after or self.backoff_base_seconds * (2**attempt)
@@ -183,3 +204,39 @@ def _is_transient_url_error(exc: urllib.error.URLError) -> bool:
         return True
     text = str(reason).lower()
     return any(marker in text for marker in _TRANSIENT_REASON_MARKERS)
+
+
+def _default_accept_encoding() -> str:
+    encodings = ["gzip", "deflate"]
+    if brotli is not None:
+        encodings.append("br")
+    return ", ".join(encodings)
+
+
+def _decode_content_encoding(data: bytes, encoding: str | None) -> bytes:
+    """Decode an HTTP response body according to its Content-Encoding header.
+
+    Returns the original bytes when the encoding is missing, ``identity``, or
+    cannot be decoded. ``urllib`` does not transparently decode response
+    bodies, so adapters used to receive raw gzip bytes whenever a CDN
+    compressed the payload regardless of ``Accept-Encoding``.
+    """
+
+    if not data or not encoding:
+        return data
+    encoding = encoding.strip().lower()
+    if encoding in {"", "identity"}:
+        return data
+    try:
+        if encoding == "gzip":
+            return gzip.decompress(data)
+        if encoding == "deflate":
+            try:
+                return zlib.decompress(data)
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS)
+        if encoding == "br" and brotli is not None:
+            return brotli.decompress(data)
+    except (OSError, zlib.error, ValueError):
+        return data
+    return data

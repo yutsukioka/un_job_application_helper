@@ -89,3 +89,4 @@ class VacancySearchResponse:
     offset: int
     results: list[dict[str, Any]]
     facets: dict[str, dict[str, int]] = field(default_factory=dict)
+    unclassified_count: int = 0

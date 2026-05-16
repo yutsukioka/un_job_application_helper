@@ -39,16 +39,61 @@ def _is_past_closing_date(value: str | None) -> bool:
 class JobDatabase:
     def __init__(self, path: str | Path = "jobagg.sqlite3") -> None:
         self.path = Path(path)
+        self._persistent_conn: sqlite3.Connection | None = None
+
+    @staticmethod
+    def _apply_pragmas(conn: sqlite3.Connection) -> None:
+        # journal_mode=WAL improves concurrent read/write throughput; the other
+        # pragmas are safe defaults for an embedded single-writer workload.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
 
     @contextmanager
     def connect(self):
+        if self._persistent_conn is not None:
+            # Reuse the connection opened by ``connection_scope`` so a batch
+            # operation does not pay the open/close + WAL checkpoint cost per
+            # row and so all writes share one transaction.
+            yield self._persistent_conn
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         try:
+            self._apply_pragmas(conn)
             yield conn
             conn.commit()
         finally:
+            conn.close()
+
+    @contextmanager
+    def connection_scope(self):
+        """Open one connection and reuse it for nested ``connect()`` calls.
+
+        Useful for batch operations such as ``upsert_jobs`` where the previous
+        per-call open/close cycle dominated runtime. Commits on success and
+        rolls back on exception.
+        """
+
+        if self._persistent_conn is not None:
+            # Already inside a scope; just yield the existing connection.
+            yield self._persistent_conn
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        self._apply_pragmas(conn)
+        self._persistent_conn = conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._persistent_conn = None
             conn.close()
 
     def initialize(self) -> None:
@@ -420,8 +465,9 @@ class JobDatabase:
 
     def upsert_jobs(self, jobs: Iterable[JobRecord]) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0, "unchanged": 0}
-        for job in jobs:
-            counts[self.upsert_job(job)] += 1
+        with self.connection_scope():
+            for job in jobs:
+                counts[self.upsert_job(job)] += 1
         return counts
 
     def add_change_event(self, event: ChangeEvent, conn: sqlite3.Connection | None = None) -> None:

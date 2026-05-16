@@ -139,6 +139,22 @@ def search_collected_jobs(
             tuple([*params, request.limit, request.offset]),
         ).fetchall()
         results = [_search_row_to_result(conn, row, request) for row in rows]
+        unclassified_clauses, unclassified_params = _jobs_only_conditions(request)
+        unclassified_where = (
+            " WHERE " + " AND ".join(unclassified_clauses)
+            if unclassified_clauses
+            else ""
+        )
+        unclassified_query = f"""
+            SELECT COUNT(*) AS count
+            FROM jobs j
+            LEFT JOIN vacancy_classifications c ON c.vacancy_id = j.job_key
+            {unclassified_where}
+            { "AND" if unclassified_where else "WHERE" } c.vacancy_id IS NULL
+        """
+        unclassified_count = int(
+            conn.execute(unclassified_query, tuple(unclassified_params)).fetchone()["count"]
+        )
     facets = search_facet_counts(db, request) if include_facets else {}
     return VacancySearchResponse(
         total=total,
@@ -146,6 +162,7 @@ def search_collected_jobs(
         offset=request.offset,
         results=results,
         facets=facets,
+        unclassified_count=unclassified_count,
     )
 
 
@@ -233,6 +250,34 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
     if location_clause:
         clauses.append(location_clause)
         params.extend(location_params)
+    return clauses, params
+
+
+def _jobs_only_conditions(request: VacancySearchRequest) -> tuple[list[str], list[Any]]:
+    """Return clauses that depend only on the ``jobs`` table.
+
+    Used to count rows that satisfy the request scope but have no
+    classification row, so the search response can warn the user that
+    classification is incomplete.
+    """
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if request.status:
+        _add_in_clause(
+            clauses, params, "j.status", [status.casefold() for status in request.status]
+        )
+    _add_in_clause(clauses, params, "j.org_id", request.organizations)
+    _add_in_clause(clauses, params, "j.source_id", request.source_ids)
+    _add_in_clause(clauses, params, "j.ats_family", request.ats_families)
+    _add_date_clause(clauses, params, "j.closes_at", ">=", request.closing_date_from)
+    _add_date_clause(clauses, params, "j.closes_at", "<=", request.closing_date_to)
+    _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
+    _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
+    if request.text:
+        clauses.append("(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?)")
+        needle = f"%{request.text}%"
+        params.extend([needle, needle, needle])
     return clauses, params
 
 

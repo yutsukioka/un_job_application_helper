@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import urllib.robotparser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -48,7 +51,7 @@ def load_policy(path: str | Path | None = None) -> RobotsPolicy:
         str(host).lower(): dict(config or {})
         for host, config in (data.get("domains") or {}).items()
     }
-    return RobotsPolicy(
+    policy = RobotsPolicy(
         user_agent=str(default.get("user_agent", RobotsPolicy.user_agent)),
         honor_robots_txt=bool(default.get("honor_robots_txt", True)),
         request_timeout_seconds=int(default.get("request_timeout_seconds", 30)),
@@ -57,6 +60,37 @@ def load_policy(path: str | Path | None = None) -> RobotsPolicy:
         max_jobs_per_source=int(default.get("max_jobs_per_source", 1000)),
         domains=domains,
     )
+    for warning in validate_policy(policy):
+        _LOGGER.warning("robots policy: %s", warning)
+    return policy
+
+
+def validate_policy(policy: RobotsPolicy) -> list[str]:
+    """Return human-readable warnings for risky robots-policy configurations.
+
+    Currently flags any domain (or the global default) that disables
+    ``honor_robots_txt`` without recording an ``override_reason``. Operators
+    can use these warnings to keep an audit trail of why scrapes proceed in
+    the face of a blanket ``Disallow`` from a portal.
+    """
+
+    warnings: list[str] = []
+    if not policy.honor_robots_txt and not getattr(policy, "_default_override_reason", None):
+        # Default override is recorded separately; we leave the global default
+        # alone here unless the YAML loader populated an attribute.
+        warnings.append(
+            "default policy disables honor_robots_txt without override_reason"
+        )
+    for host, config in policy.domains.items():
+        honors = config.get("honor_robots_txt", True)
+        if honors:
+            continue
+        reason = str(config.get("override_reason") or "").strip()
+        if not reason:
+            warnings.append(
+                f"domain {host!r} disables honor_robots_txt without override_reason"
+            )
+    return warnings
 
 
 class RobotsChecker:
@@ -75,7 +109,19 @@ class RobotsChecker:
             parser.set_url(urljoin(root, "/robots.txt"))
             try:
                 parser.read()
-            except OSError:
-                return False
+            except OSError as exc:
+                # A network failure fetching robots.txt is not the same as a
+                # disallow rule. Logging and permitting the request avoids
+                # silently aborting a sync because the portal hiccupped, but
+                # we still record the event so operators can investigate.
+                _LOGGER.warning(
+                    "Could not read robots.txt at %s (%s); allowing request",
+                    urljoin(root, "/robots.txt"),
+                    exc,
+                )
+                # Cache an empty parser so we don't retry on every URL of the
+                # same host within this run; an empty parser permits all paths.
+                self._parsers[root] = parser
+                return True
             self._parsers[root] = parser
         return parser.can_fetch(self.policy.user_agent, url)
