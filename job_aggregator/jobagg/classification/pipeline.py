@@ -50,11 +50,39 @@ def classify_database(
     source_id: str | None = None,
     status: str | None = None,
     version: str = CLASSIFICATION_VERSION,
+    force: bool = False,
 ) -> int:
+    # Pre-compute existing (vacancy_id -> source_hash) for the current
+    # classification version so we can skip rows whose underlying job
+    # content has not changed. ``force=True`` (e.g. ``--reclassify-all``)
+    # bypasses this and re-classifies every row.
+    existing_state: dict[str, str | None] = (
+        {} if force else db.classification_state(version)
+    )
     count = 0
+    skipped = 0
     for row in db.iter_jobs(source_id=source_id, status=status):
+        current_hash = row.get("normalized_hash")
+        previous_hash = existing_state.get(row["job_key"])
+        if (
+            not force
+            and current_hash is not None
+            and previous_hash is not None
+            and previous_hash == current_hash
+        ):
+            skipped += 1
+            continue
         classify_and_store(row, db, version=version)
         count += 1
+    if skipped:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "classify_database: classified=%s skipped_unchanged=%s version=%s",
+            count,
+            skipped,
+            version,
+        )
     return count
 
 
@@ -69,7 +97,7 @@ def classify_and_store(
     overrides = db.classification_overrides(result.vacancy_id)
     result = apply_overrides(result, overrides)
     locations = apply_location_overrides(locations, result, overrides)
-    db.upsert_vacancy_classification(result)
+    db.upsert_vacancy_classification(result, source_hash=vacancy.get("normalized_hash"))
     db.replace_vacancy_locations(result.vacancy_id, locations)
     return result
 

@@ -21,7 +21,7 @@ class FakeResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
+    def read(self, amt=-1):
         return b"ok"
 
     def geturl(self):

@@ -317,12 +317,46 @@ def _add_in_clause(
     column: str,
     values: list[str],
 ) -> None:
+    if column not in _ALLOWED_IN_COLUMNS:
+        # ``column`` is interpolated directly into SQL, so it must be a
+        # vetted internal literal. The allowlist is module-level and easy
+        # to grep/audit; reject anything else loudly.
+        raise ValueError(f"Refusing to build IN clause for unknown column: {column!r}")
     cleaned = [value for value in values if value not in (None, "")]
     if not cleaned:
         return
     placeholders = ", ".join("?" for _ in cleaned)
     clauses.append(f"{column} IN ({placeholders})")
     params.extend(cleaned)
+
+
+# Columns currently passed to ``_add_in_clause``. Keep alphabetised so the
+# diff is easy to review when a new filter facet is added.
+_ALLOWED_IN_COLUMNS: frozenset[str] = frozenset(
+    {
+        "c.contract_category",
+        "c.grade_code",
+        "c.grade_family",
+        "c.grade_system",
+        "c.national_international",
+        "c.ccog_primary_code",
+        "c.unv_category",
+        "c.unv_volunteer_type",
+        "c.work_modality",
+        "city_key",
+        "country_iso3",
+        "j.ats_family",
+        "j.org_id",
+        "j.source_id",
+        "j.status",
+        "l.city_key",
+        "l.country_iso3",
+        "l.location_type",
+        "l.region",
+        "location_type",
+        "region",
+    }
+)
 
 
 def _add_ccog_family_clause(
@@ -352,15 +386,31 @@ def _add_date_clause(
     if value is None:
         return
     normalized = value.isoformat() if isinstance(value, date) else value
+    # We previously wrapped both sides in ``date(...)`` to coerce stored
+    # ISO-8601 timestamps to plain dates. That defeats any index on
+    # ``closes_at`` / ``posted_at``. Stored values sort correctly as strings,
+    # so we use plain comparisons and only translate date-only upper bounds
+    # to the start of the next day so the comparison remains inclusive.
     if _is_date_only(normalized):
-        clauses.append(f"date({column}) {operator} date(?)")
-    else:
-        clauses.append(f"{column} {operator} ?")
+        if operator in ("<=", "<"):
+            normalized = _next_day_iso(normalized) + "T00:00:00+00:00"
+            clauses.append(f"{column} < ?")
+            params.append(normalized)
+            return
+        normalized = normalized + "T00:00:00+00:00"
+    clauses.append(f"{column} {operator} ?")
     params.append(normalized)
 
 
 def _is_date_only(value: str) -> bool:
     return len(value) == 10 and value[4] == "-" and value[7] == "-"
+
+
+def _next_day_iso(value: str) -> str:
+    from datetime import date as _date, timedelta
+
+    parsed = _date.fromisoformat(value)
+    return (parsed + timedelta(days=1)).isoformat()
 
 
 def _normalize_country_iso3(value: str) -> str | None:

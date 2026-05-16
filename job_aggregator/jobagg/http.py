@@ -36,6 +36,16 @@ class HTTPError(RuntimeError):
     pass
 
 
+class ResponseTooLargeError(HTTPError):
+    """Raised when a response exceeds the configured byte cap."""
+
+
+# 50 MiB. Listing JSON and HTML pages from supported ATSs are typically
+# under 5 MiB; this cap exists to prevent a misconfigured detail URL from
+# pulling a large binary into memory and persisting it as ``description``.
+_DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+
+
 class JobAggHTTPClient:
     def __init__(
         self,
@@ -46,6 +56,7 @@ class JobAggHTTPClient:
         max_retries: int = 3,
         backoff_base_seconds: float = 1.0,
         jitter_ratio: float = 0.25,
+        max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
@@ -53,6 +64,7 @@ class JobAggHTTPClient:
         self.max_retries = max_retries
         self.backoff_base_seconds = backoff_base_seconds
         self.jitter_ratio = jitter_ratio
+        self.max_response_bytes = int(max_response_bytes)
         self._last_request_at = 0.0
         self._cookie_jar = CookieJar()
         self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._cookie_jar))
@@ -76,7 +88,22 @@ class JobAggHTTPClient:
             self._respect_min_delay()
             try:
                 with self._opener.open(request, timeout=self.timeout_seconds) as response:
-                    raw_bytes = response.read()
+                    declared = response.headers.get("Content-Length")
+                    if declared is not None:
+                        try:
+                            if int(declared) > self.max_response_bytes:
+                                raise ResponseTooLargeError(
+                                    f"Response from {url} declares {declared} bytes, exceeds cap {self.max_response_bytes}"
+                                )
+                        except ValueError:
+                            pass
+                    # Read at most max_response_bytes + 1 so we can detect
+                    # over-cap responses that omitted Content-Length.
+                    raw_bytes = response.read(self.max_response_bytes + 1)
+                    if len(raw_bytes) > self.max_response_bytes:
+                        raise ResponseTooLargeError(
+                            f"Response from {url} exceeded cap of {self.max_response_bytes} bytes"
+                        )
                     decoded_bytes = _decode_content_encoding(
                         raw_bytes,
                         response.headers.get("Content-Encoding"),

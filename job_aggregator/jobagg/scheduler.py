@@ -159,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="ccog-filter-v1",
         help="Classification version label to store.",
     )
+    classify.add_argument(
+        "--reclassify-all",
+        action="store_true",
+        help="Re-classify every job, even if its source content is unchanged since the last run.",
+    )
     classify.set_defaults(handler=handle_classify)
 
     audit = subcommands.add_parser(
@@ -444,6 +449,7 @@ def handle_classify(args: argparse.Namespace) -> int:
         source_id=args.source_id,
         status=args.status,
         version=args.version,
+        force=getattr(args, "reclassify_all", False),
     )
     LOGGER.info("Classified %s jobs", count)
     return 0

@@ -126,6 +126,12 @@ class JobDatabase:
                 CREATE INDEX IF NOT EXISTS idx_jobs_source_status
                     ON jobs (source_id, status);
 
+                CREATE INDEX IF NOT EXISTS idx_jobs_closes_at
+                    ON jobs (closes_at);
+
+                CREATE INDEX IF NOT EXISTS idx_jobs_posted_at
+                    ON jobs (posted_at);
+
                 CREATE TABLE IF NOT EXISTS change_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_id TEXT NOT NULL,
@@ -313,6 +319,14 @@ class JobDatabase:
                 "jobs",
                 "missing_run_count",
                 "INTEGER NOT NULL DEFAULT 0",
+            )
+            # Hash of the underlying job at the time of classification, so a
+            # re-run can skip rows whose source content has not changed.
+            self._ensure_column(
+                conn,
+                "vacancy_classifications",
+                "source_hash",
+                "TEXT",
             )
 
     def upsert_job(self, job: JobRecord) -> str:
@@ -773,10 +787,16 @@ class JobDatabase:
                 tuple(row[column] for column in columns),
             )
 
-    def upsert_vacancy_classification(self, classification: Any) -> None:
+    def upsert_vacancy_classification(
+        self,
+        classification: Any,
+        *,
+        source_hash: str | None = None,
+    ) -> None:
         from jobagg.classification.pipeline import classification_to_row
 
         row = classification_to_row(classification)
+        row["source_hash"] = source_hash
         columns = list(row)
         placeholders = ", ".join("?" for _ in columns)
         updates = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "vacancy_id")
@@ -789,6 +809,24 @@ class JobDatabase:
                 """,
                 tuple(row[column] for column in columns),
             )
+
+    def classification_state(self, version: str) -> dict[str, str | None]:
+        """Return ``{vacancy_id: source_hash}`` for rows at ``version``.
+
+        Used by ``classify_database`` to skip vacancies whose source content
+        has not changed since they were last classified.
+        """
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT vacancy_id, source_hash
+                FROM vacancy_classifications
+                WHERE classification_version = ?
+                """,
+                (version,),
+            ).fetchall()
+        return {row["vacancy_id"]: row["source_hash"] for row in rows}
 
     def replace_vacancy_locations(self, vacancy_id: str, locations: Iterable[Any]) -> None:
         from jobagg.classification.pipeline import location_to_row
@@ -912,4 +950,11 @@ class JobDatabase:
                     _dt(datetime.now(tz=UTC)),
                     created_by,
                 ),
+            )
+            # Invalidate the cached classification source_hash for this
+            # vacancy so the next ``classify_database`` run re-applies the
+            # new override instead of skipping the row as unchanged.
+            conn.execute(
+                "UPDATE vacancy_classifications SET source_hash = NULL WHERE vacancy_id = ?",
+                (vacancy_id,),
             )
