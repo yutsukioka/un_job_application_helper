@@ -28,6 +28,7 @@ from jobagg.filters.saved_searches import (
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
 from jobagg.models import OrganizationSource
 from jobagg.observability.logging import configure_logging, get_logger
+from jobagg.ops_check import collect_ops_check, ops_check_to_markdown
 from jobagg.pipelines.bundles import (
     publish_canonical_results,
     source_output_paths,
@@ -205,6 +206,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit.add_argument("--output", help="Optional output file path. Defaults to stdout.")
     audit.set_defaults(handler=handle_audit_classification)
+
+    ops = subcommands.add_parser(
+        "ops-check",
+        help="Write a Markdown operational health report for collected bundles.",
+    )
+    ops.add_argument("--all", action="store_true", help="Inspect all *_jobs.sqlite3 bundle databases.")
+    ops.add_argument("--output", help="Markdown output path. Defaults to stdout.")
+    ops.add_argument(
+        "--output-dir",
+        help="Bundle output directory. Defaults to the parent directory of --output when provided.",
+    )
+    ops.set_defaults(handler=handle_ops_check)
 
     filter_cmd = subcommands.add_parser("filter", help="Filter classified vacancies.")
     _add_filter_arguments(filter_cmd)
@@ -513,6 +526,26 @@ def handle_audit_classification(args: argparse.Namespace) -> int:
         _write_text(audit_to_markdown(audit), args.output)
         return 0
     _write_text(json.dumps(audit, indent=2, ensure_ascii=True) + "\n", args.output)
+    return 0
+
+
+def handle_ops_check(args: argparse.Namespace) -> int:
+    output_dir = args.output_dir
+    if output_dir is None and args.output:
+        output_dir = str(Path(args.output).parent)
+    report = collect_ops_check(
+        db_path=args.db,
+        output_dir=output_dir,
+        all_bundles=args.all,
+    )
+    _write_text(ops_check_to_markdown(report), args.output)
+    if args.output:
+        LOGGER.info("Wrote operational check report to %s", args.output)
+    if report.fail_count:
+        LOGGER.error("Operational check found %s failure(s)", report.fail_count)
+        return 1
+    if report.warn_count:
+        LOGGER.warning("Operational check found %s warning(s)", report.warn_count)
     return 0
 
 
