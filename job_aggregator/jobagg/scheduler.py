@@ -36,6 +36,10 @@ from jobagg.pipelines.bundles import (
     write_source_bundle,
     write_summary,
 )
+from jobagg.pipelines.consolidation import (
+    consolidate_bundle_databases,
+    write_organization_summary,
+)
 from jobagg.pipelines.exports import export_jobs
 from jobagg.pipelines.sync_source import (
     load_sources,
@@ -142,6 +146,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not archive overwritten, duplicate, or noncanonical output files.",
     )
     bundles.set_defaults(handler=handle_sync_bundles)
+
+    consolidate = subcommands.add_parser(
+        "consolidate-bundles",
+        help="Consolidate existing per-organization bundles into all_jobs outputs without fetching.",
+    )
+    consolidate.add_argument(
+        "--output-dir",
+        default="output",
+        help="Directory containing existing *_jobs.sqlite3 bundles.",
+    )
+    consolidate.add_argument(
+        "--slug",
+        default="all",
+        help="Output slug for consolidated files. Defaults to all.",
+    )
+    consolidate.add_argument(
+        "--summary-output",
+        help="Optional CSV path for per-organization current/history counts.",
+    )
+    consolidate.set_defaults(handler=handle_consolidate_bundles)
 
     export = subcommands.add_parser("export", help="Export persisted jobs.")
     export.add_argument("--format", choices=["json", "csv"], default="json", help="Export format.")
@@ -427,6 +451,28 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
         LOGGER.info("Archived previous/noncanonical output files at %s", archive_dir)
     LOGGER.info("Published %s canonical organization bundles to %s", len(selected), output_dir)
     return 1 if any(result.sync_result.errors for result in selected) else 0
+
+
+def handle_consolidate_bundles(args: argparse.Namespace) -> int:
+    result = consolidate_bundle_databases(
+        output_dir=args.output_dir,
+        slug=args.slug,
+    )
+    if args.summary_output:
+        write_organization_summary(result, args.summary_output)
+        LOGGER.info("Wrote organization summary to %s", args.summary_output)
+    LOGGER.info(
+        "Consolidated %s source databases into %s",
+        len(result.source_db_paths),
+        result.db_path,
+    )
+    LOGGER.info("Current open jobs: %s", result.current_count)
+    LOGGER.info("History jobs: %s", result.history_count)
+    LOGGER.info("Current JSON: %s", result.current_json_path)
+    LOGGER.info("Current CSV: %s", result.current_csv_path)
+    LOGGER.info("History JSON: %s", result.history_json_path)
+    LOGGER.info("History CSV: %s", result.history_csv_path)
+    return 0
 
 
 def handle_export(args: argparse.Namespace) -> int:

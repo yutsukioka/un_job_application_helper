@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from jobagg.adapters.base import JobAdapter, register_adapter
@@ -6,12 +7,14 @@ from jobagg.models import OrganizationSource, SyncResult
 from jobagg.normalize import build_job
 from jobagg.pipelines.bundles import (
     BundleResult,
+    _copy_sqlite_seed_database,
     publish_canonical_results,
     source_output_paths,
     source_output_slug,
     validate_bundle_dir,
     write_source_bundle,
 )
+from jobagg.pipelines.consolidation import consolidate_bundle_databases
 from jobagg.robots import RobotsPolicy
 from jobagg.scheduler import main
 
@@ -185,6 +188,25 @@ def test_write_source_bundle_seeds_existing_canonical_database(tmp_path):
     assert result.sync_result.unchanged == 1
 
 
+def test_sqlite_seed_copy_uses_backup_api_for_wal_state(tmp_path):
+    source_path = tmp_path / "seed.sqlite3"
+    target_path = tmp_path / "target.sqlite3"
+    with sqlite3.connect(source_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO sample (value) VALUES ('visible from wal')")
+        conn.commit()
+        assert source_path.with_name(f"{source_path.name}-wal").exists()
+
+        _copy_sqlite_seed_database(source_path, target_path)
+
+    with sqlite3.connect(target_path) as copied:
+        assert copied.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert copied.execute("SELECT value FROM sample").fetchone()[0] == "visible from wal"
+    assert not target_path.with_name(f"{target_path.name}-wal").exists()
+    assert not target_path.with_name(f"{target_path.name}-shm").exists()
+
+
 def test_sync_bundles_returns_error_for_any_missing_requested_source(tmp_path):
     config = tmp_path / "organizations.yaml"
     config.write_text(
@@ -214,6 +236,62 @@ sources:
     )
 
     assert exit_code == 1
+
+
+def test_consolidate_bundle_databases_writes_all_jobs_outputs(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    source_a = OrganizationSource(
+        id="org_a_workday",
+        name="Org A",
+        ats_family="workday",
+        base_url="https://example.org/a",
+        extra={"output_slug": "org_a"},
+    )
+    source_b = OrganizationSource(
+        id="org_b_taleo",
+        name="Org B",
+        ats_family="taleo",
+        base_url="https://example.org/b",
+        extra={"output_slug": "org_b"},
+    )
+
+    db_a = JobDatabase(output / "org_a_jobs.sqlite3")
+    db_a.initialize()
+    db_a.upsert_job(
+        build_job(
+            source_a,
+            title="Open Role A",
+            external_id="A1",
+            apply_url="https://example.org/a/A1",
+        )
+    )
+    db_b = JobDatabase(output / "org_b_jobs.sqlite3")
+    db_b.initialize()
+    db_b.upsert_job(
+        build_job(
+            source_b,
+            title="Closed Role B",
+            external_id="B1",
+            status="closed",
+            apply_url="https://example.org/b/B1",
+        )
+    )
+
+    result = consolidate_bundle_databases(output_dir=output)
+
+    assert result.current_count == 1
+    assert result.history_count == 2
+    assert result.status_counts == {"closed": 1, "open": 1}
+    assert result.db_path == output / "all_jobs.sqlite3"
+    assert (output / "all_jobs_current.csv").exists()
+    assert (output / "all_jobs_history.csv").exists()
+
+    current_rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
+    history_rows = json.loads((output / "all_jobs_history.json").read_text(encoding="utf-8"))
+
+    assert [row["title"] for row in current_rows] == ["Open Role A"]
+    assert sorted(row["title"] for row in history_rows) == ["Closed Role B", "Open Role A"]
 
 
 def _staged_result(tmp_path, *, source_id, slug, fetched):

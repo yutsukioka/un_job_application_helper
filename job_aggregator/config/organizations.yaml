@@ -83,6 +83,7 @@ sources:
       page_size: 20
       max_pages: 10
       fetch_details: false
+      allow_empty_source: true
 
   - id: wipo_taleo
     name: World Intellectual Property Organization
@@ -496,11 +497,13 @@ sources:
     extra:
       output_slug: icao
       site_number: CX_3001
+      expected_site_name: ICAO
       detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_3001/job/{job_id}
       fallback_listing_url: https://icaocareers.icao.int/careers
       oracle_dns_preflight: true
-      page_size: 25
+      page_size: 100
       max_pages: 12
+      max_detail_pages_per_run: 25
       fetch_details: false
 
   - id: paho_workday
@@ -523,14 +526,16 @@ sources:
     extra:
       output_slug: unfpa
       site_number: CX_2003
+      expected_site_name: UNFPA
       detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2003/job/{job_id}
       fallback_listing_url: https://www.unfpa.org/jobs
       fallback_parser: unfpa_official
       fallback_max_pages: 12
       oracle_dns_preflight: true
       fraud_warning: UNFPA does not charge application, processing, training, interviewing, testing, or other recruitment fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
-      page_size: 25
+      page_size: 100
       max_pages: 10
+      max_detail_pages_per_run: 25
       fetch_details: false
 
   - id: undp_oracle_hcm
@@ -541,15 +546,20 @@ sources:
     extra:
       output_slug: undp
       site_number: CX_1
+      expected_site_name: UNDP
       detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/{job_id}
       fallback_listing_url: https://jobs.undp.org/cj_view_jobs.cfm
       fallback_parser: undp_official
       fallback_max_pages: 1
       oracle_dns_preflight: true
       fraud_warning: UNDP does not charge recruitment-related fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
-      page_size: 25
+      page_size: 100
       max_pages: 12
+      max_detail_pages_per_run: 25
       fetch_details: false
+      request_timeout_seconds: 60
+      max_retries: 4
+      backoff_base_seconds: 2
 
   - id: unwomen_oracle_hcm
     name: UN Women
@@ -559,13 +569,18 @@ sources:
     extra:
       output_slug: unwomen
       site_number: CX_1001
+      expected_site_name: UN Women
       detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/{job_id}
       fallback_listing_url: https://www.unwomen.org/en/jobs/unwomen
       fallback_parser: generic_official
       oracle_dns_preflight: true
-      page_size: 25
+      page_size: 100
       max_pages: 10
+      max_detail_pages_per_run: 25
       fetch_details: false
+      request_timeout_seconds: 60
+      max_retries: 4
+      backoff_base_seconds: 2
 
   - id: wmo_oracle_hcm
     name: World Meteorological Organization
@@ -575,11 +590,13 @@ sources:
     extra:
       output_slug: wmo
       site_number: CX_5001
+      expected_site_name: WMO
       detail_url_template: https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_5001/job/{job_id}
       fallback_listing_url: https://wmo.int/jobs
       oracle_dns_preflight: true
-      page_size: 25
+      page_size: 100
       max_pages: 10
+      max_detail_pages_per_run: 25
       fetch_details: false
 
   - id: iom_oracle_hcm
@@ -634,6 +651,7 @@ sources:
       output_slug: unesco
       search_url: https://careers.unesco.org/search/?q=
       max_pages: 5
+      date_locale: EU
 
   - id: icrc_successfactors
     name: International Committee of the Red Cross
@@ -738,17 +756,26 @@ sources:
       search_url: https://career2.successfactors.eu/career?company=ctbtoprepa&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
       max_pages: 1
       fetch_details: false
+      allow_empty_source: true
 
   - id: icc_successfactors_legacy
     name: International Criminal Court
     ats_family: successfactors_legacy
-    base_url: https://career5.successfactors.eu
+    adapter: successfactors_legacy
+    base_url: https://career5.successfactors.eu/career?company=1657261P
     enabled: true
     extra:
       output_slug: icc
+      company_id: "1657261P"
+      locale: en_GB
+      fallback_locales:
+        - fr_FR
       search_url: https://career5.successfactors.eu/career?company=1657261P&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
+      primary_fetch_method: successfactors_xml
+      empty_policy: verified_empty_required
       max_pages: 1
       fetch_details: false
+      allow_empty_source: false
 
   - id: icddrb_custom_html
     name: icddr,b
@@ -772,6 +799,7 @@ sources:
       output_slug: ifad
       listing_url: https://job.ifad.org/psc/IFHRPRDE/CAREERS/JOBS/c/HRS_HRAM_FL.HRS_CG_SEARCH_FL.GBL?Page=HRS_APP_SCHJOB_FL&Action=U
       fetch_details: false
+      date_locale: US
 
   - id: imo_api
     name: International Maritime Organization
@@ -783,6 +811,7 @@ sources:
       api_url: https://recruit.imo.org/api/CurrentJobVacancies
       detail_url_template: https://recruit.imo.org/vacancies/{job_id}
       fetch_details: false
+      date_locale: EU
 
   - id: ipu_static_html
     name: Inter-Parliamentary Union
@@ -794,8 +823,25 @@ sources:
       output_slug: ipu
       listing_url: https://www.ipu.org/about-ipu/work-with-us/vacancies
       parser: public_links
-      job_link_selector_hint: /work-with-ipu/vacancies/
+      job_link_selector_hint: /work-with-us/vacancies/
       fetch_details: true
+      empty_policy:
+        mode: verified_structural_empty
+        required_page_markers:
+          - Vacancies
+          - Vacancies list
+          - IPU job application
+          - Roster
+        section_start_text: Vacancies list
+        section_end_any_text:
+          - IPU job application
+          - Roster
+        job_link_patterns:
+          - /about-ipu/work-with-us/vacancies/
+          - /vacancies/
+        ignore_link_text:
+          - IPU job application
+          - Roster
 
   - id: itcilo_custom_html
     name: International Training Centre of the ILO
@@ -811,6 +857,7 @@ sources:
         - /jobs/
         - /job/
       fetch_details: true
+      allow_empty_source: true
 
   - id: itlos_static_html
     name: International Tribunal for the Law of the Sea

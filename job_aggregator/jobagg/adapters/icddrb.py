@@ -129,12 +129,15 @@ def _csrf_token(html_text: str) -> str | None:
 def _vacancy_links(html_text: str, base_url: str) -> list[dict[str, str]]:
     links = []
     for match in re.finditer(
-        r"<a\b[^>]*href=[\"'](?P<href>[^\"']*vacancy-preview/(?P<id>\d+)[^\"']*)[\"'][^>]*>(?P<title>.*?)</a>",
+        r"<a\b[^>]*href=(?:[\"'](?P<quoted>[^\"']*vacancy-preview/(?P<quoted_id>\d+)[^\"']*)[\"']|"
+        r"(?P<bare>[^\s>]*vacancy-preview/(?P<bare_id>\d+)[^\s>]*))[^>]*>(?P<title>.*?)</a>",
         html_text,
         flags=re.IGNORECASE | re.DOTALL,
     ):
-        title = clean_html(match.group("title")) or f"icddr,b vacancy {match.group('id')}"
-        links.append({"href": urljoin(base_url, match.group("href")), "title": title})
+        href = match.group("quoted") or match.group("bare")
+        vacancy_id = match.group("quoted_id") or match.group("bare_id")
+        title = clean_html(match.group("title")) or f"icddr,b vacancy {vacancy_id}"
+        links.append({"href": urljoin(base_url, href), "title": title})
     return links
 
 

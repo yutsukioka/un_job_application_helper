@@ -109,8 +109,7 @@ def write_source_bundle(
     slug = source_output_slug(source)
     paths = source_output_paths(output_dir, file_slug or slug)
     if seed_db_path is not None and Path(seed_db_path).is_file() and not paths["db"].exists():
-        paths["db"].parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(seed_db_path, paths["db"])
+        _copy_sqlite_seed_database(Path(seed_db_path), paths["db"])
     db = JobDatabase(paths["db"])
     db.initialize()
     if selective_details:
@@ -141,6 +140,30 @@ def write_source_bundle(
         paths=paths,
         sync_result=result,
     )
+
+
+def _copy_sqlite_seed_database(source_path: Path, target_path: Path) -> None:
+    """Copy a SQLite seed using the backup API so WAL state is included."""
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_sqlite_artifacts(target_path)
+    try:
+        with sqlite3.connect(source_path) as source, sqlite3.connect(target_path) as target:
+            source.execute("PRAGMA busy_timeout=5000")
+            target.execute("PRAGMA busy_timeout=5000")
+            source.backup(target)
+            integrity = target.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError(
+                    f"seed backup integrity_check failed: {integrity[0] if integrity else 'no result'}"
+                )
+            target.execute("PRAGMA journal_mode=DELETE").fetchall()
+    except sqlite3.DatabaseError as exc:
+        _remove_sqlite_artifacts(target_path)
+        raise sqlite3.DatabaseError(
+            f"Failed to copy SQLite seed database {source_path} -> {target_path}: {exc}"
+        ) from exc
+    _remove_sqlite_sidecars(target_path)
 
 
 def export_bundle(db: JobDatabase, *, paths: dict[str, Path], source_id: str) -> None:
@@ -371,6 +394,25 @@ def _replace_file(source: Path, destination: Path, archive: Path | None) -> None
         archive_root.mkdir(parents=True, exist_ok=True)
         shutil.move(str(destination), _unique_path(archive_root / destination.name))
     source.replace(destination)
+
+
+def _remove_sqlite_artifacts(path: Path) -> None:
+    for artifact in (path, *_sqlite_sidecars(path)):
+        if artifact.exists():
+            artifact.unlink()
+
+
+def _remove_sqlite_sidecars(path: Path) -> None:
+    for artifact in _sqlite_sidecars(path):
+        if artifact.exists():
+            artifact.unlink()
+
+
+def _sqlite_sidecars(path: Path) -> tuple[Path, Path]:
+    return (
+        path.with_name(f"{path.name}-wal"),
+        path.with_name(f"{path.name}-shm"),
+    )
 
 
 def _unique_path(path: Path) -> Path:

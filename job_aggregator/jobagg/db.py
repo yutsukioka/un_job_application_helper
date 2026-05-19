@@ -11,11 +11,23 @@ from pathlib import Path
 from typing import Any
 
 from jobagg.hashing import ensure_job_hash, posting_fingerprint
-from jobagg.models import ChangeEvent, JobRecord, SyncResult
+from jobagg.models import ChangeEvent, JobRecord, SourceRunDiagnostics, SyncResult
 
 
 def _dt(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _bool_to_int(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    return int(bool(value))
+
+
+def _int_to_optional_bool(value: int | None) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -166,6 +178,39 @@ class JobDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_source_runs_source_observed
                     ON source_runs (source_id, observed_at);
+
+                CREATE TABLE IF NOT EXISTS source_run_diagnostics (
+                    source_run_id INTEGER PRIMARY KEY REFERENCES source_runs(id) ON DELETE CASCADE,
+                    source_id TEXT NOT NULL,
+                    adapter_version TEXT,
+                    fetch_method TEXT,
+                    platform_host TEXT,
+                    site_number TEXT,
+                    expected_site_name TEXT,
+                    observed_site_name TEXT,
+                    endpoint_family TEXT,
+                    http_status INTEGER,
+                    total_reported_by_source INTEGER,
+                    pages_fetched INTEGER,
+                    pagination_complete INTEGER,
+                    list_error_count INTEGER NOT NULL DEFAULT 0,
+                    detail_attempted INTEGER NOT NULL DEFAULT 0,
+                    detail_succeeded INTEGER NOT NULL DEFAULT 0,
+                    detail_failed INTEGER NOT NULL DEFAULT 0,
+                    detail_skipped INTEGER NOT NULL DEFAULT 0,
+                    empty_reason TEXT,
+                    zero_fetched_evidence TEXT NOT NULL DEFAULT '{}',
+                    observed_agency_counts TEXT NOT NULL DEFAULT '{}',
+                    observed_organization_counts TEXT NOT NULL DEFAULT '{}',
+                    count_delta_pct REAL,
+                    health_status TEXT,
+                    scope_validation_status TEXT,
+                    missing_transition_allowed INTEGER NOT NULL DEFAULT 0,
+                    observed_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_source_run_diag_source_observed
+                    ON source_run_diagnostics (source_id, observed_at);
 
                 CREATE TABLE IF NOT EXISTS vacancy_source_features (
                     vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
@@ -351,6 +396,24 @@ class JobDatabase:
                 "jobs",
                 "posting_fingerprint",
                 "TEXT",
+            )
+            self._ensure_column(
+                conn,
+                "source_run_diagnostics",
+                "detail_skipped",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                conn,
+                "source_run_diagnostics",
+                "observed_agency_counts",
+                "TEXT NOT NULL DEFAULT '{}'",
+            )
+            self._ensure_column(
+                conn,
+                "source_run_diagnostics",
+                "observed_organization_counts",
+                "TEXT NOT NULL DEFAULT '{}'",
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_posting_fingerprint "
@@ -674,11 +737,11 @@ class JobDatabase:
         *,
         observed_at: datetime | None = None,
         conn: sqlite3.Connection | None = None,
-    ) -> None:
+    ) -> int:
         observed_at = observed_at or datetime.now(tz=UTC)
 
-        def write(connection: sqlite3.Connection) -> None:
-            connection.execute(
+        def write(connection: sqlite3.Connection) -> int:
+            cursor = connection.execute(
                 """
                 INSERT INTO source_runs (
                     source_id, fetched, inserted, updated, unchanged, missing,
@@ -696,6 +759,101 @@ class JobDatabase:
                     result.closed,
                     json.dumps(result.errors, ensure_ascii=True),
                     _dt(observed_at),
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+            if result.diagnostics is not None:
+                result.diagnostics.observed_at = observed_at
+                self.add_source_run_diagnostics(run_id, result.diagnostics, conn=connection)
+            return run_id
+
+        if conn is not None:
+            return write(conn)
+        with self.connect() as owned_conn:
+            return write(owned_conn)
+
+    def add_source_run_diagnostics(
+        self,
+        source_run_id: int,
+        diagnostics: SourceRunDiagnostics,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        def write(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT INTO source_run_diagnostics (
+                    source_run_id, source_id, adapter_version, fetch_method, platform_host,
+                    site_number, expected_site_name, observed_site_name, endpoint_family,
+                    http_status, total_reported_by_source, pages_fetched,
+                    pagination_complete, list_error_count, detail_attempted,
+                    detail_succeeded, detail_failed, detail_skipped, empty_reason,
+                    zero_fetched_evidence, observed_agency_counts,
+                    observed_organization_counts, count_delta_pct, health_status,
+                    scope_validation_status,
+                    missing_transition_allowed, observed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_run_id) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    adapter_version = excluded.adapter_version,
+                    fetch_method = excluded.fetch_method,
+                    platform_host = excluded.platform_host,
+                    site_number = excluded.site_number,
+                    expected_site_name = excluded.expected_site_name,
+                    observed_site_name = excluded.observed_site_name,
+                    endpoint_family = excluded.endpoint_family,
+                    http_status = excluded.http_status,
+                    total_reported_by_source = excluded.total_reported_by_source,
+                    pages_fetched = excluded.pages_fetched,
+                    pagination_complete = excluded.pagination_complete,
+                    list_error_count = excluded.list_error_count,
+                    detail_attempted = excluded.detail_attempted,
+                    detail_succeeded = excluded.detail_succeeded,
+                    detail_failed = excluded.detail_failed,
+                    detail_skipped = excluded.detail_skipped,
+                    empty_reason = excluded.empty_reason,
+                    zero_fetched_evidence = excluded.zero_fetched_evidence,
+                    observed_agency_counts = excluded.observed_agency_counts,
+                    observed_organization_counts = excluded.observed_organization_counts,
+                    count_delta_pct = excluded.count_delta_pct,
+                    health_status = excluded.health_status,
+                    scope_validation_status = excluded.scope_validation_status,
+                    missing_transition_allowed = excluded.missing_transition_allowed,
+                    observed_at = excluded.observed_at
+                """,
+                (
+                    source_run_id,
+                    diagnostics.source_id,
+                    diagnostics.adapter_version,
+                    diagnostics.fetch_method,
+                    diagnostics.platform_host,
+                    diagnostics.site_number,
+                    diagnostics.expected_site_name,
+                    diagnostics.observed_site_name,
+                    diagnostics.endpoint_family,
+                    diagnostics.http_status,
+                    diagnostics.total_reported_by_source,
+                    diagnostics.pages_fetched,
+                    _bool_to_int(diagnostics.pagination_complete),
+                    diagnostics.list_error_count,
+                    diagnostics.detail_attempted,
+                    diagnostics.detail_succeeded,
+                    diagnostics.detail_failed,
+                    diagnostics.detail_skipped,
+                    diagnostics.empty_reason,
+                    json.dumps(diagnostics.zero_fetched_evidence, sort_keys=True, ensure_ascii=True),
+                    json.dumps(diagnostics.observed_agency_counts, sort_keys=True, ensure_ascii=True),
+                    json.dumps(
+                        diagnostics.observed_organization_counts,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                    ),
+                    diagnostics.count_delta_pct,
+                    diagnostics.health_status,
+                    diagnostics.scope_validation_status,
+                    int(bool(diagnostics.missing_transition_allowed)),
+                    _dt(diagnostics.observed_at),
                 ),
             )
 
@@ -717,6 +875,26 @@ class JobDatabase:
             for row in rows:
                 data = dict(row)
                 data["errors"] = json.loads(data.pop("errors_json") or "[]")
+                yield data
+
+    def iter_source_run_diagnostics(self, source_id: str | None = None) -> Iterable[dict[str, Any]]:
+        query = "SELECT * FROM source_run_diagnostics"
+        params = []
+        if source_id:
+            query += " WHERE source_id = ?"
+            params.append(source_id)
+        query += " ORDER BY observed_at, source_run_id"
+        with self.connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            for row in rows:
+                data = dict(row)
+                data["pagination_complete"] = _int_to_optional_bool(data["pagination_complete"])
+                data["missing_transition_allowed"] = bool(data["missing_transition_allowed"])
+                data["zero_fetched_evidence"] = json.loads(data["zero_fetched_evidence"] or "{}")
+                data["observed_agency_counts"] = json.loads(data["observed_agency_counts"] or "{}")
+                data["observed_organization_counts"] = json.loads(
+                    data["observed_organization_counts"] or "{}"
+                )
                 yield data
 
     def mark_missing(

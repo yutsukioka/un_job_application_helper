@@ -251,20 +251,30 @@ extra:
   fetch_details: false
 ```
 
-For Oracle HCM Candidate Experience sites, configure the `site_number` observed
-in the HAR. The adapter builds the public `recruitingCEJobRequisitions` query
-and paginates by offset:
+For Oracle HCM Candidate Experience sites, configure both the `site_number` and
+the expected site name. Multiple organizations can share the same Oracle host,
+so the adapter validates `siteSettings/{site_number}` before updating jobs,
+then paginates until the source-reported total is satisfied. A site can also
+host multiple agency scopes, so Oracle diagnostics record agency and
+organization facet counts separately from the stable `source_id`:
 
 ```yaml
 extra:
   site_number: CX_1001
-  page_size: 25
+  expected_site_name: UN Women
+  page_size: 100
+  max_detail_pages_per_run: 25
   fetch_details: false
 ```
 
-For SuccessFactors/RMK, the adapter supports three public listing patterns:
-JSON POST (`api_url`), static HTML listings (`search_url`), and RSS feeds
-(`rss_url`). Prefer HTML/RSS when the JSON endpoint is disallowed by robots.txt.
+`max_detail_pages_per_run` bounds selective detail enrichment during routine
+bundle runs. Listing fetches still complete and write jobs first; any remaining
+detail pages stay pending for later runs instead of blocking the source.
+
+For SuccessFactors/RMK, the adapter supports JSON POST (`api_url`), static HTML
+listings (`search_url`), RSS feeds (`rss_url`), and XML feed mode for legacy RCM
+sites that expose `career_ns=job_listing_summary&resultType=XML`. Treat zero-job
+results as valid only when the feed or page provides explicit empty evidence.
 
 For Avature portals such as UNOPS, configure the public `SearchJobs` page:
 

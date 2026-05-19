@@ -46,6 +46,7 @@ class OracleHCMAdapter(JobAdapter):
         api_url = str(api_url)
         if self._fallback_listing_url() and self._preflight_dns_enabled() and not _host_resolves(api_url):
             return self._fetch_fallback_jobs("dns_resolution_failed")
+        self._validate_site_settings()
         try:
             return self._fetch_paginated_jobs(api_url)
         except Exception as exc:
@@ -57,6 +58,11 @@ class OracleHCMAdapter(JobAdapter):
         page_size = _as_int(self.source.extra.get("page_size"), default=25)
         max_pages = _as_int(self.source.extra.get("max_pages"), default=25)
         fetch_details = _as_bool(self.source.extra.get("fetch_details"), default=False)
+        self.run_diagnostics.fetch_method = "oracle_ce"
+        self.run_diagnostics.endpoint_family = "oracle_ce"
+        self.run_diagnostics.scope_validation_status = (
+            self.run_diagnostics.scope_validation_status or "not_applicable"
+        )
 
         jobs: list[JobRecord] = []
         seen_keys: set[str] = set()
@@ -66,7 +72,9 @@ class OracleHCMAdapter(JobAdapter):
             page_url = self._page_url(api_url, limit=page_size, offset=offset)
             self.ensure_allowed(page_url)
             payload = self.context.http.get(page_url, headers=self._oracle_headers()).json()
+            self._record_scope_facets(payload)
             page_jobs = self.parse_jobs(payload)
+            self.run_diagnostics.pages_fetched = page + 1
             if not page_jobs:
                 break
             for job in page_jobs:
@@ -80,15 +88,20 @@ class OracleHCMAdapter(JobAdapter):
                 seen_keys.add(key)
                 jobs.append(job)
             total_count = _total_count(payload) or total_count
-            if total_count is not None and offset + page_size >= total_count:
+            self.run_diagnostics.total_reported_by_source = total_count
+            if total_count is not None and len(seen_keys) >= total_count:
                 break
+        if total_count is None:
+            self.run_diagnostics.pagination_complete = True
+        else:
+            self.run_diagnostics.pagination_complete = len(seen_keys) >= total_count
         return jobs
 
     def parse_jobs(self, payload: Any) -> list[JobRecord]:
         rows = _rows(payload)
         jobs = []
         for item in rows:
-            external_id = item.get("RequisitionNumber") or item.get("Id") or item.get("RequisitionId")
+            external_id = item.get("Id") or item.get("RequisitionNumber") or item.get("RequisitionId")
             apply_url = (
                 item.get("ExternalApplyUrl")
                 or item.get("ApplyURL")
@@ -107,10 +120,7 @@ class OracleHCMAdapter(JobAdapter):
                     or item.get("Organization")
                     or item.get("BusinessUnit")
                     or item.get("LegalEmployer"),
-                    employment_type=item.get("ContractType")
-                    or item.get("WorkerType")
-                    or item.get("JobType")
-                    or item.get("WorkplaceType"),
+                    employment_type=_contract_type(item),
                     posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
                     closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
                     apply_url=str(apply_url),
@@ -136,6 +146,49 @@ class OracleHCMAdapter(JobAdapter):
             return None
         base = self.source.base_url.rstrip("/")
         return f"{base}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+
+    def _validate_site_settings(self) -> None:
+        site_number = self.source.extra.get("site_number")
+        expected_site_name = self.source.extra.get("expected_site_name")
+        if not site_number and not expected_site_name:
+            return
+        if not site_number:
+            raise ValueError(f"{self.source.id} requires extra.site_number for Oracle CE site validation")
+        url = self._site_settings_url(str(site_number))
+        self.ensure_allowed(url)
+        payload = self.context.http.get(url, headers=self._oracle_headers()).json()
+        observed_site_number = _find_first_value(payload, ("siteNumber", "SiteNumber", "siteCode"))
+        observed_site_name = _find_first_value(payload, ("siteName", "SiteName", "name", "Name"))
+        self.run_diagnostics.site_number = str(site_number)
+        self.run_diagnostics.expected_site_name = str(expected_site_name) if expected_site_name else None
+        self.run_diagnostics.observed_site_name = str(observed_site_name) if observed_site_name else None
+        if observed_site_number and str(observed_site_number) != str(site_number):
+            self.run_diagnostics.scope_validation_status = "site_number_mismatch"
+            self.run_diagnostics.health_status = "issue"
+            raise RuntimeError(
+                f"{self.source.id}: Oracle site number mismatch "
+                f"expected {site_number}, observed {observed_site_number}"
+            )
+        if expected_site_name and observed_site_name and not _site_name_matches(
+            str(expected_site_name),
+            str(observed_site_name),
+        ):
+            self.run_diagnostics.scope_validation_status = "site_name_mismatch"
+            self.run_diagnostics.health_status = "issue"
+            raise RuntimeError(
+                f"{self.source.id}: Oracle site name mismatch "
+                f"expected {expected_site_name!r}, observed {observed_site_name!r}"
+            )
+        self.run_diagnostics.scope_validation_status = "passed"
+
+    def _site_settings_url(self, site_number: str) -> str:
+        template = self.source.extra.get("site_settings_url_template")
+        if template:
+            return str(template).format(site_number=site_number)
+        return (
+            f"{self.source.base_url.rstrip('/')}/hcmRestApi/CandidateExperience/en/"
+            f"siteSettings/{site_number}"
+        )
 
     def _page_url(self, api_url: str, *, limit: int, offset: int) -> str:
         template = self.source.extra.get("list_url_template")
@@ -167,10 +220,16 @@ class OracleHCMAdapter(JobAdapter):
         if not site_number:
             return None
         base = self.source.base_url.rstrip("/")
+        quoted_external_id = quote(f'"{external_id}"')
         return (
             f"{base}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
-            f"?expand=all&onlyData=true&finder=ById;Id={external_id},siteNumber={site_number}"
+            f"?expand=all&onlyData=true&finder=ById;Id={quoted_external_id},siteNumber={site_number}"
         )
+
+    def _record_scope_facets(self, payload: Any) -> None:
+        agency_counts, organization_counts = _scope_counts(payload)
+        _merge_counts_max(self.run_diagnostics.observed_agency_counts, agency_counts)
+        _merge_counts_max(self.run_diagnostics.observed_organization_counts, organization_counts)
 
     def _apply_url_from_template(self, external_id: Any) -> str | None:
         if external_id is None:
@@ -261,6 +320,11 @@ class OracleHCMAdapter(JobAdapter):
         raw = dict(item)
         raw.setdefault("source_priority", source_priority)
         raw.setdefault("listing_status", listing_status)
+        raw.setdefault("oracle_site_number", self.source.extra.get("site_number"))
+        if self.run_diagnostics.observed_site_name:
+            raw.setdefault("oracle_site_name", self.run_diagnostics.observed_site_name)
+        if self.source.extra.get("expected_site_name"):
+            raw.setdefault("oracle_expected_site_name", str(self.source.extra["expected_site_name"]))
         if self.source.extra.get("fraud_warning"):
             raw.setdefault("fraud_warning", str(self.source.extra["fraud_warning"]))
         return raw
@@ -298,6 +362,67 @@ def _first_link_href(value: object) -> str | None:
     return None
 
 
+def _contract_type(item: dict[str, Any]) -> Any:
+    return (
+        item.get("ContractType")
+        or item.get("WorkerType")
+        or item.get("JobType")
+        or _flex_value(item, "Vacancy Type")
+        or _flex_value(item, "Recruiting Type")
+        or item.get("WorkplaceType")
+    )
+
+
+def _flex_value(item: dict[str, Any], prompt: str) -> str | None:
+    for field in item.get("requisitionFlexFields", []) or []:
+        if isinstance(field, dict) and field.get("Prompt") == prompt:
+            value = field.get("Value")
+            return str(value) if value not in (None, "") else None
+    return None
+
+
+def _scope_counts(payload: Any) -> tuple[dict[str, int], dict[str, int]]:
+    agency_counts: dict[str, int] = {}
+    organization_counts: dict[str, int] = {}
+    if not isinstance(payload, dict):
+        return agency_counts, organization_counts
+    for item in payload.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        for facet in item.get("flexFieldsFacet", []) or []:
+            if not isinstance(facet, dict):
+                continue
+            if facet.get("Label") != "Agency" and facet.get("Name") != "AttributeChar4":
+                continue
+            _add_facet_values(agency_counts, facet.get("values"))
+        _add_facet_values(organization_counts, item.get("organizationsFacet"))
+    return agency_counts, organization_counts
+
+
+def _add_facet_values(target: dict[str, int], values: Any) -> None:
+    if not isinstance(values, list):
+        return
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        name = value.get("Name")
+        if name in (None, ""):
+            continue
+        target[str(name)] = target.get(str(name), 0) + _count_value(value.get("TotalCount"))
+
+
+def _count_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _merge_counts_max(target: dict[str, int], observed: dict[str, int]) -> None:
+    for key, count in observed.items():
+        target[key] = max(target.get(key, 0), count)
+
+
 def _rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -325,6 +450,33 @@ def _total_count(payload: Any) -> int | None:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+def _find_first_value(payload: Any, keys: tuple[str, ...]) -> Any:
+    if isinstance(payload, dict):
+        for key in keys:
+            if payload.get(key) not in (None, ""):
+                return payload[key]
+        for value in payload.values():
+            found = _find_first_value(value, keys)
+            if found not in (None, ""):
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _find_first_value(item, keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _site_name_matches(expected: str, observed: str) -> bool:
+    expected_norm = _normalize_site_name(expected)
+    observed_norm = _normalize_site_name(observed)
+    return expected_norm in observed_norm or observed_norm in expected_norm
+
+
+def _normalize_site_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _location(item: dict[str, Any]) -> str | None:

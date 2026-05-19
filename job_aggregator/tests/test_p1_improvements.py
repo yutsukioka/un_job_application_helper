@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from jobagg.db import JobDatabase
 from jobagg.hashing import content_hash, posting_fingerprint
 from jobagg.http import JobAggHTTPClient
 from jobagg.models import JobRecord, OrganizationSource
-from jobagg.normalize import build_job
+from jobagg.normalize import build_job, parse_datetime
 
 
 def _source() -> OrganizationSource:
@@ -133,6 +131,18 @@ def test_listing_only_update_preserves_local_tz(tmp_path):
     stored = db.get_job(detailed.identity_key())
     assert stored["closes_at_local"] == "2026-01-15 20:00"
     assert stored["closes_tz"] == "Africa/Nairobi"
+
+
+def test_numeric_date_locale_controls_ambiguous_dates():
+    assert parse_datetime("06/05/2026") is None
+    assert (
+        parse_datetime("06/05/2026", date_locale="US").isoformat()
+        == "2026-06-05T00:00:00+00:00"
+    )
+    assert (
+        parse_datetime("06/05/2026", date_locale="EU").isoformat()
+        == "2026-05-06T00:00:00+00:00"
+    )
 
 
 # ---------- #24: cross-source posting fingerprint ----------

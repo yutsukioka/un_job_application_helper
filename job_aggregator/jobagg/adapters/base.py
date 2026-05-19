@@ -5,9 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
 from jobagg.http import JobAggHTTPClient
-from jobagg.models import JobRecord, OrganizationSource
+from jobagg.models import JobRecord, OrganizationSource, SourceRunDiagnostics
 from jobagg.robots import RobotsChecker
 
 
@@ -24,6 +25,16 @@ class JobAdapter(ABC):
     def __init__(self, context: AdapterContext) -> None:
         self.context = context
         self.source = context.source
+        self.run_diagnostics = SourceRunDiagnostics(
+            source_id=self.source.id,
+            adapter_version=self.family,
+            fetch_method=self.family,
+            platform_host=urlsplit(self.source.base_url).netloc,
+            site_number=_optional_text(self.source.extra.get("site_number")),
+            expected_site_name=_optional_text(self.source.extra.get("expected_site_name")),
+            endpoint_family=self.family,
+            scope_validation_status="not_applicable",
+        )
 
     def ensure_allowed(self, url: str) -> None:
         if self.context.robots is not None and not self.context.robots.allowed(url):
@@ -76,3 +87,9 @@ def get_adapter_class(family: str) -> type[JobAdapter]:
 
 def registered_families() -> list[str]:
     return sorted(_REGISTRY)
+
+
+def _optional_text(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)

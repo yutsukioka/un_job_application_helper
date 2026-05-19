@@ -1,5 +1,5 @@
 from jobagg.db import JobDatabase
-from jobagg.models import OrganizationSource
+from jobagg.models import OrganizationSource, SourceRunDiagnostics, SyncResult
 from jobagg.normalize import build_job
 
 
@@ -209,3 +209,65 @@ def test_adapter_reported_status_transition_records_change_event(tmp_path):
         ]
     assert events == ["created", "closed"]
     assert db.get_job("org_api:status-1")["status"] == "closed"
+
+
+def test_source_run_diagnostics_are_persisted_with_source_run(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    result = SyncResult(
+        source_id="org_api",
+        fetched=0,
+        diagnostics=SourceRunDiagnostics(
+            source_id="org_api",
+            fetch_method="oracle_hcm",
+            platform_host="example.org",
+            site_number="CX_1",
+            expected_site_name="Example",
+            observed_site_name="Example",
+            total_reported_by_source=0,
+            pages_fetched=1,
+            pagination_complete=True,
+            empty_reason="verified_total_zero",
+            zero_fetched_evidence={"total": 0},
+            health_status="ok_empty",
+            scope_validation_status="passed",
+            missing_transition_allowed=True,
+        ),
+    )
+
+    run_id = db.add_source_run(result)
+
+    runs = list(db.iter_source_runs("org_api"))
+    diagnostics = list(db.iter_source_run_diagnostics("org_api"))
+    assert runs[0]["id"] == run_id
+    assert diagnostics == [
+        {
+            "source_run_id": run_id,
+            "source_id": "org_api",
+            "adapter_version": None,
+            "fetch_method": "oracle_hcm",
+            "platform_host": "example.org",
+            "site_number": "CX_1",
+            "expected_site_name": "Example",
+            "observed_site_name": "Example",
+            "endpoint_family": None,
+            "http_status": None,
+            "total_reported_by_source": 0,
+            "pages_fetched": 1,
+            "pagination_complete": True,
+            "list_error_count": 0,
+            "detail_attempted": 0,
+            "detail_succeeded": 0,
+            "detail_failed": 0,
+            "detail_skipped": 0,
+            "empty_reason": "verified_total_zero",
+            "zero_fetched_evidence": {"total": 0},
+            "observed_agency_counts": {},
+            "observed_organization_counts": {},
+            "count_delta_pct": None,
+            "health_status": "ok_empty",
+            "scope_validation_status": "passed",
+            "missing_transition_allowed": True,
+            "observed_at": diagnostics[0]["observed_at"],
+        }
+    ]

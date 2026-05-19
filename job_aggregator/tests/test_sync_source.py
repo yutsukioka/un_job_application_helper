@@ -65,6 +65,33 @@ class SelectiveDetailFailureTestAdapter(JobAdapter):
 
 
 @register_adapter
+class SelectiveDetailBudgetTestAdapter(JobAdapter):
+    family = "selective_detail_budget_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title=f"Listing Role {index}",
+                external_id=f"A{index}",
+                apply_url=f"https://example.org/jobs/A{index}",
+                raw={"id": f"A{index}"},
+            )
+            for index in range(1, 4)
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        return build_job(
+            self.source,
+            title=f"Detailed Role {item['id']}",
+            external_id=item["id"],
+            closes_at="2026-06-15",
+            apply_url=f"https://example.org/jobs/{item['id']}",
+            raw={"id": item["id"], "detail": True},
+        )
+
+
+@register_adapter
 class CapTestAdapter(JobAdapter):
     family = "cap_test"
 
@@ -105,6 +132,39 @@ class PageCapTestAdapter(JobAdapter):
         ]
 
 
+@register_adapter
+class HTTPConfigTestAdapter(JobAdapter):
+    family = "http_config_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="HTTP Config Role",
+                external_id="HTTP",
+                apply_url="https://example.org/jobs/HTTP",
+                raw={
+                    "timeout_seconds": self.context.http.timeout_seconds,
+                    "max_retries": self.context.http.max_retries,
+                    "backoff_base_seconds": self.context.http.backoff_base_seconds,
+                },
+            )
+        ]
+
+
+@register_adapter
+class VerifiedEmptyTestAdapter(JobAdapter):
+    family = "verified_empty_test"
+
+    def fetch_jobs(self):
+        self.run_diagnostics.health_status = "ok_empty"
+        self.run_diagnostics.empty_reason = "verified_total_zero"
+        self.run_diagnostics.zero_fetched_evidence = {"total_reported_by_source": 0}
+        self.run_diagnostics.pagination_complete = True
+        self.run_diagnostics.scope_validation_status = "passed"
+        return []
+
+
 def test_zero_fetch_first_run_is_allowed_and_recorded(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -116,9 +176,13 @@ def test_zero_fetch_first_run_is_allowed_and_recorded(tmp_path):
     assert result.errors == []
     assert list(db.iter_jobs(source_id=source.id)) == []
     runs = list(db.iter_source_runs(source.id))
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
     assert len(runs) == 1
     assert runs[0]["fetched"] == 0
     assert runs[0]["errors"] == []
+    assert diagnostics[0]["health_status"] == "warning"
+    assert diagnostics[0]["empty_reason"] == "unverified_zero"
+    assert diagnostics[0]["missing_transition_allowed"] is False
 
 
 def test_zero_fetch_with_active_jobs_skips_missing_marking(tmp_path):
@@ -146,6 +210,57 @@ def test_zero_fetch_with_active_jobs_skips_missing_marking(tmp_path):
     runs = list(db.iter_source_runs(source.id))
     assert len(runs) == 1
     assert runs[0]["errors"] == result.errors
+
+
+def test_zero_fetch_allow_empty_source_without_evidence_does_not_mark_missing(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "legit_empty_source",
+        "zero_fetch_test",
+        empty=True,
+        allow_empty_source=True,
+    )
+    existing = build_job(
+        source,
+        title="Existing Role",
+        external_id="OLD",
+        closes_at="2026-05-30",
+        apply_url="https://example.org/jobs/OLD",
+    )
+    db.upsert_job(existing)
+
+    result = sync_source(source, db=db, policy=_policy(), missing_run_threshold=1)
+
+    assert result.fetched == 0
+    assert result.missing == 0
+    assert "zero jobs fetched for source with active jobs" in result.errors[0]
+    assert db.get_job(existing.identity_key())["status"] == "open"
+
+
+def test_verified_empty_zero_fetch_allows_missing_transition(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("verified_empty_source", "verified_empty_test")
+    existing = build_job(
+        source,
+        title="Existing Role",
+        external_id="OLD",
+        closes_at="2026-05-30",
+        apply_url="https://example.org/jobs/OLD",
+    )
+    db.upsert_job(existing)
+
+    result = sync_source(source, db=db, policy=_policy(), missing_run_threshold=1)
+
+    assert result.fetched == 0
+    assert result.errors == []
+    assert result.missing == 1
+    assert db.get_job(existing.identity_key())["status"] == "missing"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["health_status"] == "ok_empty"
+    assert diagnostics[0]["empty_reason"] == "verified_total_zero"
+    assert diagnostics[0]["missing_transition_allowed"] is True
 
 
 def test_non_empty_fetch_still_marks_missing(tmp_path):
@@ -185,12 +300,71 @@ def test_selective_detail_failure_keeps_listing_job_and_records_error(tmp_path):
     assert result.fetched == 2
     assert result.inserted == 2
     assert len(result.errors) == 1
+    assert "detail refresh failed for 1/2 jobs" in result.errors[0]
     assert "A1 detail refresh failed: detail timeout" in result.errors[0]
     listing_only = db.get_job("selective_detail:A1")
     detailed = db.get_job("selective_detail:A2")
     assert listing_only["title"] == "Listing Role 1"
     assert detailed["title"] == "Detailed Role 2"
     assert detailed["description"] == "Detailed responsibilities."
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 2
+    assert diagnostics[0]["detail_succeeded"] == 1
+    assert diagnostics[0]["detail_failed"] == 1
+    assert diagnostics[0]["health_status"] == "issue"
+
+
+def test_selective_detail_budget_skips_remaining_jobs_without_error(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "selective_detail_budget",
+        "selective_detail_budget_test",
+        max_detail_pages_per_run=1,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 3
+    assert result.errors == []
+    assert db.get_job("selective_detail_budget:A1")["title"] == "Detailed Role A1"
+    assert db.get_job("selective_detail_budget:A2")["title"] == "Listing Role 2"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 1
+    assert diagnostics[0]["detail_succeeded"] == 1
+    assert diagnostics[0]["detail_failed"] == 0
+    assert diagnostics[0]["detail_skipped"] == 2
+
+
+def test_selective_detail_budget_zero_disables_detail_fetch(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "selective_detail_budget_zero",
+        "selective_detail_budget_test",
+        max_detail_pages_per_run=0,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 3
+    assert result.errors == []
+    assert db.get_job("selective_detail_budget_zero:A1")["title"] == "Listing Role 1"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 0
+    assert diagnostics[0]["detail_succeeded"] == 0
+    assert diagnostics[0]["detail_failed"] == 0
+    assert diagnostics[0]["detail_skipped"] == 3
 
 
 def test_capped_sync_uses_full_seen_set_for_missing_marking(tmp_path):
@@ -233,6 +407,27 @@ def test_policy_max_pages_is_applied_to_adapter_source_extra(tmp_path):
     stored = db.get_job("page_cap_source:PAGE")
     assert stored["raw"]["max_pages"] == 2
     assert stored["raw"]["fallback_max_pages"] == 2
+
+
+def test_source_http_retry_and_timeout_overrides_reach_adapter(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "http_config_source",
+        "http_config_test",
+        request_timeout_seconds=60,
+        max_retries=4,
+        backoff_base_seconds=2,
+    )
+
+    sync_source(source, db=db, policy=_policy(request_timeout_seconds=15))
+
+    stored = db.get_job("http_config_source:HTTP")
+    assert stored["raw"] == {
+        "timeout_seconds": 60,
+        "max_retries": 4,
+        "backoff_base_seconds": 2,
+    }
 
 
 def _source(source_id, family, **extra):

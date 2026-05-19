@@ -1,11 +1,14 @@
 import json
+import re
+from pathlib import Path
 
 from jobagg.adapters.avature import AvatureAdapter
 from jobagg.adapters.base import AdapterContext
 from jobagg.adapters.csod import CSODAdapter, _extract_balanced_json_object
-from jobagg.adapters.icddrb import ICDDRBAdapter
+from jobagg.adapters.icddrb import ICDDRBAdapter, _vacancy_links
 from jobagg.adapters.imo import IMOAPIAdapter
 from jobagg.adapters.oracle_hcm import OracleHCMAdapter, classify_fetch_error
+from jobagg.adapters.pageup import PageUpAdapter
 from jobagg.adapters.peoplesoft import PeopleSoftAdapter
 from jobagg.adapters.smartrecruiters import SmartRecruitersAdapter
 from jobagg.adapters.static_html import StaticHTMLAdapter, parse_detail_page, parse_unssc_jobs
@@ -14,6 +17,7 @@ from jobagg.adapters.successfactors_rmk import SuccessFactorsLegacyAdapter
 from jobagg.adapters.successfactors_rmk import _next_page_url
 from jobagg.adapters.unv import UNVAdapter
 from jobagg.adapters.workable import WorkableAdapter
+from jobagg.classification.extractors import OracleHCMExtractor
 from jobagg.http import JobAggHTTPClient
 from jobagg.models import OrganizationSource
 
@@ -37,6 +41,37 @@ class FakeHTTP:
         return FakeResponse(self.pages[payload["pageNumber"]])
 
 
+class FakeTextHTTP:
+    def __init__(self, text):
+        self.text = text
+
+    def get(self, url, *, headers=None):
+        return FakeResponse(text=self.text)
+
+
+class FakeOracleCEHTTP:
+    def __init__(self, pages, *, site_settings=None, detail_pages=None):
+        self.pages = pages
+        self.site_settings = site_settings or {"siteNumber": "CX_1", "siteName": "UNDP"}
+        self.detail_pages = detail_pages or {}
+        self.get_calls = []
+
+    def get(self, url, *, headers=None):
+        self.get_calls.append((url, headers or {}))
+        if "/siteSettings/" in url:
+            return FakeResponse(self.site_settings)
+        if "recruitingCEJobRequisitionDetails" in url:
+            for job_id, payload in self.detail_pages.items():
+                if str(job_id) in url:
+                    return FakeResponse(payload)
+            raise AssertionError(f"Unexpected detail URL: {url}")
+        offset = 0
+        match = re.search(r"offset=(\d+)", url)
+        if match:
+            offset = int(match.group(1))
+        return FakeResponse(self.pages[offset])
+
+
 def source(family, **extra):
     return OrganizationSource(
         id=f"{family}_org",
@@ -45,6 +80,10 @@ def source(family, **extra):
         base_url="https://example.org",
         extra=extra,
     )
+
+
+def fixture_json(*parts):
+    return json.loads((Path(__file__).parent / "fixtures" / Path(*parts)).read_text())
 
 
 def test_csod_posts_paginated_search_payload():
@@ -217,6 +256,149 @@ def test_oracle_hcm_classifies_dns_resolution_errors():
     assert classify_fetch_error(RuntimeError("GET failed with HTTP 401: no auth")) == "auth_or_forbidden"
 
 
+def test_oracle_hcm_validates_site_settings_and_paginates_to_total(monkeypatch):
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
+    org = source(
+        "oracle_hcm",
+        site_number="CX_1",
+        expected_site_name="UNDP",
+        page_size=2,
+        max_pages=5,
+    )
+    http = FakeOracleCEHTTP(
+        {
+            0: {
+                "items": [
+                    {
+                        "TotalJobsCount": 3,
+                        "requisitionList": [
+                            {"Id": "1", "Title": "Role 1"},
+                            {"Id": "2", "Title": "Role 2"},
+                        ],
+                    }
+                ]
+            },
+            2: {
+                "items": [
+                    {
+                        "TotalJobsCount": 3,
+                        "requisitionList": [
+                            {"Id": "3", "Title": "Role 3"},
+                        ],
+                    }
+                ]
+            },
+        },
+        site_settings={"siteNumber": "CX_1", "siteName": "UNDP Careers"},
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    jobs = adapter.fetch_jobs()
+
+    assert [job.external_id for job in jobs] == ["1", "2", "3"]
+    assert any("/siteSettings/CX_1" in call[0] for call in http.get_calls)
+    assert adapter.run_diagnostics.scope_validation_status == "passed"
+    assert adapter.run_diagnostics.total_reported_by_source == 3
+    assert adapter.run_diagnostics.pages_fetched == 2
+    assert adapter.run_diagnostics.pagination_complete is True
+
+
+def test_oracle_hcm_records_hosted_agency_scope_from_facets(monkeypatch):
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
+    org = source(
+        "oracle_hcm",
+        site_number="CX_1",
+        expected_site_name="UNDP",
+        page_size=25,
+        max_pages=2,
+    )
+    http = FakeOracleCEHTTP(
+        {0: fixture_json("oracle", "cx1_undp_hosted_agencies_list.json")},
+        site_settings={"siteNumber": "CX_1", "siteName": "UNDP"},
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    jobs = adapter.fetch_jobs()
+
+    assert [job.external_id for job in jobs] == ["34287", "33995", "34141"]
+    assert adapter.run_diagnostics.observed_agency_counts == {
+        "UNCDF": 1,
+        "UN Volunteers": 1,
+        "UNDP": 17,
+    }
+    assert adapter.run_diagnostics.observed_organization_counts == {
+        "United Nations Capital Development Fund": 1,
+        "United Nations Development Programme": 166,
+    }
+    assert jobs[0].raw["oracle_site_number"] == "CX_1"
+    assert jobs[0].raw["oracle_site_name"] == "UNDP"
+
+
+def test_oracle_hcm_detail_uses_har_backed_flex_fields_for_contract_and_grade():
+    org = source("oracle_hcm", site_number="CX_1")
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=JobAggHTTPClient()))
+
+    job = adapter.parse_jobs(fixture_json("oracle", "cx1_undp_hosted_agencies_detail.json"))[0]
+    features = OracleHCMExtractor().extract(
+        {
+            "job_key": job.identity_key(),
+            "source_id": job.source_id,
+            "ats_family": job.ats_family,
+            "title": job.title,
+            "description": job.description,
+            "location": job.location,
+            "department": job.department,
+            "employment_type": job.employment_type,
+            "raw": job.raw,
+        }
+    )
+
+    assert job.external_id == "34287"
+    assert job.closes_at.isoformat() == "2026-05-24T07:34:00+00:00"
+    assert job.employment_type == "International Personnel Service Agreement"
+    assert features.grade_raw == "IPSA-8"
+    assert features.contract_raw == "International Personnel Service Agreement"
+    assert features.contract_source_field == "requisitionFlexFields.Vacancy Type"
+    assert features.evidence["Agency"] == "UNDP"
+    assert features.evidence["Bureau"] == "Regional Bureau for Arab States"
+
+
+def test_oracle_hcm_detail_url_quotes_id_like_candidate_experience_har():
+    org = source("oracle_hcm", site_number="CX_1")
+    detail_payload = fixture_json("oracle", "cx1_undp_hosted_agencies_detail.json")
+    http = FakeOracleCEHTTP({}, detail_pages={"34287": detail_payload})
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    adapter.fetch_detail_for_listing_item({"Id": "34287"})
+
+    detail_url = next(call[0] for call in http.get_calls if "recruitingCEJobRequisitionDetails" in call[0])
+    assert "Id=%2234287%22,siteNumber=CX_1" in detail_url
+
+
+def test_oracle_hcm_site_name_mismatch_aborts_without_jobs(monkeypatch):
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
+    org = source(
+        "oracle_hcm",
+        site_number="CX_1001",
+        expected_site_name="UN Women",
+    )
+    adapter = OracleHCMAdapter(
+        AdapterContext(
+            source=org,
+            http=FakeOracleCEHTTP({}, site_settings={"siteNumber": "CX_1", "siteName": "UNDP"}),
+        )
+    )
+
+    try:
+        adapter.fetch_jobs()
+    except RuntimeError as exc:
+        assert "site number mismatch" in str(exc)
+    else:
+        raise AssertionError("Expected site mismatch to raise")
+    assert adapter.run_diagnostics.scope_validation_status == "site_number_mismatch"
+    assert adapter.run_diagnostics.health_status == "issue"
+
+
 def test_oracle_hcm_falls_back_to_undp_listing_when_oracle_dns_fails(monkeypatch):
     class FakeOracleHTTP:
         def __init__(self):
@@ -271,7 +453,7 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
                   National Consultant: RMNCAH Monitoring and Evaluation (M&E) Consultant
                 </a>
                 <div>Closing date</div>
-                <div>16 May 2026 20:56(America/New_York)</div>
+                <div>16 Jun 2026 20:56(America/New_York)</div>
                 <div>Location</div>
                 <div>Suva</div>
                 <div>Staff grade/level</div>
@@ -300,7 +482,7 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
     assert jobs[0].external_id == "34001"
     assert jobs[0].location == "Suva"
     assert jobs[0].employment_type == "Consultancy"
-    assert jobs[0].closes_at.isoformat() == "2026-05-16T00:00:00+00:00"
+    assert jobs[0].closes_at.isoformat() == "2026-06-16T00:00:00+00:00"
     assert jobs[0].source_url == (
         "https://www.unfpa.org/jobs/"
         "national-consultant-rmncah-monitoring-and-evaluation-me-consultant"
@@ -553,6 +735,38 @@ def test_avature_parses_unops_listing_html():
     assert jobs[0].posted_at.isoformat() == "2026-05-14T00:00:00+00:00"
 
 
+def test_pageup_listing_percent_encodes_unicode_detail_urls():
+    adapter = PageUpAdapter(
+        AdapterContext(
+            source=OrganizationSource(
+                id="unicef_pageup",
+                name="UNICEF",
+                ats_family="pageup",
+                base_url="https://jobs.unicef.org",
+            ),
+            http=JobAggHTTPClient(),
+        )
+    )
+
+    jobs = adapter.parse_listing_html(
+        """
+        <div class="list-view--item">
+          <a class="job-link"
+             href="/en-us/job/593073/spécialiste-éducation">
+             Spécialiste éducation #593073
+          </a>
+          <span class="location">Dakar</span>
+          <time datetime="2026-06-01"></time>
+        </div>
+        """
+    )
+
+    assert jobs[0].external_id == "593073"
+    assert jobs[0].raw["_pageup_detail_url"] == (
+        "https://jobs.unicef.org/en-us/job/593073/sp%C3%A9cialiste-%C3%A9ducation"
+    )
+
+
 def test_imo_api_parses_current_vacancies_payload():
     adapter = IMOAPIAdapter(
         AdapterContext(
@@ -615,6 +829,28 @@ def test_icddrb_detail_parser_extracts_apply_url_and_deadline():
     assert job.employment_type == "Fixed Term"
     assert job.closes_at.isoformat() == "2026-05-16T00:00:00+00:00"
     assert job.apply_url == "https://career.icddrb.org/apply-for-job/32217/22320"
+
+
+def test_icddrb_listing_accepts_unquoted_vacancy_links():
+    links = _vacancy_links(
+        """
+        <tr>
+          <td>
+            <a href=https://career.icddrb.org/vacancy-preview/32222>
+              Technical Assistant (Internal#64/2026).
+            </a>
+          </td>
+        </tr>
+        """,
+        "https://career.icddrb.org/",
+    )
+
+    assert links == [
+        {
+            "href": "https://career.icddrb.org/vacancy-preview/32222",
+            "title": "Technical Assistant (Internal#64/2026).",
+        }
+    ]
 
 
 def test_peoplesoft_parser_prefers_value_spans_over_labels():
@@ -708,6 +944,112 @@ def test_static_detail_parser_uses_json_ld_and_deadline_text():
     assert jobs[0].closes_at.isoformat() == "2026-05-24T00:00:00+00:00"
 
 
+def test_static_html_adapter_reports_cloudflare_block_page():
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=source("static_html", parser="public_links"),
+            http=FakeTextHTTP(
+                """
+                <html>
+                  <head><title>Attention Required! | Cloudflare</title></head>
+                  <body><h1>Sorry, you have been blocked</h1></body>
+                </html>
+                """
+            ),
+        )
+    )
+
+    try:
+        adapter.fetch_jobs()
+    except RuntimeError as exc:
+        assert "blocked by Cloudflare" in str(exc)
+    else:
+        raise AssertionError("Expected blocked static page to raise")
+
+
+def test_static_html_adapter_accepts_explicit_empty_board():
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=source("static_html", parser="public_links"),
+            http=FakeTextHTTP(
+                """
+                <html>
+                  <body><p>There are no vacancies available at this time.</p></body>
+                </html>
+                """
+            ),
+        )
+    )
+
+    assert adapter.fetch_jobs() == []
+
+
+def test_static_html_adapter_rejects_zero_links_without_empty_marker():
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=source("static_html", parser="public_links"),
+            http=FakeTextHTTP("<html><body><h1>Work with us</h1></body></html>"),
+        )
+    )
+
+    try:
+        adapter.fetch_jobs()
+    except RuntimeError as exc:
+        assert "no job links found" in str(exc)
+    else:
+        raise AssertionError("Expected zero-link static page to raise")
+
+
+def test_ipu_static_html_accepts_structural_empty_fixture():
+    fixture = Path("tests/fixtures/ipu/current_empty_2026_05.html").read_text(encoding="utf-8")
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=_ipu_source(),
+            http=FakeTextHTTP(fixture),
+        )
+    )
+
+    assert adapter.fetch_jobs() == []
+    assert adapter.run_diagnostics.health_status == "ok_empty"
+    assert adapter.run_diagnostics.empty_reason == "verified_structural_empty"
+    assert adapter.run_diagnostics.zero_fetched_evidence["job_nodes_found"] == 0
+
+
+def test_ipu_static_html_parses_synthetic_positive_fixture():
+    fixture = Path("tests/fixtures/ipu/synthetic_one_vacancy.html").read_text(encoding="utf-8")
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=_ipu_source(),
+            http=FakeTextHTTP(fixture),
+        )
+    )
+
+    jobs = adapter.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Programme Officer"
+    assert jobs[0].source_url == (
+        "https://www.ipu.org/about-ipu/work-with-us/vacancies/programme-officer"
+    )
+
+
+def test_ipu_static_html_rejects_missing_structural_empty_markers():
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=_ipu_source(),
+            http=FakeTextHTTP("<html><body><h1>Vacancies</h1></body></html>"),
+        )
+    )
+
+    try:
+        adapter.fetch_jobs()
+    except RuntimeError as exc:
+        assert "structural empty markers were not verified" in str(exc)
+    else:
+        raise AssertionError("Expected missing structural markers to raise")
+    assert adapter.run_diagnostics.empty_reason == "parser_no_match"
+
+
 def test_static_detail_parser_extracts_common_labels():
     org = source("static_html")
 
@@ -751,3 +1093,126 @@ def test_successfactors_legacy_parses_query_job_links():
 
     assert jobs[0].external_id == "12345"
     assert jobs[0].title == "Monitoring Officer"
+
+
+def test_successfactors_legacy_xml_feed_parses_jobs():
+    org = OrganizationSource(
+        id="icc_successfactors_legacy",
+        name="International Criminal Court",
+        ats_family="successfactors_legacy",
+        base_url="https://career5.successfactors.eu/career?company=1657261P",
+        extra={
+            "company_id": "1657261P",
+            "locale": "en_GB",
+            "primary_fetch_method": "successfactors_xml",
+        },
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(
+            source=org,
+            http=FakeTextHTTP(
+                """
+                <source totalJobs="1">
+                  <job>
+                    <jobReqId>24421</jobReqId>
+                    <title>Associate Legal Officer</title>
+                    <location>The Hague</location>
+                    <department>Registry</department>
+                    <closingDate>31 May 2026</closingDate>
+                    <description>Legal role.</description>
+                  </job>
+                </source>
+                """
+            ),
+        )
+    )
+
+    jobs = adapter.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert jobs[0].external_id == "24421"
+    assert jobs[0].title == "Associate Legal Officer"
+    assert jobs[0].location == "The Hague"
+    assert jobs[0].source_url == (
+        "https://career5.successfactors.eu/career?company=1657261P&career_ns=job_listing&"
+        "career_job_req_id=24421&rcm_site_locale=en_GB&selected_lang=en_GB"
+    )
+    assert adapter.run_diagnostics.health_status == "ok"
+    assert adapter.run_diagnostics.fetch_method == "successfactors_xml"
+
+
+def test_successfactors_legacy_xml_feed_accepts_explicit_zero():
+    org = OrganizationSource(
+        id="icc_successfactors_legacy",
+        name="International Criminal Court",
+        ats_family="successfactors_legacy",
+        base_url="https://career5.successfactors.eu/career?company=1657261P",
+        extra={
+            "company_id": "1657261P",
+            "locale": "en_GB",
+            "primary_fetch_method": "successfactors_xml",
+        },
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(source=org, http=FakeTextHTTP("<source totalJobs=\"0\" />"))
+    )
+
+    assert adapter.fetch_jobs() == []
+    assert adapter.run_diagnostics.health_status == "ok_empty"
+    assert adapter.run_diagnostics.empty_reason == "verified_total_zero"
+
+
+def test_successfactors_legacy_xml_feed_rejects_unverified_zero():
+    org = OrganizationSource(
+        id="icc_successfactors_legacy",
+        name="International Criminal Court",
+        ats_family="successfactors_legacy",
+        base_url="https://career5.successfactors.eu/career?company=1657261P",
+        extra={
+            "company_id": "1657261P",
+            "locale": "en_GB",
+            "primary_fetch_method": "successfactors_xml",
+        },
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(source=org, http=FakeTextHTTP("<source />"))
+    )
+
+    try:
+        adapter.fetch_jobs()
+    except RuntimeError as exc:
+        assert "without verified zero evidence" in str(exc)
+    else:
+        raise AssertionError("Expected unverified zero XML feed to raise")
+
+
+def _ipu_source():
+    return OrganizationSource(
+        id="ipu_static_html",
+        name="Inter-Parliamentary Union",
+        ats_family="ipu_static_html",
+        adapter="static_html",
+        base_url="https://www.ipu.org/about-ipu/work-with-us/vacancies",
+        extra={
+            "listing_url": "https://www.ipu.org/about-ipu/work-with-us/vacancies",
+            "parser": "public_links",
+            "job_link_selector_hint": "/work-with-us/vacancies/",
+            "fetch_details": False,
+            "empty_policy": {
+                "mode": "verified_structural_empty",
+                "required_page_markers": [
+                    "Vacancies",
+                    "Vacancies list",
+                    "IPU job application",
+                    "Roster",
+                ],
+                "section_start_text": "Vacancies list",
+                "section_end_any_text": ["IPU job application", "Roster"],
+                "job_link_patterns": [
+                    "/about-ipu/work-with-us/vacancies/",
+                    "/vacancies/",
+                ],
+                "ignore_link_text": ["IPU job application", "Roster"],
+            },
+        },
+    )

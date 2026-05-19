@@ -6,7 +6,7 @@ import html
 import json
 import re
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.models import JobRecord
@@ -122,7 +122,7 @@ class PageUpAdapter(JobAdapter):
             if not link:
                 continue
             href = html.unescape(link.group("href"))
-            detail_url = urljoin(self.source.base_url, href)
+            detail_url = _quote_url(urljoin(self.source.base_url, href))
             external_id = self._job_id_from_url(detail_url) or self._extract_hash_id(link.group("title"))
             jobs.append(
                 build_job(
@@ -145,7 +145,8 @@ class PageUpAdapter(JobAdapter):
         detail_url = item.get("_pageup_detail_url")
         if not detail_url:
             return None
-        detail_text = self.fetch_text(str(detail_url))
+        detail_url = _quote_url(str(detail_url))
+        detail_text = self.fetch_text(detail_url)
         try:
             payload = json.loads(detail_text)
         except json.JSONDecodeError:
@@ -266,3 +267,16 @@ class PageUpAdapter(JobAdapter):
     def _extract_title_from_detail_url(self, url: str) -> str:
         slug = urlsplit(url).path.rstrip("/").split("/")[-1]
         return slug.replace("-", " ").title() if slug else "Untitled role"
+
+
+def _quote_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            quote(parts.path, safe="/%"),
+            quote(parts.query, safe="=&%:+,;/?@"),
+            parts.fragment,
+        )
+    )

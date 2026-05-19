@@ -134,10 +134,43 @@ class SyncResult:
     missing: int = 0
     closed: int = 0
     errors: list[str] = field(default_factory=list)
+    diagnostics: SourceRunDiagnostics | None = None
 
     @property
     def changed(self) -> int:
         return self.inserted + self.updated + self.missing + self.closed
+
+
+@dataclass(slots=True)
+class SourceRunDiagnostics:
+    """Structured health metadata for one source synchronization run."""
+
+    source_id: str
+    adapter_version: str | None = None
+    fetch_method: str | None = None
+    platform_host: str | None = None
+    site_number: str | None = None
+    expected_site_name: str | None = None
+    observed_site_name: str | None = None
+    endpoint_family: str | None = None
+    http_status: int | None = None
+    total_reported_by_source: int | None = None
+    pages_fetched: int | None = None
+    pagination_complete: bool | None = None
+    list_error_count: int = 0
+    detail_attempted: int = 0
+    detail_succeeded: int = 0
+    detail_failed: int = 0
+    detail_skipped: int = 0
+    empty_reason: str | None = None
+    zero_fetched_evidence: dict[str, Any] = field(default_factory=dict)
+    observed_agency_counts: dict[str, int] = field(default_factory=dict)
+    observed_organization_counts: dict[str, int] = field(default_factory=dict)
+    count_delta_pct: float | None = None
+    health_status: str | None = None
+    scope_validation_status: str | None = None
+    missing_transition_allowed: bool = False
+    observed_at: datetime = field(default_factory=utc_now)
 
 
 def _identity_part(value: object | None) -> str:

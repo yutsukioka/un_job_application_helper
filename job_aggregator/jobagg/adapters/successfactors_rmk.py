@@ -8,7 +8,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.models import JobRecord
@@ -373,9 +373,215 @@ def _job_id_from_url(url: str) -> str | None:
     return parts[-1]
 
 
+def _xml_job_elements(root: ET.Element) -> list[ET.Element]:
+    candidates = []
+    for element in root.iter():
+        tag = _xml_key(element.tag)
+        fields = _xml_flatten(element)
+        if tag in {"job", "jobposting", "jobrequisition"}:
+            candidates.append(element)
+            continue
+        if _first_field(fields, ("title", "jobtitle", "externaljobtitle")) and _first_field(
+            fields,
+            ("jobreqid", "jobid", "id", "career_job_req_id"),
+        ):
+            candidates.append(element)
+    deduped: list[ET.Element] = []
+    seen: set[int] = set()
+    for element in candidates:
+        element_id = id(element)
+        if element_id in seen:
+            continue
+        seen.add(element_id)
+        deduped.append(element)
+    return deduped
+
+
+def _xml_flatten(element: ET.Element) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for key, value in element.attrib.items():
+        text = str(value).strip()
+        if text:
+            fields.setdefault(_xml_key(key), text)
+    for child in element.iter():
+        if child is element:
+            continue
+        key = _xml_key(child.tag)
+        text = "".join(child.itertext()).strip()
+        if key and text:
+            fields.setdefault(key, _clean_html(text) or text)
+    return fields
+
+
+def _xml_total_count(root: ET.Element) -> int | None:
+    for key, value in _xml_flatten(root).items():
+        if key in {"total", "totaljobs", "totaljobcount", "count", "postingcount", "resultcount"}:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    for key, value in root.attrib.items():
+        if _xml_key(key) in {"total", "totaljobs", "totaljobcount", "count", "postingcount", "resultcount"}:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _xml_zero_evidence(root: ET.Element) -> dict[str, Any]:
+    total = _xml_total_count(root)
+    if total == 0:
+        return {"total_reported_by_source": 0}
+    return {}
+
+
+def _first_field(fields: dict[str, str], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = fields.get(_xml_key(key))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _xml_key(value: object) -> str:
+    text = str(value)
+    if "}" in text:
+        text = text.rsplit("}", 1)[-1]
+    return re.sub(r"[^a-z0-9]+", "", text.casefold())
+
+
 @register_adapter
 class SuccessFactorsLegacyAdapter(SuccessFactorsRMKAdapter):
     family = "successfactors_legacy"
+
+    def fetch_jobs(self) -> list[JobRecord]:
+        if self.source.extra.get("primary_fetch_method") == "successfactors_xml":
+            return self._fetch_xml_feed_jobs()
+        return super().fetch_jobs()
+
+    def _fetch_xml_feed_jobs(self) -> list[JobRecord]:
+        self.run_diagnostics.fetch_method = "successfactors_xml"
+        self.run_diagnostics.endpoint_family = "successfactors_rcm"
+        self.run_diagnostics.scope_validation_status = "passed"
+        feed_url = self._xml_feed_url()
+        xml_text = self.fetch_text(feed_url)
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            self.run_diagnostics.health_status = "issue"
+            self.run_diagnostics.empty_reason = "xml_unavailable"
+            raise RuntimeError(
+                f"{self.source.id}: SuccessFactors XML feed unavailable or not XML"
+            ) from exc
+
+        jobs = self.parse_jobs_from_xml_feed(root)
+        total_count = _xml_total_count(root)
+        self.run_diagnostics.total_reported_by_source = total_count if total_count is not None else len(jobs)
+        self.run_diagnostics.pages_fetched = 1
+        self.run_diagnostics.pagination_complete = True
+        if jobs:
+            self.run_diagnostics.health_status = "ok"
+            return jobs
+
+        zero_evidence = _xml_zero_evidence(root)
+        if zero_evidence:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_total_zero"
+            self.run_diagnostics.zero_fetched_evidence = zero_evidence
+            return []
+
+        self.run_diagnostics.health_status = "issue"
+        self.run_diagnostics.empty_reason = "unverified_zero"
+        raise RuntimeError(
+            f"{self.source.id}: SuccessFactors XML returned zero jobs without verified zero evidence"
+        )
+
+    def parse_jobs_from_xml_feed(self, root: ET.Element) -> list[JobRecord]:
+        jobs: list[JobRecord] = []
+        seen: set[str] = set()
+        for item in _xml_job_elements(root):
+            fields = _xml_flatten(item)
+            external_id = _first_field(
+                fields,
+                (
+                    "jobreqid",
+                    "jobreq_id",
+                    "jobrequisitionid",
+                    "career_job_req_id",
+                    "jobid",
+                    "id",
+                    "reqid",
+                ),
+            )
+            title = _first_field(fields, ("title", "jobtitle", "externaljobtitle", "job_title"))
+            if not external_id or not title:
+                continue
+            if external_id in seen:
+                continue
+            seen.add(external_id)
+            source_url = (
+                _first_field(fields, ("url", "link", "joburl", "applyurl"))
+                or self._successfactors_detail_url(external_id)
+            )
+            jobs.append(
+                build_job(
+                    self.source,
+                    title=title,
+                    external_id=external_id,
+                    location=_first_field(fields, ("location", "joblocation", "city", "country")),
+                    department=_first_field(fields, ("department", "jobdepartment", "facility")),
+                    employment_type=_first_field(fields, ("grade", "jobgrade", "shifttype", "employmenttype")),
+                    posted_at=_first_field(fields, ("posteddate", "postingdate", "startdate")),
+                    closes_at=_first_field(fields, ("closingdate", "enddate", "applicationdeadline")),
+                    apply_url=source_url,
+                    source_url=source_url,
+                    description=_first_field(fields, ("description", "jobdescription")),
+                    raw={**fields, "parser": "successfactors_xml"},
+                )
+            )
+        return jobs
+
+    def _xml_feed_url(self) -> str:
+        configured = self.source.extra.get("xml_feed_url")
+        if configured:
+            return str(configured)
+        company_id = str(self.source.extra.get("company_id") or "")
+        locale = str(self.source.extra.get("locale") or "en_GB")
+        base_parts = urlsplit(self.source.base_url)
+        base_path = base_parts.path or "/career"
+        query = dict(parse_qsl(base_parts.query, keep_blank_values=True))
+        query.update(
+            {
+                "company": company_id or query.get("company", ""),
+                "career_ns": "job_listing_summary",
+                "resultType": "XML",
+                "rcm_site_locale": locale,
+                "selected_lang": locale,
+            }
+        )
+        return urlunsplit(
+            (
+                base_parts.scheme,
+                base_parts.netloc,
+                base_path,
+                urlencode({key: value for key, value in query.items() if value != ""}),
+                "",
+            )
+        )
+
+    def _successfactors_detail_url(self, external_id: str) -> str:
+        company_id = str(self.source.extra.get("company_id") or "")
+        locale = str(self.source.extra.get("locale") or "en_GB")
+        parts = urlsplit(self.source.base_url)
+        query = {
+            "company": company_id,
+            "career_ns": "job_listing",
+            "career_job_req_id": external_id,
+            "rcm_site_locale": locale,
+            "selected_lang": locale,
+        }
+        return urlunsplit((parts.scheme, parts.netloc, parts.path or "/career", urlencode(query), ""))
 
 
 def _title_without_location(title: str) -> str:

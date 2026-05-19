@@ -1,0 +1,53 @@
+{
+  "items": [
+    {
+      "Id": "34287",
+      "Title": "Digital & AI Programme Analyst, IPSA8 ST - Office Based in Amman, Jordan",
+      "RequisitionId": 300003690000001,
+      "ExternalPostedStartDate": "2026-05-18T09:00:00+00:00",
+      "ExternalPostedEndDate": "2026-05-24T07:34:00+00:00",
+      "PrimaryLocation": "Amman, Jordan",
+      "PrimaryLocationCountry": "JO",
+      "ShortDescriptionStr": "Duties and Responsibilities",
+      "ExternalDescriptionStr": "Digital transformation and AI programme delivery.",
+      "ExternalResponsibilitiesStr": "Lead programme analysis and delivery support.",
+      "ExternalQualificationsStr": "Advanced degree required.",
+      "requisitionFlexFields": [
+        {
+          "Prompt": "Agency",
+          "Value": "UNDP",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 2
+        },
+        {
+          "Prompt": "Grade",
+          "Value": "IPSA-8",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 3
+        },
+        {
+          "Prompt": "Vacancy Type",
+          "Value": "International Personnel Service Agreement",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 4
+        },
+        {
+          "Prompt": "Bureau",
+          "Value": "Regional Bureau for Arab States",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 9
+        },
+        {
+          "Prompt": "Contract Duration",
+          "Value": "5 months",
+          "ControlType": "SingleChoiceList",
+          "SequenceNumber": 11
+        }
+      ]
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 499,
+  "offset": 0
+}

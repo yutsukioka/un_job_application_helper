@@ -25,6 +25,11 @@ class StaticHTMLAdapter(JobAdapter):
         listing_url = str(self.source.extra.get("listing_url") or self.source.base_url)
         parser_name = str(self.source.extra.get("parser") or self.source.ats_family)
         html_text = self.fetch_text(listing_url)
+        blocked_reason = _blocked_page_reason(html_text)
+        if blocked_reason:
+            self.run_diagnostics.health_status = "issue"
+            self.run_diagnostics.empty_reason = "blocked"
+            raise RuntimeError(f"{self.source.id}: listing page blocked by {blocked_reason}")
         if parser_name == "unssc_drupal":
             return parse_unssc_jobs(self.source, html_text, listing_url)
         if parser_name in {"generic", "public_links"}:
@@ -40,7 +45,33 @@ class StaticHTMLAdapter(JobAdapter):
         fetch_details = _as_bool(self.source.extra.get("fetch_details"), default=True)
         max_detail_jobs = _as_int(self.source.extra.get("max_detail_jobs"), default=100)
         seen: set[str] = set()
-        for link in _job_links_from_html(self.source, html_text, listing_url):
+        links = _job_links_from_html(self.source, html_text, listing_url)
+        if not links:
+            structural_evidence = _verified_structural_empty_evidence(self.source, html_text)
+            if structural_evidence.get("verified"):
+                self.run_diagnostics.health_status = "ok_empty"
+                self.run_diagnostics.empty_reason = "verified_structural_empty"
+                self.run_diagnostics.zero_fetched_evidence = structural_evidence
+                self.run_diagnostics.pagination_complete = True
+                return []
+            if _has_structural_empty_policy(self.source):
+                self.run_diagnostics.health_status = "issue"
+                self.run_diagnostics.empty_reason = "parser_no_match"
+                self.run_diagnostics.zero_fetched_evidence = structural_evidence
+                raise RuntimeError(
+                    f"{self.source.id}: no job links found and structural empty markers were not verified"
+                )
+            empty_reason = _empty_board_reason(html_text)
+            if empty_reason:
+                self.run_diagnostics.health_status = "ok_empty"
+                self.run_diagnostics.empty_reason = "verified_text_empty"
+                self.run_diagnostics.zero_fetched_evidence = {"matched_text": empty_reason}
+                self.run_diagnostics.pagination_complete = True
+                return []
+            raise RuntimeError(
+                f"{self.source.id}: no job links found; selectors may be stale or page blocked"
+            )
+        for link in links:
             key = link["href"]
             if key in seen:
                 continue
@@ -208,6 +239,76 @@ def _job_links_from_html(
             continue
         links.append({"href": href, "title": title})
     return links
+
+
+def _blocked_page_reason(html_text: str) -> str | None:
+    lowered = html_text.casefold()
+    if "attention required! | cloudflare" in lowered or "sorry, you have been blocked" in lowered:
+        return "Cloudflare"
+    return None
+
+
+def _empty_board_reason(html_text: str) -> str | None:
+    lowered = _clean(html_text).casefold()
+    empty_markers = (
+        "there are no vacancies available",
+        "there are no vacancies",
+        "there are no internships available",
+        "there are no internships",
+        "no current vacancies",
+        "no vacancies available",
+        "no vacancies at this time",
+        "no jobs available",
+        "no open positions",
+    )
+    for marker in empty_markers:
+        if marker in lowered:
+            return marker
+    return None
+
+
+def _has_structural_empty_policy(source: OrganizationSource) -> bool:
+    policy = source.extra.get("empty_policy")
+    return isinstance(policy, dict) and policy.get("mode") == "verified_structural_empty"
+
+
+def _verified_structural_empty_evidence(
+    source: OrganizationSource,
+    html_text: str,
+) -> dict[str, Any]:
+    policy = source.extra.get("empty_policy")
+    if not isinstance(policy, dict) or policy.get("mode") != "verified_structural_empty":
+        return {}
+    text = _clean(html_text)
+    lowered = text.casefold()
+    required = [str(marker) for marker in policy.get("required_page_markers") or []]
+    missing_markers = [marker for marker in required if marker.casefold() not in lowered]
+    section_start = str(policy.get("section_start_text") or "")
+    section_start_found = not section_start or section_start.casefold() in lowered
+    section_end_any = [str(marker) for marker in policy.get("section_end_any_text") or []]
+    section_end_found = not section_end_any or any(marker.casefold() in lowered for marker in section_end_any)
+    link_patterns = [str(pattern).casefold() for pattern in policy.get("job_link_patterns") or []]
+    ignored_text = {str(value).casefold() for value in policy.get("ignore_link_text") or []}
+    job_nodes = []
+    for anchor in _TokenParser.parse(html_text).anchors:
+        title = _clean(anchor["text"])
+        href = str(anchor["href"])
+        if title.casefold() in ignored_text:
+            continue
+        if link_patterns and not any(pattern in href.casefold() for pattern in link_patterns):
+            continue
+        if title:
+            job_nodes.append({"title": title, "href": href})
+    verified = not missing_markers and section_start_found and section_end_found and not job_nodes
+    return {
+        "verified": verified,
+        "required_markers_found": not missing_markers,
+        "missing_markers": missing_markers,
+        "section_start_found": section_start_found,
+        "section_end_found": section_end_found,
+        "job_nodes_found": len(job_nodes),
+        "job_nodes_sample": job_nodes[:5],
+    }
 
 
 def _table_rows(html_text: str) -> list[str]:

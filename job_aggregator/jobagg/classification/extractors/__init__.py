@@ -98,7 +98,15 @@ class OracleHCMExtractor(SourceFeatureExtractor):
                 "PrimaryLocationCountry": raw.get("PrimaryLocationCountry"),
                 "secondaryLocations": raw.get("secondaryLocations", []),
                 "workLocation": raw.get("workLocation", []),
-                "source_priority": raw.get("_source_priority"),
+                "oracle_site_number": raw.get("oracle_site_number"),
+                "oracle_site_name": raw.get("oracle_site_name"),
+                "Agency": get_flex(raw, "Agency"),
+                "Vacancy Type": get_flex(raw, "Vacancy Type"),
+                "Practice Area": get_flex(raw, "Practice Area"),
+                "Bureau": get_flex(raw, "Bureau"),
+                "Contract Duration": get_flex(raw, "Contract Duration"),
+                "Vacancy Timeline": get_flex(raw, "Vacancy Timeline"),
+                "source_priority": raw.get("source_priority") or raw.get("_source_priority"),
             },
         )
         features.title = vacancy.get("title") or raw.get("Title")
@@ -108,12 +116,19 @@ class OracleHCMExtractor(SourceFeatureExtractor):
         )
         features.grade_raw = get_flex(raw, "Grade")
         features.grade_source_field = "requisitionFlexFields.Grade" if features.grade_raw else None
+        vacancy_type = get_flex(raw, "Vacancy Type")
+        recruiting_type = get_flex(raw, "Recruiting Type")
         features.contract_raw = (
-            get_flex(raw, "Recruiting Type")
+            vacancy_type
+            or recruiting_type
             or raw.get("RecruitingType")
             or raw.get("JobType")
             or features.contract_raw
         )
+        if vacancy_type:
+            features.contract_source_field = "requisitionFlexFields.Vacancy Type"
+        elif recruiting_type:
+            features.contract_source_field = "requisitionFlexFields.Recruiting Type"
         features.country_code_raw = raw.get("PrimaryLocationCountry") or work_location.get("Country")
         features.city_raw = work_location.get("TownOrCity")
         features.work_modality_raw = text_join(secondary_names)
