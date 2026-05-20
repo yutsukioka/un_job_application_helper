@@ -245,12 +245,18 @@ class TaleoExtractor(SourceFeatureExtractor):
         raw = raw_dict(vacancy)
         flat = raw.get("_taleo_flat") if isinstance(raw.get("_taleo_flat"), dict) else {}
         features = base_features(vacancy, evidence={"taleo_flat": flat, "detail_url": raw.get("_taleo_detail_url")})
-        features.grade_raw = flat.get("JOB_LEVEL") or flat.get("job_level")
+        features.grade_raw = (
+            flat.get("JOB_LEVEL")
+            or flat.get("job_level")
+            or flat.get("Position Level")
+            or flat.get("position_level")
+        )
         features.grade_source_field = "_taleo_flat.JOB_LEVEL" if features.grade_raw else None
         features.contract_raw = (
             flat.get("JOB_TYPE")
             or flat.get("EMPLOYEE_STATUS")
             or flat.get("JOB_SCHEDULE")
+            or flat.get("POSITION_LEVEL_LABEL")
             or features.contract_raw
         )
         features.department = vacancy.get("department") or flat.get("JOB_FIELD")

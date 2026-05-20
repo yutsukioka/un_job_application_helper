@@ -25,11 +25,11 @@ grade_patterns:
     staff_category: field_service
   - system: WFP_SERVICE_CONTRACT
     family: SSA
-    regex: "\\bSSA\\s?(\\d+)\\b"
+    regex: "\\bSSA[-\\s]?(\\d+)\\b"
     staff_category: service_contract
   - system: WFP_SERVICE_CONTRACT
     family: SC
-    regex: "\\bSC\\s?(\\d+)\\b"
+    regex: "\\bSC[-\\s]?(\\d+)\\b"
     staff_category: service_contract
   - system: UNOPS
     family: IICA
@@ -47,6 +47,22 @@ grade_patterns:
     family: UG
     regex: "\\bUG\\d*\\b"
     staff_category: unknown_grade
+  - system: ADB
+    family: AS
+    regex: "\\bAS[-\\s]?(1|2|3|4|5|6|7)\\b"
+    staff_category: administrative_staff
+  - system: ADB
+    family: NS
+    regex: "\\bNS[-\\s]?(1|2|3|4|5|6|7)\\b"
+    staff_category: national_staff
+  - system: ADB
+    family: IS
+    regex: "\\bIS[-\\s]?(1|2)\\b"
+    staff_category: international_staff
+  - system: ADB
+    family: TI
+    regex: "\\bTI[-\\s]?(1|2|3)\\b"
+    staff_category: technical_international_staff
   - system: UN
     family: INTERN
     regex: "\\bI[-\\s]?1\\b|\\bINTERN\\b"

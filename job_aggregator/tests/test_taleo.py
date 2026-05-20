@@ -121,6 +121,55 @@ def test_taleo_parses_compact_rest_column_array():
     assert jobs[0].closes_at.isoformat() == "2026-05-29T00:59:00+00:00"
 
 
+def test_taleo_parses_adb_detail_fill_list_payload():
+    source = OrganizationSource(
+        id="adb_taleo",
+        name="ADB",
+        ats_family="taleo",
+        base_url="https://adb.taleo.net/careersection/1/jobsearch.ftl",
+    )
+    adapter = TaleoAdapter(AdapterContext(source=source, http=JobAggHTTPClient()))
+
+    job = adapter.parse_detail_html(
+        """
+        <html><head><meta property="og:title" content="Home" /></head>
+        <body>
+        <script>
+        api.fillList('requisitionDescriptionInterface', 'descRequisition', [
+          '83990','true','83990','false',
+          'Submission for the position: Senior Social Protection Specialist - (Job Number: 260497)',
+          'false','83990','false','true',
+          'Senior Social Protection Specialist ','260497','','','','',
+          '!*!!*!!*!%3Cp%3EFull ADB role description for social protection.%3C/p%3E',
+          'Asian Development Bank-India Resident Mission-India-New Delhi',
+          'Asian Development Bank-India Resident Mission-India-New Delhi',
+          'Sectors Department 3','Sectors Department 3',
+          'Human and Social Development Sector Office',
+          'Human and Social Development Sector Office',
+          '','','Technical International (Field Office)',
+          'Technical International (Field Office)','TI2','TI2',
+          '06-May-2026, 7:56:15 AM','06-May-2026, 7:56:15 AM',
+          'Ongoing','03-Jun-2026, 11:59:00 PM',
+          'false','83990','83990','true'
+        ]);
+        </script>
+        </body></html>
+        """,
+        "https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260497",
+    )
+
+    flat = job.raw["_taleo_flat"]
+    assert job.external_id == "260497"
+    assert job.title == "Senior Social Protection Specialist"
+    assert job.location == "Asian Development Bank-India Resident Mission-India-New Delhi"
+    assert job.department == "Sectors Department 3"
+    assert job.employment_type == "Technical International (Field Office)"
+    assert job.description == "Full ADB role description for social protection."
+    assert job.closes_at.isoformat() == "2026-06-03T23:59:00+00:00"
+    assert flat["JOB_LEVEL"] == "TI2"
+    assert flat["Position Level"] == "TI2"
+
+
 def test_taleo_rest_fetches_configured_search_pages():
     class Response:
         def __init__(self, payload):

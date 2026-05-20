@@ -270,6 +270,162 @@ def test_grade_mapping_table_is_seeded_in_database(tmp_path):
     assert tuple(wfp_g5) == ("T2_JUNIOR_PROFESSIONAL", "G-5")
 
 
+def test_adb_ti2_position_level_standardizes_from_taleo_flat_payload(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="adb_taleo",
+        name="Asian Development Bank",
+        ats_family="taleo",
+        base_url="https://adb.taleo.net/careersection/1/jobsearch.ftl",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Senior Social Protection Specialist",
+            external_id="260497",
+            location="Asian Development Bank-India Resident Mission-India-New Delhi",
+            employment_type="Technical International (Field Office)",
+            description="This is a fixed term staff appointment.",
+            apply_url="https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260497",
+            raw={
+                "_taleo_flat": {
+                    "JOB_LEVEL": "TI2",
+                    "POSITION_LEVEL_LABEL": "Technical International (Field Office)",
+                }
+            },
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="adb_taleo"))
+
+    assert row["grade_code"] == "TI2"
+    assert row["grade_mapping_organization"] == "Asian Development Bank"
+    assert row["grade_mapping_raw_grade_code"] == "TI1..TI3"
+    assert row["standard_seniority_tier"] == "T3_MID_PROFESSIONAL"
+    assert row["standard_scope"] == "International"
+    assert row["standard_employment_category"] == "Staff"
+
+
+def test_internship_is_not_standard_grade_even_when_grade_signal_exists(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Internship - Programme Support P-2",
+            external_id="intern-p2",
+            location="Geneva, Switzerland",
+            description="This internship is for learning and exposure.",
+            apply_url="https://jobs.unicef.org/jobs/intern-p2",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="unicef_pageup"))
+
+    assert row["contract_category"] == "internship_unknown"
+    assert row["grade_code"] == "P2"
+    assert row["standard_seniority_tier"] is None
+    assert row["standard_employment_category"] is None
+
+
+def test_generic_consultant_is_not_standard_grade(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unfpa_oracle_hcm",
+        name="UNFPA",
+        ats_family="oracle_hcm",
+        base_url="https://example.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="International Consultant P-3",
+            external_id="consultant-p3",
+            location="Nairobi, Kenya",
+            description="International consultant assignment.",
+            apply_url="https://example.org/jobs/consultant-p3",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="unfpa_oracle_hcm"))
+
+    assert row["contract_category"] == "consultant"
+    assert row["grade_code"] == "P3"
+    assert row["standard_seniority_tier"] is None
+    assert row["standard_employment_category"] is None
+
+
+def test_level_bearing_consultant_code_can_be_standardized(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unops_avature",
+        name="UNOPS",
+        ats_family="avature",
+        base_url="https://jobs.unops.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="International Consultant IICA-1",
+            external_id="iica-1",
+            location="Copenhagen, Denmark",
+            description="International consultant assignment with IICA-1 level.",
+            apply_url="https://jobs.unops.org/jobs/iica-1",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="unops_avature"))
+
+    assert row["contract_category"] == "consultant"
+    assert row["grade_code"] == "IICA1"
+    assert row["grade_mapping_raw_grade_code"] == "IICA-1"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+    assert row["standard_employment_category"] == "Contractor"
+
+
+def test_level_bearing_ssa_consultant_code_can_be_standardized(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="wfp_workday",
+        name="World Food Programme",
+        ats_family="workday",
+        base_url="https://example.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Driver - Special Services Agreement SSA-2",
+            external_id="ssa-2",
+            location="Dakar, Senegal",
+            description="Special Services Agreement roster.",
+            apply_url="https://example.org/jobs/ssa-2",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="wfp_workday"))
+
+    assert row["contract_category"] == "consultant"
+    assert row["grade_family"] == "SSA"
+    assert row["grade_code"] == "SSA2"
+    assert row["grade_mapping_raw_grade_code"] == "SSA1..SSA7"
+    assert row["standard_seniority_tier"] == "T1_ENTRY_SUPPORT"
+
+
 def test_ccog_resource_tree_contains_runtime_subset():
     tree = {entry["code"]: entry for entry in ccog_tree()}
 

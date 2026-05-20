@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import html
 import json
 import re
 from typing import Any
-from urllib.parse import parse_qsl, quote, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.models import JobRecord
@@ -187,18 +188,33 @@ class TaleoAdapter(JobAdapter):
         return self.parse_detail_html(html_text, str(detail_url))
 
     def parse_detail_html(self, html_text: str, detail_url: str) -> JobRecord:
-        title = self._meta_content(html_text, "og:title") or self._title_text(html_text)
-        body = self._clean_html_document(html_text)
-        external_id = self._job_id_from_url(detail_url)
+        parsed_detail = self._parse_taleo_detail_payload(html_text)
+        flat = parsed_detail.get("flat") if isinstance(parsed_detail.get("flat"), dict) else {}
+        title = (
+            parsed_detail.get("title")
+            or self._meta_content(html_text, "og:title")
+            or self._title_text(html_text)
+        )
+        body = parsed_detail.get("description") or self._clean_html_document(html_text)
+        external_id = parsed_detail.get("external_id") or self._job_id_from_url(detail_url)
         closes_at = self._extract_labeled_value(
             body,
             "Closing Date",
             "Deadline",
             "Closing Date (Period for Applying) - Internal",
+        ) or flat.get("Closing Date")
+        location = (
+            self._extract_labeled_value(body, "Primary Location", "Location")
+            or flat.get("LOCATION")
         )
-        location = self._extract_labeled_value(body, "Primary Location", "Location")
-        department = self._extract_labeled_value(body, "Organization", "Job Field")
-        employment_type = self._extract_labeled_value(body, "Schedule", "Job Type")
+        department = (
+            self._extract_labeled_value(body, "Organization", "Job Field")
+            or flat.get("JOB_FIELD")
+        )
+        employment_type = (
+            self._extract_labeled_value(body, "Schedule", "Job Type")
+            or flat.get("POSITION_LEVEL_LABEL")
+        )
         return build_job(
             self.source,
             title=title,
@@ -210,7 +226,11 @@ class TaleoAdapter(JobAdapter):
             apply_url=detail_url,
             source_url=detail_url,
             description=body,
-            raw={"detail_url": detail_url},
+            raw={
+                "detail_url": detail_url,
+                "_taleo_detail_url": detail_url,
+                "_taleo_flat": flat,
+            },
         )
 
     def _default_search_payload(self) -> dict[str, Any]:
@@ -361,6 +381,130 @@ class TaleoAdapter(JobAdapter):
         if current is not None and not _jobs_from_payload(payload):
             return True
         return False
+
+    def _parse_taleo_detail_payload(self, html_text: str) -> dict[str, Any]:
+        values = self._detail_fill_list_values(html_text)
+        if not values:
+            return {}
+
+        title = clean_text(values[9]) if len(values) > 9 else None
+        external_id = clean_text(values[10]) if len(values) > 10 else None
+        description = self._detail_description(values)
+        flat = self._detail_flat_values(values)
+        if external_id:
+            flat.setdefault("Job Number", external_id)
+        if title:
+            flat.setdefault("Requisition Title", title)
+        return {
+            "title": title,
+            "external_id": external_id,
+            "description": description,
+            "flat": flat,
+        }
+
+    def _detail_fill_list_values(self, html_text: str) -> list[str]:
+        match = re.search(
+            r"api\.fillList\("
+            r"['\"]requisitionDescriptionInterface['\"]\s*,\s*"
+            r"['\"]descRequisition['\"]\s*,\s*\[(.*?)\]\s*\);",
+            html_text,
+            re.DOTALL,
+        )
+        if not match:
+            return []
+        try:
+            values = ast.literal_eval(f"[{match.group(1)}]")
+        except (SyntaxError, ValueError):
+            return []
+        return [str(value) for value in values]
+
+    def _detail_description(self, values: list[str]) -> str | None:
+        parts: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if "%3C" not in value and not value.lstrip().startswith("<"):
+                continue
+            decoded_html = unquote(value).lstrip("!*")
+            text = clean_html(decoded_html)
+            if not text:
+                continue
+            fingerprint = re.sub(r"\s+", " ", text).strip()
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            parts.append(text)
+        return "\n\n".join(parts) if parts else None
+
+    def _detail_flat_values(self, values: list[str]) -> dict[str, Any]:
+        flat: dict[str, Any] = {"_taleo_parser": "requisitionDescriptionInterface.fillList"}
+        grade_index, grade_value = self._adb_position_level(values)
+        if grade_value:
+            flat["JOB_LEVEL"] = grade_value
+            flat["Position Level"] = grade_value
+            label = self._nearest_previous_nonempty(values, grade_index, exclude={grade_value})
+            if label:
+                flat["POSITION_LEVEL_LABEL"] = label
+
+        metadata = self._metadata_after_descriptions(values)
+        if metadata:
+            flat["LOCATION"] = metadata[0]
+        if len(metadata) > 1:
+            flat["JOB_FIELD"] = metadata[1]
+        if len(metadata) > 2:
+            flat["ORGANIZATION"] = metadata[2]
+        closing_date = self._closing_date_from_metadata(metadata)
+        if closing_date:
+            flat["Closing Date"] = closing_date
+        return flat
+
+    def _adb_position_level(self, values: list[str]) -> tuple[int, str | None]:
+        pattern = re.compile(r"^(?:TI|TL|IS|NS|AS)\s*-?\s*\d{1,2}$", re.IGNORECASE)
+        for index, value in enumerate(values):
+            text = clean_text(value)
+            if text and pattern.fullmatch(text):
+                return index, re.sub(r"\s|-", "", text).upper()
+        return -1, None
+
+    def _metadata_after_descriptions(self, values: list[str]) -> list[str]:
+        last_description_index = -1
+        for index, value in enumerate(values):
+            if "%3C" in value or value.lstrip().startswith("<"):
+                last_description_index = index
+        metadata: list[str] = []
+        for value in values[last_description_index + 1 :]:
+            text = clean_text(unquote(value))
+            if not text or text in metadata:
+                continue
+            if text.startswith("Submission for the position"):
+                break
+            metadata.append(text)
+        return metadata
+
+    def _closing_date_from_metadata(self, metadata: list[str]) -> str | None:
+        date_pattern = re.compile(r"^\d{1,2}-[A-Za-z]{3}-\d{4},")
+        for index, value in enumerate(metadata):
+            if value.casefold() == "ongoing":
+                for candidate in metadata[index + 1 :]:
+                    if date_pattern.match(candidate):
+                        return candidate
+        for value in reversed(metadata):
+            if date_pattern.match(value):
+                return value
+        return None
+
+    def _nearest_previous_nonempty(
+        self,
+        values: list[str],
+        index: int,
+        *,
+        exclude: set[str],
+    ) -> str | None:
+        normalized_exclude = {item.casefold() for item in exclude}
+        for value in reversed(values[:index]):
+            text = clean_text(value)
+            if text and text.casefold() not in normalized_exclude:
+                return text
+        return None
 
     def _meta_content(self, html_text: str, name: str) -> str | None:
         pattern = re.compile(

@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from jobagg.classification.models import ContractCategory
 from jobagg.classification.rules import rules_path
 
 
@@ -85,6 +86,13 @@ SOURCE_ORGANIZATION_OVERRIDES = {
 }
 
 COMMON_SYSTEM_ORGANIZATION = "United Nations Careers / UN Secretariat"
+INTERNSHIP_CONTRACT_CATEGORIES = {
+    ContractCategory.INTERNSHIP_PAID.value,
+    ContractCategory.INTERNSHIP_UNPAID.value,
+    ContractCategory.INTERNSHIP_UNKNOWN.value,
+}
+GENERIC_NONSTAFF_GRADE_FAMILIES = {"CONSULTANT", "INTERN"}
+LEVEL_BEARING_NONSTAFF_GRADE_FAMILIES = {"IICA", "LICA", "ICS", "SC", "SSA"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +203,14 @@ def _load_grade_mappings_from_path(path: Path) -> list[GradeMappingEntry]:
     return entries
 
 
-def standardize_grade(features: Any, grade: Any) -> GradeStandardization | None:
+def standardize_grade(
+    features: Any,
+    grade: Any,
+    contract: Any | None = None,
+) -> GradeStandardization | None:
+    if _should_skip_nonstaff_standardization(features, grade, contract):
+        return None
+
     entries = _candidate_entries(str(features.source_id))
     if not entries:
         return None
@@ -226,6 +241,44 @@ def standardize_grade(features: Any, grade: Any) -> GradeStandardization | None:
             evidence={"method": "role_title_signal", "field": field_name, "matched": matched},
         )
     return None
+
+
+def _should_skip_nonstaff_standardization(
+    features: Any,
+    grade: Any,
+    contract: Any | None,
+) -> bool:
+    category = _contract_category_value(contract)
+    grade_family = str(getattr(grade, "family", "") or "").upper()
+
+    if category in INTERNSHIP_CONTRACT_CATEGORIES:
+        return True
+    if grade_family in GENERIC_NONSTAFF_GRADE_FAMILIES:
+        return True
+    if category == ContractCategory.CONSULTANT.value:
+        return not _has_level_bearing_nonstaff_grade(features, grade)
+    return False
+
+
+def _contract_category_value(contract: Any | None) -> str | None:
+    category = getattr(contract, "category", None)
+    if isinstance(category, ContractCategory):
+        return category.value
+    if category is None:
+        return None
+    return str(category)
+
+
+def _has_level_bearing_nonstaff_grade(features: Any, grade: Any) -> bool:
+    family = str(getattr(grade, "family", "") or "").upper()
+    level = getattr(grade, "level", None)
+    if family in LEVEL_BEARING_NONSTAFF_GRADE_FAMILIES and level:
+        return True
+    pattern = re.compile(r"\b(?:IICA|LICA|ICS|SC|SSA)[-\s]?\d{1,2}\b", re.IGNORECASE)
+    for _, signal in _grade_signals(features, grade):
+        if pattern.search(signal):
+            return True
+    return False
 
 
 def _candidate_entries(source_id: str) -> list[GradeMappingEntry]:
