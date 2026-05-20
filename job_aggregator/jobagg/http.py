@@ -81,6 +81,7 @@ class JobAggHTTPClient:
         method: str,
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
+        timeout_seconds: int | float | None = None,
     ) -> HttpResponse:
         request_headers = {
             "User-Agent": self.user_agent,
@@ -90,10 +91,11 @@ class JobAggHTTPClient:
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         for attempt in range(self.max_retries + 1):
             self._respect_min_delay(host)
             try:
-                with self._opener.open(request, timeout=self.timeout_seconds) as response:
+                with self._opener.open(request, timeout=timeout) as response:
                     declared = response.headers.get("Content-Length")
                     if declared is not None:
                         try:
@@ -171,8 +173,19 @@ class JobAggHTTPClient:
         high = delay * (1 + self.jitter_ratio)
         return random.uniform(low, high)
 
-    def get(self, url: str, *, headers: dict[str, str] | None = None) -> HttpResponse:
-        return self._request(url, method="GET", headers=headers)
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        timeout_seconds: int | float | None = None,
+    ) -> HttpResponse:
+        return self._request(
+            url,
+            method="GET",
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        )
 
     def post_json(
         self,
@@ -180,6 +193,7 @@ class JobAggHTTPClient:
         payload: Any,
         *,
         headers: dict[str, str] | None = None,
+        timeout_seconds: int | float | None = None,
     ) -> HttpResponse:
         request_headers = {
             "Accept": "application/json",
@@ -187,7 +201,13 @@ class JobAggHTTPClient:
         }
         request_headers.update(headers or {})
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        return self._request(url, method="POST", headers=request_headers, body=body)
+        return self._request(
+            url,
+            method="POST",
+            headers=request_headers,
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
 
     def post_form(
         self,
@@ -195,6 +215,7 @@ class JobAggHTTPClient:
         payload: dict[str, Any] | None = None,
         *,
         headers: dict[str, str] | None = None,
+        timeout_seconds: int | float | None = None,
     ) -> HttpResponse:
         request_headers = {
             "Accept": "*/*",
@@ -206,7 +227,13 @@ class JobAggHTTPClient:
             from urllib.parse import urlencode
 
             body = urlencode(payload, doseq=True).encode("utf-8")
-        return self._request(url, method="POST", headers=request_headers, body=body)
+        return self._request(
+            url,
+            method="POST",
+            headers=request_headers,
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 def _retry_after_seconds(value: str | None) -> float | None:

@@ -138,7 +138,18 @@ class OracleHCMAdapter(JobAdapter):
         if detail_url is None:
             return None
         self.ensure_allowed(detail_url)
-        return next(iter(self.parse_jobs(self.context.http.get(detail_url, headers=self._oracle_headers()).json())), None)
+        return next(
+            iter(
+                self.parse_jobs(
+                    self.context.http.get(
+                        detail_url,
+                        headers=self._oracle_headers(),
+                        timeout_seconds=self._detail_timeout_seconds(),
+                    ).json()
+                )
+            ),
+            None,
+        )
 
     def _default_api_url(self) -> str | None:
         site_number = self.source.extra.get("site_number")
@@ -246,6 +257,13 @@ class OracleHCMAdapter(JobAdapter):
             f"{self.source.base_url.rstrip('/')}/hcmUI/CandidateExperience/en/sites/"
             f"{site_number}/job/{external_id}"
         )
+
+    def _detail_timeout_seconds(self) -> int | None:
+        value = self.source.extra.get("detail_timeout_seconds")
+        if value in (None, ""):
+            return None
+        timeout = _as_int(value, default=0)
+        return timeout if timeout > 0 else None
 
     def _oracle_headers(self) -> dict[str, str]:
         return {

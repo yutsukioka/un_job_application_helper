@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERIFIED_EMPTY_REASONS = {"verified_total_zero", "verified_structural_empty"}
+VERIFIED_EMPTY_REASONS = {"verified_total_zero", "verified_structural_empty", "verified_text_empty"}
 ISSUE_HEALTH_STATUSES = {"issue"}
 WARN_HEALTH_STATUSES = {"warning", "degraded"}
 

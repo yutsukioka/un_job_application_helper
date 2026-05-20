@@ -34,7 +34,8 @@ include = ["jobagg*"]
 
 [tool.setuptools.package-data]
 jobagg = [
-  "classification/rules/*.yaml"
+  "classification/rules/*.yaml",
+  "classification/rules/*.csv"
 ]
 
 [tool.pytest.ini_options]

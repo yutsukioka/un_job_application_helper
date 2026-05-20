@@ -110,6 +110,16 @@ def test_workday_parses_wfp_listing_payload():
     )
 
 
+def test_workday_marks_source_reported_zero_as_verified_empty():
+    http = FakeHTTPClient(pages={0: {"total": 0, "jobPostings": []}})
+    adapter = WorkdayAdapter(AdapterContext(source=wfp_source(), http=http))
+
+    assert adapter.fetch_jobs() == []
+    assert adapter.run_diagnostics.health_status == "ok_empty"
+    assert adapter.run_diagnostics.empty_reason == "verified_total_zero"
+    assert adapter.run_diagnostics.zero_fetched_evidence == {"total_reported_by_source": 0}
+
+
 def test_workday_parses_wfp_detail_payload():
     adapter = WorkdayAdapter(AdapterContext(source=wfp_source(), http=JobAggHTTPClient()))
 

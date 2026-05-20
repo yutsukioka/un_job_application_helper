@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from dataclasses import replace
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -35,6 +36,32 @@ class StaticHTMLAdapter(JobAdapter):
         if parser_name in {"generic", "public_links"}:
             return self._parse_generic_links(html_text, listing_url)
         return self._parse_generic_links(html_text, listing_url)
+
+    def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
+        detail_url = (
+            item.get("href")
+            or item.get("document_url")
+            or item.get("source_url")
+            or item.get("url")
+            or item.get("apply_url")
+        )
+        if not detail_url:
+            return None
+        detail_url = str(detail_url)
+        self.ensure_allowed(detail_url)
+        detail_job = parse_detail_page(self.source, self.fetch_text(detail_url), detail_url)
+        listing_external_id = item.get("external_id") or item.get("code")
+        if listing_external_id in (None, ""):
+            return detail_job
+        return replace(
+            detail_job,
+            external_id=str(listing_external_id),
+            raw={
+                **detail_job.raw,
+                "listing_raw": item,
+                "detail_url": detail_url,
+            },
+        )
 
     def _parse_generic_links(self, html_text: str, listing_url: str) -> list[JobRecord]:
         json_ld_jobs = parse_json_ld_jobs(self.source, html_text, listing_url)
@@ -91,7 +118,12 @@ class StaticHTMLAdapter(JobAdapter):
                     external_id=_external_id_from_url(link["href"]),
                     apply_url=link["href"],
                     source_url=link["href"],
-                    raw={"href": link["href"], "title": link["title"], "parser": "public_links"},
+                    raw={
+                        "href": link["href"],
+                        "external_id": _external_id_from_url(link["href"]),
+                        "title": link["title"],
+                        "parser": "public_links",
+                    },
                 )
             )
         return _dedupe(detail_jobs)
@@ -124,6 +156,7 @@ def parse_unssc_jobs(
                 source_url=document_url or listing_url,
                 raw={
                     "code": code,
+                    "external_id": code,
                     "document_url": document_url,
                     "apply_url": apply_url,
                     "parser": "unssc_drupal",
@@ -476,6 +509,15 @@ def _strip_site_suffix(value: object | None) -> str | None:
 
 
 def _mainish_html(html_text: str) -> str:
+    detail_patterns = (
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjob_description\b)[^>]*>(?P<body>.*?)</div>\s*</div>",
+        r"<div\b(?=[^>]*id=[\"']description_box[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
+        r"<div\b(?=[^>]*id=[\"']job_details_content[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
+    )
+    for pattern in detail_patterns:
+        match = re.search(pattern, html_text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group("body")
     for tag in ("main", "article"):
         match = re.search(
             rf"<{tag}\b[^>]*>(?P<body>.*?)</{tag}>",

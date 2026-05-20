@@ -111,6 +111,38 @@ class SuccessFactorsRMKAdapter(JobAdapter):
             current_url = _next_page_url(html_text, current_url)
         return jobs
 
+    def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
+        detail_url = _raw_detail_url(item)
+        if not detail_url:
+            external_id = item.get("id") or item.get("jobReqId") or item.get("jobreqid")
+            url_title = item.get("urlTitle") or item.get("unifiedUrlTitle")
+            detail_url = self._detail_url(external_id, url_title)
+        if not detail_url:
+            return None
+        detail_url = str(detail_url)
+        self.ensure_allowed(detail_url)
+        html_text = self.fetch_text(detail_url)
+        for job in self.parse_jobs_from_html(html_text):
+            if job.description:
+                return job
+        description = _detail_description(html_text)
+        if not description:
+            return None
+        return build_job(
+            self.source,
+            title=_detail_title(html_text) or _raw_title(item),
+            external_id=_job_id_from_url(detail_url),
+            location=_detail_location(html_text) or _raw_location(item),
+            department=_raw_department(item),
+            employment_type=_raw_employment_type(item),
+            posted_at=_raw_posted_at(item),
+            closes_at=_raw_closes_at(item) or _application_deadline(html_text),
+            apply_url=detail_url,
+            source_url=detail_url,
+            description=description,
+            raw={**item, "detail_url": detail_url, "parser": "successfactors_detail"},
+        )
+
     def parse_jobs_from_api(self, payload: Any) -> list[JobRecord]:
         rows = payload.get("jobSearchResult", []) if isinstance(payload, dict) else payload
         jobs: list[JobRecord] = []
@@ -120,6 +152,7 @@ class SuccessFactorsRMKAdapter(JobAdapter):
             item = row.get("response") if isinstance(row.get("response"), dict) else row
             external_id = item.get("id")
             url_title = item.get("urlTitle") or item.get("unifiedUrlTitle")
+            detail_url = self._detail_url(external_id, url_title)
             jobs.append(
                 build_job(
                     self.source,
@@ -131,8 +164,9 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     employment_type=item.get("jobGrade") or _first_text(item.get("filter3")),
                     posted_at=item.get("unifiedStandardStart") or item.get("cus_postingdate"),
                     closes_at=item.get("unifiedStandardEnd") or item.get("cus_enddate"),
-                    apply_url=self._detail_url(external_id, url_title) or str(external_id),
-                    raw=item,
+                    apply_url=detail_url or str(external_id),
+                    source_url=detail_url,
+                    raw={**item, "detail_url": detail_url},
                 )
             )
         return jobs
@@ -224,7 +258,12 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     external_id=_job_id_from_url(detail_url),
                     apply_url=detail_url,
                     source_url=detail_url,
-                    raw={"listing_html": match.group(0), "parser": "successfactors_legacy"},
+                    raw={
+                        "listing_html": match.group(0),
+                        "detail_url": detail_url,
+                        "title": title,
+                        "parser": "successfactors_legacy",
+                    },
                 )
             )
         return jobs
@@ -250,7 +289,11 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     closes_at=_extract_class_text(item_html, "jobShifttype"),
                     apply_url=detail_url,
                     source_url=detail_url,
-                    raw={"listing_html": item_html},
+                    raw={
+                        "listing_html": item_html,
+                        "detail_url": detail_url,
+                        "title": _clean_html(link.group("title")),
+                    },
                 )
             )
         return jobs
@@ -282,7 +325,11 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     or _extract_section_value(item_html, "postingdate"),
                     apply_url=detail_url,
                     source_url=detail_url,
-                    raw={"listing_html": item_html},
+                    raw={
+                        "listing_html": item_html,
+                        "detail_url": detail_url,
+                        "title": _clean_html(link.group("title")),
+                    },
                 )
             )
         return jobs
@@ -324,6 +371,104 @@ def _location_text(value: object) -> str | None:
             return ", ".join(str(address[key]) for key in ("addressLocality", "addressRegion", "addressCountry") if address.get(key))
     if isinstance(value, list):
         return "; ".join(filter(None, (_location_text(item) for item in value)))
+    return None
+
+
+def _raw_detail_url(item: dict[str, Any]) -> str | None:
+    for key in ("detail_url", "href", "link", "url", "apply_url", "source_url"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _raw_title(item: dict[str, Any]) -> str | None:
+    for key in ("title", "unifiedStandardTitle", "jobTitle", "externalJobTitle"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _raw_location(item: dict[str, Any]) -> str | None:
+    return _first_text(item.get("jobLocationShort")) or _first_text(item.get("mfield1"))
+
+
+def _raw_department(item: dict[str, Any]) -> str | None:
+    return _first_text(item.get("legalEntity_obj")) or _first_text(item.get("filter6"))
+
+
+def _raw_employment_type(item: dict[str, Any]) -> str | None:
+    return _first_text(item.get("jobGrade")) or _first_text(item.get("filter3"))
+
+
+def _raw_posted_at(item: dict[str, Any]) -> str | None:
+    return _first_text(item.get("unifiedStandardStart")) or _first_text(item.get("cus_postingdate"))
+
+
+def _raw_closes_at(item: dict[str, Any]) -> str | None:
+    return _first_text(item.get("unifiedStandardEnd")) or _first_text(item.get("cus_enddate"))
+
+
+def _detail_title(html_text: str) -> str | None:
+    title = _first_html_match(
+        html_text,
+        (
+            r"<meta\b(?=[^>]*property=[\"']og:title[\"'])(?=[^>]*content=[\"'](?P<value>[^\"']+)[\"'])",
+            r"<h1\b[^>]*>(?P<value>.*?)</h1>",
+            r"<title\b[^>]*>(?P<value>.*?)</title>",
+        ),
+    )
+    if not title:
+        return None
+    return re.split(r"\s+[|-]\s+", title, maxsplit=1)[0].strip()
+
+
+def _detail_location(html_text: str) -> str | None:
+    return _first_html_match(
+        html_text,
+        (
+            r"<span\b(?=[^>]*class=[\"'][^\"']*\bjobLocation\b)[^>]*>(?P<value>.*?)</span>",
+            r"<div\b(?=[^>]*class=[\"'][^\"']*\blocation\b)[^>]*>(?P<value>.*?)</div>",
+        ),
+    )
+
+
+def _detail_description(html_text: str) -> str | None:
+    patterns = (
+        r"<span\b(?=[^>]*class=[\"'][^\"']*\bjobdescription\b)[^>]*>"
+        r"(?P<value>.*?)</span>\s*</span>\s*</div>",
+        r"<span\b(?=[^>]*itemprop=[\"']description[\"'])[^>]*>(?P<value>.*?)</span>",
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobdescription\b)[^>]*>(?P<value>.*?)</div>",
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDescription\b)[^>]*>(?P<value>.*?)</div>",
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDisplay\b)[^>]*>(?P<value>.*?)</main>",
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDisplay\b)[^>]*>(?P<value>.*?)</body>",
+        r"<section\b(?=[^>]*class=[\"'][^\"']*\bjob[^\"']*\bdescription\b)[^>]*>(?P<value>.*?)</section>",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, html_text, flags=re.IGNORECASE | re.DOTALL):
+            cleaned = _clean_html(match.group("value"))
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _first_html_match(
+    html_text: str,
+    patterns: tuple[str, ...],
+    *,
+    raw: bool = False,
+) -> str | None:
+    for pattern in patterns:
+        match = re.search(pattern, html_text, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        value = match.group("value")
+        if raw:
+            return value
+        cleaned = _clean_html(value)
+        if cleaned:
+            return cleaned
     return None
 
 

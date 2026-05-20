@@ -174,7 +174,7 @@ def test_pageup_fetches_detail_html_with_get_for_listing_url():
                 }"""
             )
 
-        def get(self, url, *, headers=None):
+        def get(self, url, *, headers=None, timeout_seconds=None):
             self.get_urls.append(url)
             return Response(
                 """
@@ -210,3 +210,52 @@ def test_pageup_fetches_detail_html_with_get_for_listing_url():
     assert jobs[0].title == "Technical Manager, P-4, Nairobi #589086"
     assert jobs[0].employment_type == "Fixed Term Appointment"
     assert jobs[0].description == "Technical Manager, P-4, Nairobi #589086 Job no: 589086 Contract type: Fixed Term Appointment Location: Kenya Full role text."
+
+
+def test_pageup_retries_empty_ajax_detail_as_public_html():
+    class Response:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeHTTP:
+        user_agent = "test"
+        timeout_seconds = 30
+        max_retries = 0
+        backoff_base_seconds = 0
+        jitter_ratio = 0
+        max_response_bytes = 1024 * 1024
+
+        def __init__(self):
+            self.headers = []
+
+        def get(self, url, *, headers=None, timeout_seconds=None):
+            self.headers.append(headers or {})
+            if len(self.headers) == 1:
+                return Response('{"results": ""}')
+            return Response(
+                """
+                <h2>Programme Officer #593218</h2>
+                <p><b>Job no:</b> <span class="job-externalJobNo">593218</span></p>
+                <div id="job-details">Full UNICEF detail text.</div>
+                """
+            )
+
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+        extra={"listing_url": "https://jobs.unicef.org/en-us/listing/"},
+    )
+    adapter = PageUpAdapter(AdapterContext(source=source, http=FakeHTTP()))
+
+    job = adapter.fetch_detail_for_listing_item(
+        {
+            "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/593218/example",
+        }
+    )
+
+    assert job is not None
+    assert job.external_id == "593218"
+    assert "Full UNICEF detail text" in (job.description or "")
+    assert adapter.context.http.headers[1]["Accept"].startswith("text/html")

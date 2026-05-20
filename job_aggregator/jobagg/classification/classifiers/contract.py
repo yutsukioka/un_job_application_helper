@@ -133,8 +133,9 @@ def _match_rules(text: str | None, field_name: str) -> ContractResult:
 
 
 def _keyword_matches(text: str, keyword: str) -> bool:
-    if keyword.strip() in {"ta", "con"}:
-        return re.search(rf"\b{re.escape(keyword.strip())}\b", text) is not None
+    stripped = keyword.strip()
+    if re.fullmatch(r"[a-z0-9]+", stripped):
+        return re.search(rf"\b{re.escape(stripped)}\b", text) is not None
     return keyword in text
 
 

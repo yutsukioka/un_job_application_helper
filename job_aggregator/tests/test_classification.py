@@ -3,6 +3,7 @@ import sqlite3
 from jobagg.classification import classify_database
 from jobagg.classification.classifiers.ccog import _keyword_score, ccog_tree
 from jobagg.classification.classifiers.contract import classify_contract
+from jobagg.classification.grade_mapping import grade_mapping_rows
 from jobagg.classification.models import ContractCategory, FeatureBundle, GradeResult
 from jobagg.db import JobDatabase
 from jobagg.filters.explain import explain_job_match
@@ -39,6 +40,12 @@ def test_classifies_wfp_logistics_assistant(tmp_path):
     row = next(db.iter_jobs_with_classification(source_id="wfp_workday"))
     assert row["grade_family"] == "G"
     assert row["grade_code"] == "G5"
+    assert row["grade_mapping_organization"] == "World Food Programme"
+    assert row["grade_mapping_raw_grade_code"] == "G-5"
+    assert row["standard_grade_family"] == "UN General Service"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+    assert row["standard_scope"] == "Local"
+    assert row["standard_un_equivalent"] == "G-5"
     assert row["contract_category"] == "staff_other"
     assert row["national_international"] == "local"
     assert row["work_modality"] == "multiple_locations"
@@ -130,6 +137,10 @@ def test_classifies_unv_specialist_and_filters_facets(tmp_path):
     assert len(rows) == 1
     row = rows[0]
     assert row["unv_category"] == "un_volunteer_specialist"
+    assert row["grade_mapping_organization"] == "United Nations Volunteers"
+    assert row["grade_mapping_raw_grade_code"] == "International UNV Specialist"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+    assert row["standard_un_equivalent"] == "~P-2 functional only"
     assert row["work_modality"] == "onsite"
     assert row["country_iso3"] == "RWA"
     assert row["city"] == "Kigali"
@@ -240,6 +251,25 @@ def test_classification_schema_and_manual_override(tmp_path):
     assert {"vacancy_source_features", "vacancy_classifications", "vacancy_locations"} <= tables
 
 
+def test_grade_mapping_table_is_seeded_in_database(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+
+    with db.connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM grade_mappings").fetchone()[0]
+        wfp_g5 = conn.execute(
+            """
+            SELECT normalized_seniority_tier, approximate_un_equivalent
+            FROM grade_mappings
+            WHERE organization = ? AND raw_grade_code = ?
+            """,
+            ("World Food Programme", "G-5"),
+        ).fetchone()
+
+    assert count == len(grade_mapping_rows()) >= 700
+    assert tuple(wfp_g5) == ("T2_JUNIOR_PROFESSIONAL", "G-5")
+
+
 def test_ccog_resource_tree_contains_runtime_subset():
     tree = {entry["code"]: entry for entry in ccog_tree()}
 
@@ -292,3 +322,18 @@ def test_contract_specific_internship_signals_override_generic_title():
 
     assert unpaid.category is ContractCategory.INTERNSHIP_UNPAID
     assert paid_source.category is ContractCategory.INTERNSHIP_PAID
+
+
+def test_contract_intern_keyword_does_not_match_international():
+    result = classify_contract(
+        FeatureBundle(
+            vacancy_id="job-3",
+            source_id="unido_successfactors",
+            ats_family="successfactors",
+            title="International Scrap and Waste Materials Inspection Expert",
+            employment_type="ISA-P4",
+        ),
+        GradeResult(family="P", code="P4"),
+    )
+
+    assert result.category is ContractCategory.STAFF_OTHER

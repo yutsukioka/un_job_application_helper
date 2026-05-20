@@ -292,6 +292,42 @@ def test_consolidate_bundle_databases_writes_all_jobs_outputs(tmp_path):
 
     assert [row["title"] for row in current_rows] == ["Open Role A"]
     assert sorted(row["title"] for row in history_rows) == ["Closed Role B", "Open Role A"]
+    with sqlite3.connect(output / "all_jobs.sqlite3") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM grade_mappings").fetchone()[0] >= 700
+
+
+def test_sync_bundles_refreshes_consolidated_database_by_default(tmp_path):
+    config = tmp_path / "organizations.yaml"
+    output = tmp_path / "output"
+    config.write_text(
+        """
+sources:
+  - id: org_static_bundle
+    name: Org
+    ats_family: static_bundle_test
+    base_url: https://example.org
+    enabled: true
+    extra:
+      output_slug: org
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--output-dir",
+            str(output),
+            "--no-archive",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (output / "all_jobs.sqlite3").exists()
+    rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
+    assert [row["title"] for row in rows] == ["Role 1"]
 
 
 def _staged_result(tmp_path, *, source_id, slug, fetched):

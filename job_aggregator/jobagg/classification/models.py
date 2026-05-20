@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 
 
-CLASSIFICATION_VERSION = "ccog-filter-v1"
+CLASSIFICATION_VERSION = "ccog-filter-v2"
 EXTRACTOR_VERSION = "source-features-v1"
 
 
@@ -210,6 +210,19 @@ class ClassificationResult:
     staff_category: str | None = None
     min_years_experience: int | None = None
     grade_confidence: float = 0.0
+    grade_mapping_organization: str | None = None
+    grade_mapping_raw_grade_code: str | None = None
+    standard_grade_family: str | None = None
+    standard_seniority_tier: str | None = None
+    standard_scope: str | None = None
+    standard_employment_category: str | None = None
+    standard_un_equivalent: str | None = None
+    standard_experience_range: str | None = None
+    standard_role_scope: str | None = None
+    standard_supervisory_expectations: str | None = None
+    grade_mapping_confidence: str | None = None
+    grade_mapping_evidence_type: str | None = None
+    grade_mapping_notes: str | None = None
     country: str | None = None
     country_iso2: str | None = None
     country_iso3: str | None = None

@@ -14,6 +14,7 @@ from jobagg.classification.classifiers.modality import classify_modality
 from jobagg.classification.classifiers.national_scope import classify_national_scope
 from jobagg.classification.classifiers.unv import classify_unv
 from jobagg.classification.extractors import get_extractor
+from jobagg.classification.grade_mapping import standardize_grade
 from jobagg.classification.locations import (
     best_vacancy_location,
     build_vacancy_locations,
@@ -119,6 +120,7 @@ def classify_job_with_locations(
     extractor = get_extractor(str(vacancy["source_id"]), str(vacancy["ats_family"]))
     features = extractor.extract(vacancy)
     grade = classify_grade(features)
+    grade_standardization = standardize_grade(features, grade)
     contract = classify_contract(features, grade)
     national_scope = classify_national_scope(features, grade, contract)
     location = classify_location(features)
@@ -156,6 +158,43 @@ def classify_job_with_locations(
         staff_category=grade.staff_category,
         min_years_experience=grade.min_years_experience,
         grade_confidence=grade.confidence,
+        grade_mapping_organization=grade_standardization.mapping_organization
+        if grade_standardization
+        else None,
+        grade_mapping_raw_grade_code=grade_standardization.mapping_raw_grade_code
+        if grade_standardization
+        else None,
+        standard_grade_family=grade_standardization.normalized_grade_family
+        if grade_standardization
+        else None,
+        standard_seniority_tier=grade_standardization.normalized_seniority_tier
+        if grade_standardization
+        else None,
+        standard_scope=grade_standardization.international_national_local
+        if grade_standardization
+        else None,
+        standard_employment_category=grade_standardization.staff_consultant_contractor_other
+        if grade_standardization
+        else None,
+        standard_un_equivalent=grade_standardization.approximate_un_equivalent
+        if grade_standardization
+        else None,
+        standard_experience_range=grade_standardization.approximate_experience_range
+        if grade_standardization
+        else None,
+        standard_role_scope=grade_standardization.typical_role_scope
+        if grade_standardization
+        else None,
+        standard_supervisory_expectations=grade_standardization.supervisory_expectations
+        if grade_standardization
+        else None,
+        grade_mapping_confidence=grade_standardization.confidence_level
+        if grade_standardization
+        else None,
+        grade_mapping_evidence_type=grade_standardization.evidence_type
+        if grade_standardization
+        else None,
+        grade_mapping_notes=grade_standardization.notes_caveats if grade_standardization else None,
         country=location.country,
         country_iso2=location.iso2,
         country_iso3=location.iso3,
@@ -179,6 +218,9 @@ def classify_job_with_locations(
         evidence={
             "features": features.evidence,
             "grade": grade.evidence,
+            "grade_standardization": grade_standardization.evidence
+            if grade_standardization
+            else None,
             "contract": contract.evidence,
             "national_scope": national_scope.evidence,
             "location": location.evidence,

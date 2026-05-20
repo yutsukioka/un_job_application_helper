@@ -70,6 +70,29 @@ def test_ops_check_command_infers_output_dir_from_report_path(tmp_path):
     assert "healthy_source" in report_path.read_text(encoding="utf-8")
 
 
+def test_ops_check_accepts_verified_text_empty(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    _write_bundle(
+        output / "empty_jobs.sqlite3",
+        source_id="empty_source",
+        fetched=0,
+        health_status="ok_empty",
+        pagination_complete=True,
+        errors=[],
+        empty_reason="verified_text_empty",
+    )
+
+    report = collect_ops_check(
+        db_path=tmp_path / "unused.sqlite3",
+        output_dir=output,
+        all_bundles=True,
+    )
+
+    assert report.pass_count == 1
+    assert report.warn_count == 0
+
+
 def _write_bundle(
     path,
     *,
@@ -78,6 +101,7 @@ def _write_bundle(
     health_status: str,
     pagination_complete: bool,
     errors: list[str],
+    empty_reason: str | None = None,
 ) -> None:
     source = OrganizationSource(
         id=source_id,
@@ -108,6 +132,7 @@ def _write_bundle(
                 scope_validation_status="passed",
                 pagination_complete=pagination_complete,
                 total_reported_by_source=fetched,
+                empty_reason=empty_reason,
                 missing_transition_allowed=health_status in {"ok", "ok_empty"},
             ),
         )

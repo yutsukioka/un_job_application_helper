@@ -18,6 +18,7 @@ CONSOLIDATED_TABLES = (
     ("jobs", "job_key"),
     ("vacancy_source_features", "vacancy_id"),
     ("vacancy_classifications", "vacancy_id"),
+    ("grade_mappings", "mapping_version, organization, raw_grade_code"),
     ("classification_overrides", "vacancy_id, field_name"),
     ("vacancy_locations", None),
     ("change_events", None),

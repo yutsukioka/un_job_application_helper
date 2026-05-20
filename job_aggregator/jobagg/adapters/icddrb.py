@@ -71,6 +71,14 @@ class ICDDRBAdapter(JobAdapter):
             raw={"href": link["href"], "title": link["title"], "parser": "icddrb_listing"},
         )
 
+    def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
+        detail_url = item.get("href") or item.get("url") or item.get("source_url") or item.get("apply_url")
+        if not detail_url:
+            return None
+        detail_url = str(detail_url)
+        self.ensure_allowed(detail_url)
+        return self.parse_detail_page(self.fetch_text(detail_url), detail_url)
+
     def parse_detail_page(self, html_text: str, page_url: str) -> JobRecord:
         title = _first_match(
             html_text,

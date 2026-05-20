@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from jobagg.adapters.base import JobAdapter, register_adapter
+from jobagg.http import JobAggHTTPClient
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job
 from jobagg.utils import as_bool as _as_bool
@@ -146,7 +147,7 @@ class PageUpAdapter(JobAdapter):
         if not detail_url:
             return None
         detail_url = _quote_url(str(detail_url))
-        detail_text = self.fetch_text(detail_url)
+        detail_text = self._fetch_detail_text(detail_url)
         try:
             payload = json.loads(detail_text)
         except json.JSONDecodeError:
@@ -154,9 +155,55 @@ class PageUpAdapter(JobAdapter):
         else:
             if isinstance(payload, dict) and isinstance(payload.get("results"), str):
                 detail_html = payload["results"]
+                if not detail_html.strip():
+                    detail_html = self._fetch_public_detail_html(detail_url)
             else:
                 return None
+        if not detail_html.strip():
+            return None
         return self.parse_detail_html(detail_html, str(detail_url))
+
+    def _fetch_detail_text(self, detail_url: str) -> str:
+        self.ensure_allowed(detail_url)
+        return self.context.http.get(
+            detail_url,
+            timeout_seconds=self._detail_timeout_seconds(),
+        ).text
+
+    def _fetch_public_detail_html(self, detail_url: str) -> str:
+        self.ensure_allowed(detail_url)
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": str(self.source.extra.get("listing_url") or self.source.base_url),
+        }
+        text = self.context.http.get(
+            detail_url,
+            headers=headers,
+            timeout_seconds=self._detail_timeout_seconds(),
+        ).text
+        if text.strip():
+            return text
+        # Some PageUp tenants intermittently return an empty AJAX fragment for
+        # public detail URLs after filter requests. A fresh cookie jar avoids
+        # persisting that empty fragment as the job description.
+        stateless_http = JobAggHTTPClient(
+            user_agent=self.context.http.user_agent,
+            timeout_seconds=self.context.http.timeout_seconds,
+            min_delay_seconds=0,
+            max_retries=self.context.http.max_retries,
+            backoff_base_seconds=self.context.http.backoff_base_seconds,
+            jitter_ratio=self.context.http.jitter_ratio,
+            max_response_bytes=self.context.http.max_response_bytes,
+        )
+        return stateless_http.get(
+            detail_url,
+            headers=headers,
+            timeout_seconds=self._detail_timeout_seconds(),
+        ).text
+
+    def _detail_timeout_seconds(self) -> int | None:
+        value = _as_int(self.source.extra.get("detail_timeout_seconds"), default=0)
+        return value or None
 
     def parse_detail_html(self, detail_html: str, detail_url: str) -> JobRecord:
         title = self._extract_heading(detail_html) or self._extract_title_from_detail_url(detail_url)

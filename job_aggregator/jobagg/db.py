@@ -251,6 +251,34 @@ class JobDatabase:
                     extractor_version TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS grade_mappings (
+                    mapping_version TEXT NOT NULL,
+                    organization TEXT NOT NULL,
+                    raw_grade_code TEXT NOT NULL,
+                    normalized_raw_grade_code TEXT NOT NULL,
+                    normalized_grade_family TEXT,
+                    normalized_seniority_tier TEXT,
+                    international_national_local TEXT,
+                    staff_consultant_contractor_other TEXT,
+                    approximate_un_equivalent TEXT,
+                    approximate_experience_range TEXT,
+                    typical_role_scope TEXT,
+                    supervisory_expectations TEXT,
+                    notes_caveats TEXT,
+                    confidence_level TEXT,
+                    evidence_type TEXT,
+                    PRIMARY KEY (mapping_version, organization, raw_grade_code)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_grade_mappings_org_code
+                    ON grade_mappings (organization, normalized_raw_grade_code);
+                CREATE INDEX IF NOT EXISTS idx_grade_mappings_seniority
+                    ON grade_mappings (normalized_seniority_tier);
+                CREATE INDEX IF NOT EXISTS idx_grade_mappings_scope
+                    ON grade_mappings (international_national_local);
+                CREATE INDEX IF NOT EXISTS idx_grade_mappings_un_equiv
+                    ON grade_mappings (approximate_un_equivalent);
+
                 CREATE TABLE IF NOT EXISTS vacancy_classifications (
                     vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
                     ccog_primary_code TEXT,
@@ -272,6 +300,19 @@ class JobDatabase:
                     staff_category TEXT,
                     min_years_experience INTEGER,
                     grade_confidence REAL,
+                    grade_mapping_organization TEXT,
+                    grade_mapping_raw_grade_code TEXT,
+                    standard_grade_family TEXT,
+                    standard_seniority_tier TEXT,
+                    standard_scope TEXT,
+                    standard_employment_category TEXT,
+                    standard_un_equivalent TEXT,
+                    standard_experience_range TEXT,
+                    standard_role_scope TEXT,
+                    standard_supervisory_expectations TEXT,
+                    grade_mapping_confidence TEXT,
+                    grade_mapping_evidence_type TEXT,
+                    grade_mapping_notes TEXT,
                     country TEXT,
                     country_iso2 TEXT,
                     country_iso3 TEXT,
@@ -373,6 +414,22 @@ class JobDatabase:
                 "source_hash",
                 "TEXT",
             )
+            for column in (
+                "grade_mapping_organization",
+                "grade_mapping_raw_grade_code",
+                "standard_grade_family",
+                "standard_seniority_tier",
+                "standard_scope",
+                "standard_employment_category",
+                "standard_un_equivalent",
+                "standard_experience_range",
+                "standard_role_scope",
+                "standard_supervisory_expectations",
+                "grade_mapping_confidence",
+                "grade_mapping_evidence_type",
+                "grade_mapping_notes",
+            ):
+                self._ensure_column(conn, "vacancy_classifications", column, "TEXT")
             # Vendor-supplied wall-clock closing time (kept verbatim) and
             # the IANA timezone identifier used to interpret it. ``closes_at``
             # remains the normalized UTC value used for sorting/indexing.
@@ -419,6 +476,19 @@ class JobDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_jobs_posting_fingerprint "
                 "ON jobs (posting_fingerprint)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_class_standard_seniority "
+                "ON vacancy_classifications (standard_seniority_tier)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_class_standard_scope "
+                "ON vacancy_classifications (standard_scope)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_class_standard_un_equiv "
+                "ON vacancy_classifications (standard_un_equivalent)"
+            )
+            self._seed_grade_mappings(conn)
             self._ensure_fts(conn)
 
     def _ensure_fts(self, conn: sqlite3.Connection) -> None:
@@ -595,6 +665,36 @@ class JobDatabase:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _seed_grade_mappings(self, conn: sqlite3.Connection) -> None:
+        from jobagg.classification.grade_mapping import (
+            GRADE_MAPPING_VERSION,
+            grade_mapping_rows,
+        )
+
+        rows = grade_mapping_rows()
+        if not rows:
+            return
+        columns = list(rows[0])
+        placeholders = ", ".join("?" for _ in columns)
+        updates = ", ".join(
+            f"{column} = excluded.{column}"
+            for column in columns
+            if column not in {"mapping_version", "organization", "raw_grade_code"}
+        )
+        conn.execute(
+            "DELETE FROM grade_mappings WHERE mapping_version = ?",
+            (GRADE_MAPPING_VERSION,),
+        )
+        conn.executemany(
+            f"""
+            INSERT INTO grade_mappings ({", ".join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT(mapping_version, organization, raw_grade_code)
+            DO UPDATE SET {updates}
+            """,
+            [tuple(row[column] for column in columns) for row in rows],
+        )
 
     def _merge_existing_detail_fields(self, job: JobRecord, current: sqlite3.Row) -> None:
         """Preserve detail-only fields when a listing-only sync omits them."""
@@ -1034,6 +1134,19 @@ class JobDatabase:
                 c.staff_category,
                 c.min_years_experience,
                 c.grade_confidence,
+                c.grade_mapping_organization,
+                c.grade_mapping_raw_grade_code,
+                c.standard_grade_family,
+                c.standard_seniority_tier,
+                c.standard_scope,
+                c.standard_employment_category,
+                c.standard_un_equivalent,
+                c.standard_experience_range,
+                c.standard_role_scope,
+                c.standard_supervisory_expectations,
+                c.grade_mapping_confidence,
+                c.grade_mapping_evidence_type,
+                c.grade_mapping_notes,
                 c.country,
                 c.country_iso2,
                 c.country_iso3,

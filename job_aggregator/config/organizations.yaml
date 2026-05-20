@@ -558,6 +558,7 @@ sources:
       max_detail_pages_per_run: 25
       fetch_details: false
       request_timeout_seconds: 60
+      detail_timeout_seconds: 120
       max_retries: 4
       backoff_base_seconds: 2
 
@@ -749,14 +750,17 @@ sources:
   - id: ctbto_successfactors_legacy
     name: Comprehensive Nuclear-Test-Ban Treaty Organization
     ats_family: successfactors_legacy
-    base_url: https://career2.successfactors.eu
+    base_url: https://career2.successfactors.eu/career?company=ctbtoprepa
     enabled: true
     extra:
       output_slug: ctbto
+      company_id: ctbtoprepa
+      locale: en_GB
+      primary_fetch_method: successfactors_xml
       search_url: https://career2.successfactors.eu/career?company=ctbtoprepa&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
       max_pages: 1
       fetch_details: false
-      allow_empty_source: true
+      allow_empty_source: false
 
   - id: icc_successfactors_legacy
     name: International Criminal Court

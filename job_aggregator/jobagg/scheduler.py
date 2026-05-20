@@ -146,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not archive overwritten, duplicate, or noncanonical output files.",
     )
+    bundles.add_argument(
+        "--skip-consolidate",
+        action="store_true",
+        help="Do not refresh all_jobs.sqlite3/current/history after publishing bundles.",
+    )
     bundles.set_defaults(handler=handle_sync_bundles)
 
     consolidate = subcommands.add_parser(
@@ -181,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--status", choices=["open", "missing", "closed"], help="Optional status filter.")
     classify.add_argument(
         "--version",
-        default="ccog-filter-v1",
+        default="ccog-filter-v2",
         help="Classification version label to store.",
     )
     classify.add_argument(
@@ -462,6 +467,14 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
         )
     if archive_dir is not None:
         LOGGER.info("Archived previous/noncanonical output files at %s", archive_dir)
+    if not args.skip_consolidate:
+        consolidated = consolidate_bundle_databases(output_dir=output_dir)
+        LOGGER.info(
+            "Refreshed consolidated database %s with %s current and %s history jobs",
+            consolidated.db_path,
+            consolidated.current_count,
+            consolidated.history_count,
+        )
     LOGGER.info("Published %s canonical organization bundles to %s", len(selected), output_dir)
     return 1 if any(result.sync_result.errors for result in selected) else 0
 

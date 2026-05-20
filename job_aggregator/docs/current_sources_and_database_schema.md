@@ -282,6 +282,19 @@ Normalized classification output for filtering, search, audit, and review.
 | `staff_category` | TEXT |  | Staff category classification. |
 | `min_years_experience` | INTEGER |  | Derived minimum years when inferable. |
 | `grade_confidence` | REAL |  | Grade classification confidence. |
+| `grade_mapping_organization` | TEXT |  | Organization row used from the revised grade mapping table. |
+| `grade_mapping_raw_grade_code` | TEXT |  | Raw mapping-table grade code that matched the vacancy. |
+| `standard_grade_family` | TEXT |  | Cross-organization grade family from `grade_mapping_table_revised.csv`. |
+| `standard_seniority_tier` | TEXT | indexed | Standard seniority tier such as `T2_JUNIOR_PROFESSIONAL`. |
+| `standard_scope` | TEXT | indexed | Standard international/national/local scope from the mapping table. |
+| `standard_employment_category` | TEXT |  | Standard staff/consultant/contractor/other category. |
+| `standard_un_equivalent` | TEXT | indexed | Approximate UN-equivalent grade or functional equivalent. |
+| `standard_experience_range` | TEXT |  | Approximate experience band from the mapping table. |
+| `standard_role_scope` | TEXT |  | Typical role scope from the mapping table. |
+| `standard_supervisory_expectations` | TEXT |  | Supervisory expectations from the mapping table. |
+| `grade_mapping_confidence` | TEXT |  | Mapping-table confidence level. |
+| `grade_mapping_evidence_type` | TEXT |  | Mapping-table evidence type. |
+| `grade_mapping_notes` | TEXT |  | Mapping-table caveats. |
 | `country` | TEXT |  | Normalized country name. |
 | `country_iso2` | TEXT |  | ISO-3166 alpha-2 country code. |
 | `country_iso3` | TEXT | indexed | ISO-3166 alpha-3 country code. |
@@ -305,6 +318,29 @@ Normalized classification output for filtering, search, audit, and review.
 | `evidence` | TEXT |  | Serialized classification evidence. |
 | `classified_at` | TEXT |  | Classification timestamp. |
 | `source_hash` | TEXT |  | Source content hash used to skip unchanged reclassification. |
+
+## Table: `grade_mappings`
+
+Bundled copy of `jobagg/classification/rules/grade_mapping_table_revised.csv`.
+It is seeded during database initialization so each source database and the consolidated `all_jobs.sqlite3` carries the grade standardization reference used by classification.
+
+| Column | SQLite type | Key/index | Meaning |
+|---|---|---|---|
+| `mapping_version` | TEXT | composite primary key | Mapping dataset version. |
+| `organization` | TEXT | composite primary key, indexed with normalized code | Organization name from the CSV. |
+| `raw_grade_code` | TEXT | composite primary key | Organization-specific grade/code label. |
+| `normalized_raw_grade_code` | TEXT | indexed with organization | Compact match key for the raw grade code. |
+| `normalized_grade_family` | TEXT |  | Standard grade family. |
+| `normalized_seniority_tier` | TEXT | indexed | Standard seniority tier. |
+| `international_national_local` | TEXT | indexed | Standard scope. |
+| `staff_consultant_contractor_other` | TEXT |  | Standard employment category. |
+| `approximate_un_equivalent` | TEXT | indexed | Approximate UN-equivalent grade. |
+| `approximate_experience_range` | TEXT |  | Experience range. |
+| `typical_role_scope` | TEXT |  | Typical role scope. |
+| `supervisory_expectations` | TEXT |  | Supervisory expectations. |
+| `notes_caveats` | TEXT |  | Mapping caveats. |
+| `confidence_level` | TEXT |  | Mapping confidence. |
+| `evidence_type` | TEXT |  | Mapping evidence type. |
 
 ## Table: `vacancy_locations`
 

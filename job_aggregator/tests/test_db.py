@@ -1,3 +1,5 @@
+import sqlite3
+
 from jobagg.db import JobDatabase
 from jobagg.models import OrganizationSource, SourceRunDiagnostics, SyncResult
 from jobagg.normalize import build_job
@@ -271,3 +273,46 @@ def test_source_run_diagnostics_are_persisted_with_source_run(tmp_path):
             "observed_at": diagnostics[0]["observed_at"],
         }
     ]
+
+
+def test_initialize_migrates_legacy_classification_table_before_standard_indexes(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE vacancy_classifications (
+                vacancy_id TEXT PRIMARY KEY,
+                ccog_primary_code TEXT,
+                ccog_family_code TEXT,
+                contract_category TEXT,
+                grade_family TEXT,
+                grade_code TEXT,
+                country_iso3 TEXT,
+                city TEXT,
+                region TEXT,
+                work_modality TEXT,
+                national_international TEXT,
+                unv_category TEXT,
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                classification_version TEXT NOT NULL,
+                evidence TEXT,
+                classified_at TEXT NOT NULL
+            )
+            """
+        )
+
+    db = JobDatabase(path)
+    db.initialize()
+
+    with sqlite3.connect(path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(vacancy_classifications)")
+        }
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(vacancy_classifications)")
+        }
+
+    assert "standard_seniority_tier" in columns
+    assert "idx_class_standard_seniority" in indexes

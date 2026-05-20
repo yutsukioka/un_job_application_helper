@@ -5,6 +5,7 @@ from pathlib import Path
 from jobagg.adapters.avature import AvatureAdapter
 from jobagg.adapters.base import AdapterContext
 from jobagg.adapters.csod import CSODAdapter, _extract_balanced_json_object
+from jobagg.adapters.custom_html import CustomHTMLAdapter
 from jobagg.adapters.icddrb import ICDDRBAdapter, _vacancy_links
 from jobagg.adapters.imo import IMOAPIAdapter
 from jobagg.adapters.oracle_hcm import OracleHCMAdapter, classify_fetch_error
@@ -56,8 +57,8 @@ class FakeOracleCEHTTP:
         self.detail_pages = detail_pages or {}
         self.get_calls = []
 
-    def get(self, url, *, headers=None):
-        self.get_calls.append((url, headers or {}))
+    def get(self, url, *, headers=None, timeout_seconds=None):
+        self.get_calls.append((url, headers or {}, timeout_seconds))
         if "/siteSettings/" in url:
             return FakeResponse(self.site_settings)
         if "recruitingCEJobRequisitionDetails" in url:
@@ -373,6 +374,18 @@ def test_oracle_hcm_detail_url_quotes_id_like_candidate_experience_har():
 
     detail_url = next(call[0] for call in http.get_calls if "recruitingCEJobRequisitionDetails" in call[0])
     assert "Id=%2234287%22,siteNumber=CX_1" in detail_url
+
+
+def test_oracle_hcm_detail_uses_detail_timeout_override():
+    org = source("oracle_hcm", site_number="CX_1", detail_timeout_seconds=120)
+    detail_payload = fixture_json("oracle", "cx1_undp_hosted_agencies_detail.json")
+    http = FakeOracleCEHTTP({}, detail_pages={"34287": detail_payload})
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    adapter.fetch_detail_for_listing_item({"Id": "34287"})
+
+    detail_call = next(call for call in http.get_calls if "recruitingCEJobRequisitionDetails" in call[0])
+    assert detail_call[2] == 120
 
 
 def test_oracle_hcm_site_name_mismatch_aborts_without_jobs(monkeypatch):
@@ -1184,6 +1197,87 @@ def test_successfactors_legacy_xml_feed_rejects_unverified_zero():
         assert "without verified zero evidence" in str(exc)
     else:
         raise AssertionError("Expected unverified zero XML feed to raise")
+
+
+def test_successfactors_rmk_fetches_detail_description_from_listing_item():
+    html = """
+    <html>
+      <head><title>Programme Officer - Careers</title></head>
+      <body>
+        <div class="jobDisplay">
+          <h1>Programme Officer</h1>
+          <p>Full duties and responsibilities from the detail page.</p>
+        </div>
+      </body>
+    </html>
+    """
+    adapter = SuccessFactorsRMKAdapter(
+        AdapterContext(source=source("successfactors_rmk"), http=FakeTextHTTP(html))
+    )
+
+    job = adapter.fetch_detail_for_listing_item(
+        {
+            "detail_url": "https://example.org/job/programme-officer/12345/",
+            "title": "Programme Officer",
+        }
+    )
+
+    assert job is not None
+    assert job.external_id == "12345"
+    assert "Full duties and responsibilities" in (job.description or "")
+
+
+def test_static_html_fetches_detail_for_selective_refresh():
+    html = """
+    <html>
+      <head><title>Analyst</title></head>
+      <body><main><h1>Analyst</h1><p>Static detail body.</p></main></body>
+    </html>
+    """
+    adapter = StaticHTMLAdapter(
+        AdapterContext(source=source("static_html"), http=FakeTextHTTP(html))
+    )
+
+    job = adapter.fetch_detail_for_listing_item({"href": "https://example.org/jobs/analyst"})
+
+    assert job is not None
+    assert "Static detail body" in (job.description or "")
+
+
+def test_custom_html_fetches_detail_for_selective_refresh():
+    html = """
+    <html>
+      <head><title>Engineer</title></head>
+      <body><main><h1>Engineer</h1><p>Custom detail body.</p></main></body>
+    </html>
+    """
+    adapter = CustomHTMLAdapter(
+        AdapterContext(source=source("custom_html"), http=FakeTextHTTP(html))
+    )
+
+    job = adapter.fetch_detail_for_listing_item({"href": "https://example.org/jobs/engineer"})
+
+    assert job is not None
+    assert "Custom detail body" in (job.description or "")
+
+
+def test_peoplesoft_fetches_detail_for_selective_refresh():
+    html = """
+    <html>
+      <head><title>PeopleSoft Role</title></head>
+      <body><main><p>PeopleSoft detail body.</p></main></body>
+    </html>
+    """
+    adapter = PeopleSoftAdapter(
+        AdapterContext(source=source("peoplesoft"), http=FakeTextHTTP(html))
+    )
+
+    job = adapter.fetch_detail_for_listing_item(
+        {"detail_url": "https://example.org/jobs?job_id=123", "job_id": "123"}
+    )
+
+    assert job is not None
+    assert "PeopleSoft detail body" in (job.description or "")
 
 
 def _ipu_source():

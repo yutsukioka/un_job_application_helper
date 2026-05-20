@@ -60,8 +60,15 @@ class WorkdayAdapter(JobAdapter):
                     "searchText": search_text,
                 },
             )
+            page_total = _as_int(
+                payload.get("total") if isinstance(payload, dict) else None,
+                default=0,
+            )
+            if pages == 0 and isinstance(payload, dict) and "total" in payload:
+                self.run_diagnostics.total_reported_by_source = page_total
             rows = _jobs_from_payload(payload)
             if not rows:
+                pages += 1
                 break
             new_in_page = 0
             for item in rows:
@@ -84,10 +91,6 @@ class WorkdayAdapter(JobAdapter):
                 jobs.append(parsed)
                 new_in_page += 1
 
-            page_total = _as_int(
-                payload.get("total") if isinstance(payload, dict) else None,
-                default=0,
-            )
             if page_total > 0 and (expected_total is None or page_total > expected_total):
                 expected_total = page_total
             offset += page_size
@@ -100,6 +103,12 @@ class WorkdayAdapter(JobAdapter):
                 break
             if expected_total is None and len(rows) < page_size:
                 break
+        self.run_diagnostics.pages_fetched = pages
+        self.run_diagnostics.pagination_complete = True
+        if not jobs and self.run_diagnostics.total_reported_by_source == 0:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_total_zero"
+            self.run_diagnostics.zero_fetched_evidence = {"total_reported_by_source": 0}
         return jobs
 
     def parse_jobs(self, payload: Any) -> list[JobRecord]:

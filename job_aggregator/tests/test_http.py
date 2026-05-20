@@ -71,6 +71,15 @@ class ServerErrorThenSuccessOpener:
         return FakeResponse()
 
 
+class RecordingTimeoutOpener:
+    def __init__(self):
+        self.timeouts = []
+
+    def open(self, request, timeout):
+        self.timeouts.append(timeout)
+        return FakeResponse()
+
+
 def test_transient_url_error_retries_then_succeeds():
     client = JobAggHTTPClient(max_retries=2, backoff_base_seconds=0, jitter_ratio=0)
     opener = RetryThenSuccessOpener()
@@ -131,3 +140,14 @@ def test_http_403_is_not_retried():
         client.get("https://example.org/forbidden")
 
     assert opener.calls == 1
+
+
+def test_get_can_override_timeout_per_request():
+    client = JobAggHTTPClient(timeout_seconds=30)
+    opener = RecordingTimeoutOpener()
+    client._opener = opener
+
+    client.get("https://example.org/slow-detail", timeout_seconds=120)
+    client.get("https://example.org/listing")
+
+    assert opener.timeouts == [120, 30]
