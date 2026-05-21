@@ -69,7 +69,7 @@ grade_patterns:
     staff_category: technical_international_staff
   - system: CERN
     family: CERN
-    regex: "\\bGrade\\s*(?:range\\s*:?\\s*)?(2|3|4|5|6|7)\\b"
+    regex: "\\bGrade\\s*(?:range\\s*:?\\s*)?(2|3|4|5|6|7|8)\\b"
     staff_category: cern_staff
   - system: UN
     family: INTERN

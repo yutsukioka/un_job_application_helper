@@ -502,6 +502,71 @@ def test_cern_grae_experience_text_infers_grade2(tmp_path):
     assert row["standard_un_equivalent"] == "~G-3/G-4"
 
 
+def test_cern_general_secondary_technician_track_infers_grade2(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="CMS DSS Electronics Technician",
+            external_id="ep-cmx-2025-276-grae",
+            location="Geneva, Switzerland",
+            description=(
+                "This position offers an excellent opportunity for a young professional. "
+                "By the application deadline, you have a maximum of 2 years of professional "
+                "experience since graduation in a technical or administrative field and your "
+                "highest educational qualification is a general secondary education diploma "
+                "or a shorter non-university degree. You can't hold a bachelor's degree, "
+                "master's degree or PhD."
+            ),
+            apply_url="https://careers.cern/jobs/ep-cmx-2025-276-grae/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["grade_code"] == "Grade 2"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 2"
+    assert row["standard_seniority_tier"] == "T1_ENTRY_SUPPORT"
+
+
+def test_cern_grade8_range_standardizes(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Governance, Risk and Compliance Lead",
+            external_id="cio-2026-108-ld",
+            location="Geneva, Switzerland",
+            description="Contract duration (in months): 60 Grade range: 8 Benchmark job: 200020 - Computing Engineer",
+            apply_url="https://careers.cern/jobs/cio-2026-108-ld/",
+            raw={"grade": "8"},
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["grade_code"] == "Grade 8"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 8"
+    assert row["standard_seniority_tier"] == "T6_DIRECTOR"
+    assert row["standard_un_equivalent"] == "~P-5/D-1"
+
+
 def test_cern_staff_work_described_as_consultancy_is_not_consultant(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()

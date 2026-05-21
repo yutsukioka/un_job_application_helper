@@ -481,7 +481,7 @@ def _normalize_grade_field(value: str | None) -> str | None:
     text = _clean(value)
     if not text:
         return None
-    match = re.fullmatch(r"(?:grade\s*)?(?P<level>[2-7])", text, flags=re.IGNORECASE)
+    match = re.fullmatch(r"(?:grade\s*)?(?P<level>[2-8])", text, flags=re.IGNORECASE)
     if match:
         return f"Grade {match.group('level')}"
     return text

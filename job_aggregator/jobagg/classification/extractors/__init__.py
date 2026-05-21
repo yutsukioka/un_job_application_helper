@@ -315,14 +315,14 @@ def _cern_grade_from_value(value: object | None) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
-    match = re.search(r"\b(?:Grade\s*)?(?P<level>[2-7])\b", text, flags=re.I)
+    match = re.search(r"\b(?:Grade\s*)?(?P<level>[2-8])\b", text, flags=re.I)
     if match:
         return f"Grade {match.group('level')}"
     return text if text else None
 
 
 def _cern_grade_from_text(text: str) -> str | None:
-    match = re.search(r"\bGrade\s+range\s*:?\s*(?P<level>[2-7])\b", text, flags=re.I)
+    match = re.search(r"\bGrade\s+range\s*:?\s*(?P<level>[2-8])\b", text, flags=re.I)
     if match:
         return f"Grade {match.group('level')}"
     return None
@@ -341,6 +341,15 @@ def _cern_grade_from_experience_text(text: str) -> str | None:
         r"maximum of 2 years of professional experience since graduation"
         r".{0,220}highest educational qualification is either a bachelor.?s or master.?s degree"
         r".{0,120}(?:can.?t|cannot) hold a phd",
+        normalized,
+        flags=re.I,
+    ):
+        return "Grade 2"
+    if re.search(
+        r"maximum of 2 years of professional experience since graduation"
+        r".{0,220}highest educational qualification is a general secondary education diploma"
+        r".{0,120}shorter non-university degree"
+        r".{0,160}(?:can.?t|cannot) hold a bachelor.?s degree, master.?s degree or phd",
         normalized,
         flags=re.I,
     ):

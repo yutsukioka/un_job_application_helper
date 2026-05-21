@@ -11380,8 +11380,23 @@
     "Approximate Experience Range":"10+ years",
     "Typical Role Scope":"Lead\/Principal",
     "Supervisory Expectations":"Leadership",
-    "Notes \/ Caveats":"Highest listed grade.",
+    "Notes \/ Caveats":"Principal or lead grade; UN equivalence is functional only.",
     "Confidence Level":"MEDIUM",
     "Evidence Type":"official"
+  },
+  {
+    "Organization":"CERN",
+    "Raw Grade Code":"Grade 8",
+    "Normalized Grade Family":"CERN Staff Grade",
+    "Normalized Seniority Tier":"T6_DIRECTOR",
+    "International \/ National \/ Local":"International \/ European scientific organization",
+    "Staff \/ Consultant \/ Contractor \/ Other":"Staff",
+    "Approximate UN Equivalent":"~P-5\/D-1",
+    "Approximate Experience Range":"12+ years",
+    "Typical Role Scope":"Senior lead \/ principal manager",
+    "Supervisory Expectations":"Leadership \/ team supervision",
+    "Notes \/ Caveats":"CERN Grade 8 observed in vacancy detail grade range; UN equivalence is functional only.",
+    "Confidence Level":"MEDIUM",
+    "Evidence Type":"observed CERN detail grade range + inference"
   }
 ]
