@@ -215,7 +215,7 @@ def parse_detail_page(
     title = _strip_site_suffix(title)
     closes_at = _field_after(tokens, ("closing date", "deadline", "deadline for application", "application deadline"))
     location = _field_after(tokens, ("location", "duty station", "job location"))
-    grade = _field_after(tokens, ("grade", "post level"))
+    grade = _normalize_grade_field(_field_after(tokens, ("grade range", "grade", "post level")))
     contract_type = _field_after(tokens, ("contract type", "contract", "type"))
     posted_at = _field_after(tokens, ("posted date", "date posted", "publication date", "posted on"))
     description = _clean_html(_mainish_html(html_text))
@@ -450,6 +450,7 @@ def _field_after(tokens: list[str], labels: tuple[str, ...]) -> str | None:
         "duty station",
         "job location",
         "grade",
+        "grade range",
         "post level",
         "contract type",
         "contract",
@@ -474,6 +475,16 @@ def _field_after(tokens: list[str], labels: tuple[str, ...]) -> str | None:
                 if value:
                     return value
     return None
+
+
+def _normalize_grade_field(value: str | None) -> str | None:
+    text = _clean(value)
+    if not text:
+        return None
+    match = re.fullmatch(r"(?:grade\s*)?(?P<level>[2-7])", text, flags=re.IGNORECASE)
+    if match:
+        return f"Grade {match.group('level')}"
+    return text
 
 
 def _deadline_from_text(value: object | None) -> str | None:

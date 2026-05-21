@@ -124,6 +124,8 @@ def _normalized_code(family: str, level: str | None) -> str | None:
         return "CON"
     if family == "INTERN":
         return "I1"
+    if family == "CERN" and level:
+        return f"Grade {level}"
     if not level:
         return family
     if family == "NO":

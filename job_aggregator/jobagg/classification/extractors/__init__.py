@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from jobagg.classification.extractors.base import (
@@ -20,6 +21,24 @@ from jobagg.classification.models import FeatureBundle
 class GenericExtractor(SourceFeatureExtractor):
     def extract(self, vacancy: dict[str, Any]) -> FeatureBundle:
         return base_features(vacancy)
+
+
+class CERNCustomHTMLExtractor(SourceFeatureExtractor):
+    def extract(self, vacancy: dict[str, Any]) -> FeatureBundle:
+        raw = raw_dict(vacancy)
+        features = base_features(
+            vacancy,
+            evidence={
+                "raw_grade": raw.get("grade"),
+                "detail_url": raw.get("detail_url") or raw.get("href"),
+                "parser": raw.get("parser"),
+            },
+        )
+        grade, source_field = _cern_grade_signal(raw, features.description)
+        if grade:
+            features.grade_raw = grade
+            features.grade_source_field = source_field
+        return features
 
 
 class IOMOracleHCMExtractor(SourceFeatureExtractor):
@@ -265,6 +284,7 @@ class TaleoExtractor(SourceFeatureExtractor):
 
 
 _SOURCE_EXTRACTORS: dict[str, type[SourceFeatureExtractor]] = {
+    "cern_custom_html": CERNCustomHTMLExtractor,
     "iom_oracle_hcm": IOMOracleHCMExtractor,
     "un_inspira": InspiraExtractor,
     "isa_inspira_split": InspiraExtractor,
@@ -275,6 +295,57 @@ _SOURCE_EXTRACTORS: dict[str, type[SourceFeatureExtractor]] = {
     "worldbank_csod": CSODExtractor,
     "adb_taleo": TaleoExtractor,
 }
+
+
+def _cern_grade_signal(raw: dict[str, Any], description: str | None) -> tuple[str | None, str | None]:
+    raw_grade = _cern_grade_from_value(raw.get("grade"))
+    if raw_grade:
+        return raw_grade, "raw.grade"
+    text = description or ""
+    explicit = _cern_grade_from_text(text)
+    if explicit:
+        return explicit, "description.grade_range"
+    inferred = _cern_grade_from_experience_text(text)
+    if inferred:
+        return inferred, "description.experience_eligibility"
+    return None, None
+
+
+def _cern_grade_from_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    match = re.search(r"\b(?:Grade\s*)?(?P<level>[2-7])\b", text, flags=re.I)
+    if match:
+        return f"Grade {match.group('level')}"
+    return text if text else None
+
+
+def _cern_grade_from_text(text: str) -> str | None:
+    match = re.search(r"\bGrade\s+range\s*:?\s*(?P<level>[2-7])\b", text, flags=re.I)
+    if match:
+        return f"Grade {match.group('level')}"
+    return None
+
+
+def _cern_grade_from_experience_text(text: str) -> str | None:
+    normalized = " ".join(text.split())
+    if re.search(
+        r"master.?s degree with 2 to 6 years of professional experience since graduation"
+        r".{0,160}phd with a maximum of 3 years",
+        normalized,
+        flags=re.I,
+    ):
+        return "Grade 4"
+    if re.search(
+        r"maximum of 2 years of professional experience since graduation"
+        r".{0,220}highest educational qualification is either a bachelor.?s or master.?s degree"
+        r".{0,120}(?:can.?t|cannot) hold a phd",
+        normalized,
+        flags=re.I,
+    ):
+        return "Grade 2"
+    return None
 
 _ATS_EXTRACTORS: dict[str, type[SourceFeatureExtractor]] = {
     "oracle_hcm": OracleHCMExtractor,

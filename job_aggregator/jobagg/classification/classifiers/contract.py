@@ -25,11 +25,13 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
         ("description", features.description),
     ]
     internship_context = _has_internship_context(features)
+    consultant_context = _has_consultant_context(features)
     for field_name, text in text_fields:
         result = _match_rules(
             text,
             field_name,
             internship_context=internship_context,
+            consultant_context=consultant_context,
         )
         if result.category is not ContractCategory.UNKNOWN:
             candidates.append(result)
@@ -118,6 +120,7 @@ def _match_rules(
     field_name: str,
     *,
     internship_context: bool = True,
+    consultant_context: bool = True,
 ) -> ContractResult:
     normalized = f" {(text or '').casefold()} "
     if not normalized.strip():
@@ -141,6 +144,14 @@ def _match_rules(
                 internship_context,
             ):
                 continue
+            if _is_weak_consultant_description_signal(
+                category,
+                field_name,
+                str(keyword),
+                normalized,
+                consultant_context,
+            ):
+                continue
             if _keyword_matches(normalized, str(keyword).casefold()):
                 return ContractResult(
                     category=category,
@@ -152,6 +163,18 @@ def _match_rules(
 
 def _has_internship_context(features: FeatureBundle) -> bool:
     pattern = re.compile(r"\b(?:intern|internship|studentship)\b", re.I)
+    return any(
+        pattern.search(value or "")
+        for value in (
+            features.title,
+            features.employment_type,
+            features.contract_raw,
+        )
+    )
+
+
+def _has_consultant_context(features: FeatureBundle) -> bool:
+    pattern = re.compile(r"\b(?:consultant|consultancy|contractor|retainer)\b", re.I)
     return any(
         pattern.search(value or "")
         for value in (
@@ -181,6 +204,28 @@ def _is_weak_internship_benefit_signal(
         "not paid",
     }
     return category in weak_categories and keyword.casefold() in weak_keywords
+
+
+def _is_weak_consultant_description_signal(
+    category: ContractCategory,
+    field_name: str,
+    keyword: str,
+    text: str,
+    consultant_context: bool,
+) -> bool:
+    if category is not ContractCategory.CONSULTANT:
+        return False
+    if field_name != "description" or consultant_context:
+        return False
+    if keyword.casefold() in {"ssa", "cfa", "individual consultant", "retainer"}:
+        return False
+    strong_description_signal = re.search(
+        r"\b(?:international|national)?\s*consultant(?:cy)?\s+"
+        r"(?:assignment|position|role|job|vacancy|roster)\b",
+        text,
+        flags=re.I,
+    )
+    return strong_description_signal is None
 
 
 def _keyword_matches(text: str, keyword: str) -> bool:

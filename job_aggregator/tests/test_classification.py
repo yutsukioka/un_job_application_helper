@@ -406,6 +406,132 @@ def test_cern_studentship_is_internship_and_not_standard_grade(tmp_path):
     assert row["standard_employment_category"] is None
 
 
+def test_cern_explicit_grade_range_standardizes(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Ceph Software Engineer",
+            external_id="it-sd-gss-2026-96-ld",
+            location="Geneva, Switzerland",
+            description="Contract duration (in months): 60 Grade range: 6 Benchmark job: 200020 - Computing Engineer",
+            apply_url="https://careers.cern/jobs/it-sd-gss-2026-96-ld/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["grade_code"] == "Grade 6"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 6"
+    assert row["standard_seniority_tier"] == "T4_SENIOR_PROFESSIONAL"
+    assert row["standard_un_equivalent"] == "~P-3/P-4"
+
+
+def test_cern_grap_experience_text_infers_grade4(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Applied Physicist",
+            external_id="te-mpe-pe-2026-85-grap",
+            location="Geneva, Switzerland",
+            description=(
+                "By the application deadline, you have a master's degree with 2 to 6 years "
+                "of professional experience since graduation or a PhD with a maximum of "
+                "3 years of professional experience since graduation."
+            ),
+            apply_url="https://careers.cern/jobs/te-mpe-pe-2026-85-grap/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["grade_code"] == "Grade 4"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 4"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+    assert row["standard_un_equivalent"] == "~P-1/P-2"
+
+
+def test_cern_grae_experience_text_infers_grade2(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Computational Physicist",
+            external_id="be-op-ps-2026-139-grae",
+            location="Geneva, Switzerland",
+            description=(
+                "By the application deadline, you have a maximum of 2 years of professional "
+                "experience since graduation in the respective field and your highest educational "
+                "qualification is either a bachelor's or master's degree. You must have a "
+                "university degree and can't hold a PhD."
+            ),
+            apply_url="https://careers.cern/jobs/be-op-ps-2026-139-grae/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["grade_code"] == "Grade 2"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 2"
+    assert row["standard_seniority_tier"] == "T1_ENTRY_SUPPORT"
+    assert row["standard_un_equivalent"] == "~G-3/G-4"
+
+
+def test_cern_staff_work_described_as_consultancy_is_not_consultant(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Data Analytics Infrastructure Engineer",
+            external_id="it-da-asm-2026-95-ld",
+            location="Geneva, Switzerland",
+            description=(
+                "Contract duration (in months): 36 Grade range: 6 Benchmark job: 200020 - "
+                "Computing Engineer. Consultancy, assistance and advice to end users."
+            ),
+            apply_url="https://careers.cern/jobs/it-da-asm-2026-95-ld/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["contract_category"] != "consultant"
+    assert row["grade_mapping_raw_grade_code"] == "Grade 6"
+
+
 def test_generic_consultant_is_not_standard_grade(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
