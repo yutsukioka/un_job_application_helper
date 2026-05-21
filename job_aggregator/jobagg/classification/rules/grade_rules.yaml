@@ -56,8 +56,12 @@ grade_patterns:
     regex: "\\bNS[-\\s]?(1|2|3|4|5|6|7)\\b"
     staff_category: national_staff
   - system: ADB
+    family: TL
+    regex: "\\bTL[-\\s]?(1|2|3|4|5|6|7)\\b"
+    staff_category: technical_local_staff
+  - system: ADB
     family: IS
-    regex: "\\bIS[-\\s]?(1|2)\\b"
+    regex: "\\bIS[-\\s]?(1|2|3|4|5|6)\\b"
     staff_category: international_staff
   - system: ADB
     family: TI

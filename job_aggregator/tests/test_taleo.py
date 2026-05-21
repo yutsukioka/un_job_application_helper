@@ -140,7 +140,8 @@ def test_taleo_parses_adb_detail_fill_list_payload():
           'Submission for the position: Senior Social Protection Specialist - (Job Number: 260497)',
           'false','83990','false','true',
           'Senior Social Protection Specialist ','260497','','','','',
-          '!*!!*!!*!%3Cp%3EFull ADB role description for social protection.%3C/p%3E',
+          '!*!!*!!*!%3Cp%3EFull ADB role description for social protection.%3C/p%3E'
+          '%3Cp%3EYou will:%3C/p%3E%3Cul%3E%3Cli%3ELead policy dialogue.%3C/li%3E%3C/ul%3E',
           'Asian Development Bank-India Resident Mission-India-New Delhi',
           'Asian Development Bank-India Resident Mission-India-New Delhi',
           'Sectors Department 3','Sectors Department 3',
@@ -164,10 +165,16 @@ def test_taleo_parses_adb_detail_fill_list_payload():
     assert job.location == "Asian Development Bank-India Resident Mission-India-New Delhi"
     assert job.department == "Sectors Department 3"
     assert job.employment_type == "Technical International (Field Office)"
-    assert job.description == "Full ADB role description for social protection."
+    assert "Full ADB role description for social protection.\n\nYou will:" in job.description
+    assert "- Lead policy dialogue." in job.description
     assert job.closes_at.isoformat() == "2026-06-03T23:59:00+00:00"
     assert flat["JOB_LEVEL"] == "TI2"
     assert flat["Position Level"] == "TI2"
+    assert flat["Department"] == "Sectors Department 3"
+    assert flat["Division"] == "Human and Social Development Sector Office"
+    assert flat["Staff Category"] == "Technical International (Field Office)"
+    assert flat["Job Posting"] == "06-May-2026, 7:56:15 AM"
+    assert flat["Closing Date (Period for Applying) - Internal"] == "03-Jun-2026, 11:59:00 PM"
 
 
 def test_taleo_rest_fetches_configured_search_pages():

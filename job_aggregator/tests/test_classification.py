@@ -302,9 +302,50 @@ def test_adb_ti2_position_level_standardizes_from_taleo_flat_payload(tmp_path):
 
     assert row["grade_code"] == "TI2"
     assert row["grade_mapping_organization"] == "Asian Development Bank"
-    assert row["grade_mapping_raw_grade_code"] == "TI1..TI3"
-    assert row["standard_seniority_tier"] == "T3_MID_PROFESSIONAL"
+    assert row["grade_mapping_raw_grade_code"] == "TI2"
+    assert row["standard_seniority_tier"] == "T4_SENIOR_PROFESSIONAL"
     assert row["standard_scope"] == "International"
+    assert row["standard_un_equivalent"] == "~P4"
+    assert row["standard_employment_category"] == "Staff"
+
+
+def test_adb_tl1_position_level_uses_adb_grade_json_mapping(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="adb_taleo",
+        name="Asian Development Bank",
+        ats_family="taleo",
+        base_url="https://adb.taleo.net/careersection/1/jobsearch.ftl",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Human Resource Assistant",
+            external_id="260510",
+            location="Asian Development Bank-Asian Development Bank Headquarters-Philippines-Manila",
+            employment_type="Technical Local - HQ",
+            description="This is a fixed term staff appointment.",
+            apply_url="https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260510",
+            raw={
+                "_taleo_flat": {
+                    "JOB_LEVEL": "TL1",
+                    "STAFF_CATEGORY": "Technical Local - HQ",
+                    "POSITION_LEVEL_LABEL": "Technical Local - HQ",
+                }
+            },
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="adb_taleo"))
+
+    assert row["grade_code"] == "TL1"
+    assert row["grade_family"] == "TL"
+    assert row["grade_mapping_raw_grade_code"] == "TL1"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+    assert row["standard_scope"] == "National / Local"
+    assert row["standard_un_equivalent"] == "~NO-A/NO-B"
     assert row["standard_employment_category"] == "Staff"
 
 

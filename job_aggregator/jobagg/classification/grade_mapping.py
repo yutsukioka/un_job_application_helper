@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -15,6 +16,7 @@ from jobagg.classification.rules import rules_path
 
 GRADE_MAPPING_VERSION = "grade_mapping_table_revised_v1"
 GRADE_MAPPING_CSV = "grade_mapping_table_revised.csv"
+ADB_GRADE_JSON = "docs/adb_grade.json"
 
 CSV_TO_DB_COLUMNS = {
     "Organization": "organization",
@@ -86,6 +88,7 @@ SOURCE_ORGANIZATION_OVERRIDES = {
 }
 
 COMMON_SYSTEM_ORGANIZATION = "United Nations Careers / UN Secretariat"
+ADB_MAPPING_ORGANIZATION = "Asian Development Bank"
 INTERNSHIP_CONTRACT_CATEGORIES = {
     ContractCategory.INTERNSHIP_PAID.value,
     ContractCategory.INTERNSHIP_UNPAID.value,
@@ -164,7 +167,16 @@ def load_grade_mappings() -> tuple[GradeMappingEntry, ...]:
     path = rules_path(GRADE_MAPPING_CSV)
     if not path.is_file():
         return ()
-    return tuple(_load_grade_mappings_from_path(path))
+    entries = _load_grade_mappings_from_path(path)
+    adb_entries = _load_adb_grade_mappings_from_docs()
+    if adb_entries:
+        entries = [
+            entry
+            for entry in entries
+            if entry.organization != ADB_MAPPING_ORGANIZATION
+        ]
+        entries.extend(adb_entries)
+    return tuple(entries)
 
 
 def _load_grade_mappings_from_path(path: Path) -> list[GradeMappingEntry]:
@@ -201,6 +213,121 @@ def _load_grade_mappings_from_path(path: Path) -> list[GradeMappingEntry]:
                 )
             )
     return entries
+
+
+def _load_adb_grade_mappings_from_docs() -> list[GradeMappingEntry]:
+    path = Path(__file__).resolve().parents[2] / ADB_GRADE_JSON
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+
+    entries: list[GradeMappingEntry] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        raw_grade_code = _clean(item.get("grade_code"))
+        family = _clean(item.get("grade_family"))
+        if not raw_grade_code or not family:
+            continue
+        un_mapping = item.get("un_mapping") if isinstance(item.get("un_mapping"), dict) else {}
+        label_range = un_mapping.get("label_range") if isinstance(un_mapping, dict) else None
+        secondary = item.get("secondary_mapping") if isinstance(item.get("secondary_mapping"), dict) else None
+        entries.append(
+            GradeMappingEntry(
+                mapping_version=GRADE_MAPPING_VERSION,
+                organization=ADB_MAPPING_ORGANIZATION,
+                raw_grade_code=raw_grade_code,
+                normalized_raw_grade_code=normalize_grade_key(raw_grade_code),
+                normalized_grade_family=_adb_normalized_family(family),
+                normalized_seniority_tier=_adb_standard_tier(item.get("tier")),
+                international_national_local=_adb_scope(family),
+                staff_consultant_contractor_other="Staff",
+                approximate_un_equivalent=_un_equivalent(label_range),
+                approximate_experience_range=None,
+                typical_role_scope=_adb_role_scope(family),
+                supervisory_expectations="Varies by vacancy",
+                notes_caveats=_adb_notes(item.get("tier"), secondary),
+                confidence_level=_clean(item.get("confidence")),
+                evidence_type="docs/adb_grade.json",
+            )
+        )
+    return entries
+
+
+def _adb_normalized_family(family: str) -> str:
+    labels = {
+        "AS": "ADB Administrative Staff",
+        "NS": "ADB National Staff",
+        "TL": "ADB Technical Local Staff",
+        "IS": "ADB International Staff",
+        "TI": "ADB Technical International Staff",
+    }
+    return labels.get(family.upper(), f"ADB {family.upper()} Staff")
+
+
+def _adb_scope(family: str) -> str:
+    if family.upper() in {"IS", "TI"}:
+        return "International"
+    if family.upper() in {"NS", "TL"}:
+        return "National / Local"
+    return "Local / headquarters administrative"
+
+
+def _adb_role_scope(family: str) -> str:
+    labels = {
+        "AS": "Administrative/support staff",
+        "NS": "National professional or specialist staff",
+        "TL": "Technical local professional or specialist staff",
+        "IS": "International professional staff",
+        "TI": "Technical international professional staff",
+    }
+    return labels.get(family.upper(), "ADB staff role")
+
+
+def _adb_standard_tier(value: object | None) -> str | None:
+    tier = _clean(value)
+    if not tier:
+        return None
+    upper_tier = tier.split("-")[-1].strip().upper()
+    return {
+        "T1": "T1_ENTRY_SUPPORT",
+        "T2": "T2_JUNIOR_PROFESSIONAL",
+        "T3": "T3_MID_PROFESSIONAL",
+        "T4": "T4_SENIOR_PROFESSIONAL",
+        "T5": "T5_PRINCIPAL_MANAGER",
+        "T6": "T6_DIRECTOR",
+        "T7": "T7_EXECUTIVE",
+    }.get(upper_tier, tier)
+
+
+def _un_equivalent(label_range: object | None) -> str | None:
+    if not isinstance(label_range, list):
+        return None
+    labels = [_clean(label) for label in label_range]
+    labels = [label for label in labels if label]
+    if not labels:
+        return None
+    return "~" + "/".join(labels)
+
+
+def _adb_notes(tier: object | None, secondary: dict[str, Any] | None) -> str:
+    notes = [
+        "ADB mapping loaded from docs/adb_grade.json.",
+        "ADB is outside the UN Common System; UN equivalence is functional only.",
+    ]
+    raw_tier = _clean(tier)
+    if raw_tier:
+        notes.append(f"Source tier: {raw_tier}.")
+    if secondary:
+        secondary_labels = _un_equivalent(secondary.get("label_range"))
+        if secondary_labels:
+            notes.append(f"Secondary mapping: {secondary_labels}.")
+    return " ".join(notes)
 
 
 def standardize_grade(
@@ -422,6 +549,12 @@ def _range_regex(raw_grade_code: str) -> re.Pattern[str] | None:
         r"(?P<end_prefix>[A-Za-z]+)?[-\s]?(?P<end>\d{1,2})",
         raw_grade_code,
     )
+    if not match:
+        match = re.search(
+            r"(?P<prefix>[A-Za-z]+)[-\s]?(?P<start>\d{1,2})"
+            r"\s*[-–—]\s*(?P<end_prefix>[A-Za-z]+)?[-\s]?(?P<end>\d{1,2})",
+            raw_grade_code,
+        )
     if not match:
         return None
     prefix = match.group("prefix") or match.group("end_prefix") or ""

@@ -215,7 +215,7 @@ class TaleoAdapter(JobAdapter):
             self._extract_labeled_value(body, "Schedule", "Job Type")
             or flat.get("POSITION_LEVEL_LABEL")
         )
-        return build_job(
+        job = build_job(
             self.source,
             title=title,
             external_id=external_id,
@@ -232,6 +232,9 @@ class TaleoAdapter(JobAdapter):
                 "_taleo_flat": flat,
             },
         )
+        if body:
+            job.description = body
+        return job
 
     def _default_search_payload(self) -> dict[str, Any]:
         return {
@@ -425,7 +428,7 @@ class TaleoAdapter(JobAdapter):
             if "%3C" not in value and not value.lstrip().startswith("<"):
                 continue
             decoded_html = unquote(value).lstrip("!*")
-            text = clean_html(decoded_html)
+            text = self._clean_detail_html_fragment(decoded_html)
             if not text:
                 continue
             fingerprint = re.sub(r"\s+", " ", text).strip()
@@ -444,26 +447,62 @@ class TaleoAdapter(JobAdapter):
             label = self._nearest_previous_nonempty(values, grade_index, exclude={grade_value})
             if label:
                 flat["POSITION_LEVEL_LABEL"] = label
+                flat["STAFF_CATEGORY"] = label
+                flat["Staff Category"] = label
 
         metadata = self._metadata_after_descriptions(values)
         if metadata:
             flat["LOCATION"] = metadata[0]
+            flat["Primary Location"] = metadata[0]
         if len(metadata) > 1:
             flat["JOB_FIELD"] = metadata[1]
+            flat["Department"] = metadata[1]
         if len(metadata) > 2:
             flat["ORGANIZATION"] = metadata[2]
+            flat["Division"] = metadata[2]
+        if (
+            len(metadata) > 3
+            and metadata[3] != flat.get("STAFF_CATEGORY")
+            and not self._looks_like_adb_position_level(metadata[3])
+        ):
+            flat["UNIT"] = metadata[3]
+            flat["Unit"] = metadata[3]
+        if len(metadata) > 3:
+            flat.setdefault("STAFF_CATEGORY", metadata[3])
+            flat.setdefault("Staff Category", metadata[3])
+        posting_date = self._posting_date_from_metadata(metadata)
+        if posting_date:
+            flat["Job Posting"] = posting_date
         closing_date = self._closing_date_from_metadata(metadata)
         if closing_date:
             flat["Closing Date"] = closing_date
+            flat["Closing Date (Period for Applying) - Internal"] = closing_date
         return flat
 
+    def _clean_detail_html_fragment(self, html_text: str) -> str | None:
+        text = html.unescape(html_text)
+        text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
+        text = re.sub(r"(?i)<\s*li\b[^>]*>", "\n- ", text)
+        text = re.sub(r"(?i)</\s*li\s*>", "\n", text)
+        text = re.sub(r"(?i)</\s*(p|div|h[1-6]|ul|ol|table|tr)\s*>", "\n\n", text)
+        text = re.sub(r"(?i)<\s*(p|div|h[1-6]|ul|ol|table|tr)\b[^>]*>", "\n", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = text.replace("\u00a0", " ")
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        text = re.sub(r" *\n *", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        return text or None
+
     def _adb_position_level(self, values: list[str]) -> tuple[int, str | None]:
-        pattern = re.compile(r"^(?:TI|TL|IS|NS|AS)\s*-?\s*\d{1,2}$", re.IGNORECASE)
         for index, value in enumerate(values):
             text = clean_text(value)
-            if text and pattern.fullmatch(text):
+            if text and self._looks_like_adb_position_level(text):
                 return index, re.sub(r"\s|-", "", text).upper()
         return -1, None
+
+    def _looks_like_adb_position_level(self, value: str) -> bool:
+        pattern = re.compile(r"^(?:TI|TL|IS|NS|AS)\s*-?\s*\d{1,2}$", re.IGNORECASE)
+        return bool(pattern.fullmatch(value))
 
     def _metadata_after_descriptions(self, values: list[str]) -> list[str]:
         last_description_index = -1
@@ -488,6 +527,18 @@ class TaleoAdapter(JobAdapter):
                     if date_pattern.match(candidate):
                         return candidate
         for value in reversed(metadata):
+            if date_pattern.match(value):
+                return value
+        return None
+
+    def _posting_date_from_metadata(self, metadata: list[str]) -> str | None:
+        date_pattern = re.compile(r"^\d{1,2}-[A-Za-z]{3}-\d{4},")
+        for index, value in enumerate(metadata):
+            if value.casefold() == "ongoing":
+                for candidate in reversed(metadata[:index]):
+                    if date_pattern.match(candidate):
+                        return candidate
+        for value in metadata:
             if date_pattern.match(value):
                 return value
         return None

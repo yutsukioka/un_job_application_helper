@@ -1,0 +1,304 @@
+[
+  {
+    "organization": "ADB",
+    "grade_code": "AS1-AS2",
+    "grade_family": "AS",
+    "tier": "T1",
+    "un_mapping": {
+      "system": "UN_G",
+      "min_grade": 1,
+      "max_grade": 3,
+      "label_range": ["G1", "G3"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "AS3-AS5",
+    "grade_family": "AS",
+    "tier": "T1-T2",
+    "un_mapping": {
+      "system": "UN_G",
+      "min_grade": 4,
+      "max_grade": 5,
+      "label_range": ["G4", "G5"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "AS6",
+    "grade_family": "AS",
+    "tier": "T2",
+    "un_mapping": {
+      "system": "UN_G",
+      "min_grade": 6,
+      "max_grade": 6,
+      "label_range": ["G6"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "AS7",
+    "grade_family": "AS",
+    "tier": "T2-T3",
+    "un_mapping": {
+      "system": "UN_G",
+      "min_grade": 6,
+      "max_grade": 7,
+      "label_range": ["G6", "G7"]
+    },
+    "confidence": "HIGH"
+  },
+
+  {
+    "organization": "ADB",
+    "grade_code": "NS1",
+    "grade_family": "NS",
+    "tier": "T2",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 1,
+      "max_grade": 2,
+      "label_range": ["NO-A", "NO-B"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "NS2",
+    "grade_family": "NS",
+    "tier": "T2-T3",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 2,
+      "max_grade": 2,
+      "label_range": ["NO-B"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "NS3",
+    "grade_family": "NS",
+    "tier": "T3",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 3,
+      "max_grade": 3,
+      "label_range": ["NO-C"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "NS4-NS5",
+    "grade_family": "NS",
+    "tier": "T3-T4",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 3,
+      "max_grade": 4,
+      "label_range": ["NO-C", "NO-D"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "NS6-NS7",
+    "grade_family": "NS",
+    "tier": "T4",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 4,
+      "max_grade": 5,
+      "label_range": ["NO-D", "NO-E"]
+    },
+    "secondary_mapping": {
+      "system": "UN_P",
+      "min_grade": 3,
+      "max_grade": 4,
+      "label_range": ["P3", "P4"]
+    },
+    "confidence": "LOW-MED"
+  },
+
+  {
+    "organization": "ADB",
+    "grade_code": "IS1",
+    "grade_family": "IS",
+    "tier": "T1",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 1,
+      "max_grade": 1,
+      "label_range": ["P1"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "IS2",
+    "grade_family": "IS",
+    "tier": "T2",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 2,
+      "max_grade": 2,
+      "label_range": ["P2"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "IS3-IS4",
+    "grade_family": "IS",
+    "tier": "T3",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 3,
+      "max_grade": 3,
+      "label_range": ["P3"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "IS5",
+    "grade_family": "IS",
+    "tier": "T3-T4",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 4,
+      "max_grade": 4,
+      "label_range": ["P4"]
+    },
+    "confidence": "HIGH"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "IS6",
+    "grade_family": "IS",
+    "tier": "T4-T5",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 5,
+      "max_grade": 5,
+      "label_range": ["P5"]
+    },
+    "confidence": "MED"
+  },
+
+  {
+    "organization": "ADB",
+    "grade_code": "TL1",
+    "grade_family": "TL",
+    "tier": "T2",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 1,
+      "max_grade": 2,
+      "label_range": ["NO-A", "NO-B"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TL2",
+    "grade_family": "TL",
+    "tier": "T2-T3",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 2,
+      "max_grade": 2,
+      "label_range": ["NO-B"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TL3",
+    "grade_family": "TL",
+    "tier": "T3",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 3,
+      "max_grade": 3,
+      "label_range": ["NO-C"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TL4-TL5",
+    "grade_family": "TL",
+    "tier": "T3-T4",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 3,
+      "max_grade": 4,
+      "label_range": ["NO-C", "NO-D"]
+    },
+    "confidence": "LOW-MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TL6-TL7",
+    "grade_family": "TL",
+    "tier": "T4",
+    "un_mapping": {
+      "system": "UN_NO",
+      "min_grade": 4,
+      "max_grade": 5,
+      "label_range": ["NO-D", "NO-E"]
+    },
+    "secondary_mapping": {
+      "system": "UN_P",
+      "min_grade": 3,
+      "max_grade": 4,
+      "label_range": ["P3", "P4"]
+    },
+    "confidence": "LOW-MED"
+  },
+
+  {
+    "organization": "ADB",
+    "grade_code": "TI1",
+    "grade_family": "TI",
+    "tier": "T3",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 3,
+      "max_grade": 3,
+      "label_range": ["P3"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TI2",
+    "grade_family": "TI",
+    "tier": "T4",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 4,
+      "max_grade": 4,
+      "label_range": ["P4"]
+    },
+    "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "TI3",
+    "grade_family": "TI",
+    "tier": "T5",
+    "un_mapping": {
+      "system": "UN_P",
+      "min_grade": 5,
+      "max_grade": 5,
+      "label_range": ["P5"]
+    },
+    "confidence": "MED"
+  }
+]
