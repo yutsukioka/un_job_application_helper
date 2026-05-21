@@ -24,8 +24,13 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
         ("employment_type", features.employment_type),
         ("description", features.description),
     ]
+    internship_context = _has_internship_context(features)
     for field_name, text in text_fields:
-        result = _match_rules(text, field_name)
+        result = _match_rules(
+            text,
+            field_name,
+            internship_context=internship_context,
+        )
         if result.category is not ContractCategory.UNKNOWN:
             candidates.append(result)
     if candidates:
@@ -70,6 +75,7 @@ def _source_contract(value: str | None) -> ContractResult:
         "consultancy": ContractCategory.CONSULTANT,
         "intern": ContractCategory.INTERNSHIP_UNKNOWN,
         "internship": ContractCategory.INTERNSHIP_UNKNOWN,
+        "studentship": ContractCategory.INTERNSHIP_UNKNOWN,
         "temporary appointment": ContractCategory.TEMPORARY_APPOINTMENT_STAFF,
         "temporary": ContractCategory.TEMPORARY_APPOINTMENT_STAFF,
         "fixed term": ContractCategory.FIXED_TERM_APPOINTMENT_STAFF,
@@ -107,7 +113,12 @@ def _specificity(category: ContractCategory) -> int:
     return 0
 
 
-def _match_rules(text: str | None, field_name: str) -> ContractResult:
+def _match_rules(
+    text: str | None,
+    field_name: str,
+    *,
+    internship_context: bool = True,
+) -> ContractResult:
     normalized = f" {(text or '').casefold()} "
     if not normalized.strip():
         return ContractResult()
@@ -123,6 +134,13 @@ def _match_rules(text: str | None, field_name: str) -> ContractResult:
     for category in priority:
         config = rules.get(category.value, {})
         for keyword in config.get("keywords", []) or []:
+            if _is_weak_internship_benefit_signal(
+                category,
+                field_name,
+                str(keyword),
+                internship_context,
+            ):
+                continue
             if _keyword_matches(normalized, str(keyword).casefold()):
                 return ContractResult(
                     category=category,
@@ -130,6 +148,39 @@ def _match_rules(text: str | None, field_name: str) -> ContractResult:
                     evidence={"field": field_name, "matched": keyword},
                 )
     return ContractResult()
+
+
+def _has_internship_context(features: FeatureBundle) -> bool:
+    pattern = re.compile(r"\b(?:intern|internship|studentship)\b", re.I)
+    return any(
+        pattern.search(value or "")
+        for value in (
+            features.title,
+            features.employment_type,
+            features.contract_raw,
+        )
+    )
+
+
+def _is_weak_internship_benefit_signal(
+    category: ContractCategory,
+    field_name: str,
+    keyword: str,
+    internship_context: bool,
+) -> bool:
+    if field_name != "description" or internship_context:
+        return False
+    weak_categories = {
+        ContractCategory.INTERNSHIP_PAID,
+        ContractCategory.INTERNSHIP_UNPAID,
+    }
+    weak_keywords = {
+        "stipend",
+        "monthly allowance",
+        "no remuneration",
+        "not paid",
+    }
+    return category in weak_categories and keyword.casefold() in weak_keywords
 
 
 def _keyword_matches(text: str, keyword: str) -> bool:

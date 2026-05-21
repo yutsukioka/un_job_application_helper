@@ -33,6 +33,7 @@ contract_rules:
     keywords:
       - "intern"
       - "internship"
+      - "studentship"
   internship_paid:
     keywords:
       - "paid internship"

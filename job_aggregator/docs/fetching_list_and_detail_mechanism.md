@@ -44,7 +44,7 @@ The main persistence tables are:
 - `vacancy_snapshots`: content snapshots when a job is inserted or materially changed.
 - `source_runs`: compact per-source run counts and errors.
 - `source_run_diagnostics`: structured health, scope, pagination, detail, and zero-fetch evidence.
-- `grade_mappings`: the revised organization grade mapping table loaded from `grade_mapping_table_revised.csv`.
+- `grade_mappings`: the bundled organization grade mapping table loaded from `grade_mapping_table.json`, with `grade_mapping_table.csv` as a fallback/audit copy.
 - `vacancy_source_features`, `vacancy_classifications`, and `vacancy_locations`: normalization/search layers built after raw fetch.
 
 The output bundle for each organization contains five files:
@@ -287,13 +287,14 @@ Consolidate source bundles:
 
 ## Grade Standardization
 
-The revised grade mapping CSV is bundled at:
+The revised grade mapping files are bundled at:
 
 ```text
-jobagg/classification/rules/grade_mapping_table_revised.csv
+jobagg/classification/rules/grade_mapping_table.json
+jobagg/classification/rules/grade_mapping_table.csv
 ```
 
-Every database initialization seeds the `grade_mappings` table from that CSV. Classification then uses the same table to add per-vacancy standardized grade fields into `vacancy_classifications`:
+Every database initialization seeds the `grade_mappings` table from the JSON mapping table when available, falling back to the CSV copy if needed. Classification then uses the same table to add per-vacancy standardized grade fields into `vacancy_classifications`:
 
 - `grade_mapping_organization`
 - `grade_mapping_raw_grade_code`

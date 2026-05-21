@@ -378,6 +378,34 @@ def test_internship_is_not_standard_grade_even_when_grade_signal_exists(tmp_path
     assert row["standard_employment_category"] is None
 
 
+def test_cern_studentship_is_internship_and_not_standard_grade(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="cern_custom_html",
+        name="CERN",
+        ats_family="custom_html",
+        base_url="https://careers.cern/jobs/",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Technical Studentship (Applied Physics)",
+            external_id="tsc-ap",
+            location="Geneva, Switzerland",
+            description="Studentship with a monthly net allowance in Geneva.",
+            apply_url="https://careers.cern/jobs/tsc-ap/",
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="cern_custom_html"))
+
+    assert row["contract_category"] == "internship_unknown"
+    assert row["standard_seniority_tier"] is None
+    assert row["standard_employment_category"] is None
+
+
 def test_generic_consultant_is_not_standard_grade(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -519,6 +547,36 @@ def test_contract_specific_internship_signals_override_generic_title():
 
     assert unpaid.category is ContractCategory.INTERNSHIP_UNPAID
     assert paid_source.category is ContractCategory.INTERNSHIP_PAID
+
+
+def test_contract_stipend_benefit_without_internship_context_is_not_paid_internship():
+    result = classify_contract(
+        FeatureBundle(
+            vacancy_id="cern-1",
+            source_id="cern_custom_html",
+            ats_family="custom_html",
+            title="Applied Physicist",
+            description="CERN benefits include a monthly net allowance and health insurance.",
+        ),
+        GradeResult(),
+    )
+
+    assert result.category is ContractCategory.UNKNOWN
+
+
+def test_contract_stipend_benefit_with_studentship_context_is_internship():
+    result = classify_contract(
+        FeatureBundle(
+            vacancy_id="cern-2",
+            source_id="cern_custom_html",
+            ats_family="custom_html",
+            title="Administrative Studentship",
+            description="This studentship includes a monthly net allowance.",
+        ),
+        GradeResult(),
+    )
+
+    assert result.category is ContractCategory.INTERNSHIP_UNKNOWN
 
 
 def test_contract_intern_keyword_does_not_match_international():

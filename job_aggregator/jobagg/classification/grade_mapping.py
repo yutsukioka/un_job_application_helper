@@ -1,4 +1,4 @@
-"""Organization-specific grade standardization from the revised mapping CSV."""
+"""Organization-specific grade standardization from bundled mapping tables."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from jobagg.classification.models import ContractCategory
 from jobagg.classification.rules import rules_path
 
 
-GRADE_MAPPING_VERSION = "grade_mapping_table_revised_v1"
-GRADE_MAPPING_CSV = "grade_mapping_table_revised.csv"
-ADB_GRADE_JSON = "docs/adb_grade.json"
+GRADE_MAPPING_VERSION = "grade_mapping_table_v1"
+GRADE_MAPPING_JSON = "grade_mapping_table.json"
+GRADE_MAPPING_CSV = "grade_mapping_table.csv"
+ADB_GRADE_JSON = "adb_grade.json"
 
 CSV_TO_DB_COLUMNS = {
     "Organization": "organization",
@@ -164,11 +165,8 @@ def grade_mapping_rows() -> list[dict[str, Any]]:
 
 @lru_cache(maxsize=1)
 def load_grade_mappings() -> tuple[GradeMappingEntry, ...]:
-    path = rules_path(GRADE_MAPPING_CSV)
-    if not path.is_file():
-        return ()
-    entries = _load_grade_mappings_from_path(path)
-    adb_entries = _load_adb_grade_mappings_from_docs()
+    entries = _load_bundled_grade_mappings()
+    adb_entries = _load_adb_grade_mappings_from_rules()
     if adb_entries:
         entries = [
             entry
@@ -179,44 +177,78 @@ def load_grade_mappings() -> tuple[GradeMappingEntry, ...]:
     return tuple(entries)
 
 
-def _load_grade_mappings_from_path(path: Path) -> list[GradeMappingEntry]:
-    entries: list[GradeMappingEntry] = []
+def _load_bundled_grade_mappings() -> list[GradeMappingEntry]:
+    json_path = rules_path(GRADE_MAPPING_JSON)
+    if json_path.is_file():
+        entries = _load_grade_mappings_from_json_path(json_path)
+        if entries:
+            return entries
+    csv_path = rules_path(GRADE_MAPPING_CSV)
+    if csv_path.is_file():
+        return _load_grade_mappings_from_csv_path(csv_path)
+    return []
+
+
+def _load_grade_mappings_from_json_path(path: Path) -> list[GradeMappingEntry]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return _load_grade_mappings_from_records(
+        row for row in payload if isinstance(row, dict)
+    )
+
+
+def _load_grade_mappings_from_csv_path(path: Path) -> list[GradeMappingEntry]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        for row in csv.DictReader(handle):
-            mapped = {
-                db_column: _clean(row.get(csv_column))
-                for csv_column, db_column in CSV_TO_DB_COLUMNS.items()
-            }
-            organization = mapped["organization"]
-            raw_grade_code = mapped["raw_grade_code"]
-            if not organization or not raw_grade_code:
-                continue
-            entries.append(
-                GradeMappingEntry(
-                    mapping_version=GRADE_MAPPING_VERSION,
-                    organization=organization,
-                    raw_grade_code=raw_grade_code,
-                    normalized_raw_grade_code=normalize_grade_key(raw_grade_code),
-                    normalized_grade_family=mapped["normalized_grade_family"],
-                    normalized_seniority_tier=mapped["normalized_seniority_tier"],
-                    international_national_local=mapped["international_national_local"],
-                    staff_consultant_contractor_other=mapped[
-                        "staff_consultant_contractor_other"
-                    ],
-                    approximate_un_equivalent=mapped["approximate_un_equivalent"],
-                    approximate_experience_range=mapped["approximate_experience_range"],
-                    typical_role_scope=mapped["typical_role_scope"],
-                    supervisory_expectations=mapped["supervisory_expectations"],
-                    notes_caveats=mapped["notes_caveats"],
-                    confidence_level=mapped["confidence_level"],
-                    evidence_type=mapped["evidence_type"],
-                )
+        return _load_grade_mappings_from_records(csv.DictReader(handle))
+
+
+def _load_grade_mappings_from_path(path: Path) -> list[GradeMappingEntry]:
+    return _load_grade_mappings_from_csv_path(path)
+
+
+def _load_grade_mappings_from_records(
+    rows: Any,
+) -> list[GradeMappingEntry]:
+    entries: list[GradeMappingEntry] = []
+    for row in rows:
+        mapped = {
+            db_column: _clean(row.get(csv_column))
+            for csv_column, db_column in CSV_TO_DB_COLUMNS.items()
+        }
+        organization = mapped["organization"]
+        raw_grade_code = mapped["raw_grade_code"]
+        if not organization or not raw_grade_code:
+            continue
+        entries.append(
+            GradeMappingEntry(
+                mapping_version=GRADE_MAPPING_VERSION,
+                organization=organization,
+                raw_grade_code=raw_grade_code,
+                normalized_raw_grade_code=normalize_grade_key(raw_grade_code),
+                normalized_grade_family=mapped["normalized_grade_family"],
+                normalized_seniority_tier=mapped["normalized_seniority_tier"],
+                international_national_local=mapped["international_national_local"],
+                staff_consultant_contractor_other=mapped[
+                    "staff_consultant_contractor_other"
+                ],
+                approximate_un_equivalent=mapped["approximate_un_equivalent"],
+                approximate_experience_range=mapped["approximate_experience_range"],
+                typical_role_scope=mapped["typical_role_scope"],
+                supervisory_expectations=mapped["supervisory_expectations"],
+                notes_caveats=mapped["notes_caveats"],
+                confidence_level=mapped["confidence_level"],
+                evidence_type=mapped["evidence_type"],
             )
+        )
     return entries
 
 
-def _load_adb_grade_mappings_from_docs() -> list[GradeMappingEntry]:
-    path = Path(__file__).resolve().parents[2] / ADB_GRADE_JSON
+def _load_adb_grade_mappings_from_rules() -> list[GradeMappingEntry]:
+    path = rules_path(ADB_GRADE_JSON)
     if not path.is_file():
         return []
     try:
@@ -253,7 +285,7 @@ def _load_adb_grade_mappings_from_docs() -> list[GradeMappingEntry]:
                 supervisory_expectations="Varies by vacancy",
                 notes_caveats=_adb_notes(item.get("tier"), secondary),
                 confidence_level=_clean(item.get("confidence")),
-                evidence_type="docs/adb_grade.json",
+                evidence_type="rules/adb_grade.json",
             )
         )
     return entries
@@ -317,7 +349,7 @@ def _un_equivalent(label_range: object | None) -> str | None:
 
 def _adb_notes(tier: object | None, secondary: dict[str, Any] | None) -> str:
     notes = [
-        "ADB mapping loaded from docs/adb_grade.json.",
+        "ADB mapping loaded from jobagg/classification/rules/adb_grade.json.",
         "ADB is outside the UN Common System; UN equivalence is functional only.",
     ]
     raw_tier = _clean(tier)

@@ -284,7 +284,7 @@ Normalized classification output for filtering, search, audit, and review.
 | `grade_confidence` | REAL |  | Grade classification confidence. |
 | `grade_mapping_organization` | TEXT |  | Organization row used from the revised grade mapping table. |
 | `grade_mapping_raw_grade_code` | TEXT |  | Raw mapping-table grade code that matched the vacancy. |
-| `standard_grade_family` | TEXT |  | Cross-organization grade family from `grade_mapping_table_revised.csv`. |
+| `standard_grade_family` | TEXT |  | Cross-organization grade family from the bundled grade mapping table. |
 | `standard_seniority_tier` | TEXT | indexed | Standard seniority tier such as `T2_JUNIOR_PROFESSIONAL`. |
 | `standard_scope` | TEXT | indexed | Standard international/national/local scope from the mapping table. |
 | `standard_employment_category` | TEXT |  | Standard staff/consultant/contractor/other category. |
@@ -321,7 +321,7 @@ Normalized classification output for filtering, search, audit, and review.
 
 ## Table: `grade_mappings`
 
-Bundled copy of `jobagg/classification/rules/grade_mapping_table_revised.csv`.
+Bundled copy of `jobagg/classification/rules/grade_mapping_table.json`, with `grade_mapping_table.csv` kept as a fallback/audit copy.
 It is seeded during database initialization so each source database and the consolidated `all_jobs.sqlite3` carries the grade standardization reference used by classification.
 
 | Column | SQLite type | Key/index | Meaning |
