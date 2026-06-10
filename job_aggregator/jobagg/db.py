@@ -288,9 +288,41 @@ class JobDatabase:
                     ccog_part TEXT,
                     ccog_confidence REAL,
                     ccog_method TEXT,
+                    occupational_family_code TEXT,
+                    occupational_family_label TEXT,
+                    occupational_medium_code TEXT,
+                    occupational_medium_label TEXT,
+                    occupational_small_code TEXT,
+                    occupational_small_label TEXT,
+                    occupational_confidence REAL,
+                    occupational_classifier_version TEXT,
+                    occupational_evidence TEXT,
+                    mandate_network_code TEXT,
+                    mandate_network_label TEXT,
+                    mandate_family_code TEXT,
+                    mandate_family_label TEXT,
+                    primary_mandate_network TEXT,
+                    primary_mandate_family TEXT,
+                    secondary_mandate_families TEXT,
+                    mandate_source TEXT,
+                    mandate_confidence REAL,
+                    mandate_evidence TEXT,
+                    source_native_category TEXT,
+                    source_native_job_family TEXT,
+                    source_native_job_network TEXT,
+                    capability_tags TEXT,
+                    capability_tag_scores TEXT,
+                    capability_tag_evidence TEXT,
+                    capability_classifier_version TEXT,
                     contract_category TEXT,
                     contract_subtype TEXT,
                     contract_confidence REAL,
+                    contract_group TEXT,
+                    contract_group_confidence REAL,
+                    contract_group_evidence TEXT,
+                    seniority_group TEXT,
+                    seniority_confidence REAL,
+                    seniority_evidence TEXT,
                     national_international TEXT,
                     national_international_confidence REAL,
                     grade_system TEXT,
@@ -331,6 +363,7 @@ class JobDatabase:
                     unv_host_entity TEXT,
                     unv_sdg TEXT,
                     unv_expertise_areas TEXT,
+                    quality_flags TEXT,
                     needs_review INTEGER NOT NULL DEFAULT 0,
                     classification_version TEXT NOT NULL,
                     evidence TEXT,
@@ -430,6 +463,42 @@ class JobDatabase:
                 "grade_mapping_notes",
             ):
                 self._ensure_column(conn, "vacancy_classifications", column, "TEXT")
+            for column, column_type in (
+                ("occupational_family_code", "TEXT"),
+                ("occupational_family_label", "TEXT"),
+                ("occupational_medium_code", "TEXT"),
+                ("occupational_medium_label", "TEXT"),
+                ("occupational_small_code", "TEXT"),
+                ("occupational_small_label", "TEXT"),
+                ("occupational_confidence", "REAL NOT NULL DEFAULT 0.0"),
+                ("occupational_classifier_version", "TEXT"),
+                ("occupational_evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("mandate_network_code", "TEXT"),
+                ("mandate_network_label", "TEXT"),
+                ("mandate_family_code", "TEXT"),
+                ("mandate_family_label", "TEXT"),
+                ("primary_mandate_network", "TEXT"),
+                ("primary_mandate_family", "TEXT"),
+                ("secondary_mandate_families", "TEXT NOT NULL DEFAULT '[]'"),
+                ("mandate_source", "TEXT"),
+                ("mandate_confidence", "REAL NOT NULL DEFAULT 0.0"),
+                ("mandate_evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("source_native_category", "TEXT"),
+                ("source_native_job_family", "TEXT"),
+                ("source_native_job_network", "TEXT"),
+                ("capability_tags", "TEXT NOT NULL DEFAULT '[]'"),
+                ("capability_tag_scores", "TEXT NOT NULL DEFAULT '{}'"),
+                ("capability_tag_evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("capability_classifier_version", "TEXT"),
+                ("contract_group", "TEXT"),
+                ("contract_group_confidence", "REAL NOT NULL DEFAULT 0.0"),
+                ("contract_group_evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("seniority_group", "TEXT"),
+                ("seniority_confidence", "REAL NOT NULL DEFAULT 0.0"),
+                ("seniority_evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("quality_flags", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                self._ensure_column(conn, "vacancy_classifications", column, column_type)
             # Vendor-supplied wall-clock closing time (kept verbatim) and
             # the IANA timezone identifier used to interpret it. ``closes_at``
             # remains the normalized UTC value used for sorting/indexing.
@@ -488,6 +557,18 @@ class JobDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_class_standard_un_equiv "
                 "ON vacancy_classifications (standard_un_equivalent)"
             )
+            for index_name, column in (
+                ("idx_class_occupational_family", "occupational_family_code"),
+                ("idx_class_occupational_medium", "occupational_medium_code"),
+                ("idx_class_mandate_network", "mandate_network_code"),
+                ("idx_class_mandate_family", "mandate_family_code"),
+                ("idx_class_contract_group", "contract_group"),
+                ("idx_class_seniority_group", "seniority_group"),
+            ):
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} "
+                    f"ON vacancy_classifications ({column})"
+                )
             self._seed_grade_mappings(conn)
             self._ensure_fts(conn)
 
@@ -699,6 +780,8 @@ class JobDatabase:
     def _merge_existing_detail_fields(self, job: JobRecord, current: sqlite3.Row) -> None:
         """Preserve detail-only fields when a listing-only sync omits them."""
 
+        new_row_is_listing_only = self._new_row_is_listing_only(job.raw)
+        job.raw = self._merge_existing_raw_detail_fields(job.raw, current["raw_json"])
         if job.department is None:
             job.department = current["department"]
         if job.employment_type is None:
@@ -713,6 +796,68 @@ class JobDatabase:
             job.closes_tz = current["closes_tz"]
         if job.description is None:
             job.description = current["description"]
+        elif new_row_is_listing_only and self._current_row_has_detail(current["raw_json"]):
+            job.description = current["description"]
+
+    @staticmethod
+    def _merge_existing_raw_detail_fields(
+        new_raw: dict[str, Any],
+        current_raw_json: str | None,
+    ) -> dict[str, Any]:
+        try:
+            current_raw = json.loads(current_raw_json or "{}")
+        except json.JSONDecodeError:
+            current_raw = {}
+        if not isinstance(current_raw, dict):
+            current_raw = {}
+
+        merged = dict(new_raw or {})
+
+        current_flat = current_raw.get("_taleo_flat")
+        new_flat = merged.get("_taleo_flat")
+        if isinstance(current_flat, dict) and isinstance(new_flat, dict):
+            merged["_taleo_flat"] = {**current_flat, **new_flat}
+        elif isinstance(current_flat, dict) and not isinstance(new_flat, dict):
+            merged["_taleo_flat"] = current_flat
+
+        for key in (
+            "requisitionFlexFields",
+            "workLocation",
+            "otherWorkLocations",
+            "secondaryLocations",
+            "jobPostingInfo",
+            "detail_html",
+        ):
+            if not JobDatabase._raw_has_value(merged.get(key)) and JobDatabase._raw_has_value(
+                current_raw.get(key)
+            ):
+                merged[key] = current_raw[key]
+
+        return merged
+
+    @staticmethod
+    def _new_row_is_listing_only(raw: dict[str, Any]) -> bool:
+        return JobDatabase._raw_has_value(raw.get("listing_html")) and not JobDatabase._raw_has_value(
+            raw.get("detail_html")
+        )
+
+    @staticmethod
+    def _current_row_has_detail(current_raw_json: str | None) -> bool:
+        try:
+            current_raw = json.loads(current_raw_json or "{}")
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(current_raw, dict):
+            return False
+        return JobDatabase._raw_has_value(current_raw.get("detail_html"))
+
+    @staticmethod
+    def _raw_has_value(value: Any) -> bool:
+        if value is None or value == "":
+            return False
+        if isinstance(value, (list, dict)):
+            return bool(value)
+        return True
 
     def get_job(self, job_key: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -1122,9 +1267,41 @@ class JobDatabase:
                 c.ccog_part,
                 c.ccog_confidence,
                 c.ccog_method,
+                c.occupational_family_code,
+                c.occupational_family_label,
+                c.occupational_medium_code,
+                c.occupational_medium_label,
+                c.occupational_small_code,
+                c.occupational_small_label,
+                c.occupational_confidence,
+                c.occupational_classifier_version,
+                c.occupational_evidence,
+                c.mandate_network_code,
+                c.mandate_network_label,
+                c.mandate_family_code,
+                c.mandate_family_label,
+                c.primary_mandate_network,
+                c.primary_mandate_family,
+                c.secondary_mandate_families,
+                c.mandate_source,
+                c.mandate_confidence,
+                c.mandate_evidence,
+                c.source_native_category,
+                c.source_native_job_family,
+                c.source_native_job_network,
+                c.capability_tags,
+                c.capability_tag_scores,
+                c.capability_tag_evidence,
+                c.capability_classifier_version,
                 c.contract_category,
                 c.contract_subtype,
                 c.contract_confidence,
+                c.contract_group,
+                c.contract_group_confidence,
+                c.contract_group_evidence,
+                c.seniority_group,
+                c.seniority_confidence,
+                c.seniority_evidence,
                 c.national_international,
                 c.national_international_confidence,
                 c.grade_system,
@@ -1165,6 +1342,7 @@ class JobDatabase:
                 c.unv_host_entity,
                 c.unv_sdg,
                 c.unv_expertise_areas,
+                c.quality_flags,
                 c.needs_review,
                 c.classification_version,
                 c.classified_at
@@ -1191,8 +1369,24 @@ class JobDatabase:
         for row in rows:
             data = dict(row)
             data["raw"] = json.loads(data.pop("raw_json") or "{}")
-            if data.get("unv_expertise_areas"):
-                data["unv_expertise_areas"] = json.loads(data["unv_expertise_areas"])
+            for field_name in (
+                "unv_expertise_areas",
+                "secondary_mandate_families",
+                "capability_tags",
+                "quality_flags",
+            ):
+                if data.get(field_name):
+                    data[field_name] = json.loads(data[field_name])
+            for field_name in (
+                "occupational_evidence",
+                "mandate_evidence",
+                "capability_tag_scores",
+                "capability_tag_evidence",
+                "contract_group_evidence",
+                "seniority_evidence",
+            ):
+                if data.get(field_name):
+                    data[field_name] = json.loads(data[field_name])
             data["needs_review"] = bool(data["needs_review"]) if data.get("needs_review") is not None else None
             yield data
 

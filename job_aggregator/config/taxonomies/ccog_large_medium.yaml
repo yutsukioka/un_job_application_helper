@@ -1,0 +1,7 @@
+# Runtime CCOG entries are loaded from jobagg/classification/rules/ccog_reference.yaml.
+# The full Markdown artifact is kept under .agents/skills/apex-ccog-resolver/resource
+# and was repaired only for OCR/code-formatting errors.
+code_levels:
+  family: "first two code components, e.g. 1.A"
+  medium: "first three code components, e.g. 1.A.01"
+  small: "four or more code components, e.g. 1.A.01.c"

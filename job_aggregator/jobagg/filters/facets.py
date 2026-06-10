@@ -17,6 +17,12 @@ FACET_COLUMNS = {
     "national_international": "c.national_international",
     "unv_categories": "c.unv_category",
     "ccog_families": "c.ccog_family_code",
+    "occupational_families": "c.occupational_family_code",
+    "occupational_mediums": "c.occupational_medium_code",
+    "mandate_networks": "c.mandate_network_code",
+    "mandate_families": "c.mandate_family_code",
+    "contract_groups": "c.contract_group",
+    "seniority_groups": "c.seniority_group",
 }
 
 

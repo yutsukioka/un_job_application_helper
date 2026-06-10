@@ -1,0 +1,17 @@
+# Source-native categories are preserved separately. Only clear mappings go here.
+mappings:
+  inspira:
+    source: un_careers_native
+  pageup:
+    Child Protection:
+      network_code: POLNET
+      family: Human Rights Affairs
+      confidence: 0.72
+    Education:
+      network_code: DEVNET
+      family: Education
+      confidence: 0.78
+    Health:
+      network_code: SCINET
+      family: Medical
+      confidence: 0.70

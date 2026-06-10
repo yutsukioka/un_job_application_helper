@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 
 
-CLASSIFICATION_VERSION = "ccog-filter-v2"
+CLASSIFICATION_VERSION = "ccog-filter-v4"
 EXTRACTOR_VERSION = "source-features-v1"
 
 
@@ -198,9 +198,41 @@ class ClassificationResult:
     ccog_part: str | None = None
     ccog_confidence: float = 0.0
     ccog_method: str | None = None
+    occupational_family_code: str | None = None
+    occupational_family_label: str | None = None
+    occupational_medium_code: str | None = None
+    occupational_medium_label: str | None = None
+    occupational_small_code: str | None = None
+    occupational_small_label: str | None = None
+    occupational_confidence: float = 0.0
+    occupational_classifier_version: str | None = None
+    occupational_evidence: dict[str, Any] = field(default_factory=dict)
+    mandate_network_code: str | None = None
+    mandate_network_label: str | None = None
+    mandate_family_code: str | None = None
+    mandate_family_label: str | None = None
+    primary_mandate_network: str | None = None
+    primary_mandate_family: str | None = None
+    secondary_mandate_families: list[str] = field(default_factory=list)
+    mandate_source: str | None = None
+    mandate_confidence: float = 0.0
+    mandate_evidence: dict[str, Any] = field(default_factory=dict)
+    source_native_category: str | None = None
+    source_native_job_family: str | None = None
+    source_native_job_network: str | None = None
+    capability_tags: list[str] = field(default_factory=list)
+    capability_tag_scores: dict[str, float] = field(default_factory=dict)
+    capability_tag_evidence: dict[str, Any] = field(default_factory=dict)
+    capability_classifier_version: str | None = None
     contract_category: ContractCategory = ContractCategory.UNKNOWN
     contract_subtype: str | None = None
     contract_confidence: float = 0.0
+    contract_group: str | None = None
+    contract_group_confidence: float = 0.0
+    contract_group_evidence: dict[str, Any] = field(default_factory=dict)
+    seniority_group: str | None = None
+    seniority_confidence: float = 0.0
+    seniority_evidence: dict[str, Any] = field(default_factory=dict)
     national_international: NationalInternational = NationalInternational.UNKNOWN
     national_international_confidence: float = 0.0
     grade_system: str | None = None
@@ -241,6 +273,7 @@ class ClassificationResult:
     unv_host_entity: str | None = None
     unv_sdg: str | None = None
     unv_expertise_areas: list[str] = field(default_factory=list)
+    quality_flags: list[str] = field(default_factory=list)
     needs_review: bool = False
     classification_version: str = CLASSIFICATION_VERSION
     evidence: dict[str, Any] = field(default_factory=dict)

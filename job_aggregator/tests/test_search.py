@@ -143,6 +143,54 @@ def test_nairobi_international_p_grade_search_matches_inspira_and_unicef(tmp_pat
     assert "title" in source_fields
 
 
+def test_search_filters_by_taxonomy_facets(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    db.upsert_job(
+        build_job(
+            source,
+            title="Finance Officer, P-3, Nairobi, Kenya",
+            external_id="taxonomy-search",
+            location="Nairobi, Kenya",
+            description="Responsible for budgeting, accounting, and project financial control.",
+            apply_url="https://jobs.unicef.org/jobs/taxonomy-search",
+        )
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Human Resources Officer, P-3, Nairobi, Kenya",
+            external_id="taxonomy-search-miss",
+            location="Nairobi, Kenya",
+            description="Responsible for recruitment and learning.",
+            apply_url="https://jobs.unicef.org/jobs/taxonomy-search-miss",
+        )
+    )
+
+    classify_database(db)
+    response = search_collected_jobs(
+        db,
+        VacancySearchRequest(
+            mandate_network_codes=["MAGNET"],
+            mandate_family_codes=["MAGNET.finance"],
+            occupational_medium_codes=["1.A.01"],
+            capability_tags=["budgeting"],
+            contract_groups=["staff"],
+            seniority_groups=["mid"],
+        ),
+    )
+
+    assert response.total == 1
+    assert response.results[0]["title"] == "Finance Officer, P-3, Nairobi, Kenya"
+    assert response.facets["mandate_families"] == {"MAGNET.finance": 1}
+    explanation = explain_job_match(
+        db,
+        "unicef_pageup:taxonomy-search",
+        VacancySearchRequest(capability_tags=["budgeting"], contract_groups=["staff"]),
+    )
+    assert explanation["matched"] is True
+
+
 def test_unv_region_does_not_create_nairobi_duty_station(tmp_path):
     db = _db(tmp_path)
     source = _source("unv_uvp", "unv")

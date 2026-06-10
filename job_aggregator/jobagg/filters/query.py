@@ -66,9 +66,35 @@ def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str,
             c.ccog_part,
             c.ccog_confidence,
             c.ccog_method,
+            c.occupational_family_code,
+            c.occupational_family_label,
+            c.occupational_medium_code,
+            c.occupational_medium_label,
+            c.occupational_small_code,
+            c.occupational_small_label,
+            c.occupational_confidence,
+            c.occupational_classifier_version,
+            c.mandate_network_code,
+            c.mandate_network_label,
+            c.mandate_family_code,
+            c.mandate_family_label,
+            c.primary_mandate_network,
+            c.primary_mandate_family,
+            c.secondary_mandate_families,
+            c.mandate_source,
+            c.mandate_confidence,
+            c.source_native_category,
+            c.source_native_job_family,
+            c.source_native_job_network,
+            c.capability_tags,
+            c.capability_classifier_version,
             c.contract_category,
             c.contract_subtype,
             c.contract_confidence,
+            c.contract_group,
+            c.contract_group_confidence,
+            c.seniority_group,
+            c.seniority_confidence,
             c.national_international,
             c.national_international_confidence,
             c.grade_system,
@@ -109,6 +135,7 @@ def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str,
             c.unv_host_entity,
             c.unv_sdg,
             c.unv_expertise_areas,
+            c.quality_flags,
             c.needs_review,
             c.classification_version,
             c.classified_at
@@ -179,10 +206,21 @@ def search_collected_jobs(
             c.national_international,
             c.contract_category,
             c.contract_subtype,
+            c.contract_group,
+            c.seniority_group,
             c.ccog_primary_code,
             c.ccog_primary_label,
             c.ccog_family_code,
             c.ccog_family_label,
+            c.occupational_family_code,
+            c.occupational_family_label,
+            c.occupational_medium_code,
+            c.occupational_medium_label,
+            c.mandate_network_code,
+            c.mandate_network_label,
+            c.mandate_family_code,
+            c.mandate_family_label,
+            c.capability_tags,
             c.work_modality,
             c.country,
             c.city,
@@ -240,6 +278,12 @@ def search_facet_counts(
         "grades": "c.grade_code",
         "organizations": "j.org_id",
         "ccog_families": "c.ccog_family_code",
+        "occupational_families": "c.occupational_family_code",
+        "occupational_mediums": "c.occupational_medium_code",
+        "mandate_networks": "c.mandate_network_code",
+        "mandate_families": "c.mandate_family_code",
+        "contract_groups": "c.contract_group",
+        "seniority_groups": "c.seniority_group",
         "contract_categories": "c.contract_category",
         "work_modalities": "c.work_modality",
         "regions": "c.region",
@@ -299,6 +343,13 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
             _add_in_clause(clauses, params, "c.national_international", scopes)
     _add_in_clause(clauses, params, "c.ccog_primary_code", request.ccog_codes)
     _add_ccog_family_clause(clauses, params, request.ccog_families)
+    _add_in_clause(clauses, params, "c.occupational_family_code", request.occupational_family_codes)
+    _add_in_clause(clauses, params, "c.occupational_medium_code", request.occupational_medium_codes)
+    _add_in_clause(clauses, params, "c.mandate_network_code", request.mandate_network_codes)
+    _add_in_clause(clauses, params, "c.mandate_family_code", request.mandate_family_codes)
+    _add_json_array_contains_clause(clauses, params, "c.capability_tags", request.capability_tags)
+    _add_in_clause(clauses, params, "c.contract_group", request.contract_groups)
+    _add_in_clause(clauses, params, "c.seniority_group", request.seniority_groups)
     _add_in_clause(clauses, params, "c.work_modality", request.work_modalities)
     _add_in_clause(clauses, params, "c.unv_category", request.unv_categories)
     _add_in_clause(clauses, params, "c.unv_volunteer_type", request.unv_volunteer_types)
@@ -395,11 +446,17 @@ def _add_in_clause(
 _ALLOWED_IN_COLUMNS: frozenset[str] = frozenset(
     {
         "c.contract_category",
+        "c.contract_group",
         "c.grade_code",
         "c.grade_family",
         "c.grade_system",
+        "c.mandate_family_code",
+        "c.mandate_network_code",
         "c.national_international",
+        "c.occupational_family_code",
+        "c.occupational_medium_code",
         "c.ccog_primary_code",
+        "c.seniority_group",
         "c.unv_category",
         "c.unv_volunteer_type",
         "c.work_modality",
@@ -433,6 +490,22 @@ def _add_ccog_family_clause(
             "(c.ccog_family_code = ? OR c.ccog_primary_code = ? OR c.ccog_primary_code LIKE ?)"
         )
         params.extend([family, family, f"{family}.%"])
+    clauses.append("(" + " OR ".join(parts) + ")")
+
+
+def _add_json_array_contains_clause(
+    clauses: list[str],
+    params: list[Any],
+    column: str,
+    values: list[str],
+) -> None:
+    cleaned = [value for value in values if value]
+    if not cleaned:
+        return
+    parts = []
+    for value in cleaned:
+        parts.append(f"{column} LIKE ?")
+        params.append(f'%"{value}"%')
     clauses.append("(" + " OR ".join(parts) + ")")
 
 
@@ -494,6 +567,12 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
         "source_id": ("j.source_id", filters.source_id),
         "ats_family": ("j.ats_family", filters.ats_family),
         "ccog_part": ("c.ccog_part", filters.ccog_part),
+        "occupational_family_code": ("c.occupational_family_code", filters.occupational_family_code),
+        "occupational_medium_code": ("c.occupational_medium_code", filters.occupational_medium_code),
+        "mandate_network_code": ("c.mandate_network_code", filters.mandate_network_code),
+        "mandate_family_code": ("c.mandate_family_code", filters.mandate_family_code),
+        "contract_group": ("c.contract_group", filters.contract_group),
+        "seniority_group": ("c.seniority_group", filters.seniority_group),
         "contract_category": ("c.contract_category", filters.contract_category),
         "contract_subtype": ("c.contract_subtype", filters.contract_subtype),
         "grade_system": ("c.grade_system", filters.grade_system),
@@ -527,6 +606,9 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
             "(c.ccog_family_code = ? OR c.ccog_primary_code = ? OR c.ccog_primary_code LIKE ?)"
         )
         params.extend([filters.ccog_family, filters.ccog_family, f"{filters.ccog_family}.%"])
+    if filters.capability_tag:
+        clauses.append("c.capability_tags LIKE ?")
+        params.append(f'%"{filters.capability_tag}"%')
     if filters.max_min_years_experience is not None:
         clauses.append("(c.min_years_experience IS NULL OR c.min_years_experience <= ?)")
         params.append(filters.max_min_years_experience)
@@ -547,8 +629,14 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
 def _row_to_dict(row: Any) -> dict[str, Any]:
     data = dict(row)
     data["raw"] = json.loads(data.pop("raw_json") or "{}")
-    if data.get("unv_expertise_areas"):
-        data["unv_expertise_areas"] = json.loads(data["unv_expertise_areas"])
+    for field_name in (
+        "unv_expertise_areas",
+        "secondary_mandate_families",
+        "capability_tags",
+        "quality_flags",
+    ):
+        if data.get(field_name):
+            data[field_name] = json.loads(data[field_name])
     data["needs_review"] = bool(data["needs_review"]) if data.get("needs_review") is not None else None
     return data
 
@@ -586,6 +674,17 @@ def _search_row_to_result(
         "ccog_primary_label": data["ccog_primary_label"],
         "ccog_family_code": data["ccog_family_code"],
         "ccog_family_label": data["ccog_family_label"],
+        "occupational_family_code": data["occupational_family_code"],
+        "occupational_family_label": data["occupational_family_label"],
+        "occupational_medium_code": data["occupational_medium_code"],
+        "occupational_medium_label": data["occupational_medium_label"],
+        "mandate_network_code": data["mandate_network_code"],
+        "mandate_network_label": data["mandate_network_label"],
+        "mandate_family_code": data["mandate_family_code"],
+        "mandate_family_label": data["mandate_family_label"],
+        "capability_tags": json.loads(data["capability_tags"] or "[]"),
+        "contract_group": data["contract_group"],
+        "seniority_group": data["seniority_group"],
         "work_modality": data["work_modality"],
         "closing_date": data["closes_at"],
         "posted_date": data["posted_at"],

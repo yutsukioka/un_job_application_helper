@@ -13,6 +13,7 @@ from pathlib import Path
 from jobagg.classification import classify_database
 from jobagg.classification.audit import audit_classification, audit_to_markdown
 from jobagg.classification.classifiers.ccog import ccog_tree
+from jobagg.classification.models import CLASSIFICATION_VERSION
 from jobagg.db import JobDatabase
 from jobagg.filters.explain import explain_job_match, explain_to_text
 from jobagg.filters.facets import facet_counts
@@ -186,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--status", choices=["open", "missing", "closed"], help="Optional status filter.")
     classify.add_argument(
         "--version",
-        default="ccog-filter-v2",
+        default=CLASSIFICATION_VERSION,
         help="Classification version label to store.",
     )
     classify.add_argument(
@@ -900,6 +901,13 @@ def _add_filter_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ccog-part", help="CCOG part filter.")
     parser.add_argument("--ccog-family", help="CCOG family prefix/code filter.")
     parser.add_argument("--ccog-code", help="Exact CCOG primary code filter.")
+    parser.add_argument("--occupational-family-code", help="Derived CCOG family filter.")
+    parser.add_argument("--occupational-medium-code", help="Derived CCOG medium filter.")
+    parser.add_argument("--mandate-network-code", help="UN Job Network code filter.")
+    parser.add_argument("--mandate-family-code", help="UN Job Family code filter.")
+    parser.add_argument("--capability-tag", help="Capability tag filter.")
+    parser.add_argument("--contract-group", help="Normalized contract group filter.")
+    parser.add_argument("--seniority-group", help="Normalized seniority group filter.")
     parser.add_argument("--contract-category", help="Contract category filter.")
     parser.add_argument("--contract-subtype", help="Contract subtype filter.")
     parser.add_argument("--grade-system", help="Grade system filter.")
@@ -966,6 +974,13 @@ def _add_search_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--grade", action="append", default=[], help="Grade code filter such as P2 or P-3.")
     parser.add_argument("--ccog-code", action="append", default=[], help="Exact CCOG primary code filter.")
     parser.add_argument("--ccog-family", action="append", default=[], help="CCOG family code/prefix filter.")
+    parser.add_argument("--occupational-family-code", action="append", default=[], help="Derived CCOG family filter.")
+    parser.add_argument("--occupational-medium-code", action="append", default=[], help="Derived CCOG medium filter.")
+    parser.add_argument("--mandate-network-code", action="append", default=[], help="UN Job Network code filter.")
+    parser.add_argument("--mandate-family-code", action="append", default=[], help="UN Job Family code filter.")
+    parser.add_argument("--capability-tag", action="append", default=[], help="Capability tag filter.")
+    parser.add_argument("--contract-group", action="append", default=[], help="Normalized contract group filter.")
+    parser.add_argument("--seniority-group", action="append", default=[], help="Normalized seniority group filter.")
     parser.add_argument("--work-modality", action="append", default=[], help="Work modality filter.")
     parser.add_argument("--unv-category", action="append", default=[], help="UNV category filter.")
     parser.add_argument("--unv-volunteer-type", action="append", default=[], help="UNV volunteer type filter.")
@@ -1039,6 +1054,13 @@ def _search_request_from_args(args: argparse.Namespace) -> VacancySearchRequest:
         grade_codes=getattr(args, "grade", []) or [],
         ccog_codes=getattr(args, "ccog_code", []) or [],
         ccog_families=getattr(args, "ccog_family", []) or [],
+        occupational_family_codes=getattr(args, "occupational_family_code", []) or [],
+        occupational_medium_codes=getattr(args, "occupational_medium_code", []) or [],
+        mandate_network_codes=getattr(args, "mandate_network_code", []) or [],
+        mandate_family_codes=getattr(args, "mandate_family_code", []) or [],
+        capability_tags=getattr(args, "capability_tag", []) or [],
+        contract_groups=getattr(args, "contract_group", []) or [],
+        seniority_groups=getattr(args, "seniority_group", []) or [],
         work_modalities=getattr(args, "work_modality", []) or [],
         unv_categories=getattr(args, "unv_category", []) or [],
         unv_volunteer_types=getattr(args, "unv_volunteer_type", []) or [],
@@ -1069,6 +1091,13 @@ def _filters_from_args(args: argparse.Namespace) -> VacancyFilters:
         ccog_part=getattr(args, "ccog_part", None),
         ccog_family=getattr(args, "ccog_family", None),
         ccog_code=getattr(args, "ccog_code", None),
+        occupational_family_code=getattr(args, "occupational_family_code", None),
+        occupational_medium_code=getattr(args, "occupational_medium_code", None),
+        mandate_network_code=getattr(args, "mandate_network_code", None),
+        mandate_family_code=getattr(args, "mandate_family_code", None),
+        capability_tag=getattr(args, "capability_tag", None),
+        contract_group=getattr(args, "contract_group", None),
+        seniority_group=getattr(args, "seniority_group", None),
         contract_category=getattr(args, "contract_category", None),
         contract_subtype=getattr(args, "contract_subtype", None),
         grade_system=getattr(args, "grade_system", None),

@@ -1,0 +1,82 @@
+# Canonical mandate taxonomy based on UN Careers Job Network -> Job Family.
+networks:
+  DEVNET:
+    label: Economic, Social and Development
+    job_families:
+      - Drug Control and Crime Prevention
+      - Population Affairs
+      - Programme Management
+      - Public Administration
+      - Statistics
+      - Social Affairs
+      - Sustainable Development
+      - Economic Affairs
+      - Economic Affairs (and Sustainable Development)
+      - Education
+      - Donor and External Relations
+      - Environmental Affairs
+      - Science and Technology
+  ITECNET:
+    label: Information and Telecommunication Technology
+    job_families:
+      - Information Management Systems and Technology
+      - Media Technology
+      - Telecommunications Technology
+  SAFETYNET:
+    label: Internal Security and Safety
+    job_families:
+      - Safety
+      - Security
+  LEGALNET:
+    label: Legal
+    job_families:
+      - Jurists
+      - Legal Affairs
+  LOGNET:
+    label: Logistics, Transportation and Supply Chain
+    job_families:
+      - Human Settlements
+      - Engineering
+      - Facilities Management
+      - Transportation
+      - Logistics and Supply Chain
+      - Property and Asset Management
+      - Procurement
+      - Aviation
+  MAGNET:
+    label: Management and Administration
+    job_families:
+      - Ombudsman
+      - Investigation
+      - Management and Analysis
+      - Inspection and Evaluation
+      - Audit
+      - Administration
+      - Ethics
+      - Finance
+      - Human Resources
+      - Investment Management
+  POLNET:
+    label: Political, Peace and Humanitarian
+    job_families:
+      - Rule of Law
+      - Civil Affairs
+      - Humanitarian Affairs
+      - Political Affairs
+      - Human Rights Affairs
+      - Security Institutions
+      - Electoral Affairs
+  INFONET:
+    label: Public Information and Conference Management
+    job_families:
+      - Protocol
+      - Public Information
+      - Language
+      - Conference Services
+      - Documentation and Information Management
+      - Data Analytics and Management
+  SCINET:
+    label: Science
+    job_families:
+      - Medical
+      - Natural and Life Sciences

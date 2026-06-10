@@ -30,6 +30,7 @@ from jobagg.classification.models import (
     VacancyLocation,
     WorkModality,
 )
+from jobagg.classification.taxonomy import enrich_search_taxonomy
 from jobagg.db import JobDatabase
 from jobagg.filters.normalization import country_for_city, country_info, display_city, normalize_city
 
@@ -132,10 +133,20 @@ def classify_job_with_locations(
         modality = classify_modality(features, location)
     unv = classify_unv(features)
     ccog = classify_ccog(features, grade, contract, unv)
+    taxonomy = enrich_search_taxonomy(features, grade, contract, ccog, unv)
     needs_review = (
         ccog.confidence < 0.70
         or contract.confidence < 0.50
         or (grade.confidence < 0.50 and features.source_id not in {"unv_uvp"})
+        or bool(
+            set(taxonomy.quality_flags)
+            & {
+                "low_occupational_confidence",
+                "missing_contract_group",
+                "missing_seniority",
+                "missing_mandate_area",
+            }
+        )
     )
     result = ClassificationResult(
         vacancy_id=features.vacancy_id,
@@ -146,9 +157,41 @@ def classify_job_with_locations(
         ccog_part=ccog.part,
         ccog_confidence=ccog.confidence,
         ccog_method=ccog.method,
+        occupational_family_code=taxonomy.occupational_family_code,
+        occupational_family_label=taxonomy.occupational_family_label,
+        occupational_medium_code=taxonomy.occupational_medium_code,
+        occupational_medium_label=taxonomy.occupational_medium_label,
+        occupational_small_code=taxonomy.occupational_small_code,
+        occupational_small_label=taxonomy.occupational_small_label,
+        occupational_confidence=taxonomy.occupational_confidence,
+        occupational_classifier_version=taxonomy.occupational_classifier_version,
+        occupational_evidence=taxonomy.occupational_evidence,
+        mandate_network_code=taxonomy.mandate_network_code,
+        mandate_network_label=taxonomy.mandate_network_label,
+        mandate_family_code=taxonomy.mandate_family_code,
+        mandate_family_label=taxonomy.mandate_family_label,
+        primary_mandate_network=taxonomy.primary_mandate_network,
+        primary_mandate_family=taxonomy.primary_mandate_family,
+        secondary_mandate_families=taxonomy.secondary_mandate_families,
+        mandate_source=taxonomy.mandate_source,
+        mandate_confidence=taxonomy.mandate_confidence,
+        mandate_evidence=taxonomy.mandate_evidence,
+        source_native_category=taxonomy.source_native_category,
+        source_native_job_family=taxonomy.source_native_job_family,
+        source_native_job_network=taxonomy.source_native_job_network,
+        capability_tags=taxonomy.capability_tags,
+        capability_tag_scores=taxonomy.capability_tag_scores,
+        capability_tag_evidence=taxonomy.capability_tag_evidence,
+        capability_classifier_version=taxonomy.capability_classifier_version,
         contract_category=contract.category,
         contract_subtype=contract.subtype,
         contract_confidence=contract.confidence,
+        contract_group=taxonomy.contract_group,
+        contract_group_confidence=taxonomy.contract_group_confidence,
+        contract_group_evidence=taxonomy.contract_group_evidence,
+        seniority_group=taxonomy.seniority_group,
+        seniority_confidence=taxonomy.seniority_confidence,
+        seniority_evidence=taxonomy.seniority_evidence,
         national_international=national_scope.value,
         national_international_confidence=national_scope.confidence,
         grade_system=grade.system,
@@ -213,6 +256,7 @@ def classify_job_with_locations(
         unv_host_entity=unv.host_entity if unv else None,
         unv_sdg=unv.sdg if unv else None,
         unv_expertise_areas=unv.expertise_areas if unv else [],
+        quality_flags=taxonomy.quality_flags,
         needs_review=needs_review,
         classification_version=version,
         evidence={
@@ -227,6 +271,14 @@ def classify_job_with_locations(
             "modality": modality.evidence,
             "unv": unv.evidence if unv else None,
             "ccog": ccog.evidence,
+            "search_taxonomy": {
+                "occupational": taxonomy.occupational_evidence,
+                "mandate": taxonomy.mandate_evidence,
+                "capabilities": taxonomy.capability_tag_evidence,
+                "contract_group": taxonomy.contract_group_evidence,
+                "seniority": taxonomy.seniority_evidence,
+                "quality_flags": taxonomy.quality_flags,
+            },
             "locations": [location_to_row(item) for item in locations],
         },
     )
@@ -358,7 +410,22 @@ def classification_to_row(result: ClassificationResult) -> dict[str, Any]:
     for key in ("contract_category", "national_international", "work_modality", "unv_category"):
         if row.get(key) is not None:
             row[key] = row[key].value if hasattr(row[key], "value") else row[key]
-    row["unv_expertise_areas"] = json.dumps(row["unv_expertise_areas"], ensure_ascii=True)
+    for key in (
+        "unv_expertise_areas",
+        "secondary_mandate_families",
+        "capability_tags",
+        "quality_flags",
+    ):
+        row[key] = json.dumps(row[key], ensure_ascii=True)
+    for key in (
+        "occupational_evidence",
+        "mandate_evidence",
+        "capability_tag_scores",
+        "capability_tag_evidence",
+        "contract_group_evidence",
+        "seniority_evidence",
+    ):
+        row[key] = json.dumps(row[key], sort_keys=True, ensure_ascii=True)
     row["evidence"] = json.dumps(row["evidence"], sort_keys=True, ensure_ascii=True)
     row["needs_review"] = int(bool(row["needs_review"]))
     row["classified_at"] = result.classified_at.isoformat()

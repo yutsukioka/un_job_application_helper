@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from jobagg.classification.models import CCOGResult, ContractResult, FeatureBundle, GradeResult, UNVResult
 from jobagg.classification.rules import load_rule_file
@@ -75,6 +76,55 @@ def ccog_tree() -> list[dict[str, str | None]]:
         }
         for entry in _ccog_entries().values()
     ]
+
+
+def normalize_ccog_code(code: str) -> str:
+    """Normalize known CCOG OCR/code-format artifacts without changing semantics."""
+
+    compact = re.sub(r"\s+", "", str(code or "").strip())
+    if compact.startswith(("I.", "L.")):
+        compact = "1." + compact[2:]
+    compact = compact.rstrip(".")
+    if re.fullmatch(r"[12]\.[A-Z0-9]\.\d{2}[a-z]", compact, flags=re.I):
+        compact = compact[:-1] + "." + compact[-1]
+    return compact
+
+
+def collapse_ccog_to_medium(code: str) -> str | None:
+    """Return the medium-level CCOG code for a medium or small code."""
+
+    normalized = normalize_ccog_code(code)
+    parts = normalized.split(".")
+    if len(parts) < 3:
+        return None
+    return ".".join(parts[:3])
+
+
+def get_ccog_family(code: str) -> dict[str, str | None] | None:
+    """Return the CCOG family metadata for ``code``."""
+
+    normalized = normalize_ccog_code(code)
+    parts = normalized.split(".")
+    if len(parts) < 2:
+        return None
+    family_code = ".".join(parts[:2])
+    for entry in _ccog_entries().values():
+        if entry.family_code == family_code:
+            return {"code": family_code, "label": entry.family_label}
+    entry = _ccog_entries().get(family_code)
+    if entry:
+        return {"code": family_code, "label": entry.title}
+    return {"code": family_code, "label": None}
+
+
+def get_ccog_medium(code: str) -> dict[str, str | None] | None:
+    """Return medium-level CCOG metadata for a medium or small code."""
+
+    medium_code = collapse_ccog_to_medium(code)
+    if medium_code is None:
+        return None
+    entry = _ccog_entries().get(medium_code)
+    return {"code": medium_code, "label": entry.title if entry else None}
 
 
 def _source_mapping_candidate(features: FeatureBundle, part: str | None) -> CCOGResult | None:
@@ -189,9 +239,9 @@ def _hydrate(result: CCOGResult) -> CCOGResult:
 @lru_cache(maxsize=1)
 def _ccog_entries() -> dict[str, CCOGEntry]:
     data = load_rule_file("ccog_reference.yaml")
-    entries: dict[str, CCOGEntry] = {}
+    entries: dict[str, CCOGEntry] = _markdown_ccog_entries()
     for item in data.get("entries", []):
-        code = _normalize_code(str(item.get("code") or ""))
+        code = normalize_ccog_code(str(item.get("code") or ""))
         if not code:
             continue
         entries[code] = CCOGEntry(
@@ -204,6 +254,61 @@ def _ccog_entries() -> dict[str, CCOGEntry]:
     return entries
 
 
+def _markdown_ccog_entries() -> dict[str, CCOGEntry]:
+    path = _full_markdown_path()
+    if path is None:
+        return {}
+    entries: dict[str, CCOGEntry] = {}
+    current_family_code = ""
+    current_family_label = ""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        family_match = re.match(r"^## Family:\s+([0-9A-Z]\.[A-Z0-9])\s+—\s+(.+?)\s*$", line)
+        if family_match:
+            current_family_code = normalize_ccog_code(family_match.group(1))
+            current_family_label = family_match.group(2).strip()
+            continue
+        entry_match = re.match(r"^###\s+([0-9IL]\.[A-Z0-9](?:\.[0-9]{1,2})?(?:\.[a-z])?)\s+—\s+(.+?)\s*$", line)
+        if not entry_match:
+            continue
+        code = normalize_ccog_code(entry_match.group(1))
+        title = entry_match.group(2).strip()
+        family_code = current_family_code or ".".join(code.split(".")[:2])
+        family_label = current_family_label
+        level_signal = ""
+        for detail in lines[index + 1:index + 7]:
+            if detail.startswith("**Family:**"):
+                detail_match = re.match(r"^\*\*Family:\*\*\s+([0-9A-Z]\.[A-Z0-9])\s+—\s*(.*?)\s*$", detail)
+                if detail_match:
+                    family_code = normalize_ccog_code(detail_match.group(1))
+                    family_label = detail_match.group(2).strip() or family_label
+            elif detail.startswith("**Level signal:**"):
+                level_signal = detail.split(":", 1)[1].strip()
+        entries[code] = CCOGEntry(
+            code=code,
+            title=title,
+            family_code=family_code,
+            family_label=family_label,
+            level_signal=level_signal,
+        )
+    return entries
+
+
+def _full_markdown_path() -> Path | None:
+    candidates = [
+        Path(__file__).resolve().parents[4]
+        / "skills"
+        / "apex-ccog-resolver"
+        / "resource"
+        / "ccog_reference_full.md",
+        Path.cwd() / "output" / "ccog_reference_full.md",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def _parent_family_code(code: str | None) -> str | None:
     if not code:
         return None
@@ -214,7 +319,4 @@ def _parent_family_code(code: str | None) -> str | None:
 
 
 def _normalize_code(code: str) -> str:
-    compact = re.sub(r"\s+", "", code.strip())
-    if compact.startswith(("I.", "L.")):
-        compact = "1." + compact[2:]
-    return compact.rstrip(".")
+    return normalize_ccog_code(code)

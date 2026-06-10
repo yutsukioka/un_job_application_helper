@@ -16,6 +16,13 @@ class VacancyFilters:
     ccog_part: str | None = None
     ccog_family: str | None = None
     ccog_code: str | None = None
+    occupational_family_code: str | None = None
+    occupational_medium_code: str | None = None
+    mandate_network_code: str | None = None
+    mandate_family_code: str | None = None
+    capability_tag: str | None = None
+    contract_group: str | None = None
+    seniority_group: str | None = None
     contract_category: str | None = None
     contract_subtype: str | None = None
     grade_system: str | None = None
@@ -67,6 +74,13 @@ class VacancySearchRequest:
     grade_codes: list[str] = field(default_factory=list)
     ccog_codes: list[str] = field(default_factory=list)
     ccog_families: list[str] = field(default_factory=list)
+    occupational_family_codes: list[str] = field(default_factory=list)
+    occupational_medium_codes: list[str] = field(default_factory=list)
+    mandate_network_codes: list[str] = field(default_factory=list)
+    mandate_family_codes: list[str] = field(default_factory=list)
+    capability_tags: list[str] = field(default_factory=list)
+    contract_groups: list[str] = field(default_factory=list)
+    seniority_groups: list[str] = field(default_factory=list)
     work_modalities: list[str] = field(default_factory=list)
     unv_categories: list[str] = field(default_factory=list)
     unv_volunteer_types: list[str] = field(default_factory=list)

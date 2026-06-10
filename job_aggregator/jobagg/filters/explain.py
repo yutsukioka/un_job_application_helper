@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from typing import Any
 
@@ -89,6 +90,23 @@ def _evaluate_checks(
     _add_scope_check(checks, row, request)
     _add_list_check(checks, "ccog_primary_code", row.get("ccog_primary_code"), request.ccog_codes)
     _add_ccog_family_check(checks, row, request.ccog_families)
+    _add_list_check(
+        checks,
+        "occupational_family_code",
+        row.get("occupational_family_code"),
+        request.occupational_family_codes,
+    )
+    _add_list_check(
+        checks,
+        "occupational_medium_code",
+        row.get("occupational_medium_code"),
+        request.occupational_medium_codes,
+    )
+    _add_list_check(checks, "mandate_network_code", row.get("mandate_network_code"), request.mandate_network_codes)
+    _add_list_check(checks, "mandate_family_code", row.get("mandate_family_code"), request.mandate_family_codes)
+    _add_contains_check(checks, "capability_tags", row.get("capability_tags"), request.capability_tags)
+    _add_list_check(checks, "contract_group", row.get("contract_group"), request.contract_groups)
+    _add_list_check(checks, "seniority_group", row.get("seniority_group"), request.seniority_groups)
     _add_list_check(checks, "work_modality", row.get("work_modality"), request.work_modalities)
     _add_list_check(checks, "unv_category", row.get("unv_category"), request.unv_categories)
     _add_list_check(
@@ -128,6 +146,32 @@ def _add_list_check(
                 f"{label} {actual} matched"
                 if matched
                 else f"{label} {actual} not in {expected}"
+            ),
+        }
+    )
+
+
+def _add_contains_check(
+    checks: list[dict[str, Any]],
+    label: str,
+    actual: object,
+    expected: list[str],
+) -> None:
+    expected = [value for value in expected if value]
+    if not expected:
+        return
+    actual_values = set(actual if isinstance(actual, list) else [])
+    matched = any(value in actual_values for value in expected)
+    checks.append(
+        {
+            "filter": label,
+            "matched": matched,
+            "actual": sorted(actual_values),
+            "expected": expected,
+            "reason": (
+                f"{label} matched one of {expected}"
+                if matched
+                else f"{label} {sorted(actual_values)} did not include {expected}"
             ),
         }
     )
@@ -355,7 +399,13 @@ def _job_with_classification(db: JobDatabase, job_key: str) -> dict[str, Any] | 
             """,
             (job_key,),
         ).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    data = dict(row)
+    for field_name in ("capability_tags", "quality_flags", "secondary_mandate_families"):
+        if data.get(field_name):
+            data[field_name] = json.loads(data[field_name])
+    return data
 
 
 def _country_iso3(value: str) -> str | None:

@@ -1,0 +1,3 @@
+# Region normalization is currently driven by classification/rules/country_regions.yaml.
+# This file reserves the taxonomy path requested by the search-enrichment plan.
+region_source: classification/rules/country_regions.yaml

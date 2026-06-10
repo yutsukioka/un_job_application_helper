@@ -1,0 +1,21 @@
+groups:
+  internship_trainee:
+    grade_codes: [I1]
+    title_keywords: [intern, internship, studentship, trainee]
+  volunteer:
+    contract_groups: [volunteer]
+  entry_junior:
+    grade_codes: [P1, P2, NOA, NOB, G1, G2, G3, G4]
+    title_keywords: [assistant, associate, junior]
+  mid:
+    grade_codes: [P3, P4, NOC, G5, G6]
+    title_keywords: [officer, specialist, analyst, coordinator]
+  senior:
+    grade_codes: [P5, NOD, G7]
+    title_keywords: [senior, chief, head, principal, lead]
+  director_executive:
+    grade_codes: [D1, D2]
+    title_keywords: [director, representative, executive director]
+  ungraded_nonstaff_or_pathway:
+    contract_groups: [consultant_contractor, fellowship_ypp_pathway, roster_pipeline]
+  unknown: {}
