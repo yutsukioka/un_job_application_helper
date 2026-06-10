@@ -12,7 +12,12 @@ from jobagg.adapters.oracle_hcm import OracleHCMAdapter, classify_fetch_error
 from jobagg.adapters.pageup import PageUpAdapter
 from jobagg.adapters.peoplesoft import PeopleSoftAdapter
 from jobagg.adapters.smartrecruiters import SmartRecruitersAdapter
-from jobagg.adapters.static_html import StaticHTMLAdapter, parse_detail_page, parse_unssc_jobs
+from jobagg.adapters.static_html import (
+    StaticHTMLAdapter,
+    parse_detail_page,
+    parse_eu_careers_jobs,
+    parse_unssc_jobs,
+)
 from jobagg.adapters.successfactors_rmk import SuccessFactorsRMKAdapter
 from jobagg.adapters.successfactors_rmk import SuccessFactorsLegacyAdapter
 from jobagg.adapters.successfactors_rmk import _next_page_url
@@ -48,6 +53,19 @@ class FakeTextHTTP:
 
     def get(self, url, *, headers=None):
         return FakeResponse(text=self.text)
+
+
+class FakeRouteTextHTTP:
+    def __init__(self, routes):
+        self.routes = routes
+        self.get_calls = []
+
+    def get(self, url, *, headers=None):
+        self.get_calls.append(url)
+        try:
+            return FakeResponse(text=self.routes[url])
+        except KeyError as exc:
+            raise AssertionError(f"Unexpected URL: {url}") from exc
 
 
 class FakeOracleCEHTTP:
@@ -386,6 +404,50 @@ def test_oracle_hcm_detail_uses_detail_timeout_override():
 
     detail_call = next(call for call in http.get_calls if "recruitingCEJobRequisitionDetails" in call[0])
     assert detail_call[2] == 120
+
+
+def test_oracle_hcm_empty_detail_by_id_marks_listing_job_closed():
+    org = source("oracle_hcm", site_number="CX_1")
+    http = FakeOracleCEHTTP(
+        {},
+        detail_pages={"33605": {"items": [], "count": 0, "hasMore": False}},
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    job = adapter.fetch_detail_for_listing_item(
+        {
+            "Id": "33605",
+            "Title": "Assistente de Gestao da Informacao",
+            "PrimaryLocation": "Brasilia, Brazil",
+            "ShortDescription": "Listing teaser.",
+        }
+    )
+
+    assert job is not None
+    assert job.external_id == "33605"
+    assert job.status == "closed"
+    assert job.title == "Assistente de Gestao da Informacao"
+    assert job.location == "Brasilia, Brazil"
+    assert job.description == "Listing teaser."
+    assert job.raw["oracle_detail_status"] == "not_available"
+    assert job.raw["oracle_detail_empty_by_id"] is True
+
+
+def test_oracle_hcm_reuses_candidate_experience_user_id_within_adapter_run():
+    org = source("oracle_hcm", site_number="CX_1")
+    detail_payload = fixture_json("oracle", "cx1_undp_hosted_agencies_detail.json")
+    http = FakeOracleCEHTTP({}, detail_pages={"34287": detail_payload})
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    adapter.fetch_detail_for_listing_item({"Id": "34287"})
+    adapter.fetch_detail_for_listing_item({"Id": "34287"})
+
+    detail_headers = [
+        call[1]
+        for call in http.get_calls
+        if "recruitingCEJobRequisitionDetails" in call[0]
+    ]
+    assert len({headers["ora-irc-cx-userid"] for headers in detail_headers}) == 1
 
 
 def test_oracle_hcm_site_name_mismatch_aborts_without_jobs(monkeypatch):
@@ -1175,6 +1237,116 @@ def test_successfactors_legacy_xml_feed_accepts_explicit_zero():
     assert adapter.run_diagnostics.empty_reason == "verified_total_zero"
 
 
+def test_successfactors_legacy_xml_feed_accepts_empty_job_listing_root():
+    org = OrganizationSource(
+        id="afdb_successfactors_legacy",
+        name="African Development Bank Group",
+        ats_family="successfactors_legacy",
+        base_url="https://career2.successfactors.eu/career?company=africandev",
+        extra={
+            "company_id": "africandev",
+            "locale": "en_GB",
+            "primary_fetch_method": "successfactors_xml",
+        },
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(
+            source=org,
+            http=FakeTextHTTP(
+                """<?xml version="1.0" encoding="UTF-8"?><Job-Listing></Job-Listing>"""
+            ),
+        )
+    )
+
+    assert adapter.fetch_jobs() == []
+    assert adapter.run_diagnostics.health_status == "ok_empty"
+    assert adapter.run_diagnostics.empty_reason == "verified_total_zero"
+    assert adapter.run_diagnostics.zero_fetched_evidence["job_elements"] == 0
+
+
+def test_aiib_current_jobs_feed_parses_static_listing_and_detail():
+    feed_url = "https://www.aiib.org/en/opportunities/career/job-vacancies/staff/.content/index/current-jobs.js"
+    detail_url = "https://www.aiib.org/en/opportunities/career/job-vacancies/staff/job-details/senior-hr-officer-performance-reward45.html"
+    js_text = """
+    var jobs = [];
+    jobs[0]=[];
+    jobs[0]["closing-date"]="Jun 19, 2026";
+    jobs[0]["number"]="25245";
+    jobs[0]["title"]="Senior HR Officer, Performance & Reward";
+    jobs[0]["description"]="Minimum 10 years of relevant professional experience";
+    jobs[0]["department"]="Human Resources Department";
+    jobs[0]["type"]="Global Recruitment";
+    jobs[0]["location"]="Beijing ";
+    jobs[0]["positioning-date"]="May 22, 2026";
+    jobs[0]["path"]="/en/opportunities/career/job-vacancies/staff/job-details/senior-hr-officer-performance-reward45.html";
+    /*
+    jobsTop[0]=[];
+    jobsTop[0]["title"]="Commented Manual Top Job";
+    jobsTop[0]["path"]="/ignored.html";
+    */
+    """
+    detail_html = """
+    <html><head><title>Senior HR Officer, Performance &amp; Reward</title></head><body>
+      <div class="font-copy-18-black">
+        <p>The Senior HR Officer will support the Head of Performance, Rewards &amp; HR Operations.</p>
+      </div>
+      <h2 class="subheadline">Responsibilities:</h2>
+      <div class="font-copy-18-black"><ul><li>Prepare reports and presentations for Senior Management.</li></ul></div>
+      <h2 class="subheadline">Requirements:</h2>
+      <div class="font-copy-18-black"><ul>
+        <li>At least 10 years of experience in compensation and benefits, with a strong background in performance management.</li>
+        <li>Proven knowledge of job evaluation and grading.</li>
+      </ul></div>
+      <div class="job-card">
+        <div class="item"><div class="col-title">Ref. Number</div><div class="col-con">25245</div></div>
+        <div class="item"><div class="col-title">Department/Division</div><div class="col-con">Human Resources Department</div></div>
+        <div class="item"><div class="col-title">Job Type **</div><div class="col-con">Global Recruitment</div></div>
+        <div class="item"><div class="col-title">Location</div><div class="col-con">Beijing</div></div>
+        <div class="item"><div class="col-title">Posting Date</div><div class="col-con">May 22, 2026</div></div>
+        <div class="item"><div class="col-title">Closing Date *</div><div class="col-con">Jun 19, 2026</div></div>
+      </div>
+      <a href="https://career5.successfactors.eu/sfcareer/jobreqcareer?jobId=6414&company=AIIB">APPLY NOW</a>
+    </body></html>
+    """
+    org = OrganizationSource(
+        id="aiib_successfactors_legacy",
+        name="Asian Infrastructure Investment Bank",
+        ats_family="successfactors_legacy",
+        base_url="https://career5.successfactors.eu/career?company=AIIB",
+        extra={
+            "official_listing_url": "https://www.aiib.org/en/opportunities/career/job-vacancies/staff/index.html",
+            "current_jobs_url": feed_url,
+            "listing_feed_type": "aiib_current_jobs_js",
+            "date_locale": "US",
+        },
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(
+            source=org,
+            http=FakeRouteTextHTTP({feed_url: js_text, detail_url: detail_html}),
+        )
+    )
+
+    jobs = adapter.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert jobs[0].external_id == "25245"
+    assert jobs[0].title == "Senior HR Officer, Performance & Reward"
+    assert jobs[0].description == "Minimum 10 years of relevant professional experience"
+    assert jobs[0].source_url == detail_url
+    assert adapter.run_diagnostics.health_status == "ok"
+
+    detail_job = adapter.fetch_detail_for_listing_item(jobs[0].raw)
+
+    assert detail_job is not None
+    assert detail_job.external_id == "25245"
+    assert detail_job.apply_url == "https://career5.successfactors.eu/sfcareer/jobreqcareer?jobId=6414&company=AIIB"
+    assert detail_job.raw["successfactors_job_id"] == "6414"
+    assert detail_job.raw["parser"] == "aiib_official_detail"
+    assert "At least 10 years of experience in compensation and benefits" in detail_job.description
+    assert "Requirements:" in detail_job.description
+
+
 def test_successfactors_legacy_xml_feed_rejects_unverified_zero():
     org = OrganizationSource(
         id="icc_successfactors_legacy",
@@ -1206,7 +1378,9 @@ def test_successfactors_rmk_fetches_detail_description_from_listing_item():
       <body>
         <div class="jobDisplay">
           <h1>Programme Officer</h1>
-          <p>Full duties and responsibilities from the detail page.</p>
+          <p>Full duties and responsibilities from the detail page. This role coordinates
+          programme delivery, prepares analysis, manages stakeholder consultations, drafts
+          reports, supports planning, and tracks implementation risks across multiple workstreams.</p>
         </div>
       </body>
     </html>
@@ -1225,6 +1399,105 @@ def test_successfactors_rmk_fetches_detail_description_from_listing_item():
     assert job is not None
     assert job.external_id == "12345"
     assert "Full duties and responsibilities" in (job.description or "")
+
+
+def test_successfactors_rmk_detail_prefers_full_nested_itemprop_description():
+    html = """
+    <html>
+      <head><title>Analyst - Careers</title></head>
+      <body>
+        <meta itemprop="streetAddress" content="Istanbul, TR">
+        <meta itemprop="datePosted" content="Tue Jun 09 00:00:00 UTC 2026">
+        <meta itemprop="validThrough" content="Tue Jun 16 22:00:00 UTC 2026">
+        <span itemprop="description" class="jobdescription">
+          <table><tr><td><span>Requisition ID</span></td><td><span>36801</span></td></tr></table>
+          <p>The analyst will prepare financial analysis, conduct due diligence,
+          coordinate with clients, draft investment documentation, monitor portfolio
+          performance, and support senior bankers throughout project implementation.</p>
+        </span>
+      </body>
+    </html>
+    """
+    adapter = SuccessFactorsRMKAdapter(
+        AdapterContext(source=source("successfactors_rmk"), http=FakeTextHTTP(html))
+    )
+
+    job = adapter.fetch_detail_for_listing_item(
+        {"detail_url": "https://jobs.example.org/job/Istanbul-Analyst/1402478633/"}
+    )
+
+    assert job is not None
+    assert len(job.description or "") > 120
+    assert "Requisition ID" in (job.description or "")
+    assert "conduct due diligence" in (job.description or "")
+    assert job.location == "Istanbul, TR"
+    assert job.posted_at.isoformat() == "2026-06-09T00:00:00+00:00"
+    assert job.closes_at.isoformat() == "2026-06-16T22:00:00+00:00"
+
+
+def test_successfactors_rss_empty_placeholder_is_verified_empty():
+    adapter = SuccessFactorsRMKAdapter(
+        AdapterContext(source=source("successfactors_rmk"), http=JobAggHTTPClient())
+    )
+
+    jobs = adapter.parse_jobs_from_rss(
+        """
+        <rss><channel>
+          <item>
+            <title>No jobs currently available - Check out our other opportunities.</title>
+            <description>Click above to see other opportunities available.</description>
+            <link>https://jobs.example.org</link>
+          </item>
+        </channel></rss>
+        """
+    )
+
+    assert jobs == []
+    assert adapter.run_diagnostics.health_status == "ok_empty"
+    assert adapter.run_diagnostics.empty_reason == "verified_text_empty"
+
+
+def test_eu_careers_parser_reads_only_vacancy_table_rows():
+    org = OrganizationSource(
+        id="eu_careers_static",
+        name="European Union Careers",
+        ats_family="eu_careers_static",
+        adapter="static_html",
+        base_url="https://eu-careers.europa.eu/en/job-opportunities/open-vacancies",
+        extra={"parser": "eu_careers_open_vacancies"},
+    )
+    html = """
+    <table><tbody>
+      <tr>
+        <td class="views-field views-field-title">
+          <a href="/en/job-opportunities/senior-space-systems-architect/euspa-2026-ad-006">Senior Space Systems Architect</a>
+        </td>
+        <td class="views-field views-field-field-epso-domain"><a href="/en/domain/space">Space</a></td>
+        <td class="views-field views-field-field-epso-grade">AD 9</td>
+        <td class="views-field views-field-field-epso-institution">(EUSPA) European Union Agency for the Space Programme</td>
+        <td class="views-field views-field-field-epso-location">Prague (Czech Republic)</td>
+        <td class="views-field views-field-created"><time datetime="2026-04-30T11:11:20+02:00">30/04/2026</time></td>
+        <td class="views-field views-field-field-epso-deadline"><time datetime="2026-06-10T09:59:00Z">10/06/2026</time></td>
+      </tr>
+      <tr>
+        <td class="views-field views-field-title">
+          <a href="/en/selection-procedure/epso-tests">EPSO testing</a>
+        </td>
+      </tr>
+    </tbody></table>
+    """
+
+    jobs = parse_eu_careers_jobs(
+        org,
+        html,
+        "https://eu-careers.europa.eu/en/job-opportunities/open-vacancies/cast",
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Senior Space Systems Architect"
+    assert jobs[0].employment_type == "AD 9"
+    assert jobs[0].location == "Prague (Czech Republic)"
+    assert jobs[0].closes_at.isoformat() == "2026-06-10T09:59:00+00:00"
 
 
 def test_static_html_fetches_detail_for_selective_refresh():

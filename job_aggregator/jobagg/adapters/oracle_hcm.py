@@ -11,7 +11,7 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
-from jobagg.adapters.base import JobAdapter, register_adapter
+from jobagg.adapters.base import AdapterContext, JobAdapter, register_adapter
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job, parse_datetime
 from jobagg.utils import as_bool as _as_bool
@@ -38,6 +38,10 @@ _HTTP_STATUS_RE = re.compile(r"http\s+(\d{3})", re.IGNORECASE)
 @register_adapter
 class OracleHCMAdapter(JobAdapter):
     family = "oracle_hcm"
+
+    def __init__(self, context: AdapterContext) -> None:
+        super().__init__(context)
+        self._cx_user_id = str(self.source.extra.get("oracle_cx_user_id") or uuid.uuid4())
 
     def fetch_jobs(self) -> list[JobRecord]:
         api_url = self.source.extra.get("api_url") or self._default_api_url()
@@ -138,17 +142,57 @@ class OracleHCMAdapter(JobAdapter):
         if detail_url is None:
             return None
         self.ensure_allowed(detail_url)
-        return next(
-            iter(
-                self.parse_jobs(
-                    self.context.http.get(
-                        detail_url,
-                        headers=self._oracle_headers(),
-                        timeout_seconds=self._detail_timeout_seconds(),
-                    ).json()
-                )
-            ),
-            None,
+        payload = self.context.http.get(
+            detail_url,
+            headers=self._oracle_headers(),
+            timeout_seconds=self._detail_timeout_seconds(),
+        ).json()
+        detail_jobs = self.parse_jobs(payload)
+        if detail_jobs:
+            return detail_jobs[0]
+        if _oracle_detail_not_available(payload):
+            return self._closed_job_from_listing_item(
+                item,
+                external_id=str(external_id),
+                detail_url=detail_url,
+            )
+        return None
+
+    def _closed_job_from_listing_item(
+        self,
+        item: dict[str, Any],
+        *,
+        external_id: str,
+        detail_url: str,
+    ) -> JobRecord:
+        apply_url = (
+            item.get("ExternalApplyUrl")
+            or item.get("ApplyURL")
+            or self._apply_url_from_template(external_id)
+            or _first_link_href(item.get("links"))
+            or external_id
+        )
+        raw = self._raw_with_source_notice(item, source_priority="oracle_hcm_ce")
+        raw["oracle_detail_status"] = "not_available"
+        raw["oracle_detail_empty_by_id"] = True
+        raw["oracle_detail_api_url"] = detail_url
+        return build_job(
+            self.source,
+            title=item.get("Title") or external_id,
+            external_id=external_id,
+            location=_location(item),
+            department=item.get("Department")
+            or item.get("OrganizationName")
+            or item.get("Organization")
+            or item.get("BusinessUnit")
+            or item.get("LegalEmployer"),
+            employment_type=_contract_type(item),
+            posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
+            closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
+            apply_url=str(apply_url),
+            description=_description(item),
+            status="closed",
+            raw=raw,
         )
 
     def _default_api_url(self) -> str | None:
@@ -269,7 +313,7 @@ class OracleHCMAdapter(JobAdapter):
         return {
             "Accept": "application/json",
             "Content-Type": "application/vnd.oracle.adf.resourceitem+json;charset=utf-8",
-            "ora-irc-cx-userid": str(uuid.uuid4()),
+            "ora-irc-cx-userid": self._cx_user_id,
             "ora-irc-language": str(self.source.extra.get("language") or "en"),
         }
 
@@ -456,6 +500,21 @@ def _rows(payload: Any) -> list[dict[str, Any]]:
         elif item.get("Title"):
             rows.append(item)
     return rows
+
+
+def _oracle_detail_not_available(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    items = payload.get("items")
+    if not isinstance(items, list) or items:
+        return False
+    count = payload.get("count")
+    if count in (None, ""):
+        return True
+    try:
+        return int(count) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _total_count(payload: Any) -> int | None:

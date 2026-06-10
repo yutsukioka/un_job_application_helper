@@ -259,6 +259,91 @@ domains:
     min_delay_seconds: 2.0
     override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
 
+  209400.jobs2web.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  agencies-network.europa.eu:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  careers.smartrecruiters.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  digit.service-now.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  eexh.fa.em3.oraclecloud.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  eu-careers.europa.eu:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  europa.eu:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  jobs.ebrd.com:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  jobs.iadb.org:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  talents.coe.int:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.afdb.org:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.aiib.org:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.coe.int:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.interpol.int:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.iom.int:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.irena.org:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
+  www.worldbank.org:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
+
   www.unwto.org:
     honor_robots_txt: false
     min_delay_seconds: 2.0

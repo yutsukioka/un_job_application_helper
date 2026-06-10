@@ -34,6 +34,9 @@ contract_rules:
       - "intern"
       - "internship"
       - "studentship"
+      - "stagiaire"
+      - "stage en"
+      - "estagi"
   internship_paid:
     keywords:
       - "paid internship"

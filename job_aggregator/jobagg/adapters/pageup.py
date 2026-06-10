@@ -147,6 +147,7 @@ class PageUpAdapter(JobAdapter):
         if not detail_url:
             return None
         detail_url = _quote_url(str(detail_url))
+        expected_external_id = self._job_id_from_url(detail_url)
         detail_text = self._fetch_detail_text(detail_url)
         try:
             payload = json.loads(detail_text)
@@ -160,8 +161,13 @@ class PageUpAdapter(JobAdapter):
             else:
                 return None
         if not detail_html.strip():
+            detail_html = self._fetch_public_detail_html(detail_url)
+        if not detail_html.strip() or self._is_unusable_detail_html(detail_html):
             return None
-        return self.parse_detail_html(detail_html, str(detail_url))
+        job = self.parse_detail_html(detail_html, str(detail_url))
+        if expected_external_id and job.external_id != expected_external_id:
+            return None
+        return job
 
     def _fetch_detail_text(self, detail_url: str) -> str:
         self.ensure_allowed(detail_url)
@@ -206,23 +212,25 @@ class PageUpAdapter(JobAdapter):
         return value or None
 
     def parse_detail_html(self, detail_html: str, detail_url: str) -> JobRecord:
-        title = self._extract_heading(detail_html) or self._extract_title_from_detail_url(detail_url)
-        external_id = self._extract_class_text(detail_html, "job-externalJobNo") or self._job_id_from_url(detail_url)
-        apply_url = self._extract_apply_url(detail_html) or detail_url
+        scoped_html = self._job_detail_scope(detail_html)
+        title = self._extract_heading(scoped_html) or self._extract_title_from_detail_url(detail_url)
+        external_id = self._extract_class_text(scoped_html, "job-externalJobNo") or self._job_id_from_url(detail_url)
+        apply_url = self._extract_apply_url(scoped_html) or detail_url
+        description_html = self._extract_job_details_html(scoped_html) or scoped_html
         return build_job(
             self.source,
             title=title,
             external_id=external_id,
-            location=self._extract_class_text(detail_html, "location"),
-            department=self._extract_class_text(detail_html, "categories"),
-            employment_type=self._extract_labeled_value(detail_html, "Contract type"),
-            closes_at=self._extract_time_datetime(detail_html) or self._extract_labeled_value(
-                detail_html, "Deadline"
+            location=self._extract_class_text(scoped_html, "location"),
+            department=self._extract_class_text(scoped_html, "categories"),
+            employment_type=self._extract_labeled_value(scoped_html, "Contract type"),
+            closes_at=self._extract_time_datetime(scoped_html) or self._extract_labeled_value(
+                scoped_html, "Deadline"
             ),
             apply_url=apply_url,
             source_url=detail_url,
-            description=self._clean_html(detail_html),
-            raw={"detail_html": detail_html, "_pageup_detail_url": detail_url},
+            description=self._clean_html(description_html),
+            raw={"detail_html": scoped_html, "_pageup_detail_url": detail_url},
         )
 
     def _post_pageup_json(self, url: str) -> Any:
@@ -280,6 +288,38 @@ class PageUpAdapter(JobAdapter):
         )
         match = pattern.search(html_text)
         return self._clean_html(match.group("value")) if match else None
+
+    def _job_detail_scope(self, html_text: str) -> str:
+        marker = re.search(r'<span[^>]+class="[^"]*\bjob-externalJobNo\b', html_text, re.IGNORECASE)
+        if not marker:
+            return html_text
+        heading_start = html_text.rfind("<h2", 0, marker.start())
+        if heading_start == -1:
+            return html_text
+        search_results = re.search(
+            r'<div[^>]+id=["\'](?:search-results|recent-jobs)["\']',
+            html_text[marker.end() :],
+            re.IGNORECASE,
+        )
+        end = marker.end() + search_results.start() if search_results else len(html_text)
+        return html_text[heading_start:end]
+
+    def _extract_job_details_html(self, html_text: str) -> str | None:
+        match = re.search(
+            r'<div[^>]+id=["\']job-details["\'][^>]*>(?P<value>.*?)(?:</div>\s*<p>\s*<b>Advertised:|</div>\s*<p><a[^>]+class=["\']back-link\b)',
+            html_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        return match.group("value") if match else None
+
+    def _is_unusable_detail_html(self, html_text: str) -> bool:
+        folded = html_text.casefold()
+        return (
+            "awswaf" in folded
+            or "verify that you're not a robot" in folded
+            or "javascript is disabled" in folded
+            or "job-externaljobno" not in folded
+        )
 
     def _extract_teaser(self, item_html: str) -> str | None:
         match = re.search(

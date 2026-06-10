@@ -96,7 +96,60 @@ INTERNSHIP_CONTRACT_CATEGORIES = {
     ContractCategory.INTERNSHIP_UNKNOWN.value,
 }
 GENERIC_NONSTAFF_GRADE_FAMILIES = {"CONSULTANT", "INTERN"}
-LEVEL_BEARING_NONSTAFF_GRADE_FAMILIES = {"IICA", "LICA", "ICS", "SC", "SSA"}
+LEVEL_BEARING_NONSTAFF_GRADE_FAMILIES = {
+    "IICA",
+    "LICA",
+    "ICS",
+    "SC",
+    "SSA",
+    "SB",
+    "IPSA",
+    "NPSA",
+    "NB",
+    "UNESCO_CONSULTANT",
+    "UNRWA",
+}
+FAO_CONTRACT_FORM_GRADE_SIGNALS = {
+    "NPP",
+    "PSA",
+    "FELLOWSPROGRAMME",
+    "FAOFELLOWSPROGRAMME",
+    "FELLOWSHIP",
+    "FELLOW",
+    "VOLUNTEERPROGRAMME",
+    "FAOREGULARVOLUNTEERPROGRAMME",
+    "REGULARVOLUNTEERPROGRAMME",
+    "VOLUNTEER",
+}
+NON_GRADE_STANDARDIZATION_TIERS = {
+    "T0_NONSTAFF_UNGRADED",
+    "T0_PATHWAY_OUTSIDE_SYSTEM",
+    "T0_STAFF_UNGRADED",
+}
+CONSULTANT_NON_GRADE_TERMS = {
+    "CON",
+    "CONSULTING",
+    "CONSULTANCY",
+    "CONSULTANT",
+    "CONSULTANTS/CON",
+    "INDIVIDUALCONSULTANT",
+    "INDIVIDUALCONTRACTOR",
+}
+INTERNSHIP_NON_GRADE_TERMS = {
+    "INTERN",
+    "INTERNSHIP",
+    "INTERNSHIPINTERN",
+    "INTERNSHIPPROGRAMME",
+    "SHORTTERMINTERNSHIP",
+    "STUDENTSHIP",
+    "TRAINEE",
+}
+VOLUNTEER_NON_GRADE_TERMS = {
+    "VOLUNTEER",
+    "VOLUNTEERPROGRAMME",
+    "FAOREGULARVOLUNTEERPROGRAMME",
+    "REGULARVOLUNTEERPROGRAMME",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +219,7 @@ def grade_mapping_rows() -> list[dict[str, Any]]:
 @lru_cache(maxsize=1)
 def load_grade_mappings() -> tuple[GradeMappingEntry, ...]:
     entries = _load_bundled_grade_mappings()
+    entries.extend(_additional_grade_mappings())
     adb_entries = _load_adb_grade_mappings_from_rules()
     if adb_entries:
         entries = [
@@ -187,6 +241,88 @@ def _load_bundled_grade_mappings() -> list[GradeMappingEntry]:
     if csv_path.is_file():
         return _load_grade_mappings_from_csv_path(csv_path)
     return []
+
+
+def _additional_grade_mappings() -> list[GradeMappingEntry]:
+    return [
+        *[_unrwa_grade_mapping(level) for level in range(1, 21)],
+        *_unesco_consultant_level_mappings(),
+    ]
+
+
+def _unrwa_grade_mapping(level: int) -> GradeMappingEntry:
+    if level <= 5:
+        tier = "T1_ENTRY_SUPPORT"
+        equivalent = "No staff-grade equivalent"
+        scope = "Entry/support local role"
+    elif level <= 10:
+        tier = "T2_JUNIOR_PROFESSIONAL"
+        equivalent = "~G-5/G-7"
+        scope = "Skilled local technical/support role"
+    elif level <= 14:
+        tier = "T3_MID_PROFESSIONAL"
+        equivalent = "~NO-B/NO-C"
+        scope = "Mid-level local professional/specialist role"
+    elif level <= 17:
+        tier = "T4_SENIOR_PROFESSIONAL"
+        equivalent = "~NO-C/NO-D"
+        scope = "Senior local professional/specialist role"
+    else:
+        tier = "T5_PRINCIPAL_MANAGER"
+        equivalent = "~NO-D/P-4"
+        scope = "Principal local specialist or managerial role"
+    return GradeMappingEntry(
+        mapping_version=GRADE_MAPPING_VERSION,
+        organization=COMMON_SYSTEM_ORGANIZATION,
+        raw_grade_code=f"UNRWA Grade {level}",
+        normalized_raw_grade_code=normalize_grade_key(f"UNRWA Grade {level}"),
+        normalized_grade_family="UNRWA local grade scale",
+        normalized_seniority_tier=tier,
+        international_national_local="National / Local",
+        staff_consultant_contractor_other="National Consultant / UNRWA local appointment",
+        approximate_un_equivalent=equivalent,
+        approximate_experience_range="functional proxy; verify against UNRWA salary scale",
+        typical_role_scope=scope,
+        supervisory_expectations="Varies by vacancy",
+        notes_caveats=(
+            "UNRWA local grade mapping is functional and intended for search/triage; "
+            "it does not imply UN Secretariat staff-grade equivalence."
+        ),
+        confidence_level="MEDIUM",
+        evidence_type="UNRWA local grade salary scale functional proxy",
+    )
+
+
+def _unesco_consultant_level_mappings() -> list[GradeMappingEntry]:
+    rows = [
+        ("Level 1 - Junior", "T2_JUNIOR_PROFESSIONAL", "Junior consultant assignment"),
+        ("Level 2 - Middle", "T3_MID_PROFESSIONAL", "Mid-level consultant assignment"),
+        ("Level 3 - Senior", "T4_SENIOR_PROFESSIONAL", "Senior consultant assignment"),
+        ("Level 4 - Expert", "T5_PRINCIPAL_MANAGER", "Principal/expert consultant assignment"),
+    ]
+    return [
+        GradeMappingEntry(
+            mapping_version=GRADE_MAPPING_VERSION,
+            organization="UNESCO",
+            raw_grade_code=raw_grade,
+            normalized_raw_grade_code=normalize_grade_key(raw_grade),
+            normalized_grade_family="UNESCO Consultant Contract Level",
+            normalized_seniority_tier=tier,
+            international_national_local="Varies by assignment",
+            staff_consultant_contractor_other="Consultant / contractor",
+            approximate_un_equivalent="No staff-grade equivalent",
+            approximate_experience_range=None,
+            typical_role_scope=role_scope,
+            supervisory_expectations="Varies by vacancy",
+            notes_caveats=(
+                "UNESCO consultant levels are non-staff contract levels; the tier is "
+                "a functional search proxy, not a UN staff-grade equivalence."
+            ),
+            confidence_level="MEDIUM",
+            evidence_type="UNESCO job detail Type of contract/Level fields",
+        )
+        for raw_grade, tier, role_scope in rows
+    ]
 
 
 def _load_grade_mappings_from_json_path(path: Path) -> list[GradeMappingEntry]:
@@ -223,8 +359,7 @@ def _load_grade_mappings_from_records(
         raw_grade_code = mapped["raw_grade_code"]
         if not organization or not raw_grade_code:
             continue
-        entries.append(
-            GradeMappingEntry(
+        entry = GradeMappingEntry(
                 mapping_version=GRADE_MAPPING_VERSION,
                 organization=organization,
                 raw_grade_code=raw_grade_code,
@@ -243,8 +378,55 @@ def _load_grade_mappings_from_records(
                 confidence_level=mapped["confidence_level"],
                 evidence_type=mapped["evidence_type"],
             )
-        )
+        entries.append(_adjust_loaded_entry(entry))
     return entries
+
+
+def _adjust_loaded_entry(entry: GradeMappingEntry) -> GradeMappingEntry:
+    if entry.organization == "UNFPA":
+        match = re.fullmatch(r"SB[-\s]?([1-5])", entry.raw_grade_code, re.I)
+        if match:
+            return _unfpa_sb_mapping(match.group(1))
+    return entry
+
+
+def _unfpa_sb_mapping(level_text: str) -> GradeMappingEntry:
+    level = int(level_text)
+    tier_by_level = {
+        1: "T1_ENTRY_SUPPORT",
+        2: "T1_ENTRY_SUPPORT",
+        3: "T2_JUNIOR_PROFESSIONAL",
+        4: "T3_MID_PROFESSIONAL",
+        5: "T4_SENIOR_PROFESSIONAL",
+    }
+    scope_by_level = {
+        1: "Custodial, maintenance, security, driving, messenger or similar operations",
+        2: "Basic processing/support, clerical, secretarial or technical support",
+        3: "Specialized and comprehensive support with integrated execution",
+        4: "Analytical work requiring basic conceptual comprehension",
+        5: "Higher professional conceptual, analytical and advisory work",
+    }
+    raw_grade = f"SB{level}"
+    return GradeMappingEntry(
+        mapping_version=GRADE_MAPPING_VERSION,
+        organization="UNFPA",
+        raw_grade_code=raw_grade,
+        normalized_raw_grade_code=normalize_grade_key(raw_grade),
+        normalized_grade_family="UNFPA Service Contract / Individual Consultancy",
+        normalized_seniority_tier=tier_by_level[level],
+        international_national_local="National / Local",
+        staff_consultant_contractor_other="National Consultant / contractor",
+        approximate_un_equivalent="No staff-grade equivalent",
+        approximate_experience_range=None,
+        typical_role_scope=scope_by_level[level],
+        supervisory_expectations="Varies by vacancy",
+        notes_caveats=(
+            "UNFPA SB levels are service-contract/consultancy bands. They are "
+            "standardized for search tiering but are not UN staff grades."
+        ),
+        confidence_level="MEDIUM",
+        evidence_type="UNFPA SB service contract level definition",
+    )
 
 
 def _load_adb_grade_mappings_from_rules() -> list[GradeMappingEntry]:
@@ -298,12 +480,13 @@ def _adb_normalized_family(family: str) -> str:
         "TL": "ADB Technical Local Staff",
         "IS": "ADB International Staff",
         "TI": "ADB Technical International Staff",
+        "M": "ADB Managerial International Staff",
     }
     return labels.get(family.upper(), f"ADB {family.upper()} Staff")
 
 
 def _adb_scope(family: str) -> str:
-    if family.upper() in {"IS", "TI"}:
+    if family.upper() in {"IS", "TI", "M"}:
         return "International"
     if family.upper() in {"NS", "TL"}:
         return "National / Local"
@@ -317,6 +500,7 @@ def _adb_role_scope(family: str) -> str:
         "TL": "Technical local professional or specialist staff",
         "IS": "International professional staff",
         "TI": "Technical international professional staff",
+        "M": "Managerial international staff",
     }
     return labels.get(family.upper(), "ADB staff role")
 
@@ -367,15 +551,22 @@ def standardize_grade(
     grade: Any,
     contract: Any | None = None,
 ) -> GradeStandardization | None:
-    if _should_skip_nonstaff_standardization(features, grade, contract):
-        return None
-
     entries = _candidate_entries(str(features.source_id))
     if not entries:
         return None
 
+    nonstaff = _nonstaff_standardization_kind(features, grade, contract)
+    if nonstaff:
+        return _match_non_grade_standardization(entries, features, nonstaff)
+
     signals = _grade_signals(features, grade)
-    direct = _match_direct(entries, signals)
+    direct = _match_direct(
+        _grade_eligible_entries(
+            entries,
+            include_non_grade_codes=_direct_non_grade_codes(features, grade),
+        ),
+        signals,
+    )
     if direct is not None:
         entry, field_name, matched = direct
         return _standardization_from_entry(
@@ -399,24 +590,47 @@ def standardize_grade(
             entry,
             evidence={"method": "role_title_signal", "field": field_name, "matched": matched},
         )
+    staff_non_grade = _match_staff_non_grade_standardization(entries, features)
+    if staff_non_grade is not None:
+        entry, field_name, matched = staff_non_grade
+        return _standardization_from_entry(
+            entry,
+            evidence={
+                "method": "staff_non_grade_category_signal",
+                "field": field_name,
+                "matched": matched,
+            },
+        )
+    experience_standardization = _experience_proxy_standardization(features, grade)
+    if experience_standardization is not None:
+        return experience_standardization
     return None
 
 
-def _should_skip_nonstaff_standardization(
+def _nonstaff_standardization_kind(
     features: Any,
     grade: Any,
     contract: Any | None,
-) -> bool:
+) -> str | None:
     category = _contract_category_value(contract)
-    grade_family = str(getattr(grade, "family", "") or "").upper()
 
     if category in INTERNSHIP_CONTRACT_CATEGORIES:
-        return True
-    if grade_family in GENERIC_NONSTAFF_GRADE_FAMILIES:
-        return True
+        return "internship"
     if category == ContractCategory.CONSULTANT.value:
-        return not _has_level_bearing_nonstaff_grade(features, grade)
-    return False
+        if _has_level_bearing_nonstaff_grade(features, grade):
+            return None
+        if _has_fao_contract_form_grade_signal(features, grade):
+            return None
+        return "consultant"
+    if category == ContractCategory.VOLUNTEERING_UNV.value:
+        return None
+
+    grade_family = str(getattr(grade, "family", "") or "").upper()
+    if grade_family in GENERIC_NONSTAFF_GRADE_FAMILIES:
+        if _has_fao_contract_form_grade_signal(features, grade):
+            return None
+        return "consultant" if grade_family == "CONSULTANT" else "internship"
+    return None
 
 
 def _contract_category_value(contract: Any | None) -> str | None:
@@ -433,9 +647,28 @@ def _has_level_bearing_nonstaff_grade(features: Any, grade: Any) -> bool:
     level = getattr(grade, "level", None)
     if family in LEVEL_BEARING_NONSTAFF_GRADE_FAMILIES and level:
         return True
-    pattern = re.compile(r"\b(?:IICA|LICA|ICS|SC|SSA)[-\s]?\d{1,2}\b", re.IGNORECASE)
+    pattern = re.compile(
+        r"\b(?:IICA|LICA|ICS|SC|SSA|IPSA|NPSA)[-\s]?\d{1,2}\b"
+        r"|\bNB[-\s]?[1-4]\b"
+        r"|\bSB[-\s]?[1-5]\b"
+        r"|\bLevel\s*[1-4]\s*[-–—]\s*[A-Za-z]+\b"
+        r"|\bUNRWA\s+Grade\s+\d{1,2}\b",
+        re.IGNORECASE,
+    )
     for _, signal in _grade_signals(features, grade):
         if pattern.search(signal):
+            return True
+    return False
+
+
+def _has_fao_contract_form_grade_signal(features: Any, grade: Any) -> bool:
+    if getattr(features, "source_id", None) != "fao_taleo":
+        return False
+    for _, signal in _grade_signals(features, grade):
+        normalized_signal = normalize_grade_key(signal)
+        if normalized_signal in FAO_CONTRACT_FORM_GRADE_SIGNALS:
+            return True
+        if any(token in normalized_signal for token in FAO_CONTRACT_FORM_GRADE_SIGNALS):
             return True
     return False
 
@@ -479,11 +712,150 @@ def _match_direct(
     entries: list[GradeMappingEntry],
     signals: list[tuple[str, str]],
 ) -> tuple[GradeMappingEntry, str, str] | None:
+    sorted_entries = sorted(
+        entries,
+        key=lambda entry: len(entry.normalized_raw_grade_code),
+        reverse=True,
+    )
     for field_name, signal in signals:
-        for entry in entries:
+        for entry in sorted_entries:
             if _entry_matches_signal(entry, signal):
                 return entry, field_name, signal
     return None
+
+
+def _grade_eligible_entries(
+    entries: list[GradeMappingEntry],
+    *,
+    include_non_grade_codes: set[str] | None = None,
+) -> list[GradeMappingEntry]:
+    include_non_grade_codes = include_non_grade_codes or set()
+    return [
+        entry
+        for entry in entries
+        if (
+            str(entry.normalized_seniority_tier or "").upper()
+            not in NON_GRADE_STANDARDIZATION_TIERS
+            or normalize_grade_key(entry.raw_grade_code) in include_non_grade_codes
+        )
+    ]
+
+
+def _match_non_grade_standardization(
+    entries: list[GradeMappingEntry],
+    features: Any,
+    kind: str,
+) -> GradeStandardization | None:
+    candidate_entries = [entry for entry in entries if _is_non_grade_entry(entry, kind)]
+    if not candidate_entries:
+        return None
+    for field_name, signal in _non_grade_signals(features, kind):
+        for entry in candidate_entries:
+            if _entry_matches_signal(entry, signal):
+                return _standardization_from_entry(
+                    entry,
+                    evidence={
+                        "method": "non_grade_category_signal",
+                        "category_kind": kind,
+                        "field": field_name,
+                        "matched": signal,
+                    },
+                )
+    return None
+
+
+def _match_staff_non_grade_standardization(
+    entries: list[GradeMappingEntry],
+    features: Any,
+) -> tuple[GradeMappingEntry, str, str] | None:
+    candidate_entries = [entry for entry in entries if _is_staff_non_grade_entry(entry)]
+    if not candidate_entries:
+        return None
+    return _match_direct(candidate_entries, _staff_non_grade_signals(features))
+
+
+def _non_grade_signals(features: Any, kind: str) -> list[tuple[str, str]]:
+    values: list[tuple[str, object | None]] = [
+        ("source_seniority", getattr(features, "seniority_raw", None)),
+        ("source_contract", getattr(features, "contract_raw", None)),
+        ("employment_type", getattr(features, "employment_type", None)),
+        ("title", getattr(features, "title", None)),
+    ]
+    if kind == "internship":
+        values.append(("description", getattr(features, "description", None)))
+        values.append(("contract_category", "Internship"))
+    elif kind == "consultant":
+        values.append(("contract_category", "Consultant"))
+    elif kind == "volunteer":
+        values.append(("contract_category", "Volunteer"))
+    signals: list[tuple[str, str]] = []
+    for field_name, value in values:
+        text = _clean(value)
+        if text:
+            signals.append((field_name, text))
+    return signals
+
+
+def _staff_non_grade_signals(features: Any) -> list[tuple[str, str]]:
+    signals: list[tuple[str, str]] = []
+    for field_name, value in (
+        ("source_contract", getattr(features, "contract_raw", None)),
+        ("employment_type", getattr(features, "employment_type", None)),
+        ("source_seniority", getattr(features, "seniority_raw", None)),
+        ("title", getattr(features, "title", None)),
+    ):
+        text = _clean(value)
+        if text:
+            signals.append((field_name, text))
+    return signals
+
+
+def _direct_non_grade_codes(features: Any, grade: Any) -> set[str]:
+    if _has_fao_contract_form_grade_signal(features, grade):
+        return FAO_CONTRACT_FORM_GRADE_SIGNALS
+    if getattr(features, "source_id", None) == "icc_successfactors_legacy":
+        for _, signal in _grade_signals(features, grade):
+            if "VISITINGPROFESSIONAL" in normalize_grade_key(signal):
+                return {"VISITINGPROFESSIONAL"}
+    return set()
+
+
+def _is_staff_non_grade_entry(entry: GradeMappingEntry) -> bool:
+    tier = str(entry.normalized_seniority_tier or "").upper()
+    if tier != "T0_STAFF_UNGRADED":
+        return False
+    return not (
+        _is_non_grade_entry(entry, "consultant")
+        or _is_non_grade_entry(entry, "internship")
+        or _is_non_grade_entry(entry, "volunteer")
+    )
+
+
+def _is_non_grade_entry(entry: GradeMappingEntry, kind: str) -> bool:
+    tier = str(entry.normalized_seniority_tier or "").upper()
+    if tier not in NON_GRADE_STANDARDIZATION_TIERS:
+        return False
+    raw = normalize_grade_key(entry.raw_grade_code)
+    family = normalize_grade_key(entry.normalized_grade_family)
+    category = normalize_grade_key(entry.staff_consultant_contractor_other)
+    if kind == "consultant":
+        return (
+            raw in CONSULTANT_NON_GRADE_TERMS
+            or "CONSULTANT" in family
+            or "CONTRACTOR" in family
+            or "CONSULTANT" in category
+            or "CONTRACTOR" in category
+        )
+    if kind == "internship":
+        return (
+            raw in INTERNSHIP_NON_GRADE_TERMS
+            or "INTERN" in family
+            or "INTERNSHIP" in category
+            or "STUDENTSHIP" in family
+        )
+    if kind == "volunteer":
+        return raw in VOLUNTEER_NON_GRADE_TERMS or "VOLUNTEER" in family or "VOLUNTEER" in category
+    return False
 
 
 def _entry_matches_signal(entry: GradeMappingEntry, signal: str) -> bool:
@@ -552,6 +924,63 @@ def _standardization_from_entry(
             "mapping_raw_grade_code": entry.raw_grade_code,
         },
     )
+
+
+def _experience_proxy_standardization(
+    features: Any,
+    grade: Any,
+) -> GradeStandardization | None:
+    if str(getattr(grade, "family", "") or "").upper() != "EXPERIENCE":
+        return None
+    years = getattr(grade, "min_years_experience", None)
+    if not isinstance(years, int):
+        try:
+            years = int(getattr(grade, "level", ""))
+        except (TypeError, ValueError):
+            return None
+    if years < 0:
+        return None
+    tier, equivalent, role_scope = _experience_proxy_tier(years)
+    source_id = str(getattr(features, "source_id", "") or "")
+    organization = source_mapping_organization(source_id) or "Experience-derived functional proxy"
+    return GradeStandardization(
+        mapping_organization=organization,
+        mapping_raw_grade_code=f"Experience >= {years} years",
+        normalized_grade_family="Experience-inferred functional proxy",
+        normalized_seniority_tier=tier,
+        international_national_local=None,
+        staff_consultant_contractor_other="Vacancy-dependent",
+        approximate_un_equivalent=equivalent,
+        approximate_experience_range=f"{years}+ years required in vacancy text",
+        typical_role_scope=role_scope,
+        supervisory_expectations="Infer from vacancy text; verify manually",
+        confidence_level="LOW",
+        evidence_type="description experience requirement fallback",
+        notes_caveats=(
+            "No formal grade or level-bearing contract grade was detected. This "
+            "standardization uses the longest required experience phrase as a "
+            "functional search proxy only."
+        ),
+        evidence={
+            "method": "experience_requirement_fallback",
+            "matched_years": years,
+            "source_grade_evidence": getattr(grade, "evidence", {}),
+        },
+    )
+
+
+def _experience_proxy_tier(years: int) -> tuple[str, str, str]:
+    if years <= 1:
+        return ("T1_ENTRY_SUPPORT", "~P-1/G-3", "Entry-level or support role")
+    if years <= 4:
+        return ("T2_JUNIOR_PROFESSIONAL", "~P-2/NO-A", "Junior professional or skilled support role")
+    if years <= 6:
+        return ("T3_MID_PROFESSIONAL", "~P-3/NO-B", "Mid-level professional or specialist role")
+    if years <= 10:
+        return ("T4_SENIOR_PROFESSIONAL", "~P-4/NO-C", "Senior professional, manager, or specialist role")
+    if years <= 14:
+        return ("T5_PRINCIPAL_MANAGER", "~P-5/NO-D", "Principal specialist or senior manager role")
+    return ("T6_DIRECTOR", "~D-1+", "Director or executive-level functional proxy")
 
 
 def normalize_grade_key(value: object | None) -> str:
@@ -625,7 +1054,30 @@ def _flexible_token_regex(value: str) -> str:
 
 
 def _is_role_level_code(raw_grade_code: str) -> bool:
-    return any(word in raw_grade_code.casefold() for word in ("assistant", "associate", "manager", "head", "director", "lead", "coordinator", "officer", "specialist", "delegate"))
+    return any(
+        word in raw_grade_code.casefold()
+        for word in (
+            "accountant",
+            "adviser",
+            "analyst",
+            "assistant",
+            "associate",
+            "coordinator",
+            "delegate",
+            "director",
+            "doctor",
+            "driver",
+            "engineer",
+            "head",
+            "lead",
+            "manager",
+            "nurse",
+            "nutritionist",
+            "officer",
+            "specialist",
+            "supervisor",
+        )
+    )
 
 
 def _clean(value: object | None) -> str | None:

@@ -203,6 +203,7 @@ class TaleoAdapter(JobAdapter):
             "Deadline",
             "Closing Date (Period for Applying) - Internal",
         ) or flat.get("Closing Date")
+        posted_at = self._extract_labeled_value(body, "Job Posting", "Posting Date") or flat.get("Job Posting")
         location = (
             self._extract_labeled_value(body, "Primary Location", "Location")
             or flat.get("LOCATION")
@@ -210,9 +211,12 @@ class TaleoAdapter(JobAdapter):
         department = (
             self._extract_labeled_value(body, "Organization", "Job Field")
             or flat.get("JOB_FIELD")
+            or flat.get("ORGANIZATIONAL_UNIT")
         )
         employment_type = (
-            self._extract_labeled_value(body, "Schedule", "Job Type")
+            self._extract_labeled_value(body, "Type of Requisition", "Schedule", "Job Type")
+            or flat.get("TYPE_OF_REQUISITION")
+            or flat.get("JOB_TYPE")
             or flat.get("POSITION_LEVEL_LABEL")
         )
         job = build_job(
@@ -222,6 +226,7 @@ class TaleoAdapter(JobAdapter):
             location=location,
             department=department,
             employment_type=employment_type,
+            posted_at=posted_at,
             closes_at=closes_at,
             apply_url=detail_url,
             source_url=detail_url,
@@ -390,8 +395,12 @@ class TaleoAdapter(JobAdapter):
         if not values:
             return {}
 
-        title = clean_text(values[9]) if len(values) > 9 else None
-        external_id = clean_text(values[10]) if len(values) > 10 else None
+        if self._is_fao_detail_layout(values):
+            title = clean_text(unquote(values[11])) if len(values) > 11 else None
+            external_id = clean_text(unquote(values[10])) if len(values) > 10 else None
+        else:
+            title = clean_text(unquote(values[9])) if len(values) > 9 else None
+            external_id = clean_text(unquote(values[10])) if len(values) > 10 else None
         description = self._detail_description(values)
         flat = self._detail_flat_values(values)
         if external_id:
@@ -439,6 +448,9 @@ class TaleoAdapter(JobAdapter):
         return "\n\n".join(parts) if parts else None
 
     def _detail_flat_values(self, values: list[str]) -> dict[str, Any]:
+        if self._is_fao_detail_layout(values):
+            return self._fao_detail_flat_values(values)
+
         flat: dict[str, Any] = {"_taleo_parser": "requisitionDescriptionInterface.fillList"}
         grade_index, grade_value = self._adb_position_level(values)
         if grade_value:
@@ -479,6 +491,57 @@ class TaleoAdapter(JobAdapter):
             flat["Closing Date (Period for Applying) - Internal"] = closing_date
         return flat
 
+    def _is_fao_detail_layout(self, values: list[str]) -> bool:
+        if self.source.id != "fao_taleo" and "jobs.fao.org" not in str(self.source.base_url):
+            return False
+        return len(values) > 24 and clean_text(values[10]) and clean_text(values[11])
+
+    def _fao_detail_flat_values(self, values: list[str]) -> dict[str, Any]:
+        flat: dict[str, Any] = {
+            "_taleo_parser": "requisitionDescriptionInterface.fillList",
+            "_taleo_detail_layout": "fao",
+        }
+
+        def value_at(index: int) -> str | None:
+            if index >= len(values):
+                return None
+            text = clean_text(unquote(values[index]))
+            return text or None
+
+        def set_if(key: str, value: str | None) -> None:
+            if value not in (None, ""):
+                flat[key] = value
+
+        set_if("Job Number", value_at(10))
+        set_if("Requisition Title", value_at(11))
+        set_if("Job Posting", value_at(12))
+        set_if("Closing Date", value_at(14))
+        set_if("ORGANIZATIONAL_UNIT", value_at(16))
+        set_if("Organizational Unit", value_at(16))
+        set_if("JOB_CATEGORY", value_at(18))
+        set_if("Job Category", value_at(18))
+
+        requisition_type = value_at(20)
+        set_if("TYPE_OF_REQUISITION", requisition_type)
+        set_if("Type of Requisition", requisition_type)
+        set_if("JOB_TYPE", requisition_type)
+
+        grade_level = value_at(22)
+        if grade_level and grade_level.upper() not in {"N/A", "NA"}:
+            set_if("JOB_LEVEL", grade_level)
+            set_if("Grade Level", grade_level)
+
+        set_if("LOCATION", value_at(24))
+        set_if("Primary Location", value_at(24))
+        set_if("CONTRACT_DURATION", value_at(26))
+        set_if("Contract Duration", value_at(26))
+        post_number = value_at(28)
+        if post_number and post_number.upper() not in {"N/A", "NA"}:
+            set_if("POST_NUMBER", post_number)
+            set_if("Post Number", post_number)
+        set_if("CLASSIFICATION_CODE", value_at(30))
+        return flat
+
     def _clean_detail_html_fragment(self, html_text: str) -> str | None:
         text = html.unescape(html_text)
         text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
@@ -501,7 +564,7 @@ class TaleoAdapter(JobAdapter):
         return -1, None
 
     def _looks_like_adb_position_level(self, value: str) -> bool:
-        pattern = re.compile(r"^(?:TI|TL|IS|NS|AS)\s*-?\s*\d{1,2}$", re.IGNORECASE)
+        pattern = re.compile(r"^(?:TI|TL|IS|NS|AS|M)\s*-?\s*\d{1,2}$", re.IGNORECASE)
         return bool(pattern.fullmatch(value))
 
     def _metadata_after_descriptions(self, values: list[str]) -> list[str]:

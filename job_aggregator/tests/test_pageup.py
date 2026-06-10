@@ -109,6 +109,46 @@ def test_pageup_parses_unicef_detail_html():
     assert job.apply_url.startswith("https://secure.dc7.pageuppeople.com/apply/671/")
 
 
+def test_pageup_parses_full_unicef_template_detail_without_page_heading():
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+    )
+    adapter = PageUpAdapter(AdapterContext(source=source, http=JobAggHTTPClient()))
+
+    job = adapter.parse_detail_html(
+        """
+        <h2>Vacancies</h2>
+        <div id="job">
+          <h2>Youth Digital Mobilizer, Rome, Italy, National Response Italy, 6.5 months, remote work</h2>
+          <p>
+            <a class="apply-link button" href="https://secure.dc7.pageuppeople.com/apply/671/gateway/default.aspx?lJobID=593348">Apply now</a>
+            <b>Job no:</b> <span class="job-externalJobNo">593348</span><br>
+            <b>Contract type:</b> <span class="work-type consultant">Consultant</span><br>
+            <b>Duty Station:</b> Rome<br>
+            <b>Level:</b> Consultancy<br>
+            <b>Location:</b> <span class="location">Italy</span><br>
+            <b>Categories:</b> <span class="categories">Adolescent Development</span><br>
+          </p>
+          <div id="job-details"><p>Full UNICEF consultancy terms of reference.</p></div>
+          <p><b>Advertised:</b> 02 Jun 2026<br><b>Deadline:</b> <span class="close-date"><time datetime="2026-06-09T21:55:00Z">09 Jun 2026</time></span></p>
+        </div>
+        <div id="search-results"><h2>Vacancies</h2></div>
+        """,
+        "https://jobs.unicef.org/en-us/job/593348/youth-digital-mobilizer-rome-italy-national-response-italy-65-months-remote-work",
+    )
+
+    assert job.external_id == "593348"
+    assert job.title == "Youth Digital Mobilizer, Rome, Italy, National Response Italy, 6.5 months, remote work"
+    assert job.employment_type == "Consultant"
+    assert job.location == "Italy"
+    assert job.department == "Adolescent Development"
+    assert job.description == "Full UNICEF consultancy terms of reference."
+    assert "Vacancies" not in job.description
+
+
 def test_pageup_fetches_paginated_filter_results():
     class Response:
         def __init__(self, text):
@@ -259,3 +299,37 @@ def test_pageup_retries_empty_ajax_detail_as_public_html():
     assert job.external_id == "593218"
     assert "Full UNICEF detail text" in (job.description or "")
     assert adapter.context.http.headers[1]["Accept"].startswith("text/html")
+
+
+def test_pageup_ignores_aws_waf_challenge_detail_response():
+    class Response:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeHTTP:
+        def get(self, url, *, headers=None, timeout_seconds=None):
+            return Response(
+                """
+                <!DOCTYPE html>
+                <script>
+                window.awsWafCookieDomainList = ['clinchtalent.com'];
+                </script>
+                <noscript>In order to continue, we need to verify that you're not a robot.</noscript>
+                """
+            )
+
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+    )
+    adapter = PageUpAdapter(AdapterContext(source=source, http=FakeHTTP()))
+
+    job = adapter.fetch_detail_for_listing_item(
+        {
+            "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/593607/example",
+        }
+    )
+
+    assert job is None

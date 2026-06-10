@@ -67,6 +67,10 @@ grade_patterns:
     family: TI
     regex: "\\bTI[-\\s]?(1|2|3)\\b"
     staff_category: technical_international_staff
+  - system: ADB
+    family: M
+    regex: "\\bM[-\\s]?(1|2|3|4)\\b"
+    staff_category: managerial_international_staff
   - system: CERN
     family: CERN
     regex: "\\bGrade\\s*(?:range\\s*:?\\s*)?(2|3|4|5|6|7|8)\\b"

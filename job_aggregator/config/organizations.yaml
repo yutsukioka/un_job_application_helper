@@ -408,7 +408,12 @@ sources:
       filter_url: https://jobs.unicef.org/en-us/filter/
       page_size: 20
       max_pages: 25
-      fetch_details: false
+      fetch_details: true
+      max_detail_pages_per_run: 25
+      detail_min_delay_seconds: 2
+      detail_jitter_seconds: 1
+      detail_batch_size: 10
+      detail_batch_pause_seconds: 30
       query:
         search-keyword: ""
 
@@ -433,35 +438,85 @@ sources:
   - id: worldbank_csod
     name: World Bank Group
     ats_family: csod
+    adapter: csod
     base_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup
-    enabled: false
+    enabled: true
     extra:
       output_slug: worldbank
-      requires_bearer_token: true
+      official_careers_url: https://www.worldbank.org/ext/en/careers
+      search_open_positions_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup
+      implementation_status: ready_public_api_har_verified
+      auth_model: public_anonymous_candidate_site
+      requires_user_credentials: false
+      requires_bearer_token: false
+      requires_runtime_context: false
       context_url: https://worldbankgroup.csod.com/ux/ats/careersite/1/home?c=worldbankgroup&lang=en-US
       api_url: https://us.api.csod.com/rec-job-search/external/jobs
-      legacy_api_url: https://worldbankgroup.csod.com/services/x/career-site/v1/search
+      custom_fields_url: https://worldbankgroup.csod.com/services/x/core-customfields-service/v1/CustomFields?fieldIds=13&fieldIds=22&fieldIds=29&fieldIds=47&respectAvailablity=false&cultureId=1
+      careersite_config_url: https://worldbankgroup.csod.com/services/x/career-site/v1/careersites/1?cultureId=1
+      detail_legacy_api_url_template: https://worldbankgroup.csod.com/Services/API/ATS/CareerSite/1/JobRequisitions/{job_id}?useMobileAd=false&cultureId=1
       detail_api_url_template: https://worldbankgroup.csod.com/services/x/job-requisition/v2/requisitions/{job_id}/jobDetails?cultureId=1
+      apply_status_url_template: https://worldbankgroup.csod.com/Services/API/ATS/CareerSite/1/JobRequisition/{job_id}/GetRequisitionApplyStatus
+      saved_job_status_url_template: https://worldbankgroup.csod.com/services/x/ats-candidate-api/v1/jobapplicants/SavedJobs/{job_id}
       detail_url_template: https://worldbankgroup.csod.com/ux/ats/careersite/1/home/requisition/{job_id}?c=worldbankgroup
       page_size: 25
       max_pages: 10
       fetch_details: false
+      detail_fetch_mode: legacy_api_first
+      max_detail_pages_per_run: 0
+      detail_min_delay_seconds: 1
+      detail_jitter_seconds: 1
+      date_locale: US
+      request_timeout_seconds: 60
+      headers:
+        Accept: application/json; q=1.0, text/*; q=0.8, */*; q=0.1
+        Content-Type: application/json
+        Origin: https://worldbankgroup.csod.com
+        Referer: https://worldbankgroup.csod.com/
+        csod-accept-language: en-US
+        X-Requested-With: XMLHttpRequest
+      organization_scope:
+      - World Bank
+      - IFC
+      - MIGA
+      - ICSID
+      - World Bank Group
+      captured_filter_fields:
+        display_grade:
+          id: 13
+        job_family:
+          id: 22
+        organizations:
+          id: 29
+          options:
+            120: World Bank
+            121: IFC
+            122: MIGA
+            123: ICSID
+            3473: World Bank Group
+        hire_type:
+          id: 47
       search_payload:
         careerSiteId: 1
         careerSitePageId: 1
+        pageNumber: 1
+        pageSize: 25
         cultureId: 1
         cultureName: en-US
-        searchText: ""
+        searchText: ''
         states: []
         countryCodes: []
         cities: []
-        placeID: ""
+        placeID: ''
         radius: null
         postingsWithinDays: null
         customFieldCheckboxKeys: []
         customFieldDropdowns: []
         customFieldRadios: []
-
+      notes:
+      - HAR captured POST https://us.api.csod.com/rec-job-search/external/jobs returning status=Success, totalCount=59, and requisitions[].
+      - No Authorization header was present in captured search requests. Keep user credentials out of this source.
+      - Use the legacy JobRequisitions detail API first because its ad HTML contains WBG metadata table fields such as Organization, Sector, Grade, Term Duration, Recruitment Type, Location, languages, and Closing Date.
   - id: unv_uvp
     name: United Nations Volunteers
     ats_family: unv
@@ -555,12 +610,18 @@ sources:
       fraud_warning: UNDP does not charge recruitment-related fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
       page_size: 100
       max_pages: 12
-      max_detail_pages_per_run: 25
+      max_detail_pages_per_run: 20
       fetch_details: false
       request_timeout_seconds: 60
       detail_timeout_seconds: 120
       max_retries: 4
       backoff_base_seconds: 2
+      oracle_detail_min_delay_seconds: 8
+      oracle_detail_jitter_seconds: 3
+      oracle_detail_batch_size: 10
+      oracle_detail_batch_pause_seconds: 120
+      oracle_detail_failure_cooldown_seconds: 900
+      oracle_detail_stop_after_transient_failures: 3
 
   - id: unwomen_oracle_hcm
     name: UN Women
@@ -604,14 +665,32 @@ sources:
     name: International Organization for Migration
     ats_family: oracle_hcm
     base_url: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com
-    enabled: false
+    enabled: true
     extra:
       output_slug: iom
       site_number: CX_1001
-      detail_url_template: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?keyword={job_id}
-      page_size: 25
+      expected_site_name: IOM
+      listing_url: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs
+      detail_url_template: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/job/{job_id}
+      legacy_keyword_detail_url_template: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?keyword={job_id}
+      fallback_listing_url: https://www.iom.int/work-with-us
+      fallback_parser: generic_official
+      oracle_dns_preflight: true
+      page_size: 100
       max_pages: 12
+      max_detail_pages_per_run: 25
       fetch_details: false
+      request_timeout_seconds: 60
+      detail_timeout_seconds: 120
+      max_retries: 4
+      backoff_base_seconds: 2
+      oracle_detail_min_delay_seconds: 8
+      oracle_detail_jitter_seconds: 3
+      oracle_detail_batch_size: 10
+      oracle_detail_batch_pause_seconds: 120
+      oracle_detail_failure_cooldown_seconds: 900
+      oracle_detail_stop_after_transient_failures: 3
+      recruitment_note: IOM's public Candidate Experience page identifies the site as IOM's new e-recruitment platform. Applications should remain user-submitted through the official portal.
 
   - id: itu_successfactors
     name: International Telecommunication Union
@@ -628,10 +707,32 @@ sources:
     name: International Labour Organization
     ats_family: successfactors_rmk
     base_url: https://jobs.ilo.org
-    enabled: false
+    enabled: true
     extra:
       output_slug: ilo
+      search_url: https://jobs.ilo.org/search/
+      all_jobs_url: https://jobs.ilo.org/go/All-Jobs/2842101/
       rss_url: https://jobs.ilo.org/services/rss/category/?catid=2842101
+      rss_urls:
+        all_jobs: https://jobs.ilo.org/services/rss/category/?catid=2842101
+        international: https://jobs.ilo.org/services/rss/category/?catid=2843001
+        development_cooperation: https://jobs.ilo.org/services/rss/category/?catid=2842701
+        local: https://jobs.ilo.org/services/rss/category/?catid=2843601
+        temporary: https://jobs.ilo.org/services/rss/category/?catid=2843901
+        junior_professional_officers: https://jobs.ilo.org/services/rss/category/?catid=2843301
+        internships: https://jobs.ilo.org/services/rss/category/?catid=9589701
+      category_urls:
+        all_jobs: https://jobs.ilo.org/go/All-Jobs/2842101/
+        international: https://jobs.ilo.org/go/International/2843001/
+        development_cooperation: https://jobs.ilo.org/go/Development-Cooperation/2842701/
+        local: https://jobs.ilo.org/go/Local/2843601/
+        temporary: https://jobs.ilo.org/go/Temporary/2843901/
+        junior_professional_officers: https://jobs.ilo.org/go/Junior-Professional-Officers/2843301/
+        internships: https://jobs.ilo.org/go/Internships/9589701/
+      max_pages: 5
+      fetch_details: false
+      date_locale: EU
+      coverage_note: ILO Jobs is a SAP SuccessFactors Recruiting Marketing style site with job categories and an accessible search page; RSS is preferred where supported.
 
   - id: unido_successfactors
     name: UNIDO
@@ -945,3 +1046,200 @@ sources:
     extra:
       output_slug: untourism
       coverage_note: Disabled until an accessible source page or HAR with vacancy content is available.
+
+  - id: afdb_successfactors_legacy
+    name: African Development Bank Group
+    ats_family: successfactors_legacy
+    adapter: successfactors_legacy
+    base_url: https://career2.successfactors.eu/career?company=africandev
+    enabled: true
+    extra:
+      output_slug: afdb
+      company_id: africandev
+      locale: en_GB
+      fallback_locales:
+        - fr_FR
+      official_listing_url: https://www.afdb.org/en/about-careers/current-vacancies
+      search_url: https://career2.successfactors.eu/career?company=africandev&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
+      primary_fetch_method: successfactors_xml
+      empty_policy: verified_empty_required
+      max_pages: 2
+      fetch_details: false
+      allow_empty_source: false
+      coverage_note: AfDB careers point to current vacancies and the public SuccessFactors company identifier is africandev. Accept empty results only when the feed provides verified zero-job evidence because AfDB can have no open staff vacancies at a given check.
+
+  - id: idb_successfactors
+    name: Inter-American Development Bank Group
+    ats_family: successfactors_rmk
+    base_url: https://jobs.iadb.org
+    enabled: true
+    extra:
+      output_slug: idb
+      search_url: https://jobs.iadb.org/search/
+      all_jobs_url: https://jobs.iadb.org/go/All-Jobs/9638000/
+      rss_url: https://jobs.iadb.org/services/rss/category/?catid=9638000
+      rss_urls:
+        all_jobs: https://jobs.iadb.org/services/rss/category/?catid=9638000
+        idb: https://jobs.iadb.org/services/rss/category/?catid=9637900
+        idb_invest: https://jobs.iadb.org/services/rss/category/?catid=9638200
+        idb_lab: https://jobs.iadb.org/services/rss/category/?catid=9638300
+        staff_jobs: https://jobs.iadb.org/services/rss/category/?catid=9638400
+        consultant_jobs: https://jobs.iadb.org/services/rss/category/?catid=9638500
+      category_urls:
+        all_jobs: https://jobs.iadb.org/go/All-Jobs/9638000/
+        idb: https://jobs.iadb.org/go/IDB/9637900/
+        idb_invest: https://jobs.iadb.org/go/IDB-Invest/9638200/
+        idb_lab: https://jobs.iadb.org/go/IDB-Lab/9638300/
+        staff_jobs: https://jobs.iadb.org/go/Staff-Jobs/9638400/
+        consultant_jobs: https://jobs.iadb.org/go/Consultant-Jobs/9638500/
+      max_pages: 5
+      fetch_details: false
+      date_locale: US
+      coverage_note: The IDB Group careers site covers IDB, IDB Invest, and IDB Lab and uses SAP SuccessFactors Recruiting Marketing style pages.
+
+  - id: ebrd_successfactors
+    name: European Bank for Reconstruction and Development
+    ats_family: successfactors_rmk
+    base_url: https://jobs.ebrd.com
+    enabled: true
+    extra:
+      output_slug: ebrd
+      search_url: https://jobs.ebrd.com/search/?q=&sortColumn=referencedate&sortDirection=desc
+      view_all_jobs_url: https://jobs.ebrd.com/viewalljobs/
+      max_pages: 5
+      fetch_details: false
+      date_locale: EU
+      column_fields:
+        - title
+        - location
+        - postedDate
+      coverage_note: EBRD jobs are exposed on jobs.ebrd.com with searchable result pages. Treat as SuccessFactors/RMK-style static listings unless a deeper API adapter is added.
+
+  - id: aiib_successfactors_legacy
+    name: Asian Infrastructure Investment Bank
+    ats_family: successfactors_legacy
+    adapter: successfactors_legacy
+    base_url: https://career5.successfactors.eu/career?company=AIIB
+    enabled: true
+    extra:
+      output_slug: aiib
+      company_id: AIIB
+      locale: en_GB
+      official_listing_url: https://www.aiib.org/en/opportunities/career/job-vacancies/staff/index.html
+      application_process_url: https://www.aiib.org/en/opportunities/career/job-vacancies/application/index.html
+      current_jobs_url: https://www.aiib.org/en/opportunities/career/job-vacancies/staff/.content/index/current-jobs.js
+      search_url: https://career5.successfactors.eu/career?company=AIIB&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
+      listing_feed_type: aiib_current_jobs_js
+      primary_fetch_method: aiib_current_jobs_js
+      max_pages: 2
+      max_detail_pages_per_run: 8
+      detail_min_delay_seconds: 1.0
+      detail_jitter_seconds: 0.5
+      fetch_details: true
+      allow_empty_source: false
+      date_locale: US
+      coverage_note: AIIB exposes staff vacancy pages on aiib.org and a SAP SuccessFactors career portal using company=AIIB.
+
+  - id: oecd_smartrecruiters
+    name: Organisation for Economic Co-operation and Development
+    ats_family: smartrecruiters
+    base_url: https://jobs.smartrecruiters.com/OECD
+    enabled: true
+    extra:
+      output_slug: oecd
+      company: OECD
+      api_url: https://api.smartrecruiters.com/v1/companies/OECD/postings
+      search_url: https://careers.smartrecruiters.com/OECD/oecd---en
+      detail_url_template: https://jobs.smartrecruiters.com/OECD/{job_id}
+      page_size: 100
+      max_pages: 3
+      fetch_details: false
+      include_partner_organizations:
+        - International Energy Agency
+        - Nuclear Energy Agency
+      coverage_note: OECD's official careers page directs applicants to SmartRecruiters for current OECD, IEA, and NEA openings.
+
+  - id: eu_careers_static
+    name: European Union Careers
+    ats_family: eu_careers_static
+    adapter: static_html
+    base_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies
+    enabled: true
+    extra:
+      output_slug: eu_careers
+      listing_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies/cast
+      parent_listing_url: https://eu-careers.europa.eu/en/job-opportunities/open-vacancies
+      parser: eu_careers_open_vacancies
+      job_link_hints:
+        - /en/job-opportunities/open-vacancies/
+        - /en/selection-procedure/
+      institution_scope: EU institutions, bodies, agencies and selected senior management or temporary vacancies advertised through EU Careers.
+      single_candidate_portal_url: https://digit.service-now.com/eu_institutions_single_candidate_portal
+      epso_account_url: https://europa.eu/epso/application/passport/login.cfm
+      eu_agencies_network_url: https://agencies-network.europa.eu/index_en
+      fetch_details: true
+      max_pages: 3
+      allow_empty_source: true
+      coverage_note: EU Careers publishes selected temporary vacancies and senior-management posts; applications may route through the Single Candidate Portal, EPSO Account, or individual institution/agency systems.
+
+  - id: councilofeurope_talents
+    name: Council of Europe
+    ats_family: coe_talents
+    adapter: static_html
+    base_url: https://www.coe.int/en/web/jobs
+    enabled: false
+    extra:
+      output_slug: coe
+      listing_url: https://www.coe.int/en/web/jobs
+      career_portal_url: https://talents.coe.int
+      parser: portal_link_only
+      fetch_details: false
+      implementation_status: needs_custom_portal_parser
+      coverage_note: The official Council of Europe jobs page links to a talents.coe.int career portal, but static access may not expose a parseable vacancy list. Keep disabled until a portal-specific parser or HAR-backed adapter is verified.
+
+  - id: interpol_jobs2web
+    name: INTERPOL
+    ats_family: successfactors_rmk
+    base_url: https://209400.jobs2web.com
+    enabled: true
+    extra:
+      output_slug: interpol
+      official_vacancies_url: https://www.interpol.int/en/What-you-can-do/Careers/Vacancies
+      recruitment_platform_url: https://209400.jobs2web.com/
+      search_url: https://209400.jobs2web.com/search/?q=&sortColumn=referencedate&sortDirection=desc
+      max_pages: 5
+      fetch_details: false
+      date_locale: EU
+      coverage_note: INTERPOL's official vacancies page directs applicants to Recruitment Hub on jobs2web.com; all applications must be made through that online platform.
+
+  - id: irena_oracle_hcm
+    name: International Renewable Energy Agency
+    ats_family: oracle_hcm
+    base_url: https://eexh.fa.em3.oraclecloud.com
+    enabled: false
+    extra:
+      output_slug: irena
+      site_number: CX_1
+      expected_site_name: IRENA
+      listing_url: https://eexh.fa.em3.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs
+      detail_url_template: https://eexh.fa.em3.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/{job_id}
+      fallback_listing_url: https://www.irena.org/About/Careers
+      oracle_dns_preflight: true
+      tz: GMT+04:00
+      tzname: Asia/Dubai
+      page_size: 100
+      max_pages: 5
+      max_detail_pages_per_run: 25
+      fetch_details: false
+      request_timeout_seconds: 60
+      detail_timeout_seconds: 120
+      max_retries: 4
+      backoff_base_seconds: 2
+      oracle_detail_min_delay_seconds: 8
+      oracle_detail_jitter_seconds: 3
+      oracle_detail_batch_size: 10
+      oracle_detail_batch_pause_seconds: 120
+      oracle_detail_failure_cooldown_seconds: 900
+      oracle_detail_stop_after_transient_failures: 3
+      implementation_status: needs_verified_oracle_ce_endpoint
+      coverage_note: IRENA appears to use Oracle Cloud Candidate Experience, but the configured siteSettings/CX_1 endpoint returned HTTP 200 with an empty body during live testing. Keep disabled until a valid site number/API endpoint or HAR is verified.

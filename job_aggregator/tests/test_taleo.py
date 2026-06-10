@@ -121,6 +121,52 @@ def test_taleo_parses_compact_rest_column_array():
     assert jobs[0].closes_at.isoformat() == "2026-05-29T00:59:00+00:00"
 
 
+def test_taleo_parses_fao_detail_fill_list_payload():
+    source = OrganizationSource(
+        id="fao_taleo",
+        name="FAO",
+        ats_family="taleo",
+        base_url="https://jobs.fao.org/careersection/fao_external/jobsearch.ftl",
+    )
+    adapter = TaleoAdapter(AdapterContext(source=source, http=JobAggHTTPClient()))
+
+    job = adapter.parse_detail_html(
+        """
+        <html><head><meta property="og:title" content="Food Standards Officer" /></head>
+        <body>
+        <script>
+        api.fillList('requisitionDescriptionInterface', 'descRequisition', [
+          '3525756','true','3525756','false',
+          'Submission for the position: Food Standards Officer - (Job Number: 2600978)',
+          'false','3525756','false','false','','2600978','Food Standards Officer',
+          '30/Apr/2026','30/Apr/2026','22/May/2026, 11:59:00 PM',
+          '22/May/2026, 11:59:00 PM','CJW','CJW','Staff position','Staff position',
+          'Professional','Professional','P-4','P-4','Italy-Rome','Italy-Rome',
+          'Fixed-term: two years with possibility of extension',
+          'Fixed-term: two years with possibility of extension','0333840','0333840',
+          '1I02b','1I02b','!*%3Cp%3EFull FAO role description.%3C/p%3E',
+          'false','3525756','3525756','true'
+        ]);
+        </script>
+        </body></html>
+        """,
+        "https://jobs.fao.org/careersection/fao_external/jobdetail.ftl?job=2600978",
+    )
+
+    flat = job.raw["_taleo_flat"]
+    assert job.external_id == "2600978"
+    assert job.title == "Food Standards Officer"
+    assert job.employment_type == "Professional"
+    assert job.location == "Italy-Rome"
+    assert job.posted_at.isoformat() == "2026-04-30T00:00:00+00:00"
+    assert job.closes_at.isoformat() == "2026-05-22T23:59:00+00:00"
+    assert "Full FAO role description." in job.description
+    assert flat["JOB_LEVEL"] == "P-4"
+    assert flat["Grade Level"] == "P-4"
+    assert flat["Type of Requisition"] == "Professional"
+    assert flat["Post Number"] == "0333840"
+
+
 def test_taleo_parses_adb_detail_fill_list_payload():
     source = OrganizationSource(
         id="adb_taleo",
@@ -175,6 +221,48 @@ def test_taleo_parses_adb_detail_fill_list_payload():
     assert flat["Staff Category"] == "Technical International (Field Office)"
     assert flat["Job Posting"] == "06-May-2026, 7:56:15 AM"
     assert flat["Closing Date (Period for Applying) - Internal"] == "03-Jun-2026, 11:59:00 PM"
+
+
+def test_taleo_parses_adb_managerial_position_level():
+    source = OrganizationSource(
+        id="adb_taleo",
+        name="ADB",
+        ats_family="taleo",
+        base_url="https://adb.taleo.net/careersection/1/jobsearch.ftl",
+    )
+    adapter = TaleoAdapter(AdapterContext(source=source, http=JobAggHTTPClient()))
+
+    job = adapter.parse_detail_html(
+        """
+        <html><body>
+        <script>
+        api.fillList('requisitionDescriptionInterface', 'descRequisition', [
+          '83990','true','83990','false',
+          'Submission for the position: Director - (Job Number: 260558)',
+          'false','83990','false','true',
+          'Director ','260558','','','','',
+          '!*%3Cp%3EFull ADB managerial description.%3C/p%3E',
+          'Asian Development Bank-Asian Development Bank Headquarters-Philippines-Manila',
+          'Asian Development Bank-Asian Development Bank Headquarters-Philippines-Manila',
+          'Corporate Services Department','Corporate Services Department',
+          'Workplace Management and Hospitality Division',
+          'Workplace Management and Hospitality Division',
+          '','','Managerial International (HQ)',
+          'Managerial International (HQ)','M1','M1',
+          '26-May-2026, 1:50:41 PM','26-May-2026, 1:50:41 PM',
+          'Ongoing','09-Jun-2026, 11:59:00 PM',
+          'false','83990','83990','true'
+        ]);
+        </script>
+        </body></html>
+        """,
+        "https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260558",
+    )
+
+    flat = job.raw["_taleo_flat"]
+    assert flat["JOB_LEVEL"] == "M1"
+    assert flat["Position Level"] == "M1"
+    assert flat["Staff Category"] == "Managerial International (HQ)"
 
 
 def test_taleo_rest_fetches_configured_search_pages():

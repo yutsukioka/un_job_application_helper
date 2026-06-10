@@ -300,5 +300,18 @@
       "label_range": ["P5"]
     },
     "confidence": "MED"
+  },
+  {
+    "organization": "ADB",
+    "grade_code": "M1",
+    "grade_family": "M",
+    "tier": "T6",
+    "un_mapping": {
+      "system": "UN_D",
+      "min_grade": 6,
+      "max_grade": 6,
+      "label_range": ["D1"]
+    },
+    "confidence": "MED"
   }
 ]

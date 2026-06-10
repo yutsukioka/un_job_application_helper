@@ -37,6 +37,16 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
             candidates.append(result)
     if candidates:
         result = _best_candidate(candidates)
+        if _staff_grade_should_override_weak_consultancy(grade, result):
+            return ContractResult(
+                category=ContractCategory.STAFF_OTHER,
+                confidence=0.72,
+                evidence={
+                    "grade_code": grade.code,
+                    "grade_family": grade.family,
+                    "ignored_contract_signal": result.evidence,
+                },
+            )
         result.subtype = result.subtype or _grade_contract_subtype(grade)
         return result
     subtype = _grade_contract_subtype(grade)
@@ -54,7 +64,24 @@ def classify_contract(features: FeatureBundle, grade: GradeResult) -> ContractRe
             confidence=0.70,
             evidence={"grade_code": grade.code},
         )
-    if grade.family in {"P", "D", "G", "NO", "FS", "UG"}:
+    if grade.family in {
+        "P",
+        "D",
+        "G",
+        "NO",
+        "FS",
+        "UG",
+        "A",
+        "B",
+        "GL",
+        "CERN",
+        "AS",
+        "NS",
+        "TL",
+        "IS",
+        "TI",
+        "M",
+    }:
         return ContractResult(
             category=ContractCategory.STAFF_OTHER,
             confidence=0.62,
@@ -75,18 +102,32 @@ def _source_contract(value: str | None) -> ContractResult:
     mappings = {
         "consultant": ContractCategory.CONSULTANT,
         "consultancy": ContractCategory.CONSULTANT,
+        "consulting": ContractCategory.CONSULTANT,
+        "international personnel services agreement": ContractCategory.CONSULTANT,
+        "international personnel service agreement": ContractCategory.CONSULTANT,
+        "national personnel services agreement": ContractCategory.CONSULTANT,
+        "national personnel service agreement": ContractCategory.CONSULTANT,
+        "ipsa": ContractCategory.CONSULTANT,
+        "npsa": ContractCategory.CONSULTANT,
+        "fellow": ContractCategory.OTHER,
+        "fellows programme": ContractCategory.OTHER,
+        "visiting professional": ContractCategory.OTHER,
+        "volunteer": ContractCategory.OTHER,
+        "volunteer programme": ContractCategory.OTHER,
         "intern": ContractCategory.INTERNSHIP_UNKNOWN,
         "internship": ContractCategory.INTERNSHIP_UNKNOWN,
         "studentship": ContractCategory.INTERNSHIP_UNKNOWN,
+        "staff contract": ContractCategory.STAFF_OTHER,
         "temporary appointment": ContractCategory.TEMPORARY_APPOINTMENT_STAFF,
         "temporary": ContractCategory.TEMPORARY_APPOINTMENT_STAFF,
         "fixed term": ContractCategory.FIXED_TERM_APPOINTMENT_STAFF,
         "fixed-term": ContractCategory.FIXED_TERM_APPOINTMENT_STAFF,
         "general service": ContractCategory.STAFF_OTHER,
         "professional": ContractCategory.STAFF_OTHER,
+        "global recruitment": ContractCategory.STAFF_OTHER,
     }
     for needle, category in mappings.items():
-        if needle in text:
+        if _source_contract_mapping_matches(text, needle):
             return ContractResult(
                 category=category,
                 subtype=value,
@@ -96,12 +137,24 @@ def _source_contract(value: str | None) -> ContractResult:
     return ContractResult()
 
 
+def _source_contract_mapping_matches(text: str, needle: str) -> bool:
+    if needle in {"intern", "internship", "studentship", "stagiaire"}:
+        return re.search(rf"\b{re.escape(needle)}\b", text) is not None
+    if needle == "stage en":
+        return re.search(r"\bstage\s+en\b", text) is not None
+    if needle == "estagi":
+        return "estagi" in text
+    return needle in text
+
+
 def _best_candidate(candidates: list[ContractResult]) -> ContractResult:
     return max(candidates, key=lambda result: (_specificity(result.category), result.confidence))
 
 
 def _specificity(category: ContractCategory) -> int:
     if category in {ContractCategory.INTERNSHIP_PAID, ContractCategory.INTERNSHIP_UNPAID}:
+        return 5
+    if category is ContractCategory.INTERNSHIP_UNKNOWN:
         return 4
     if category in {
         ContractCategory.FIXED_TERM_APPOINTMENT_STAFF,
@@ -110,8 +163,6 @@ def _specificity(category: ContractCategory) -> int:
         ContractCategory.VOLUNTEERING_UNV,
     }:
         return 3
-    if category is ContractCategory.INTERNSHIP_UNKNOWN:
-        return 1
     return 0
 
 
@@ -162,7 +213,12 @@ def _match_rules(
 
 
 def _has_internship_context(features: FeatureBundle) -> bool:
-    pattern = re.compile(r"\b(?:intern|internship|studentship)\b", re.I)
+    pattern = re.compile(
+        r"\b(?:intern|internship|studentship|stagiaire)\b"
+        r"|\bstage\s+en\b"
+        r"|estagi",
+        re.I,
+    )
     return any(
         pattern.search(value or "")
         for value in (
@@ -174,7 +230,7 @@ def _has_internship_context(features: FeatureBundle) -> bool:
 
 
 def _has_consultant_context(features: FeatureBundle) -> bool:
-    pattern = re.compile(r"\b(?:consultant|consultancy|contractor|retainer)\b", re.I)
+    pattern = re.compile(r"\b(?:consultant|consultancy|consulting|contractor|retainer)\b", re.I)
     return any(
         pattern.search(value or "")
         for value in (
@@ -217,8 +273,18 @@ def _is_weak_consultant_description_signal(
         return False
     if field_name != "description" or consultant_context:
         return False
-    if keyword.casefold() in {"ssa", "cfa", "individual consultant", "retainer"}:
+    if keyword.casefold() == "ssa":
+        return not bool(
+            re.search(
+                r"\b(?:special\s+services?\s+agreement|ssa[-\s]?\d+)\b",
+                text,
+                flags=re.I,
+            )
+        )
+    if keyword.casefold() in {"individual consultant", "retainer"}:
         return False
+    if keyword.casefold() == "cfa":
+        return not consultant_context
     strong_description_signal = re.search(
         r"\b(?:international|national)?\s*consultant(?:cy)?\s+"
         r"(?:assignment|position|role|job|vacancy|roster)\b",
@@ -230,6 +296,8 @@ def _is_weak_consultant_description_signal(
 
 def _keyword_matches(text: str, keyword: str) -> bool:
     stripped = keyword.strip()
+    if stripped == "estagi":
+        return "estagi" in text
     if re.fullmatch(r"[a-z0-9]+", stripped):
         return re.search(rf"\b{re.escape(stripped)}\b", text) is not None
     return keyword in text
@@ -239,3 +307,32 @@ def _grade_contract_subtype(grade: GradeResult) -> str | None:
     if grade.family in {"SSA", "SC", "IICA", "LICA", "ICS"}:
         return grade.code
     return None
+
+
+def _staff_grade_should_override_weak_consultancy(
+    grade: GradeResult,
+    contract: ContractResult,
+) -> bool:
+    if contract.category is not ContractCategory.CONSULTANT:
+        return False
+    if grade.family not in {
+        "P",
+        "D",
+        "G",
+        "NO",
+        "FS",
+        "UNRWA",
+        "A",
+        "B",
+        "GL",
+        "CERN",
+        "AS",
+        "NS",
+        "TL",
+        "IS",
+        "TI",
+        "M",
+    }:
+        return False
+    evidence = contract.evidence or {}
+    return evidence.get("field") == "description"

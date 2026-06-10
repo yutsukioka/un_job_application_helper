@@ -31,6 +31,8 @@ class StaticHTMLAdapter(JobAdapter):
             self.run_diagnostics.health_status = "issue"
             self.run_diagnostics.empty_reason = "blocked"
             raise RuntimeError(f"{self.source.id}: listing page blocked by {blocked_reason}")
+        if parser_name == "eu_careers_open_vacancies":
+            return parse_eu_careers_jobs(self.source, html_text, listing_url)
         if parser_name == "unssc_drupal":
             return parse_unssc_jobs(self.source, html_text, listing_url)
         if parser_name in {"generic", "public_links"}:
@@ -164,6 +166,50 @@ def parse_unssc_jobs(
             )
         )
     return jobs
+
+
+def parse_eu_careers_jobs(
+    source: OrganizationSource,
+    html_text: str,
+    listing_url: str,
+) -> list[JobRecord]:
+    jobs = []
+    for row in _table_rows(html_text):
+        title_cell = _cell_html(row, "views-field-title")
+        title, detail_url = _first_anchor(title_cell, listing_url)
+        if not title or not detail_url:
+            continue
+        if "/job-opportunities/" not in urlsplit(detail_url).path:
+            continue
+        grade = _cell_text(row, "views-field-field-epso-grade")
+        domain = _cell_text(row, "views-field-field-epso-domain")
+        institution = _cell_text(row, "views-field-field-epso-institution")
+        location = _cell_text(row, "views-field-field-epso-location")
+        posted_at = _time_datetime(_cell_html(row, "views-field-created"))
+        closes_at = _time_datetime(_cell_html(row, "views-field-field-epso-deadline"))
+        jobs.append(
+            build_job(
+                source,
+                title=title,
+                external_id=_external_id_from_url(detail_url),
+                location=location,
+                department="; ".join(part for part in (institution, domain) if part) or None,
+                employment_type=grade,
+                posted_at=posted_at,
+                closes_at=closes_at,
+                apply_url=detail_url,
+                source_url=detail_url,
+                raw={
+                    "grade": grade,
+                    "domain": domain,
+                    "institution": institution,
+                    "location": location,
+                    "parser": "eu_careers_open_vacancies",
+                    "href": detail_url,
+                },
+            )
+        )
+    return _dedupe(jobs)
 
 
 def parse_json_ld_jobs(

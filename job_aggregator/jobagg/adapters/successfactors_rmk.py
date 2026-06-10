@@ -7,6 +7,7 @@ import html
 import json
 import re
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -37,6 +38,24 @@ _TABLE_ROW_RE = re.compile(
 )
 _TILE_RE = re.compile(
     r'<li[^>]+class="[^"]*\bjob-tile\b[^"]*"[^>]*>(?P<html>.*?)(?=<li[^>]+class="[^"]*\bjob-tile\b|</ul>)',
+    re.IGNORECASE | re.DOTALL,
+)
+_DESCRIPTION_START_RE = re.compile(
+    r"<(?P<tag>span|div|section)\b"
+    r"(?=[^>]*(?:itemprop=[\"']description[\"']|class=[\"'][^\"']*\bjobdescription\b[^\"']*[\"']))"
+    r"[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPLAY_START_RE = re.compile(
+    r"<(?P<tag>div|section)\b(?=[^>]*class=[\"'][^\"']*\bjobDisplay\b[^\"']*[\"'])[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_AIIB_CURRENT_JOB_RE = re.compile(
+    r"jobs\[(?P<index>\d+)\]\[\"(?P<key>[^\"]+)\"\]\s*=\s*\"(?P<value>(?:\\.|[^\"\\])*)\";",
+    re.IGNORECASE,
+)
+_AIIB_FONT_COPY_RE = re.compile(
+    r"<div\b(?=[^>]*class=[\"'][^\"']*\bfont-copy-18-black\b[^\"']*[\"'])[^>]*>(?P<body>.*?)</div>",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -112,6 +131,8 @@ class SuccessFactorsRMKAdapter(JobAdapter):
         return jobs
 
     def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
+        if item.get("parser") == "aiib_current_jobs_js":
+            return self._fetch_aiib_detail_for_listing_item(item)
         detail_url = _raw_detail_url(item)
         if not detail_url:
             external_id = item.get("id") or item.get("jobReqId") or item.get("jobreqid")
@@ -123,7 +144,7 @@ class SuccessFactorsRMKAdapter(JobAdapter):
         self.ensure_allowed(detail_url)
         html_text = self.fetch_text(detail_url)
         for job in self.parse_jobs_from_html(html_text):
-            if job.description:
+            if job.description and _is_meaningful_description(job.description):
                 return job
         description = _detail_description(html_text)
         if not description:
@@ -135,12 +156,46 @@ class SuccessFactorsRMKAdapter(JobAdapter):
             location=_detail_location(html_text) or _raw_location(item),
             department=_raw_department(item),
             employment_type=_raw_employment_type(item),
-            posted_at=_raw_posted_at(item),
-            closes_at=_raw_closes_at(item) or _application_deadline(html_text),
+            posted_at=_raw_posted_at(item) or _detail_posted_at(html_text),
+            closes_at=_raw_closes_at(item) or _detail_closes_at(html_text) or _application_deadline(html_text),
             apply_url=detail_url,
             source_url=detail_url,
             description=description,
             raw={**item, "detail_url": detail_url, "parser": "successfactors_detail"},
+        )
+
+    def _fetch_aiib_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
+        detail_url = item.get("detail_url") or item.get("source_url") or item.get("apply_url")
+        if not detail_url:
+            return None
+        detail_url = str(detail_url)
+        self.ensure_allowed(detail_url)
+        html_text = self.fetch_text(detail_url)
+        description = _aiib_detail_description(html_text)
+        if not description:
+            return None
+        fields = _aiib_detail_fields(html_text)
+        apply_url = _aiib_apply_url(html_text) or item.get("apply_url") or detail_url
+        successfactors_id = _job_id_from_url(str(apply_url)) if apply_url else None
+        return build_job(
+            self.source,
+            title=_raw_title(item) or _detail_title(html_text) or fields.get("Position"),
+            external_id=item.get("external_id") or item.get("number") or _job_id_from_url(detail_url),
+            location=fields.get("Location") or _raw_location(item),
+            department=fields.get("Department/Division") or _raw_department(item),
+            employment_type=fields.get("Job Type **") or fields.get("Job Type") or _raw_employment_type(item),
+            posted_at=fields.get("Posting Date") or _raw_posted_at(item),
+            closes_at=fields.get("Closing Date *") or fields.get("Closing Date") or _raw_closes_at(item),
+            apply_url=str(apply_url),
+            source_url=detail_url,
+            description=description,
+            raw={
+                **item,
+                "detail_url": detail_url,
+                "successfactors_job_id": successfactors_id,
+                "detail_fields": fields,
+                "parser": "aiib_official_detail",
+            },
         )
 
     def parse_jobs_from_api(self, payload: Any) -> list[JobRecord]:
@@ -174,11 +229,21 @@ class SuccessFactorsRMKAdapter(JobAdapter):
     def parse_jobs_from_rss(self, rss_text: str) -> list[JobRecord]:
         root = ET.fromstring(rss_text)
         jobs: list[JobRecord] = []
+        empty_placeholders = []
         for item in root.findall("./channel/item"):
             title = item.findtext("title")
             link = item.findtext("link") or item.findtext("guid")
             description = item.findtext("description")
             if not title or not link:
+                continue
+            if _is_empty_rss_item(title, description, link):
+                empty_placeholders.append(
+                    {
+                        "title": title,
+                        "link": link,
+                        "description": description,
+                    }
+                )
                 continue
             jobs.append(
                 build_job(
@@ -201,6 +266,14 @@ class SuccessFactorsRMKAdapter(JobAdapter):
                     },
                 )
             )
+        if not jobs and empty_placeholders:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_text_empty"
+            self.run_diagnostics.zero_fetched_evidence = {
+                "matched_text": empty_placeholders[0]["title"],
+                "items": empty_placeholders[:3],
+            }
+            self.run_diagnostics.pagination_complete = True
         return jobs
 
     def parse_jobs_from_html(self, html_text: str) -> list[JobRecord]:
@@ -382,6 +455,15 @@ def _raw_detail_url(item: dict[str, Any]) -> str | None:
     return None
 
 
+def _is_empty_rss_item(title: str, description: str | None, link: str) -> bool:
+    text = f"{title} {description or ''} {link}".casefold()
+    return (
+        "no jobs currently available" in text
+        or "no jobs available" in text
+        or "check out our other opportunities" in text
+    )
+
+
 def _raw_title(item: dict[str, Any]) -> str | None:
     for key in ("title", "unifiedStandardTitle", "jobTitle", "externalJobTitle"):
         value = item.get(key)
@@ -428,29 +510,160 @@ def _detail_location(html_text: str) -> str | None:
     return _first_html_match(
         html_text,
         (
+            r"<meta\b(?=[^>]*itemprop=[\"']streetAddress[\"'])(?=[^>]*content=[\"'](?P<value>[^\"']+)[\"'])",
             r"<span\b(?=[^>]*class=[\"'][^\"']*\bjobLocation\b)[^>]*>(?P<value>.*?)</span>",
             r"<div\b(?=[^>]*class=[\"'][^\"']*\blocation\b)[^>]*>(?P<value>.*?)</div>",
         ),
     )
 
 
+def _detail_posted_at(html_text: str) -> str | None:
+    return _sf_meta_datetime(_itemprop_meta_content(html_text, "datePosted"))
+
+
+def _detail_closes_at(html_text: str) -> str | None:
+    return _sf_meta_datetime(_itemprop_meta_content(html_text, "validThrough"))
+
+
 def _detail_description(html_text: str) -> str | None:
-    patterns = (
-        r"<span\b(?=[^>]*class=[\"'][^\"']*\bjobdescription\b)[^>]*>"
-        r"(?P<value>.*?)</span>\s*</span>\s*</div>",
-        r"<span\b(?=[^>]*itemprop=[\"']description[\"'])[^>]*>(?P<value>.*?)</span>",
-        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobdescription\b)[^>]*>(?P<value>.*?)</div>",
-        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDescription\b)[^>]*>(?P<value>.*?)</div>",
-        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDisplay\b)[^>]*>(?P<value>.*?)</main>",
-        r"<div\b(?=[^>]*class=[\"'][^\"']*\bjobDisplay\b)[^>]*>(?P<value>.*?)</body>",
-        r"<section\b(?=[^>]*class=[\"'][^\"']*\bjob[^\"']*\bdescription\b)[^>]*>(?P<value>.*?)</section>",
-    )
-    for pattern in patterns:
-        for match in re.finditer(pattern, html_text, flags=re.IGNORECASE | re.DOTALL):
-            cleaned = _clean_html(match.group("value"))
-            if cleaned:
-                return cleaned
+    candidates = _description_candidates(html_text, _DESCRIPTION_START_RE)
+    meaningful = [candidate for candidate in candidates if _is_meaningful_description(candidate)]
+    if meaningful:
+        return max(meaningful, key=len)
+
+    fallback_candidates = _description_candidates(html_text, _DISPLAY_START_RE)
+    meaningful = [candidate for candidate in fallback_candidates if _is_meaningful_description(candidate)]
+    if meaningful:
+        return max(meaningful, key=len)
     return None
+
+
+def _aiib_detail_description(html_text: str) -> str | None:
+    sections: list[str] = []
+    for match in _AIIB_FONT_COPY_RE.finditer(html_text):
+        body = match.group("body")
+        cleaned = _clean_html(body)
+        if not _is_meaningful_description(cleaned):
+            continue
+        heading = _aiib_preceding_heading(html_text[: match.start()])
+        sections.append(f"{heading}\n{cleaned}" if heading else cleaned)
+    if sections:
+        return "\n\n".join(sections)
+
+    fallback = _description_candidates(
+        html_text,
+        re.compile(
+            r"<(?P<tag>div)\b(?=[^>]*class=[\"'][^\"']*\bexternalPosting\b[^\"']*[\"'])[^>]*>",
+            re.IGNORECASE | re.DOTALL,
+        ),
+    )
+    meaningful = [candidate for candidate in fallback if _is_meaningful_description(candidate)]
+    if meaningful:
+        return max(meaningful, key=len)
+    return None
+
+
+def _aiib_preceding_heading(prefix: str) -> str | None:
+    match = re.search(
+        r"<h2\b(?=[^>]*class=[\"'][^\"']*\bsubheadline\b[^\"']*[\"'])[^>]*>(?P<value>.*?)</h2>\s*$",
+        prefix[-500:],
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _clean_html(match.group("value")) if match else None
+
+
+def _aiib_detail_fields(html_text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    pattern = re.compile(
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bitem\b[^\"']*[\"'])[^>]*>\s*"
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bcol-title\b[^\"']*[\"'])[^>]*>(?P<label>.*?)</div>\s*"
+        r"<div\b(?=[^>]*class=[\"'][^\"']*\bcol-con\b[^\"']*[\"'])[^>]*>(?P<value>.*?)</div>\s*"
+        r"</div>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(html_text):
+        label = _clean_html(match.group("label"))
+        value = _clean_html(match.group("value"))
+        if label and value:
+            fields[label] = value
+    return fields
+
+
+def _aiib_apply_url(html_text: str) -> str | None:
+    match = re.search(
+        r"<a\b(?=[^>]*href=[\"'](?P<href>[^\"']*career5\.successfactors\.eu[^\"']*(?:jobreqcareer|career_job_req_id|jobId)[^\"']*)[\"'])[^>]*>",
+        html_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return html.unescape(match.group("href")) if match else None
+
+
+def _strip_js_block_comments(value: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", value, flags=re.DOTALL)
+
+
+def _decode_js_string(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return html.unescape(value.replace("\\/", "/").replace('\\"', '"'))
+
+
+def _description_candidates(html_text: str, pattern: re.Pattern[str]) -> list[str]:
+    candidates = []
+    for match in pattern.finditer(html_text):
+        body = _balanced_element_inner_html(html_text, match)
+        cleaned = _clean_html(body)
+        if cleaned:
+            candidates.append(cleaned)
+    return candidates
+
+
+def _balanced_element_inner_html(html_text: str, match: re.Match[str]) -> str:
+    tag = match.group("tag").lower()
+    inner_start = match.end()
+    tag_re = re.compile(rf"</?{re.escape(tag)}\b[^>]*>", re.IGNORECASE)
+    depth = 1
+    for tag_match in tag_re.finditer(html_text, inner_start):
+        token = tag_match.group(0)
+        if token.startswith("</"):
+            depth -= 1
+            if depth == 0:
+                return html_text[inner_start : tag_match.start()]
+        elif not token.endswith("/>"):
+            depth += 1
+    return html_text[inner_start:]
+
+
+def _is_meaningful_description(value: str | None) -> bool:
+    text = (value or "").strip()
+    if len(text) >= 120:
+        return True
+    lowered = text.casefold()
+    if lowered.startswith(("grade:", "requisition id", "vacancy notice")):
+        return False
+    return len(text.split()) >= 18
+
+
+def _itemprop_meta_content(html_text: str, itemprop: str) -> str | None:
+    pattern = (
+        rf"<meta\b(?=[^>]*itemprop=[\"']{re.escape(itemprop)}[\"'])"
+        r"(?=[^>]*content=[\"'](?P<value>[^\"']+)[\"'])"
+    )
+    match = re.search(pattern, html_text, flags=re.IGNORECASE | re.DOTALL)
+    return html.unescape(match.group("value")).strip() if match else None
+
+
+def _sf_meta_datetime(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in ("%a %b %d %H:%M:%S UTC %Y", "%a %b %d %H:%M:%S GMT %Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC).isoformat()
+        except ValueError:
+            continue
+    return text
 
 
 def _first_html_match(
@@ -578,6 +791,8 @@ def _xml_zero_evidence(root: ET.Element) -> dict[str, Any]:
     total = _xml_total_count(root)
     if total == 0:
         return {"total_reported_by_source": 0}
+    if _xml_key(root.tag) in {"joblisting", "job-listing"} and not _xml_job_elements(root):
+        return {"root": _xml_key(root.tag), "job_elements": 0}
     return {}
 
 
@@ -601,9 +816,71 @@ class SuccessFactorsLegacyAdapter(SuccessFactorsRMKAdapter):
     family = "successfactors_legacy"
 
     def fetch_jobs(self) -> list[JobRecord]:
+        if self.source.extra.get("listing_feed_type") == "aiib_current_jobs_js":
+            return self._fetch_aiib_current_jobs()
         if self.source.extra.get("primary_fetch_method") == "successfactors_xml":
             return self._fetch_xml_feed_jobs()
         return super().fetch_jobs()
+
+    def _fetch_aiib_current_jobs(self) -> list[JobRecord]:
+        self.run_diagnostics.fetch_method = "aiib_current_jobs_js"
+        self.run_diagnostics.endpoint_family = "aiib_official_static"
+        self.run_diagnostics.scope_validation_status = "passed"
+        feed_url = str(self.source.extra.get("current_jobs_url") or "")
+        if not feed_url:
+            official_listing_url = str(self.source.extra.get("official_listing_url") or "")
+            feed_url = urljoin(official_listing_url, ".content/index/current-jobs.js")
+        if not feed_url:
+            raise RuntimeError(f"{self.source.id}: AIIB current jobs feed URL is not configured")
+        jobs = self.parse_aiib_current_jobs_js(self.fetch_text(feed_url), feed_url)
+        self.run_diagnostics.total_reported_by_source = len(jobs)
+        self.run_diagnostics.pages_fetched = 1
+        self.run_diagnostics.pagination_complete = True
+        if jobs:
+            self.run_diagnostics.health_status = "ok"
+        else:
+            self.run_diagnostics.health_status = "ok_empty"
+            self.run_diagnostics.empty_reason = "verified_text_empty"
+            self.run_diagnostics.zero_fetched_evidence = {"feed_url": feed_url, "jobs": 0}
+        return jobs
+
+    def parse_aiib_current_jobs_js(self, js_text: str, feed_url: str | None = None) -> list[JobRecord]:
+        rows: dict[int, dict[str, str]] = {}
+        js_text = _strip_js_block_comments(js_text)
+        for match in _AIIB_CURRENT_JOB_RE.finditer(js_text):
+            index = int(match.group("index"))
+            rows.setdefault(index, {})[match.group("key")] = _decode_js_string(match.group("value"))
+        jobs: list[JobRecord] = []
+        for index in sorted(rows):
+            row = rows[index]
+            title = row.get("title")
+            path = row.get("path")
+            if not title or not path:
+                continue
+            detail_url = urljoin(str(self.source.extra.get("official_listing_url") or feed_url or self.source.base_url), path)
+            external_id = row.get("number") or _job_id_from_url(detail_url)
+            jobs.append(
+                build_job(
+                    self.source,
+                    title=title,
+                    external_id=external_id,
+                    location=row.get("location"),
+                    department=row.get("department"),
+                    employment_type=row.get("type"),
+                    posted_at=row.get("positioning-date"),
+                    closes_at=row.get("closing-date"),
+                    apply_url=detail_url,
+                    source_url=detail_url,
+                    description=row.get("description"),
+                    raw={
+                        **row,
+                        "detail_url": detail_url,
+                        "feed_url": feed_url,
+                        "parser": "aiib_current_jobs_js",
+                    },
+                )
+            )
+        return jobs
 
     def _fetch_xml_feed_jobs(self) -> list[JobRecord]:
         self.run_diagnostics.fetch_method = "successfactors_xml"

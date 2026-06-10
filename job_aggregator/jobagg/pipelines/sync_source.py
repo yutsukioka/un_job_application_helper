@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -166,9 +168,23 @@ def sync_source_with_selective_details(
     detail_skipped = 0
     detail_errors: list[str] = []
     detail_aborted = False
+    transient_detail_failures = 0
     max_detail_pages = _optional_int(bounded_source.extra.get("max_detail_pages_per_run"))
     if max_detail_pages is None:
         max_detail_pages = _optional_int(bounded_source.extra.get("max_detail_fetches_per_run"))
+    detail_pacer = _DetailFetchPacer.from_source(bounded_source)
+    transient_failure_limit = _optional_int(
+        bounded_source.extra.get("oracle_detail_stop_after_transient_failures")
+    )
+    if transient_failure_limit is None:
+        transient_failure_limit = _optional_int(
+            bounded_source.extra.get("detail_stop_after_transient_failures")
+        )
+    failure_cooldown = _optional_int(
+        bounded_source.extra.get("oracle_detail_failure_cooldown_seconds")
+    )
+    if failure_cooldown is None:
+        failure_cooldown = _optional_int(bounded_source.extra.get("detail_failure_cooldown_seconds"))
     # Threshold guard: a systemic detail-fetch failure (auth wall, schema
     # change, blocked CDN) can otherwise look like a long quiet stream of
     # per-job warnings. Once we have a meaningful sample (>=5 attempts) and
@@ -176,24 +192,60 @@ def sync_source_with_selective_details(
     # surface a single high-signal error instead.
     DETAIL_MIN_SAMPLE = 5
     DETAIL_FAILURE_RATIO = 0.5
+    listing_jobs = _prioritize_detail_refresh_jobs(
+        db,
+        listing_jobs,
+        cutoff,
+        refresh_all_details=refresh_all_details,
+    )
     for job in listing_jobs:
         detail_job = None
-        if (
-            not detail_aborted
-            and (refresh_all_details or _needs_detail_refresh(db, job.identity_key(), cutoff, listing_job=job))
-        ):
+        needs_detail = refresh_all_details or _needs_detail_refresh(
+            db,
+            job.identity_key(),
+            cutoff,
+            listing_job=job,
+        )
+        if detail_aborted:
+            if needs_detail:
+                detail_skipped += 1
+            jobs.append(job)
+            continue
+        if needs_detail:
             fetch_detail = getattr(adapter, "fetch_detail_for_listing_item", None)
             if callable(fetch_detail):
                 if max_detail_pages is not None and detail_attempts >= max_detail_pages:
                     detail_skipped += 1
                     jobs.append(job)
                     continue
+                detail_pacer.before_attempt(detail_attempts)
                 detail_attempts += 1
                 try:
                     detail_job = fetch_detail(job.raw)
+                    if detail_job is None:
+                        detail_failures += 1
+                        detail_errors.append(f"{_job_detail_label(job)} detail refresh returned no detail")
                 except Exception as exc:
                     detail_failures += 1
                     detail_errors.append(f"{_job_detail_label(job)} detail refresh failed: {exc}")
+                    if _is_transient_detail_error(exc):
+                        transient_detail_failures += 1
+                    if (
+                        transient_failure_limit is not None
+                        and transient_failure_limit > 0
+                        and transient_detail_failures >= transient_failure_limit
+                    ):
+                        detail_aborted = True
+                        cooldown_text = (
+                            f"; host cooldown recommended for {failure_cooldown}s"
+                            if failure_cooldown
+                            else ""
+                        )
+                        result.errors.append(
+                            f"detail refresh stopped for {source.id}: "
+                            f"{transient_detail_failures} transient failures reached "
+                            f"limit {transient_failure_limit}{cooldown_text}"
+                        )
                     if (
                         detail_attempts >= DETAIL_MIN_SAMPLE
                         and detail_failures / detail_attempts >= DETAIL_FAILURE_RATIO
@@ -237,7 +289,13 @@ def _needs_detail_refresh(
 ) -> bool:
     current = db.get_job(job_key)
     if current is None:
-        return getattr(listing_job, "closes_at", None) is None
+        return True
+    if not current.get("description"):
+        return True
+    if listing_job is not None and _missing_detail_metadata(current, listing_job):
+        return True
+    if listing_job is not None and _classification_detail_required(db, current, listing_job):
+        return True
     closes_at = current.get("closes_at")
     if not closes_at:
         return True
@@ -248,6 +306,136 @@ def _needs_detail_refresh(
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed <= cutoff
+
+
+def _prioritize_detail_refresh_jobs(
+    db: JobDatabase,
+    jobs: list,
+    cutoff: datetime,
+    *,
+    refresh_all_details: bool,
+) -> list:
+    decorated = [
+        (_detail_refresh_priority(db, job, cutoff, refresh_all_details=refresh_all_details), index, job)
+        for index, job in enumerate(jobs)
+    ]
+    return [job for _, _, job in sorted(decorated, key=lambda item: (item[0], item[1]))]
+
+
+def _detail_refresh_priority(
+    db: JobDatabase,
+    job,
+    cutoff: datetime,
+    *,
+    refresh_all_details: bool,
+) -> int:
+    current = db.get_job(job.identity_key())
+    if current is None:
+        return 0
+    if _missing_detail_metadata(current, job):
+        return 1
+    if _classification_detail_required(db, current, job):
+        return 2
+    if _short_description(current.get("description")):
+        return 3
+    if refresh_all_details:
+        return 4
+    if _closing_needs_detail_refresh(current.get("closes_at"), cutoff):
+        return 5
+    return 9
+
+
+def _classification_detail_required(db: JobDatabase, current: dict, listing_job) -> bool:
+    source_id = getattr(listing_job, "source_id", "") or str(current.get("source_id") or "")
+    if source_id not in {
+        "undp_oracle_hcm",
+        "unfpa_oracle_hcm",
+        "unwomen_oracle_hcm",
+        "icao_oracle_hcm",
+        "wmo_oracle_hcm",
+        "iom_oracle_hcm",
+        "unicef_pageup",
+        "unesco_successfactors",
+        "aiib_successfactors_legacy",
+    }:
+        return False
+    if not _classification_lacks_standardization(db, str(current.get("job_key") or "")):
+        return False
+    raw = current.get("raw")
+    raw = raw if isinstance(raw, dict) else {}
+    if source_id == "unicef_pageup":
+        return not raw.get("detail_html")
+    if source_id == "unesco_successfactors":
+        return raw.get("parser") != "successfactors_detail"
+    if source_id == "aiib_successfactors_legacy":
+        return raw.get("parser") != "aiib_official_detail"
+    return True
+
+
+def _classification_lacks_standardization(db: JobDatabase, job_key: str) -> bool:
+    if not job_key:
+        return True
+    with db.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT grade_mapping_raw_grade_code, standard_seniority_tier
+            FROM vacancy_classifications
+            WHERE vacancy_id = ?
+            """,
+            (job_key,),
+        ).fetchone()
+    if row is None:
+        return True
+    return not row["grade_mapping_raw_grade_code"] or not row["standard_seniority_tier"]
+
+
+def _short_description(value: object | None) -> bool:
+    return len(str(value or "").strip()) < 500
+
+
+def _closing_needs_detail_refresh(value: str | None, cutoff: datetime) -> bool:
+    if not value:
+        return True
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= cutoff
+
+
+def _missing_detail_metadata(current: dict, listing_job) -> bool:
+    raw = current.get("raw")
+    raw = raw if isinstance(raw, dict) else {}
+    source_id = getattr(listing_job, "source_id", "") or str(current.get("source_id") or "")
+    if source_id in {"adb_taleo", "fao_taleo"}:
+        flat = raw.get("_taleo_flat") if isinstance(raw.get("_taleo_flat"), dict) else {}
+        expected_keys = {
+            "JOB_LEVEL",
+            "Position Level",
+            "Grade Level",
+            "TYPE_OF_REQUISITION",
+            "Type of Requisition",
+        }
+        return not any(flat.get(key) not in (None, "") for key in expected_keys)
+    if source_id in {
+        "undp_oracle_hcm",
+        "unfpa_oracle_hcm",
+        "unwomen_oracle_hcm",
+        "icao_oracle_hcm",
+        "wmo_oracle_hcm",
+        "iom_oracle_hcm",
+    }:
+        flex_fields = raw.get("requisitionFlexFields")
+        return not (isinstance(flex_fields, list) and flex_fields)
+    if source_id == "unicef_pageup":
+        return not raw.get("detail_html")
+    if source_id == "unesco_successfactors":
+        return raw.get("parser") != "successfactors_detail"
+    if source_id == "aiib_successfactors_legacy":
+        return raw.get("parser") != "aiib_official_detail"
+    return False
 
 
 def _should_skip_missing_for_zero_fetch(
@@ -328,6 +516,97 @@ def _optional_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+class _DetailFetchPacer:
+    def __init__(
+        self,
+        *,
+        min_delay_seconds: float = 0.0,
+        jitter_seconds: float = 0.0,
+        batch_size: int | None = None,
+        batch_pause_seconds: float = 0.0,
+    ) -> None:
+        self.min_delay_seconds = max(0.0, min_delay_seconds)
+        self.jitter_seconds = max(0.0, jitter_seconds)
+        self.batch_size = batch_size if batch_size and batch_size > 0 else None
+        self.batch_pause_seconds = max(0.0, batch_pause_seconds)
+        self._last_attempt_at: float | None = None
+
+    @classmethod
+    def from_source(cls, source: OrganizationSource) -> "_DetailFetchPacer":
+        extra = source.extra
+        min_delay = _optional_float(extra.get("oracle_detail_min_delay_seconds"))
+        if min_delay is None:
+            min_delay = _optional_float(extra.get("detail_min_delay_seconds")) or 0.0
+        jitter = _optional_float(extra.get("oracle_detail_jitter_seconds"))
+        if jitter is None:
+            jitter = _optional_float(extra.get("detail_jitter_seconds")) or 0.0
+        batch_size = _optional_int(extra.get("oracle_detail_batch_size"))
+        if batch_size is None:
+            batch_size = _optional_int(extra.get("detail_batch_size"))
+        batch_pause = _optional_float(extra.get("oracle_detail_batch_pause_seconds"))
+        if batch_pause is None:
+            batch_pause = _optional_float(extra.get("detail_batch_pause_seconds")) or 0.0
+        return cls(
+            min_delay_seconds=min_delay,
+            jitter_seconds=jitter,
+            batch_size=batch_size,
+            batch_pause_seconds=batch_pause,
+        )
+
+    def before_attempt(self, attempts_completed: int) -> None:
+        if (
+            self.batch_size
+            and self.batch_pause_seconds > 0
+            and attempts_completed > 0
+            and attempts_completed % self.batch_size == 0
+        ):
+            time.sleep(_with_jitter(self.batch_pause_seconds, self.jitter_seconds))
+            self._last_attempt_at = None
+        if self.min_delay_seconds <= 0 or self._last_attempt_at is None:
+            self._last_attempt_at = time.monotonic()
+            return
+        elapsed = time.monotonic() - self._last_attempt_at
+        remaining = self.min_delay_seconds - elapsed
+        if remaining > 0:
+            time.sleep(_with_jitter(remaining, self.jitter_seconds))
+        self._last_attempt_at = time.monotonic()
+
+
+def _with_jitter(delay: float, jitter_seconds: float) -> float:
+    if delay <= 0:
+        return 0.0
+    if jitter_seconds <= 0:
+        return delay
+    return delay + random.uniform(0, jitter_seconds)
+
+
+def _is_transient_detail_error(exc: Exception) -> bool:
+    text = repr(exc).casefold()
+    if "http 401" in text or "http 403" in text or "forbidden" in text:
+        return False
+    return any(
+        pattern in text
+        for pattern in (
+            "http 429",
+            "too many requests",
+            "http 500",
+            "http 502",
+            "http 503",
+            "http 504",
+            "service unavailable",
+            "gateway timeout",
+            "timed out",
+            "timeout",
+            "remote end closed connection",
+            "remotedisconnected",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "temporarily unavailable",
+        )
+    )
 
 
 def _optional_bool(value: object) -> bool:

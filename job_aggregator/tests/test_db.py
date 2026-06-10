@@ -43,6 +43,118 @@ def test_listing_only_update_preserves_existing_detail_fields(tmp_path):
     assert stored["description"] == "Detailed responsibilities and requirements."
 
 
+def test_listing_only_update_preserves_taleo_detail_flat_fields(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="adb_taleo",
+        name="Asian Development Bank",
+        ats_family="taleo",
+        base_url="https://adb.taleo.net/careersection/1/jobsearch.ftl",
+    )
+    detailed = build_job(
+        source,
+        title="Senior Education Specialist",
+        external_id="260596",
+        closes_at="2026-06-30",
+        description="Detailed description.",
+        apply_url="https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260596",
+        raw={"_taleo_flat": {"JOB_LEVEL": "TL4", "Position Level": "TL4"}},
+    )
+    listing_only = build_job(
+        source,
+        title="Senior Education Specialist",
+        external_id="260596",
+        closes_at="2026-06-30",
+        apply_url="https://adb.taleo.net/careersection/1/jobdetail.ftl?job=260596",
+        raw={"_taleo_flat": {"Closing Date": "30-Jun-2026"}},
+    )
+
+    assert db.upsert_job(detailed) == "inserted"
+    assert db.upsert_job(listing_only) == "unchanged"
+
+    stored = db.get_job("adb_taleo:260596")
+    assert stored is not None
+    flat = stored["raw"]["_taleo_flat"]
+    assert flat["JOB_LEVEL"] == "TL4"
+    assert flat["Position Level"] == "TL4"
+    assert flat["Closing Date"] == "30-Jun-2026"
+
+
+def test_listing_only_update_preserves_oracle_flex_fields(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="undp_oracle_hcm",
+        name="UNDP",
+        ats_family="oracle_hcm",
+        base_url="https://estm.fa.em2.oraclecloud.com",
+    )
+    detailed = build_job(
+        source,
+        title="Project Manager",
+        external_id="34063",
+        description="Detailed description.",
+        apply_url="https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/34063",
+        raw={"requisitionFlexFields": [{"Prompt": "Grade", "Value": "IPSA-9"}]},
+    )
+    listing_only = build_job(
+        source,
+        title="Project Manager",
+        external_id="34063",
+        apply_url="https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/34063",
+        raw={"requisitionFlexFields": []},
+    )
+
+    assert db.upsert_job(detailed) == "inserted"
+    assert db.upsert_job(listing_only) == "unchanged"
+
+    stored = db.get_job("undp_oracle_hcm:34063")
+    assert stored is not None
+    assert stored["raw"]["requisitionFlexFields"] == [{"Prompt": "Grade", "Value": "IPSA-9"}]
+
+
+def test_listing_only_update_preserves_pageup_detail_html_and_description(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org/en-us/listing/",
+    )
+    detailed = build_job(
+        source,
+        title="Youth Digital Mobilizer",
+        external_id="593348",
+        description="Full UNICEF detail text with terms of reference.",
+        apply_url="https://jobs.unicef.org/en-us/job/593348/example",
+        raw={
+            "detail_html": "<div id='job-details'>Full UNICEF detail text with terms of reference.</div>",
+            "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/593348/example",
+        },
+    )
+    listing_only = build_job(
+        source,
+        title="Youth Digital Mobilizer",
+        external_id="593348",
+        description="Short listing teaser.",
+        apply_url="https://jobs.unicef.org/en-us/job/593348/example",
+        raw={
+            "listing_html": "<div class='list-view--item'>Short listing teaser.</div>",
+            "_pageup_detail_url": "https://jobs.unicef.org/en-us/job/593348/example",
+        },
+    )
+
+    assert db.upsert_job(detailed) == "inserted"
+    assert db.upsert_job(listing_only) == "unchanged"
+
+    stored = db.get_job("unicef_pageup:593348")
+    assert stored is not None
+    assert stored["description"] == "Full UNICEF detail text with terms of reference."
+    assert "detail_html" in stored["raw"]
+
+
 def test_identity_falls_back_to_title_location_and_closing_date():
     source = OrganizationSource(
         id="org",
@@ -126,7 +238,7 @@ def test_change_events_snapshots_missing_closed_and_reopened(tmp_path):
         title="Role",
         external_id="123",
         location="Geneva",
-        closes_at="2026-05-30",
+        closes_at="2026-12-30",
         description="Version 1",
         apply_url="https://example.org/job/123",
     )
@@ -137,7 +249,7 @@ def test_change_events_snapshots_missing_closed_and_reopened(tmp_path):
         title="Role",
         external_id="123",
         location="Geneva",
-        closes_at="2026-05-30",
+        closes_at="2026-12-30",
         description="Version 2",
         apply_url="https://example.org/job/123",
     )
