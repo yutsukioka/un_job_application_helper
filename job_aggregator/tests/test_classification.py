@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import jobagg.classification.pipeline as classification_pipeline
 from jobagg.classification import classify_database
 from jobagg.classification.classifiers.ccog import (
     _keyword_score,
@@ -96,6 +97,33 @@ def test_city_only_location_recomputes_onsite_modality(tmp_path):
     assert row["city"] == "Nairobi"
     assert row["country_iso3"] == "KEN"
     assert row["work_modality"] == "onsite"
+
+
+def test_classification_recomputes_when_rule_digest_changes(tmp_path, monkeypatch):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unicef_pageup",
+        name="UNICEF",
+        ats_family="pageup",
+        base_url="https://jobs.unicef.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Programme Officer, P-3, Nairobi, Kenya",
+            external_id="rule-cache",
+            location="Nairobi, Kenya",
+            apply_url="https://jobs.unicef.org/jobs/rule-cache",
+        )
+    )
+
+    monkeypatch.setattr(classification_pipeline, "_classification_rules_digest", lambda: "rules-a")
+    assert classify_database(db) == 1
+    assert classify_database(db) == 0
+
+    monkeypatch.setattr(classification_pipeline, "_classification_rules_digest", lambda: "rules-b")
+    assert classify_database(db) == 1
 
 
 def test_classifies_unv_specialist_and_filters_facets(tmp_path):

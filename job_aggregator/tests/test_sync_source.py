@@ -589,7 +589,7 @@ def test_selective_detail_budget_prioritizes_null_classification_rows(tmp_path):
     assert diagnostics[0]["detail_skipped"] == 0
 
 
-def test_capped_sync_uses_full_seen_set_for_missing_marking(tmp_path):
+def test_capped_sync_blocks_missing_transition(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
     source = _source("cap_source", "cap_test")
@@ -611,7 +611,13 @@ def test_capped_sync_uses_full_seen_set_for_missing_marking(tmp_path):
 
     assert result.fetched == 1
     assert "above max_jobs_per_source=1" in result.errors[0]
-    assert db.get_job("cap_source:A2")["status"] == "open"
+    stored = db.get_job("cap_source:A2")
+    assert stored["status"] == "open"
+    assert stored["missing_run_count"] == 0
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["health_status"] == "issue"
+    assert diagnostics[0]["pagination_complete"] is False
+    assert diagnostics[0]["missing_transition_allowed"] is False
 
 
 def test_policy_max_pages_is_applied_to_adapter_source_extra(tmp_path):

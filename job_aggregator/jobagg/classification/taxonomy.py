@@ -333,8 +333,20 @@ def _taxonomy_file(name: str) -> dict[str, Any]:
 
 
 def _taxonomy_dirs() -> list[Path]:
+    classification_dir = Path(__file__).resolve().parent
     package_root = Path(__file__).resolve().parents[2]
     return [
         Path.cwd() / "config" / "taxonomies",
+        classification_dir / "rules" / "taxonomies",
         package_root / "config" / "taxonomies",
     ]
+
+
+def taxonomy_rule_paths() -> list[Path]:
+    paths_by_name: dict[str, Path] = {}
+    for base in _taxonomy_dirs():
+        if not base.is_dir():
+            continue
+        for path in sorted(base.glob("*.yaml")):
+            paths_by_name.setdefault(path.name, path)
+    return [paths_by_name[name] for name in sorted(paths_by_name)]

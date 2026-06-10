@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict
+from functools import lru_cache
 from typing import Any
 
 from jobagg.classification.classifiers.ccog import ccog_tree, classify_ccog
@@ -14,7 +16,7 @@ from jobagg.classification.classifiers.modality import classify_modality
 from jobagg.classification.classifiers.national_scope import classify_national_scope
 from jobagg.classification.classifiers.unv import classify_unv
 from jobagg.classification.extractors import get_extractor
-from jobagg.classification.grade_mapping import standardize_grade
+from jobagg.classification.grade_mapping import GRADE_MAPPING_VERSION, standardize_grade
 from jobagg.classification.locations import (
     best_vacancy_location,
     build_vacancy_locations,
@@ -30,7 +32,8 @@ from jobagg.classification.models import (
     VacancyLocation,
     WorkModality,
 )
-from jobagg.classification.taxonomy import enrich_search_taxonomy
+from jobagg.classification.rules import RULES_DIR
+from jobagg.classification.taxonomy import enrich_search_taxonomy, taxonomy_rule_paths
 from jobagg.db import JobDatabase
 from jobagg.filters.normalization import country_for_city, country_info, display_city, normalize_city
 
@@ -58,23 +61,23 @@ def classify_database(
     # classification version so we can skip rows whose underlying job
     # content has not changed. ``force=True`` (e.g. ``--reclassify-all``)
     # bypasses this and re-classifies every row.
-    existing_state: dict[str, str | None] = (
-        {} if force else db.classification_state(version)
-    )
+    existing_state: dict[str, str | None] = {} if force else db.classification_state(version)
+    rules_digest = _classification_rules_digest()
     count = 0
     skipped = 0
     for row in db.iter_jobs(source_id=source_id, status=status):
         current_hash = row.get("normalized_hash")
+        current_cache_key = _classification_cache_key(current_hash, rules_digest)
         previous_hash = existing_state.get(row["job_key"])
         if (
             not force
-            and current_hash is not None
+            and current_cache_key is not None
             and previous_hash is not None
-            and previous_hash == current_hash
+            and previous_hash == current_cache_key
         ):
             skipped += 1
             continue
-        classify_and_store(row, db, version=version)
+        classify_and_store(row, db, version=version, cache_source_hash=current_cache_key)
         count += 1
     if skipped:
         import logging
@@ -93,15 +96,47 @@ def classify_and_store(
     db: JobDatabase,
     *,
     version: str = CLASSIFICATION_VERSION,
+    cache_source_hash: str | None = None,
 ) -> ClassificationResult:
     features, result, locations = classify_job_with_locations(vacancy, version=version)
     db.upsert_vacancy_source_features(features)
     overrides = db.classification_overrides(result.vacancy_id)
     result = apply_overrides(result, overrides)
     locations = apply_location_overrides(locations, result, overrides)
-    db.upsert_vacancy_classification(result, source_hash=vacancy.get("normalized_hash"))
+    db.upsert_vacancy_classification(
+        result,
+        source_hash=(
+            cache_source_hash if cache_source_hash is not None else vacancy.get("normalized_hash")
+        ),
+    )
     db.replace_vacancy_locations(result.vacancy_id, locations)
     return result
+
+
+def _classification_cache_key(source_hash: str | None, rules_digest: str) -> str | None:
+    if source_hash is None:
+        return None
+    return f"{source_hash}:{rules_digest}"
+
+
+@lru_cache(maxsize=1)
+def _classification_rules_digest() -> str:
+    digest = hashlib.sha256()
+    digest.update(CLASSIFICATION_VERSION.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(GRADE_MAPPING_VERSION.encode("utf-8"))
+    digest.update(b"\0")
+    paths = []
+    for pattern in ("*.yaml", "*.csv", "*.json"):
+        paths.extend(RULES_DIR.glob(pattern))
+    paths.extend(taxonomy_rule_paths())
+    unique_paths = sorted({path.resolve() for path in paths if path.is_file()}, key=str)
+    for path in unique_paths:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def classify_job(

@@ -191,6 +191,31 @@ def test_search_filters_by_taxonomy_facets(tmp_path):
     assert explanation["matched"] is True
 
 
+def test_text_search_falls_back_to_like_when_fts_table_is_absent(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    db.upsert_job(
+        build_job(
+            source,
+            title="Finance Officer, P-3, Nairobi, Kenya",
+            external_id="no-fts",
+            location="Nairobi, Kenya",
+            description="Responsible for budgeting and accounting controls.",
+            apply_url="https://jobs.unicef.org/jobs/no-fts",
+        )
+    )
+    classify_database(db)
+    with db.connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS jobs_fts")
+
+    assert db.fts_available() is False
+    collected = search_collected_jobs(db, VacancySearchRequest(text="budgeting"))
+    legacy = search_vacancies(db, VacancyFilters(text="budgeting"))
+
+    assert collected.total == 1
+    assert legacy[0]["job_key"] == "unicef_pageup:no-fts"
+
+
 def test_unv_region_does_not_create_nairobi_duty_station(tmp_path):
     db = _db(tmp_path)
     source = _source("unv_uvp", "unv")

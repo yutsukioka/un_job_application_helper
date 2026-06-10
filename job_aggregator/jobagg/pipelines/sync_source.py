@@ -73,11 +73,11 @@ def sync_source(
         _mark_list_failure(result.diagnostics)
         return _finish_result(db, result)
 
+    result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     seen_job_keys = {job.identity_key() for job in jobs}
     jobs = _cap_jobs_for_policy(jobs, policy, result)
 
     result.fetched = len(jobs)
-    result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     _finalize_list_diagnostics(result, bounded_source, jobs)
     if _should_skip_missing_for_zero_fetch(bounded_source, db, jobs, close_missing, result.diagnostics):
         result.errors.append(_zero_fetch_active_jobs_error(source))
@@ -140,11 +140,11 @@ def sync_source_with_selective_details(
         _mark_list_failure(result.diagnostics)
         return _finish_result(db, result)
 
+    result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     seen_job_keys = {job.identity_key() for job in listing_jobs}
     listing_jobs = _cap_jobs_for_policy(listing_jobs, policy, result)
 
     result.fetched = len(listing_jobs)
-    result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
     _finalize_list_diagnostics(result, bounded_source, listing_jobs)
     if _should_skip_missing_for_zero_fetch(
         bounded_source,
@@ -627,6 +627,12 @@ def _cap_jobs_for_policy(
     result.errors.append(
         f"Adapter returned {len(jobs)} jobs, above max_jobs_per_source={policy.max_jobs_per_source}"
     )
+    diagnostics = result.diagnostics
+    if diagnostics is not None:
+        diagnostics.list_error_count += 1
+        diagnostics.pagination_complete = False
+        diagnostics.health_status = "issue"
+        diagnostics.missing_transition_allowed = False
     return jobs[: policy.max_jobs_per_source]
 
 

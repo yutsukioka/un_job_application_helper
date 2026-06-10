@@ -625,6 +625,13 @@ class JobDatabase:
             if jobs_count is not None and jobs_count["c"] > 0:
                 conn.execute("INSERT INTO jobs_fts(jobs_fts) VALUES('rebuild')")
 
+    def fts_available(self) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs_fts'"
+            ).fetchone()
+            return row is not None
+
     def upsert_job(self, job: JobRecord) -> str:
         job_key = job.identity_key()
         with self.connect() as conn:

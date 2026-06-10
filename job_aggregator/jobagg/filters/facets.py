@@ -27,7 +27,7 @@ FACET_COLUMNS = {
 
 
 def facet_counts(db: JobDatabase, filters: VacancyFilters) -> dict[str, dict[str, int]]:
-    where_clause, params = build_where_clause(filters)
+    where_clause, params = build_where_clause(filters, use_fts=db.fts_available())
     result: dict[str, dict[str, int]] = {}
     with db.connect() as conn:
         for facet_name, column in FACET_COLUMNS.items():

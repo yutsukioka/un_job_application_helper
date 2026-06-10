@@ -31,6 +31,7 @@ def _add_text_clause(
     text: str,
     *,
     include_department: bool = False,
+    use_fts: bool = True,
 ) -> None:
     """Add a free-text predicate, preferring FTS5 with a LIKE fallback.
 
@@ -40,22 +41,34 @@ def _add_text_clause(
     behaving identically.
     """
 
-    fts_columns = "{title description department location}" if include_department else "{title description location}"
-    phrase = _fts_phrase(text)
-    clauses.append(
-        "(j.rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?)"
-        " OR j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
-        + (" OR j.department LIKE ?" if include_department else "")
-        + ")"
-    )
     needle = f"%{text}%"
-    params.append(f"{fts_columns} : {phrase}")
+    if use_fts:
+        fts_columns = (
+            "{title description department location}"
+            if include_department
+            else "{title description location}"
+        )
+        phrase = _fts_phrase(text)
+        clauses.append(
+            "(j.rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?)"
+            " OR j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
+            + (" OR j.department LIKE ?" if include_department else "")
+            + ")"
+        )
+        params.append(f"{fts_columns} : {phrase}")
+    else:
+        clauses.append(
+            "(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
+            + (" OR j.department LIKE ?" if include_department else "")
+            + ")"
+        )
     params.extend([needle, needle, needle])
     if include_department:
         params.append(needle)
 
 
 def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str, Any]]:
+    use_fts = db.fts_available()
     query = """
         SELECT
             j.*,
@@ -144,7 +157,7 @@ def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str,
     """
     clauses: list[str] = []
     params: list[Any] = []
-    _add_filters(clauses, params, filters)
+    _add_filters(clauses, params, filters, use_fts=use_fts)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY (j.closes_at IS NULL), j.closes_at ASC, j.posted_at DESC"
@@ -162,7 +175,8 @@ def search_collected_jobs(
     *,
     include_facets: bool = True,
 ) -> VacancySearchResponse:
-    clauses, params = _search_conditions(request)
+    use_fts = db.fts_available()
+    clauses, params = _search_conditions(request, use_fts=use_fts)
     where_clause = " WHERE " + " AND ".join(clauses) if clauses else ""
     total_query = f"""
         SELECT COUNT(DISTINCT j.job_key) AS count
@@ -241,7 +255,10 @@ def search_collected_jobs(
             tuple([*params, request.limit, request.offset]),
         ).fetchall()
         results = [_search_row_to_result(conn, row, request) for row in rows]
-        unclassified_clauses, unclassified_params = _jobs_only_conditions(request)
+        unclassified_clauses, unclassified_params = _jobs_only_conditions(
+            request,
+            use_fts=use_fts,
+        )
         unclassified_where = (
             " WHERE " + " AND ".join(unclassified_clauses)
             if unclassified_clauses
@@ -272,7 +289,7 @@ def search_facet_counts(
     db: JobDatabase,
     request: VacancySearchRequest,
 ) -> dict[str, dict[str, int]]:
-    clauses, params = _search_conditions(request)
+    clauses, params = _search_conditions(request, use_fts=db.fts_available())
     where_clause = " WHERE " + " AND ".join(clauses) if clauses else ""
     facet_columns = {
         "grades": "c.grade_code",
@@ -309,14 +326,18 @@ def search_facet_counts(
     return result
 
 
-def build_where_clause(filters: VacancyFilters) -> tuple[str, list[Any]]:
+def build_where_clause(filters: VacancyFilters, *, use_fts: bool = True) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
-    _add_filters(clauses, params, filters)
+    _add_filters(clauses, params, filters, use_fts=use_fts)
     return (" WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
 
 
-def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[Any]]:
+def _search_conditions(
+    request: VacancySearchRequest,
+    *,
+    use_fts: bool = True,
+) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if request.status:
@@ -358,7 +379,7 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
     _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
     if request.text:
-        _add_text_clause(clauses, params, request.text)
+        _add_text_clause(clauses, params, request.text, use_fts=use_fts)
     location_clause, location_params = _location_exists_clause(request)
     if location_clause:
         clauses.append(location_clause)
@@ -366,7 +387,11 @@ def _search_conditions(request: VacancySearchRequest) -> tuple[list[str], list[A
     return clauses, params
 
 
-def _jobs_only_conditions(request: VacancySearchRequest) -> tuple[list[str], list[Any]]:
+def _jobs_only_conditions(
+    request: VacancySearchRequest,
+    *,
+    use_fts: bool = True,
+) -> tuple[list[str], list[Any]]:
     """Return clauses that depend only on the ``jobs`` table.
 
     Used to count rows that satisfy the request scope but have no
@@ -388,7 +413,7 @@ def _jobs_only_conditions(request: VacancySearchRequest) -> tuple[list[str], lis
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
     _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
     if request.text:
-        _add_text_clause(clauses, params, request.text)
+        _add_text_clause(clauses, params, request.text, use_fts=use_fts)
     return clauses, params
 
 
@@ -559,7 +584,13 @@ def _order_by(request: VacancySearchRequest) -> str:
     return "ORDER BY j.closes_at IS NULL, j.closes_at ASC, j.posted_at DESC"
 
 
-def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters) -> None:
+def _add_filters(
+    clauses: list[str],
+    params: list[Any],
+    filters: VacancyFilters,
+    *,
+    use_fts: bool = True,
+) -> None:
     if filters.only_active:
         clauses.append("j.status = 'open'")
     mapping = {
@@ -623,7 +654,13 @@ def _add_filters(clauses: list[str], params: list[Any], filters: VacancyFilters)
     _add_date_clause(clauses, params, "j.closes_at", ">=", filters.closing_date_from)
     _add_date_clause(clauses, params, "j.closes_at", "<=", filters.closing_date_to)
     if filters.text:
-        _add_text_clause(clauses, params, filters.text, include_department=True)
+        _add_text_clause(
+            clauses,
+            params,
+            filters.text,
+            include_department=True,
+            use_fts=use_fts,
+        )
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
