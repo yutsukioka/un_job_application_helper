@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Admin Profile (RA Split) (Option 5)"
+  short_description: "Generate IOM/Oracle-style Responsibilities + Achievements separated per role (often unlimited unless limits provided)."
+  default_prompt: |
+    Use this skill to generate Option 5 IOM/Oracle RA split role entries.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-admin-profile-ra-split/SKILL.md.
+    Treat apex-generate-admin-profile-ra-split/SKILL.md as the canonical behavior and output contract.

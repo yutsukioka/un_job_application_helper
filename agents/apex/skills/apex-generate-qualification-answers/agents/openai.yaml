@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Qualification Answers"
+  short_description: "Draft 1000-character answers to each job qualification question using the two-part format."
+  default_prompt: |
+    Use this skill to draft Option 4 qualification answers.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-qualification-answers/SKILL.md.
+    Treat apex-generate-qualification-answers/SKILL.md as the canonical behavior and output contract.

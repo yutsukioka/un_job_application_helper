@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diagnostics ▸ Skill Confidence Scorer"
+  short_description: "Score how confidently each skill matches a user request."
+  default_prompt: |
+    Use this skill to score how well each skill matches a request.
+    Follow AGENTS.md, apex-guardrails, and skill-confidence-scorer/SKILL.md.
+    Treat skill-confidence-scorer/SKILL.md as the canonical behavior and output contract.

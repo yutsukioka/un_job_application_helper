@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ STAR Story Blueprints"
+  short_description: "Generate 3-4 STAR (or condensed CAR) story blueprints aligned to critical requirements."
+  default_prompt: |
+    Use this skill to generate 3-4 STAR/CAR blueprints with reusable achievement bullets.
+    Follow AGENTS.md, apex-guardrails, and apex-star-story-blueprints/SKILL.md.
+    Treat apex-star-story-blueprints/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,49 @@
+inspira_job_family:
+  ADM:
+    part_1_default:
+      code: "1.A.12"
+      label: "Administrative officers"
+    part_2_default:
+      code: "2.1.02.a"
+      label: "Administrative assistance"
+  PGM:
+    part_1_default:
+      code: "1.A.02.e"
+      label: "Programme specialists"
+    part_2_default:
+      code: "2.2.01"
+      label: "Programme assistance"
+  PRO:
+    part_1_default:
+      code: "1.A.09"
+      label: "Supply chain management specialists"
+    part_2_default:
+      code: "2.2.06"
+      label: "Procurement, supply and logistics support"
+unv_expertise_area:
+  Information technology:
+    code: "1.A.05"
+    label: "Information systems and communication technology specialists"
+  Development programmes:
+    part_1_code: "1.A.02.e"
+    part_1_label: "Programme specialists"
+    part_2_code: "2.2.01"
+    part_2_label: "Programme assistance"
+  Administration:
+    part_1_code: "1.A.12"
+    part_1_label: "Administrative officers"
+    part_2_code: "2.1.02.a"
+    part_2_label: "Administrative assistance"
+  Procurement and contracting:
+    part_1_code: "1.A.09.a"
+    part_1_label: "Procurement specialists"
+    part_2_code: "2.2.06"
+    part_2_label: "Procurement, supply and logistics support"
+  Logistics and Inventory:
+    part_1_code: "1.A.09.c"
+    part_1_label: "Logistics specialists"
+    part_2_code: "2.2.06"
+    part_2_label: "Procurement, supply and logistics support"
+  Economics and finance:
+    code: "1.L.09"
+    label: "Economists"

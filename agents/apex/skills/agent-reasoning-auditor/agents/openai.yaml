@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Reasoning Auditor"
+  short_description: "Record reasoning summaries and flag instruction-alignment issues."
+  default_prompt: |
+    Use this skill to audit reasoning summaries and instruction alignment during diagnostic runs.
+    Follow AGENTS.md, apex-guardrails, and agent-reasoning-auditor/SKILL.md.
+    Treat agent-reasoning-auditor/SKILL.md as the canonical behavior and output contract.

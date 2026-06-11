@@ -1,0 +1,19 @@
+# Multi-Agent V1 server manifest template
+
+server_id: S1
+port: 9811
+writer: screening-lead
+advisors:
+  - technical-lead
+  - ats-format-lead
+canonical_tester: qa-auditor
+reads:
+  - inputs/application_context.md
+  - output/generated_documents/history/<JOB_SLUG>/metric_ledger.md
+  - output/generated_documents/history/<JOB_SLUG>/ccog_reference_resolved.md
+writes:
+  - output/generated_documents/history/<JOB_SLUG>/screening-lead/phase1_7_strategy_report.md
+shutdown_preconditions:
+  - Final TEST/DISCUSS cycle complete
+  - Advisor notes exported
+  - No further revision pass authorized

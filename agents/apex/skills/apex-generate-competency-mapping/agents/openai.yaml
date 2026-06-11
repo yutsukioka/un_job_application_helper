@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Competency Mapping (Option 6)"
+  short_description: "Map SKILLS_TAXONOMY skills to roles with relevance scores and compute total experience per skill (avoid overlap double-counting)."
+  default_prompt: |
+    Use this skill to generate the Option 6 competency mapping document.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-competency-mapping/SKILL.md.
+    Treat apex-generate-competency-mapping/SKILL.md as the canonical behavior and output contract.

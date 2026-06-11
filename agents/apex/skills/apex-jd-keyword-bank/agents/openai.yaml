@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ JD Keyword Bank (20-40)"
+  short_description: "Extract a larger 20-40 phrase keyword bank from the JD (complements term-extractor)."
+  default_prompt: |
+    Use this skill to extract a categorized 20-40 phrase JD keyword bank.
+    Follow AGENTS.md, apex-guardrails, and apex-jd-keyword-bank/SKILL.md.
+    Treat apex-jd-keyword-bank/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,49 @@
+contract_rules:
+  volunteering_unv:
+    source_ids:
+      - unv_uvp
+    keywords:
+      - "un volunteer"
+      - "volunteer assignment"
+  consultant:
+    keywords:
+      - "consultant"
+      - "consultancy"
+      - "individual consultant"
+      - "contractor"
+      - "retainer"
+      - "ssa"
+      - "cfa"
+  temporary_appointment_staff:
+    keywords:
+      - "temporary appointment"
+      - "temporary position"
+      - "temporary staff"
+      - " ta,"
+      - " ta "
+      - "364 days"
+  fixed_term_appointment_staff:
+    keywords:
+      - "fixed-term"
+      - "fixed term"
+      - "fixed term appointment"
+      - "fixed-term appointment"
+      - "fta"
+  internship_unknown:
+    keywords:
+      - "intern"
+      - "internship"
+      - "studentship"
+      - "stagiaire"
+      - "stage en"
+      - "estagi"
+  internship_paid:
+    keywords:
+      - "paid internship"
+      - "stipend"
+      - "monthly allowance"
+  internship_unpaid:
+    keywords:
+      - "unpaid internship"
+      - "no remuneration"
+      - "not paid"

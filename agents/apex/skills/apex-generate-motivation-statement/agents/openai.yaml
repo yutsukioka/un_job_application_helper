@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Motivation Statement"
+  short_description: "Draft a VACC-framework Inspira Motivation Statement (max 2000 characters) with condensed CAR/Micro-STAR evidence and diplomatic tone."
+  default_prompt: |
+    Use this skill to draft the Option 7 motivation statement.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-motivation-statement/SKILL.md.
+    Treat apex-generate-motivation-statement/SKILL.md as the canonical behavior and output contract.

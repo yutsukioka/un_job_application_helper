@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Execution Tracer"
+  short_description: "Log the ApexStrategist skill execution graph for diagnostic runs."
+  default_prompt: |
+    Use this skill to trace ApexStrategist skill invocation flow during diagnostic runs.
+    Follow AGENTS.md, apex-guardrails, and agent-execution-tracer/SKILL.md.
+    Treat agent-execution-tracer/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Guardrails"
+  short_description: "Central authority: UN-style evidence grounding, duties vs achievements discipline, ATS-safe wording, CAPEL + lint rules."
+  default_prompt: |
+    Use this skill to apply ApexStrategist guardrails and format profiles to the current task.
+    Follow AGENTS.md, apex-guardrails, and apex-guardrails/SKILL.md.
+    Treat apex-guardrails/SKILL.md as the canonical behavior and output contract.

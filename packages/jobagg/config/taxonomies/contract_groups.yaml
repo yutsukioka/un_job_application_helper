@@ -1,0 +1,22 @@
+groups:
+  staff:
+    contract_categories:
+      - fixed_term_appointment_staff
+      - temporary_appointment_staff
+      - staff_other
+    grade_families: [P, D, NO, G, FS]
+  consultant_contractor:
+    contract_categories: [consultant]
+    grade_families: [IICA, LICA, IPSA, NPSA, SSA, SC, SB]
+  volunteer:
+    contract_categories: [volunteering_unv]
+  internship:
+    contract_categories: [internship_paid, internship_unpaid, internship_unknown]
+  fellowship_ypp_pathway:
+    title_keywords: [jpo, ypp, fellowship, fellow, trainee]
+  roster_pipeline:
+    title_keywords: [roster, talent pool, pipeline, expression of interest]
+  other:
+    contract_categories: [other]
+  unknown:
+    contract_categories: [unknown]

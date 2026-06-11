@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Output Lint (Profile-based)"
+  short_description: "Final compliance pass using lint profiles: INSPIRA_FIELD, UNICEF_FIELD, IOM_RA, ATS_DRA."
+  default_prompt: |
+    Use this skill to lint text for the appropriate application-field format profile.
+    Follow AGENTS.md, apex-guardrails, and apex-output-lint/SKILL.md.
+    Treat apex-output-lint/SKILL.md as the canonical behavior and output contract.

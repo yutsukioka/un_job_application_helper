@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Admin Profile (DRA Split) (Option 8)"
+  short_description: "Generate ATS-style Duties + Responsibilities + Achievements separated per role (bullets allowed)."
+  default_prompt: |
+    Use this skill to generate Option 8 ATS DRA split role entries.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-admin-profile-dra-split/SKILL.md.
+    Treat apex-generate-admin-profile-dra-split/SKILL.md as the canonical behavior and output contract.

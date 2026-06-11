@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Failure Analyzer"
+  short_description: "Classify skill failures and recommend likely fixes."
+  default_prompt: |
+    Use this skill to analyze failed or partial skill runs and identify probable causes.
+    Follow AGENTS.md, apex-guardrails, and skill-failure-analyzer/SKILL.md.
+    Treat skill-failure-analyzer/SKILL.md as the canonical behavior and output contract.

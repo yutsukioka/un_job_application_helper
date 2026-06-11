@@ -1,0 +1,57 @@
+# Deterministic title/category rules for mandate inference when no native
+# UN Careers Job Network / Job Family is present.
+rules:
+  - network_code: DEVNET
+    family: Economic Affairs
+    patterns: ["economic affairs", "economist"]
+  - network_code: DEVNET
+    family: Programme Management
+    patterns: ["programme management", "program management", "programme officer", "program officer"]
+  - network_code: POLNET
+    family: Human Rights Affairs
+    patterns: ["human rights"]
+  - network_code: POLNET
+    family: Political Affairs
+    patterns: ["political affairs"]
+  - network_code: POLNET
+    family: Humanitarian Affairs
+    patterns: ["humanitarian affairs", "emergency response"]
+  - network_code: LEGALNET
+    family: Legal Affairs
+    patterns: ["legal officer", "legal affairs", "jurist", "counsel"]
+  - network_code: LOGNET
+    family: Procurement
+    patterns: ["procurement"]
+  - network_code: LOGNET
+    family: Logistics and Supply Chain
+    patterns: ["logistics", "supply chain", "warehouse"]
+  - network_code: ITECNET
+    family: Information Management Systems and Technology
+    patterns: ["information systems", "information technology", "systems officer", "software", "erp"]
+  - network_code: INFONET
+    family: Public Information
+    patterns: ["public information", "communications officer", "media officer"]
+  - network_code: INFONET
+    family: Language
+    patterns: ["interpreter", "translator", "translation"]
+  - network_code: INFONET
+    family: Data Analytics and Management
+    patterns: ["data analytics", "data analyst", "data management"]
+  - network_code: SCINET
+    family: Medical
+    patterns: ["medical officer", "doctor", "physician", "health officer"]
+  - network_code: SAFETYNET
+    family: Security
+    patterns: ["security officer", "security specialist"]
+  - network_code: MAGNET
+    family: Finance
+    patterns: ["finance officer", "financial management", "accounting", "budget"]
+  - network_code: MAGNET
+    family: Human Resources
+    patterns: ["human resources", "hr officer", "people management"]
+  - network_code: MAGNET
+    family: Audit
+    patterns: ["audit", "auditor"]
+  - network_code: MAGNET
+    family: Investigation
+    patterns: ["investigation", "investigator"]

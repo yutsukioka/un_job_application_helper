@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Bullet Enhancer"
+  short_description: "Rewrite 2-3 existing job bullets with stronger verbs, outcomes, and keyword alignment (no invention)."
+  default_prompt: |
+    Use this skill to rewrite 2-3 job-history bullets as stronger evidence examples.
+    Follow AGENTS.md, apex-guardrails, and apex-bullet-enhancer/SKILL.md.
+    Treat apex-bullet-enhancer/SKILL.md as the canonical behavior and output contract.

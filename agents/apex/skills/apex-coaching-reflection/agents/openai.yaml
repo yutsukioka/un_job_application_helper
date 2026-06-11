@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Coaching Reflection Prompts"
+  short_description: "Pose 1-2 open-ended questions to help the candidate reflect on motivations, values, and cultural fit."
+  default_prompt: |
+    Use this skill to produce 1-2 coaching reflection prompts.
+    Follow AGENTS.md, apex-guardrails, and apex-coaching-reflection/SKILL.md.
+    Treat apex-coaching-reflection/SKILL.md as the canonical behavior and output contract.

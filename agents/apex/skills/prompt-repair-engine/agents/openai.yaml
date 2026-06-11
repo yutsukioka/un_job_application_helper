@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diagnostics ▸ Prompt Repair Engine"
+  short_description: "Analyze SKILL.md files for prompt defects and log concrete repair recommendations."
+  default_prompt: |
+    Use this skill to analyze SKILL.md files and log prompt repair recommendations.
+    Follow AGENTS.md, apex-guardrails, and prompt-repair-engine/SKILL.md.
+    Treat prompt-repair-engine/SKILL.md as the canonical behavior and output contract.

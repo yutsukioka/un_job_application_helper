@@ -1,0 +1,7 @@
+interface:
+  display_name: "Utility ▸ CAPEL Fit"
+  short_description: "Normalize and fit text to strict character limits using deterministic scripts (skip if UNLIMITED)."
+  default_prompt: |
+    Use this skill to normalize and fit text to numeric character limits.
+    Follow AGENTS.md, apex-guardrails, and capel-fit/SKILL.md.
+    Treat capel-fit/SKILL.md as the canonical behavior and output contract.

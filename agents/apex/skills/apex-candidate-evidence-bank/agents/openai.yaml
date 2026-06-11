@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Candidate Evidence Bank"
+  short_description: "Map job-history evidence to JD requirements and identify gaps with mitigation strategies."
+  default_prompt: |
+    Use this skill to map candidate evidence to JD core requirements.
+    Follow AGENTS.md, apex-guardrails, and apex-candidate-evidence-bank/SKILL.md.
+    Treat apex-candidate-evidence-bank/SKILL.md as the canonical behavior and output contract.

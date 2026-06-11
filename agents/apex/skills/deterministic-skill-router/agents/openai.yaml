@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diagnostics ▸ Deterministic Skill Router"
+  short_description: "Route requests to the correct ApexStrategist skill using the deterministic rule table."
+  default_prompt: |
+    Use this skill to route requests to the correct ApexStrategist skill.
+    Follow AGENTS.md, apex-guardrails, and deterministic-skill-router/SKILL.md.
+    Treat deterministic-skill-router/SKILL.md as the canonical behavior and output contract.

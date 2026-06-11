@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Admin Profile (Option 1)"
+  short_description: "Generate INSPIRA/UNICEF-style Admin Profile outputs (character-limited, paste-ready), using TARGET_SYSTEM limits."
+  default_prompt: |
+    Use this skill to generate Option 1 INSPIRA/UNICEF admin profile fields.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-admin-profile/SKILL.md.
+    Treat apex-generate-admin-profile/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,47 @@
+{
+  "items": [
+    {
+      "SiteNumber": "CX_2003",
+      "TotalJobsCount": 65,
+      "Offset": 0,
+      "Limit": 25,
+      "SortBy": "POSTING_DATES_DESC",
+      "requisitionList": [
+        {
+          "Id": "33897",
+          "Title": "NATIONAL POST: Individual Consultant- 8th Country Programme Mid-Term Review",
+          "PostedDate": "2026-05-19",
+          "PostingEndDate": "2026-05-27",
+          "PrimaryLocation": "Accra, Ghana",
+          "PrimaryLocationCountry": "GH",
+          "ShortDescriptionStr": "Duties and Responsibilities",
+          "secondaryLocations": []
+        }
+      ],
+      "flexFieldsFacet": [
+        {
+          "Name": "AttributeChar7",
+          "Label": "Grade",
+          "values": [
+            {
+              "Id": "{\"DV\":\"P4\",\"DD\":{\"atlasPosition\":\"null\"}}",
+              "Name": "P4",
+              "TotalCount": 2
+            }
+          ]
+        }
+      ],
+      "organizationsFacet": [
+        {
+          "Id": 300000348034595,
+          "Name": "United Nations Population Fund",
+          "TotalCount": 65
+        }
+      ]
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 200,
+  "offset": 0
+}

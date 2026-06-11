@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate Cover Letter (Option 3)"
+  short_description: "Draft a tailored cover letter (document format) using UVP + STAR evidence + gap mitigation; no field linting by default."
+  default_prompt: |
+    Use this skill to draft the Option 3 cover letter.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-cover-letter/SKILL.md.
+    Treat apex-generate-cover-letter/SKILL.md as the canonical behavior and output contract.

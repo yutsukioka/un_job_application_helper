@@ -1,0 +1,179 @@
+# Seed capability taxonomy from the attached Skills Catalog request and DOCX.
+# Keywords default to the slug words when not explicitly listed.
+tags:
+  donor_liaison: {}
+  governance_institutional_strengthening: {}
+  international_cooperation_partnerships: {}
+  representation: {}
+  database_development_administration: {}
+  digital_media: {}
+  enterprise_content_management: {}
+  erp_systems:
+    keywords: [erp, enterprise resource planning]
+  geographic_spatial_data_systems:
+    keywords: [gis, geographic information system, spatial data]
+  microsoft_office_applications: {}
+  network_design_administration: {}
+  programming_software_engineering:
+    keywords: [programming, software engineering, software development]
+  quality_security_risk_management: {}
+  web_development_administration: {}
+  camp_coordination_camp_management:
+    keywords: [camp coordination and camp management, camp coordination, camp management]
+  camp_management_site_planning:
+    keywords: [camp management site planning, site planning]
+  cash_based_programming:
+    keywords: [cash-based programming, cash based programming, cbp]
+  child_protection:
+    keywords: [child protection]
+  civil_military_coordination:
+    keywords: [civil-military coordination, civil military coordination]
+  cluster_coordination:
+    keywords: [cluster coordination]
+  community_stabilization:
+    keywords: [community stabilization]
+  disarmament_demobilization_reintegration:
+    keywords: [ddr, disarmament, demobilization, reintegration]
+  disaster_risk_reduction_preparedness:
+    keywords: [disaster risk reduction & preparedness, disaster risk reduction, preparedness]
+  displacement_tracking_dtm:
+    keywords: [dtm, displacement tracking matrix, displacement tracking]
+  early_recovery_disaster_conflict:
+    keywords: [early recovery from disaster, early recovery from conflict, early recovery disaster conflict]
+  election_assistance_enfranchisement:
+    keywords: [election assistance, enfranchisement]
+  environment_climate_change:
+    keywords: [environment and climate change, climate change, environment, environmental]
+  infrastructure_rehabilitation_reconstruction:
+    keywords: [infrastructure rehabilitation, infrastructure reconstruction]
+  livelihoods_assistance_income_generation:
+    keywords: [livelihoods assistance, income generation]
+  out_of_country_voting:
+    keywords: [out of country voting, ocv]
+  peacebuilding:
+    keywords: [peacebuilding, peace building]
+  political_transition_assistance:
+    keywords: [political transition assistance]
+  profiling_registration:
+    keywords: [profiling and registration, profiling, registration]
+  protection_of_migrants:
+    keywords: [protection of migrants]
+  reparations: {}
+  sanitation: {}
+  security_sector_reform:
+    keywords: [security sector reform, ssr]
+  sexual_gender_based_violence:
+    keywords: [sgbv, sexual and gender-based violence, gender based violence, sexual violence]
+  shelter: {}
+  transit_center:
+    keywords: [transit center, transit centre]
+  transitional_justice:
+    keywords: [transitional justice]
+  vulnerability_mapping: {}
+  water_infrastructure:
+    keywords: [water infrastructure]
+  unaccompanied_minors:
+    keywords: [unaccompanied minors]
+  fleet_management: {}
+  general_administration: {}
+  interpretation_translation:
+    keywords: [interpretation, translation, interpreter, translator]
+  library_services: {}
+  premises_management: {}
+  process_change_management: {}
+  reception_secretarial_support: {}
+  supervisory_skills: {}
+  human_rights: {}
+  international_migration_law: {}
+  land_rights_claims: {}
+  legal_affairs_contracts_administration: {}
+  legal_protection_policy: {}
+  multimedia_production: {}
+  photography: {}
+  social_media: {}
+  video_production: {}
+  writing_editing_for_media:
+    keywords: [writing, editing, media writing]
+  community_engagement: {}
+  digital_marketing: {}
+  communications_campaigns: {}
+  diaspora_engagement: {}
+  migration_development: {}
+  remittances: {}
+  environmental_health: {}
+  health_administration: {}
+  health_economics_financing: {}
+  health_informatics: {}
+  health_research_biostatistics:
+    keywords: [health research, biostatistics]
+  health_screening_assessments: {}
+  health_in_crisis_humanitarian_response: {}
+  immigration_medical_examinations: {}
+  infectious_diseases_tropical_medicine:
+    keywords: [infectious diseases, tropical medicine]
+  intensive_care_infection_prevention_control:
+    keywords: [intensive care, infection prevention, infection control]
+  laboratory_management: {}
+  mental_health_psychosocial_support:
+    keywords: [mental health, psychosocial support, mhpss]
+  nutrition: {}
+  public_community_health:
+    keywords: [public health, community health]
+  reproductive_health: {}
+  auditing:
+    keywords: [audit, auditing]
+  ethics: {}
+  internal_controls: {}
+  investigation:
+    keywords: [investigation, investigator]
+  assisted_voluntary_return_reintegration:
+    keywords: [assisted voluntary return, reintegration]
+  border_management: {}
+  capacity_building_training:
+    keywords: [capacity building, training]
+  counter_trafficking:
+    keywords: [counter trafficking, trafficking]
+  immigration_visa_support_services: {}
+  labor_migration: {}
+  migrant_training: {}
+  migration_policy_dialogue: {}
+  research_publications: {}
+  airline_charter_emergency_movement_operations: {}
+  computerized_travel_reservations_systems: {}
+  integrated_global_airline_ticket_order_record_igator:
+    keywords: [igator, airline ticket order record]
+  mimosa_application: {}
+  refugee_resettlement:
+    keywords: [refugee resettlement, resettlement]
+  repatriation: {}
+  usrap_resettlement_support_center:
+    keywords: [usrap, resettlement support center]
+  costing_travel_arrangements: {}
+  evaluation_review:
+    keywords: [evaluation, review]
+  monitoring_evaluation:
+    keywords: [monitoring and evaluation, monitoring & evaluation, m&e]
+  needs_assessments: {}
+  programme_development: {}
+  programme_management:
+    keywords: [programme management, program management]
+  project_financial_control: {}
+  project_reporting: {}
+  project_management: {}
+  accounting: {}
+  budgeting:
+    keywords: [budget, budgeting]
+  cash_bank_management: {}
+  finance_policy_direction: {}
+  human_resources:
+    keywords: [human resources, hr]
+  ipsas: {}
+  occupational_health: {}
+  security_staff_safety: {}
+  non_food_item_distribution:
+    keywords: [non-food item, nfi distribution]
+  procurement: {}
+  warehouse_stock_management:
+    keywords: [warehouse, stock management, inventory]
+  transport_freight_logistics_goods_materials:
+    keywords: [transport, freight, logistics, goods, materials]

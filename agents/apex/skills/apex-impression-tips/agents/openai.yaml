@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Impression Maximizer Tips"
+  short_description: "Offer tone/language recommendations and final review advice to make application materials stand out."
+  default_prompt: |
+    Use this skill to provide impression maximizer tone and review tips.
+    Follow AGENTS.md, apex-guardrails, and apex-impression-tips/SKILL.md.
+    Treat apex-impression-tips/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Application Audit"
+  short_description: "Panel-style post-generation audit: alignment matrix, framing diagnosis, vulnerabilities, verification checklist."
+  default_prompt: |
+    Use this skill to audit generated application documents from a panel-reviewer perspective.
+    Follow AGENTS.md, apex-guardrails, and apex-application-audit/SKILL.md.
+    Treat apex-application-audit/SKILL.md as the canonical behavior and output contract.

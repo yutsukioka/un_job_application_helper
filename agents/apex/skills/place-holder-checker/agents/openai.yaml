@@ -1,0 +1,7 @@
+interface:
+  display_name: "Utility ▸ Placeholder Checker"
+  short_description: "Scan generated outputs for unresolved placeholders and write a centralized 0x_place_holders.txt report."
+  default_prompt: |
+    Use this skill to scan generated outputs for unresolved placeholders.
+    Follow AGENTS.md, apex-guardrails, and place-holder-checker/SKILL.md.
+    Treat place-holder-checker/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Build Context Pack"
+  short_description: "Create/refresh private/inputs/application_context.md (job history, JD, requirements, questions, terms, taxonomy, and LIMITS incl. TARGET_SYSTEM)."
+  default_prompt: |
+    Use this skill to create or refresh private/inputs/application_context.md.
+    Follow AGENTS.md, apex-guardrails, and apex-build-context-pack/SKILL.md.
+    Treat apex-build-context-pack/SKILL.md as the canonical behavior and output contract.

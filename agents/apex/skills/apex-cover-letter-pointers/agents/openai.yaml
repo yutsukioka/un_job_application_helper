@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Cover Letter Pointers"
+  short_description: "2-3 strategic pointers: narrative theme, gap framing, and complementing CV/Admin Profile (not drafting)."
+  default_prompt: |
+    Use this skill to provide cover letter strategy pointers, not a full letter.
+    Follow AGENTS.md, apex-guardrails, and apex-cover-letter-pointers/SKILL.md.
+    Treat apex-cover-letter-pointers/SKILL.md as the canonical behavior and output contract.

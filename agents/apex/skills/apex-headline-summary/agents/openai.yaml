@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Headline / Summary"
+  short_description: "Generate a one-line role-targeted headline for the Admin Profile and CV summary seed."
+  default_prompt: |
+    Use this skill to generate the one-line Phase 2.1 headline.
+    Follow AGENTS.md, apex-guardrails, and apex-headline-summary/SKILL.md.
+    Treat apex-headline-summary/SKILL.md as the canonical behavior and output contract.

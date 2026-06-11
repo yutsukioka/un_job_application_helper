@@ -1,0 +1,189 @@
+# Runnable copy of the v2 multi-agent server manifest.
+#
+# Source of truth (design): agents/apex/topology/server_manifest.yaml
+# This file is the runtime mirror used by:
+#   - agents/apex/prompts/v2/*.prompt.md (PORT references)
+#   - any future orchestrator or scope verifier
+#
+# Path placeholder <position> = vacancy slug under
+#   private/output/generated_documents/history/<position>/
+
+version: 2
+
+defaults:
+  base_run_dir: private/tmp/agent_sync
+  base_output_dir: private/output/generated_documents/history/<position>
+
+servers:
+  - id: P0a
+    port: 9800
+    role: prep
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/classification_proposal.md
+      - <base_output_dir>/phase1_2_core_requirements.md
+      - <base_output_dir>/metric_ledger.md
+      - <base_output_dir>/_discussion/run_manifest.json
+    notes: >
+      Hand off to a HUMAN CONFIRMATION GATE on classification_proposal.md
+      before launching P0b.
+
+  - id: P0b
+    port: 9801
+    role: prep
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ccog_reference_resolved.md
+      - <base_output_dir>/_discussion/run_manifest.json
+
+  - id: S1
+    port: 9811
+    role: author_strategy
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/screening-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S1.md
+
+  - id: S2
+    port: 9812
+    role: author_strategy
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/technical-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S2.md
+
+  - id: S3
+    port: 9813
+    role: author_strategy
+    writer: ats-format-lead
+    advisors: [screening-lead, technical-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ats-format-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S3.md
+
+  - id: C1
+    port: 9820
+    role: consensus_strategy
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/round2_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+      - <base_output_dir>/_discussion/run_manifest.json
+
+  - id: D1
+    port: 9831
+    role: author_document
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/screening-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D1.md
+
+  - id: D2
+    port: 9832
+    role: author_document
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/technical-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D2.md
+
+  - id: D3
+    port: 9833
+    role: author_document
+    writer: ats-format-lead
+    advisors: [screening-lead, technical-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ats-format-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D3.md
+
+  - id: C2
+    port: 9840
+    role: consensus_document
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/option1_admin_profile.md
+      - <base_output_dir>/option2_cv.md
+      - <base_output_dir>/option3_cover_letter.md
+      - <base_output_dir>/option4_qualification_answers.md
+      - <base_output_dir>/option7_motivation_statement.md
+      - <base_output_dir>/_discussion/round4_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+      - <base_output_dir>/_discussion/run_manifest.json
+
+  - id: E1
+    port: 9851
+    role: independent_evaluation
+    writer: independent-panel-evaluator
+    advisors: []
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/independent_panel_evaluation.md
+    notes: >
+      Isolated self-evaluating session. Read only the JD benchmark,
+      metric ledger, and canonical Option outputs.
+
+  - id: E2
+    port: 9852
+    role: independent_evaluation
+    writer: independent-shortlisting-redteam
+    advisors: []
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/independent_shortlisting_risk_review.md
+    notes: >
+      Isolated self-evaluating session. Read only the JD benchmark,
+      metric ledger, and canonical Option outputs.
+
+  - id: R1
+    port: 9860
+    role: panel_response
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/panel_response.md
+      - <base_output_dir>/_discussion/advisor_notes_R1.md
+
+  - id: R2
+    port: 9861
+    role: remediation_consensus
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/remediation_plan.md
+      - <base_output_dir>/application_audit.md
+      - <base_output_dir>/_discussion/round5_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+
+concurrency:
+  max_writer_instances_per_agent: 1
+  advisors_may_be_concurrent: true
+  prep_serialization:
+    - "P0a -> [HUMAN_CONFIRMATION] -> P0b"
+  fold_serialization:
+    - "[P0a, P0b] -> [S1, S2, S3] -> C1 -> [USER_FEEDBACK_REVISION] -> [D1, D2, D3] -> C2 -> [E1, E2] -> R1 -> R2"
+
+pre_shutdown_checks:
+  - file_exists_and_nonempty: "<base_output_dir>/_discussion/advisor_notes_<server>.md"
+  - advisor_notes_substantive_per_advisor: true
+  - file_exists: "writer's primary draft output"
+  - test_result_caller_is: qa-auditor

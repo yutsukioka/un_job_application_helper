@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Functionality Tester"
+  short_description: "Check generated artifacts against SKILL.md format requirements."
+  default_prompt: |
+    Use this skill to validate generated artifacts against their source skill contracts.
+    Follow AGENTS.md, apex-guardrails, and agent-functionality-tester/SKILL.md.
+    Treat agent-functionality-tester/SKILL.md as the canonical behavior and output contract.

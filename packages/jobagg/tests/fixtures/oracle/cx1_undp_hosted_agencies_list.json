@@ -1,0 +1,82 @@
+{
+  "items": [
+    {
+      "SiteNumber": "CX_1",
+      "TotalJobsCount": 3,
+      "Offset": 0,
+      "Limit": 25,
+      "SortBy": "POSTING_DATES_DESC",
+      "requisitionList": [
+        {
+          "Id": "34287",
+          "Title": "Digital & AI Programme Analyst, IPSA8 ST - Office Based in Amman, Jordan",
+          "PostedDate": "2026-05-18",
+          "PostingEndDate": null,
+          "PrimaryLocation": "Amman, Jordan",
+          "PrimaryLocationCountry": "JO",
+          "ShortDescriptionStr": "Duties and Responsibilities",
+          "secondaryLocations": []
+        },
+        {
+          "Id": "33995",
+          "Title": "Human Resources Analyst [Open to Tier 2 applicants]",
+          "PostedDate": "2026-05-14",
+          "PostingEndDate": null,
+          "PrimaryLocation": "Bangkok, Thailand",
+          "PrimaryLocationCountry": "TH",
+          "ShortDescriptionStr": "Human resources support.",
+          "secondaryLocations": []
+        },
+        {
+          "Id": "34141",
+          "Title": "Deputy Chief, Volunteer Services Centre (VSC)-(Open to Tier 0 applicants only)",
+          "PostedDate": "2026-05-16",
+          "PostingEndDate": null,
+          "PrimaryLocation": "Bonn, Germany",
+          "PrimaryLocationCountry": "DE",
+          "ShortDescriptionStr": "Volunteer Services Centre role.",
+          "secondaryLocations": []
+        }
+      ],
+      "flexFieldsFacet": [
+        {
+          "Name": "AttributeChar4",
+          "Label": "Agency",
+          "values": [
+            {
+              "Id": "{\"DV\":\"UNDP\",\"DD\":{\"atlasPosition\":\"null\"}}",
+              "Name": "UNDP",
+              "TotalCount": 17
+            },
+            {
+              "Id": "{\"DV\":\"UNCDF\",\"DD\":{\"atlasPosition\":\"226517\"}}",
+              "Name": "UNCDF",
+              "TotalCount": 1
+            },
+            {
+              "Id": "{\"DV\":\"UN Volunteers\",\"DD\":{\"atlasPosition\":\"00157876\"}}",
+              "Name": "UN Volunteers",
+              "TotalCount": 1
+            }
+          ]
+        }
+      ],
+      "organizationsFacet": [
+        {
+          "Id": 300000002438696,
+          "Name": "United Nations Development Programme",
+          "TotalCount": 166
+        },
+        {
+          "Id": 300000002439637,
+          "Name": "United Nations Capital Development Fund",
+          "TotalCount": 1
+        }
+      ]
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "limit": 200,
+  "offset": 0
+}

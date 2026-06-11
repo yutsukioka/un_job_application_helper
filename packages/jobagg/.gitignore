@@ -1,0 +1,16 @@
+.DS_Store
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+__pycache__/
+*.pyc
+output/
+output_archive*/
+jobagg_bundles_*/
+tmp/
+*.sqlite3
+*.sqlite
+*.db
+*.har
+*.jsonl

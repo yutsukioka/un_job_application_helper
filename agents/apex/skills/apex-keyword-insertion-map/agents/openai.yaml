@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Keyword Insertion Map"
+  short_description: "Identify must-use phrases and specify where to place them across relevant Phase 8 outputs."
+  default_prompt: |
+    Use this skill to map 8-12 must-use phrases across relevant Phase 8 outputs.
+    Follow AGENTS.md, apex-guardrails, and apex-keyword-insertion-map/SKILL.md.
+    Treat apex-keyword-insertion-map/SKILL.md as the canonical behavior and output contract.

@@ -1,0 +1,27 @@
+Organization,Raw Grade Code,Normalized Grade Family,Normalized Seniority Tier,International / National / Local,Staff / Consultant / Contractor / Other,Approximate UN Equivalent,UN_System,UN_Min,UN_Max,Approximate Experience Range,Typical Role Scope,Supervisory Expectations,Notes / Caveats,Confidence Level,Evidence Type
+Asian Development Bank,AS1,AS,T1_ENTRY_SUPPORT,Local,Staff,G1–G2,UN_G,1,2,0–3,Administrative support,None,ADB admin ladder mapped to GS support,MED,refined mapping
+Asian Development Bank,AS2,AS,T1_ENTRY_SUPPORT,Local,Staff,G2–G3,UN_G,2,3,2–4,Senior assistant,None,ADB admin ladder mapped to GS support,MED,refined mapping
+Asian Development Bank,AS3,AS,T1_ENTRY_SUPPORT,Local,Staff,G3–G4,UN_G,3,4,3–5,Program/Team assistant,Limited coordination,ADB admin ladder mapped to GS support,HIGH,refined mapping
+Asian Development Bank,AS4,AS,T2_JUNIOR_PROFESSIONAL,Local,Staff,G4–G5,UN_G,4,5,4–6,Senior assistant/associate support,May coordinate tasks,HIGH,refined mapping
+Asian Development Bank,AS5,AS,T2_JUNIOR_PROFESSIONAL,Local,Staff,G5,UN_G,5,5,5–7,Senior administrative associate,May supervise junior support,HIGH,refined mapping
+Asian Development Bank,AS6,AS,T2_JUNIOR_PROFESSIONAL,Local,Staff,G6,UN_G,6,6,6–8,Senior associate / analyst support,May supervise support staff,HIGH,refined mapping
+Asian Development Bank,AS7,AS,T2_T3,Local,Staff,G6–G7,UN_G,6,7,7–10,Lead associate / quasi-analyst support,May supervise small team,HIGH,refined mapping
+
+Asian Development Bank,NS1,NS,T2_JUNIOR_PROFESSIONAL,National,Staff,NO-A–NO-B,UN_NO,1,2,2–5,Associate officer,None,HIGH,refined mapping
+Asian Development Bank,NS2,NS,T2_T3,National,Staff,NO-B,UN_NO,2,2,4–6,Junior officer,May coordinate partners,HIGH,refined mapping
+Asian Development Bank,NS3,NS,T3_MID_PROFESSIONAL,National,Staff,NO-C,UN_NO,3,3,5–8,Officer / specialist,May supervise junior staff,HIGH,refined mapping
+Asian Development Bank,NS4,NS,T3_MID_PROFESSIONAL,National,Staff,NO-C–NO-D,UN_NO,3,4,7–10,Senior officer / specialist,May supervise team,MED,refined mapping
+Asian Development Bank,NS5,NS,T3_T4,National,Staff,NO-C–NO-D,UN_NO,3,4,8–12,Lead national specialist,Supervisory likely,MED,refined mapping
+Asian Development Bank,NS6,NS,T4_SENIOR_PROFESSIONAL,National,Staff,NO-D–NO-E / P3,P4,4,5,10–15,Principal national specialist,Supervisory,LOW,dual mapping (NO/P overlap)
+Asian Development Bank,NS7,NS,T4_SENIOR_PROFESSIONAL,National,Staff,NO-E / P4,UN_NO,5,5,12–18,Senior principal national specialist / advisor,Supervisory,LOW,dual mapping (NO/P overlap)
+
+Asian Development Bank,IS1,IS,T1_ENTRY_SUPPORT,International,Staff,P1,UN_P,1,1,0–2,Junior international professional,None,HIGH,refined mapping
+Asian Development Bank,IS2,IS,T2_JUNIOR_PROFESSIONAL,International,Staff,P2,UN_P,2,2,2–5,Analyst / junior specialist,None,HIGH,refined mapping
+Asian Development Bank,IS3,IS,T3_MID_PROFESSIONAL,International,Staff,P3,UN_P,3,3,5–8,Professional / specialist,May supervise juniors,HIGH,refined mapping
+Asian Development Bank,IS4,IS,T3_MID_PROFESSIONAL,International,Staff,P3,UN_P,3,3,6–9,Experienced specialist,May supervise,HIGH,refined mapping
+Asian Development Bank,IS5,IS,T4_SENIOR_PROFESSIONAL,International,Staff,P4,UN_P,4,4,8–12,Senior specialist / lead,Supervisory,HIGH,refined mapping
+Asian Development Bank,IS6,IS,T4_SENIOR_PROFESSIONAL,International,Staff,P4–P5,UN_P,4,5,10–15,Principal specialist,Supervisory,MED,refined mapping
+Asian Development Bank,IS7,IS,T4_T5,International,Staff,D1,UN_D,6,6,12–18,Lead specialist / division-level advisor,Senior supervisory,HIGH,refined mapping
+Asian Development Bank,IS8,IS,T4_T5,International,Staff,D1,UN_D,6,6,14–20,Senior lead advisor / manager,Senior supervisory,HIGH,refined mapping
+Asian Development Bank,IS9,IS,T5_PRINCIPAL_MANAGER,International,Staff,D2,UN_D,7,7,15–20+,Director / senior manager,Institutional management,HIGH,refined mapping
+Asian Development Bank,IS10,IS,T5_EXECUTIVE,International,Staff,ASG–USG,UN_EXEC,8,9,20+,Executive leadership,Top-level management,MED,refined mapping

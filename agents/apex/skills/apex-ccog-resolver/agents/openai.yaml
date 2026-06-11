@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ CCOG Resolver"
+  short_description: "Resolve a JD-only, vacancy-specific CCOG subset and write ccog_reference_resolved.md."
+  default_prompt: |
+    Use this skill to resolve the JD-only CCOG register subset for a vacancy.
+    Follow AGENTS.md, apex-guardrails, and apex-ccog-resolver/SKILL.md.
+    Treat apex-ccog-resolver/SKILL.md as the canonical behavior and output contract.

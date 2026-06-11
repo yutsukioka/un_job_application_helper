@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Generate CV (Option 2)"
+  short_description: "Generate a full CV (document format; bullets allowed) aligned to JD + UVP; do not apply field linting."
+  default_prompt: |
+    Use this skill to draft the Option 2 updated CV.
+    Follow AGENTS.md, apex-guardrails, and apex-generate-cv/SKILL.md.
+    Treat apex-generate-cv/SKILL.md as the canonical behavior and output contract.

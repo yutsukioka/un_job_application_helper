@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ UVP Statement"
+  short_description: "Write a concise 1-2 sentence UVP aligned to JD needs, evidence, and UN-style language."
+  default_prompt: |
+    Use this skill to write the 1-2 sentence UVP statement.
+    Follow AGENTS.md, apex-guardrails, and apex-uvp-statement/SKILL.md.
+    Treat apex-uvp-statement/SKILL.md as the canonical behavior and output contract.

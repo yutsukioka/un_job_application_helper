@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ Progression & Metric Ledger"
+  short_description: "Detect same-organization promotion chains, classify safe metric roll-ups, and create reusable progression-aware fragments."
+  default_prompt: |
+    Use this skill to build progression-aware metric ledgers for same-organization role chains.
+    Follow AGENTS.md, apex-guardrails, and apex-progression-metric-ledger/SKILL.md.
+    Treat apex-progression-metric-ledger/SKILL.md as the canonical behavior and output contract.

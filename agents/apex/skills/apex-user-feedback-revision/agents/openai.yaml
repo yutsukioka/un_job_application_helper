@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apex ▸ User Feedback Revision (Phase 7.5)"
+  short_description: "Extract gaps and metrics-needed from the strategy report, then evaluate user edits/ad-hoc updates with a non-golden-record gate."
+  default_prompt: |
+    Use this skill to evaluate strategy-report gaps and user updates before regeneration.
+    Follow AGENTS.md, apex-guardrails, and apex-user-feedback-revision/SKILL.md.
+    Treat apex-user-feedback-revision/SKILL.md as the canonical behavior and output contract.
