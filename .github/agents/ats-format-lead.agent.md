@@ -71,7 +71,7 @@ candidate-facing documents without inventing evidence.
 # v2 multi-agent additions
 
 The sections below activate only when running in v2 ensemble mode
-(see `.agents/` design spec). In single-agent linear mode
+(see `docs/architecture/` design specs). In single-agent linear mode
 (default), they are inert.
 
 ## Context Scoping
@@ -135,15 +135,15 @@ Write scope on S3 (analogous on D3):
 ```yaml
 write_scope:
   allowed_paths:
-    - output/generated_documents/history/<position>/ats-format-lead/**
-    - output/generated_documents/history/<position>/_discussion/advisor_notes_S3.md
+    - private/output/generated_documents/history/<position>/ats-format-lead/**
+    - private/output/generated_documents/history/<position>/_discussion/advisor_notes_S3.md
   forbidden_paths:
-    - output/generated_documents/history/<position>/screening-lead/**
-    - output/generated_documents/history/<position>/technical-lead/**
-    - output/generated_documents/history/<position>/phase1_7_strategy_report.md
-    - output/generated_documents/history/<position>/option*.md
-    - output/generated_documents/history/<position>/_discussion/round*_consensus.md
-    - output/generated_documents/history/<position>/_discussion/disagreement_log.md
+    - private/output/generated_documents/history/<position>/screening-lead/**
+    - private/output/generated_documents/history/<position>/technical-lead/**
+    - private/output/generated_documents/history/<position>/phase1_7_strategy_report.md
+    - private/output/generated_documents/history/<position>/option*.md
+    - private/output/generated_documents/history/<position>/_discussion/round*_consensus.md
+    - private/output/generated_documents/history/<position>/_discussion/disagreement_log.md
 ```
 
 As writer, before resuming work in any IMPLEMENT pass after pass 1,

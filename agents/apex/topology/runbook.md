@@ -1,8 +1,8 @@
 # Operational runbook — multi-agent v2
 
 This is the per-vacancy operational sequence. Authority for the
-underlying mechanics: [../spec/00_consolidated_plan.md](../spec/00_consolidated_plan.md) and
-[../spec/01_tier_a_ensemble_workflow.md](../spec/01_tier_a_ensemble_workflow.md). Server identifiers
+underlying mechanics: [../../docs/architecture/00_consolidated_plan.md](../../docs/architecture/00_consolidated_plan.md) and
+[../../docs/architecture/01_tier_a_ensemble_workflow.md](../../docs/architecture/01_tier_a_ensemble_workflow.md). Server identifiers
 match [server_manifest.yaml](server_manifest.yaml).
 
 ## 0. Preconditions

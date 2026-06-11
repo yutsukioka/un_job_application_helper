@@ -75,7 +75,7 @@ Your discuss note must:
 # v2 multi-agent additions
 
 The sections below activate only when running in v2 ensemble mode
-(see `.agents/` design spec). In single-agent linear mode
+(see `docs/architecture/` design specs). In single-agent linear mode
 (default), they are inert. In v2, this agent plays two distinct
 runtime roles depending on which server it is co-resident on.
 
@@ -123,7 +123,7 @@ Before any author server shuts down, verify:
 - `_discussion/advisor_notes_<server>.md` exists and is non-empty.
 - `_discussion/advisor_notes_<server>.md` contains at least one substantive
   technical observation, issue, or suggestion per advisor. Use
-  `.agents/scripts/validate_advisor_notes.py` with the server's advisor list;
+  `agents/apex/scripts/validate_advisor_notes.py` with the server's advisor list;
   do not accept a notes file made only of "no blocker / ready" confirmations.
 - The writer's draft file exists in its draft subfolder.
 - No `test-result PASS` was sent by anyone other than `qa-auditor`.
@@ -135,13 +135,13 @@ If any check fails, do not shut down. Re-open the round or escalate.
 ```yaml
 write_scope:
   allowed_paths:
-    - output/generated_documents/history/<position>/_discussion/advisor_notes_S1.md
+    - private/output/generated_documents/history/<position>/_discussion/advisor_notes_S1.md
   forbidden_paths:
-    - output/generated_documents/history/<position>/screening-lead/**
-    - output/generated_documents/history/<position>/technical-lead/**
-    - output/generated_documents/history/<position>/ats-format-lead/**
-    - output/generated_documents/history/<position>/phase1_7_strategy_report.md
-    - output/generated_documents/history/<position>/option*.md
+    - private/output/generated_documents/history/<position>/screening-lead/**
+    - private/output/generated_documents/history/<position>/technical-lead/**
+    - private/output/generated_documents/history/<position>/ats-format-lead/**
+    - private/output/generated_documents/history/<position>/phase1_7_strategy_report.md
+    - private/output/generated_documents/history/<position>/option*.md
   # Prompt-level convention:
   allowed_phase_actions: [test-result, "discuss-done --next-impl"]
 ```
@@ -154,7 +154,7 @@ When designated writer on C1 or C2:
   `ats-format-lead/`).
 - Read the corresponding `_discussion/advisor_notes_*.md` files.
 - Merge per the per-section default-lead table
-  (`.agents/prompts/v2/templates/per_section_default_leads.md`).
+  (`agents/apex/prompts/v2/templates/per_section_default_leads.md`).
 - Log unresolved disagreements to `_discussion/disagreement_log.md`.
 - Write the canonical flat-path output(s).
 
@@ -173,18 +173,18 @@ Verify:
 ```yaml
 write_scope:
   allowed_paths:
-    - output/generated_documents/history/<position>/phase1_7_strategy_report.md
-    - output/generated_documents/history/<position>/_discussion/round2_consensus.md
-    - output/generated_documents/history/<position>/_discussion/disagreement_log.md
+    - private/output/generated_documents/history/<position>/phase1_7_strategy_report.md
+    - private/output/generated_documents/history/<position>/_discussion/round2_consensus.md
+    - private/output/generated_documents/history/<position>/_discussion/disagreement_log.md
   forbidden_paths:
-    - output/generated_documents/history/<position>/screening-lead/**
-    - output/generated_documents/history/<position>/technical-lead/**
-    - output/generated_documents/history/<position>/ats-format-lead/**
-    - output/generated_documents/history/<position>/classification_proposal.md
-    - output/generated_documents/history/<position>/phase1_2_core_requirements.md
-    - output/generated_documents/history/<position>/metric_ledger.md
-    - output/generated_documents/history/<position>/ccog_reference_resolved.md
-    - output/generated_documents/history/<position>/option*.md
+    - private/output/generated_documents/history/<position>/screening-lead/**
+    - private/output/generated_documents/history/<position>/technical-lead/**
+    - private/output/generated_documents/history/<position>/ats-format-lead/**
+    - private/output/generated_documents/history/<position>/classification_proposal.md
+    - private/output/generated_documents/history/<position>/phase1_2_core_requirements.md
+    - private/output/generated_documents/history/<position>/metric_ledger.md
+    - private/output/generated_documents/history/<position>/ccog_reference_resolved.md
+    - private/output/generated_documents/history/<position>/option*.md
 ```
 
 ### Write scope on C2
@@ -192,17 +192,17 @@ write_scope:
 ```yaml
 write_scope:
   allowed_paths:
-    - output/generated_documents/history/<position>/option1_admin_profile.md
-    - output/generated_documents/history/<position>/option2_cv.md
-    - output/generated_documents/history/<position>/option3_cover_letter.md
-    - output/generated_documents/history/<position>/option4_qualification_answers.md
-    - output/generated_documents/history/<position>/option7_motivation_statement.md
-    - output/generated_documents/history/<position>/_discussion/round4_consensus.md
-    - output/generated_documents/history/<position>/_discussion/disagreement_log.md
+    - private/output/generated_documents/history/<position>/option1_admin_profile.md
+    - private/output/generated_documents/history/<position>/option2_cv.md
+    - private/output/generated_documents/history/<position>/option3_cover_letter.md
+    - private/output/generated_documents/history/<position>/option4_qualification_answers.md
+    - private/output/generated_documents/history/<position>/option7_motivation_statement.md
+    - private/output/generated_documents/history/<position>/_discussion/round4_consensus.md
+    - private/output/generated_documents/history/<position>/_discussion/disagreement_log.md
   forbidden_paths:
-    - output/generated_documents/history/<position>/screening-lead/**
-    - output/generated_documents/history/<position>/technical-lead/**
-    - output/generated_documents/history/<position>/ats-format-lead/**
+    - private/output/generated_documents/history/<position>/screening-lead/**
+    - private/output/generated_documents/history/<position>/technical-lead/**
+    - private/output/generated_documents/history/<position>/ats-format-lead/**
 ```
 
 ## Role disambiguation rule

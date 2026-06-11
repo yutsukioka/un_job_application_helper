@@ -47,8 +47,8 @@ analysis gets a fresh resolution tailored to the specific JD.
 
 | Input | Source | Required |
 |-------|--------|----------|
-| `JOB_DESCRIPTION_TEXT` | `application_context.md` | YES |
-| `JOB_REQUIREMENT_TEXT` | `application_context.md` | YES |
+| `JOB_DESCRIPTION_TEXT` | `private/inputs/application_context.md` | YES |
+| `JOB_REQUIREMENT_TEXT` | `private/inputs/application_context.md` | YES |
 | `VACANCY_TYPE_CLASSIFICATION` | Output of `apex-jd-core-requirements` (user-confirmed) | YES |
 
 ## Preconditions

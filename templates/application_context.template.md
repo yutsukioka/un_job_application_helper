@@ -38,7 +38,7 @@ WORD_TARGET: 300
 AGENT_MODE: single
 
 # v2 multi-agent ensemble configuration. Empty lists = single-agent linear mode (default).
-# Authority: agents/apex/spec/01_tier_a_ensemble_workflow.md §A2.
+# Authority: docs/architecture/01_tier_a_ensemble_workflow.md §A2.
 #
 # One name = that name is writer; remaining authoring agents participate as advisors on each server.
 # Two or three names = ensemble fold launched per phase.
@@ -50,7 +50,7 @@ JD_COVERAGE_FLOOR:  0.70                                                  # E2; 
 
 ## BUDGETS
 # v2 operational safety budgets. Read at Phase 0 by apex-orchestrator-report.
-# Authority: agents/apex/spec/07_tier_g_safety_budgets.md.
+# Authority: docs/architecture/07_tier_g_safety_budgets.md.
 # Counter file convention: private/tmp/_budget_<server>.json
 MAX_ROUND_TOOL_CALLS: 40            # per IMPLEMENT round, per writer
 MAX_ROUND_TOKENS:     120000        # approximate, per round, per writer

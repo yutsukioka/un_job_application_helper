@@ -2,7 +2,7 @@
 
 This block is designed to be quoted verbatim in C1 / C2 consensus
 prompts. Any consensus round must obey the leads below; overrides
-require evidence cites (see [`agents/apex/spec/02_tier_b_personas.md` §B1](../../../spec/02_tier_b_personas.md)).
+require evidence cites (see [`docs/architecture/02_tier_b_personas.md` §B1](../../../../docs/architecture/02_tier_b_personas.md)).
 
 ```
 PER-SECTION DEFAULT LEADS

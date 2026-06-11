@@ -40,13 +40,13 @@ remediation step.
 
 ## Input rule
 Use only the sanitized independent evaluation benchmark:
-- `output/generated_documents/history/<JOB_SLUG>/_discussion/independent_eval_input.md`
+- `private/output/generated_documents/history/<JOB_SLUG>/_discussion/independent_eval_input.md`
 
 That file may contain only:
 - `## JOB_DESCRIPTION_TEXT`
 - `## JOB_QUALIFICATION_QUESTIONS` when TARGET_SYSTEM is INSPIRA and questions exist
 
-Do not read the full `inputs/application_context.md`, candidate history,
+Do not read the full `private/inputs/application_context.md`, candidate history,
 metric ledgers, strategy reports, advisor notes, panel responses, or
 remediation files. Evaluate the generated candidate-facing outputs against
 the sanitized benchmark only.
