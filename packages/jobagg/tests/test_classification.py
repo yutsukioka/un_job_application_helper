@@ -1,11 +1,12 @@
 import sqlite3
-from pathlib import Path
 
 import pytest
 
 import jobagg.classification.pipeline as classification_pipeline
 from jobagg.classification import classify_database
+from jobagg.classification.classifiers import ccog as ccog_classifier
 from jobagg.classification.classifiers.ccog import (
+    _full_markdown_path,
     _keyword_score,
     ccog_tree,
     collapse_ccog_to_medium,
@@ -2035,9 +2036,11 @@ def test_unrwa_grade_17_from_inspira_description_standardizes_as_local_grade(tmp
 
 
 def test_ccog_resource_tree_contains_runtime_subset():
+    full_resource_path = _full_markdown_path()
     tree = {entry["code"]: entry for entry in ccog_tree()}
 
-    assert len(tree) >= 221
+    expected_count = 221 if full_resource_path is not None else 19
+    assert len(tree) >= expected_count
     assert {
         "1.A.01",
         "1.A.05",
@@ -2052,15 +2055,28 @@ def test_ccog_resource_tree_contains_runtime_subset():
     assert tree["1.A.01"]["family_label"] == "Administrative specialists"
 
 
+def test_ccog_resource_tree_without_private_reference_uses_tracked_subset(monkeypatch):
+    ccog_classifier._ccog_entries.cache_clear()
+    monkeypatch.setattr(ccog_classifier, "_full_markdown_path", lambda: None)
+    try:
+        tree = {entry["code"]: entry for entry in ccog_classifier.ccog_tree()}
+        assert len(tree) == 19
+        assert {
+            "1.A.01",
+            "1.A.05",
+            "1.A.09.a",
+            "1.L.09",
+            "2.1.02.a",
+            "2.2.06",
+        } <= set(tree)
+        assert tree["1.A.01"]["label"] == "Financial management specialists"
+    finally:
+        ccog_classifier._ccog_entries.cache_clear()
+
+
 def test_ccog_full_markdown_ocr_repairs_are_present():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "skills"
-        / "apex-ccog-resolver"
-        / "resource"
-        / "ccog_reference_full.md"
-    )
-    if not path.is_file():
+    path = _full_markdown_path()
+    if path is None or not path.is_file():
         pytest.skip("full CCOG markdown resource is local/ignored")
     text = path.read_text(encoding="utf-8")
 
