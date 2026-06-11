@@ -26,7 +26,7 @@ def main() -> int:
     Path(args.logfile).parent.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env["AGENTS_LIST"] = argsagents/apex
+    env["AGENTS_LIST"] = args.agents
 
     log = open(args.logfile, "ab", buffering=0)
     proc = subprocess.Popen(

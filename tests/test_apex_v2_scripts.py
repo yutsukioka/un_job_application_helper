@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import py_compile
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "agents" / "apex" / "scripts"
+AGENT_SYNC = ROOT / "agents" / "apex" / "agent_sync"
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -18,6 +22,16 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def test_agent_sync_launcher_python_files_compile() -> None:
+    py_compile.compile(str(SCRIPTS / "start_agent_sync_server.py"), doraise=True)
+
+    if not AGENT_SYNC.exists():
+        pytest.skip("agent_sync runtime is local/ignored and not present")
+
+    for path in ("server_v6.py", "client_v6.py"):
+        py_compile.compile(str(AGENT_SYNC / path), doraise=True)
 
 
 def test_validate_advisor_notes_accepts_substantive_reviews(tmp_path: Path) -> None:
