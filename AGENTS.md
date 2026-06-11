@@ -144,8 +144,8 @@ Do NOT lint CV or cover letter unless the user explicitly asks.
 ## Skills
 
 - `apex-build-context-pack`: Build or refresh `private/inputs/application_context.md` with all raw application inputs.
-- `term_extractor`: Extract exactly five high-priority terms from a job description with star ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in a strict four-line format.
-- `apex-jd-keyword-bank`: Extract a larger 20-40 phrase keyword bank from the JD (optional; complements `term_extractor`).
+- `term-extractor`: Extract exactly five high-priority terms from a job description with star ratings, ATS synonyms, JD-grounded rationale, and resume-ready examples in a strict four-line format.
+- `apex-jd-keyword-bank`: Extract a larger 20-40 phrase keyword bank from the JD (optional; complements `term-extractor`).
 - `apex-ccog-resolver`: Dynamically resolve relevant CCOG entries from the full ICSC database for a specific vacancy. Reads the full database, scores entries against JD signals and the user-confirmed vacancy-type classification only, selects a compact 10-20 entry subset, and clears the full database from context.
 
 - `apex-jd-core-requirements`: Extract the top 5-7 core requirements (and any knockout criteria) from the job description and requirement text.
