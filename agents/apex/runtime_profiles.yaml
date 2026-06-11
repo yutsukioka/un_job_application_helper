@@ -1,0 +1,19 @@
+default: single
+
+profiles:
+  single:
+    agent_mode: single
+    prompt: agents/apex/prompts/apex-single.prompt.md
+    description: Low-cost single-agent document generation mode.
+
+  ensemble_v2:
+    agent_mode: ensemble_v2
+    manifest: agents/apex/topology/server_manifest.yaml
+    launcher: agents/apex/scripts/launch_v2_servers.sh
+    prompt_dir: agents/apex/prompts/v2
+    description: Optional multi-agent mode for higher-budget runs.
+
+  auto_budget:
+    agent_mode: auto_budget
+    default_fallback: single
+    description: Reserved for future budget-aware runtime selection.

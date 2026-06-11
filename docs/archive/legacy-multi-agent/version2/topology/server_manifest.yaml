@@ -1,0 +1,195 @@
+# Server manifest for the v2 multi-agent topology.
+#
+# Authority: spec/00_consolidated_plan.md §A1 and spec/01_tier_a_ensemble_workflow.md.
+# This file is consumed by:
+#   - scripts/check_scope.py (file-write authorization)
+#   - any future orchestrator that launches servers (not implemented in v2 spec)
+#
+# All ports and run_dirs are defaults; users can override via the
+# optional ## ENSEMBLE_TOPOLOGY block in application_context.md.
+#
+# Path placeholder <position> = vacancy-specific slug under
+#   output/generated_documents/history/<position>/
+
+version: 2
+
+defaults:
+  base_run_dir: tmp/agent_sync
+  base_output_dir: output/generated_documents/history/<position>
+
+servers:
+
+  # =================================================================
+  # Prep stage 1: classification + requirements + ledger
+  # =================================================================
+  - id: P0a
+    port: 9800
+    run_dir: tmp/agent_sync/p0a
+    role: prep
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/classification_proposal.md
+      - <base_output_dir>/phase1_2_core_requirements.md
+      - <base_output_dir>/metric_ledger.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths: []
+    notes: >
+      Hand off to a HUMAN CONFIRMATION GATE on classification_proposal.md
+      before launching P0b.
+
+  # =================================================================
+  # Prep stage 2: CCOG resolved subset (post-human-confirmation)
+  # =================================================================
+  - id: P0b
+    port: 9801
+    run_dir: tmp/agent_sync/p0b
+    role: prep
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ccog_reference_resolved.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths: []
+
+  # =================================================================
+  # Strategy fold: S1, S2, S3 (concurrent)
+  # =================================================================
+  - id: S1
+    port: 9811
+    run_dir: tmp/agent_sync/s1
+    role: author_strategy
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/screening-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S1.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_S1.md
+
+  - id: S2
+    port: 9812
+    run_dir: tmp/agent_sync/s2
+    role: author_strategy
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/technical-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S2.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_S2.md
+
+  - id: S3
+    port: 9813
+    run_dir: tmp/agent_sync/s3
+    role: author_strategy
+    writer: ats-format-lead
+    advisors: [screening-lead, technical-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ats-format-lead/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/advisor_notes_S3.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_S3.md
+
+  # =================================================================
+  # Strategy consensus: C1
+  # =================================================================
+  - id: C1
+    port: 9820
+    run_dir: tmp/agent_sync/c1
+    role: consensus_strategy
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null     # writer is qa-auditor; no separate tester
+    writer_allowed_paths:
+      - <base_output_dir>/phase1_7_strategy_report.md
+      - <base_output_dir>/_discussion/round2_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+    advisor_allowed_paths: []
+
+  # =================================================================
+  # Document fold: D1, D2, D3 (concurrent)
+  # =================================================================
+  - id: D1
+    port: 9831
+    run_dir: tmp/agent_sync/d1
+    role: author_document
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/screening-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D1.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_D1.md
+
+  - id: D2
+    port: 9832
+    run_dir: tmp/agent_sync/d2
+    role: author_document
+    writer: technical-lead
+    advisors: [screening-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/technical-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D2.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_D2.md
+
+  - id: D3
+    port: 9833
+    run_dir: tmp/agent_sync/d3
+    role: author_document
+    writer: ats-format-lead
+    advisors: [screening-lead, technical-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/ats-format-lead/option*.md
+      - <base_output_dir>/_discussion/advisor_notes_D3.md
+    advisor_allowed_paths: []
+    canonical_tester_allowed_paths:
+      - <base_output_dir>/_discussion/advisor_notes_D3.md
+
+  # =================================================================
+  # Document consensus: C2
+  # =================================================================
+  - id: C2
+    port: 9840
+    run_dir: tmp/agent_sync/c2
+    role: consensus_document
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/option1_admin_profile.md
+      - <base_output_dir>/option2_cv.md
+      - <base_output_dir>/option3_cover_letter.md
+      - <base_output_dir>/option4_qualification_answers.md
+      - <base_output_dir>/_discussion/round4_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+    advisor_allowed_paths: []
+
+# Concurrency rules
+concurrency:
+  max_writer_instances_per_agent: 1     # an agent name may be writer on at most one live server at a time
+  advisors_may_be_concurrent: true      # advisor co-residency across servers is fine (advisors do not write)
+  prep_serialization:
+    - "P0a -> [HUMAN_CONFIRMATION] -> P0b"
+  fold_serialization:
+    - "[P0a, P0b] -> [S1, S2, S3] -> C1 -> [USER_FEEDBACK_REVISION] -> [D1, D2, D3] -> C2 -> [E1, E2]"
+
+# Pre-shutdown checks (per author server)
+pre_shutdown_checks:
+  - file_exists_and_nonempty: "<base_output_dir>/_discussion/advisor_notes_<server>.md"
+  - file_exists: "writer's primary draft output"
+  - test_result_caller_is: qa-auditor

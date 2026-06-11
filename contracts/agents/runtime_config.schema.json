@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/un-job-application-helper/runtime_config.schema.json",
+  "title": "Apex Runtime Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_mode"],
+  "properties": {
+    "agent_mode": {
+      "type": "string",
+      "enum": ["single", "ensemble_v2", "auto_budget"],
+      "default": "single",
+      "description": "Document generation runtime. single is the default low-cost mode."
+    },
+    "cost_limit_usd": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Optional user or app budget ceiling for one assistant run."
+    },
+    "phase_1_7_agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["screening-lead", "technical-lead", "ats-format-lead"]
+      },
+      "default": []
+    },
+    "phase_8_agents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["screening-lead", "technical-lead", "ats-format-lead"]
+      },
+      "default": []
+    },
+    "llm_provider_config_id": {
+      "type": ["string", "null"],
+      "description": "Reference to a user-keychain, app-metered, or local LLM provider config."
+    }
+  }
+}

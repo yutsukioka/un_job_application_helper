@@ -1,21 +1,59 @@
+# === Local/private data: never commit ===
+private/
+
+# Legacy locations kept ignored in case older scripts recreate them.
 inputs/
 output/
 tmp/
-.DS_Store
-**/.DS_Store
+logs/
+bak/
+.agents/
+
+# === Secrets and local configuration ===
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.mobileprovision
+*.xcuserstate
+
+# === Python/cache/build artifacts ===
 .venv/
+**/.venv/
 __pycache__/
 **/__pycache__/
-*.pyc
-bak_*
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# === Job aggregation generated data ===
+packages/jobagg/output/
+packages/jobagg/output_archive*/
+packages/jobagg/jobagg_bundles_*/
+packages/jobagg/tmp/
+*.sqlite3
+*.sqlite
+*.db
+*.har
+*.jsonl
+
+# === Apex generated/protected artifacts ===
+agents/apex/logs/
+agents/apex/agent_sync/
+agents/apex/skills/apex-ccog-resolver/resource/
+agents/apex/prompts/Run ApexStrategist v2 full ensemble run .prompt.md
 apex_skills_dump.txt
 proposed_changes.md
-skills/apex-ccog-resolver/resource/
-skills/apex-ccog-resolver/resource/CCOG_9_2015.pdf
-skills/apex-ccog-resolver/resource/ccog_reference_full.md
-# === Multi-agent log files ===
-logs/
 
-.bak
-agent_sync/
-prompts/Run ApexStrategist v2 full ensemble run .prompt.md
+# === macOS / IDE ===
+.DS_Store
+**/.DS_Store
+.vscode/
+*.code-workspace
