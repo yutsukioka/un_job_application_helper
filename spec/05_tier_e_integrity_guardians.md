@@ -38,9 +38,15 @@ entry, the guardian:
    - the generator rewrites the line using a ledger-approved phrasing, or
    - the user adds a new ledger entry (only via P0a re-run, not in-place).
 
-## E2. JD-coverage hard floor
+## E2. JD coverage controls
 
-### Calculation
+The workflow uses three complementary checks. E2a is deterministic phrase
+coverage at C2; E2b and E2c are deeper semantic checks at R2 after independent
+evaluation and panel-response artifacts exist.
+
+### E2a. Phrase coverage hard floor
+
+#### Calculation
 
 ```
 jd_coverage_score =
@@ -53,7 +59,7 @@ jd_coverage_score =
 Optionally extended to include `JD_KEYWORD_BANK` Tier-1 phrases with
 configurable weight.
 
-### Floor
+#### Floor
 
 - Default: `0.70` (70% of 5★ terms must appear).
 - Configurable per vacancy via `## RUN_MODE` extension:
@@ -63,7 +69,7 @@ configurable weight.
 JD_COVERAGE_FLOOR: 0.70
 ```
 
-### Enforcement
+#### Enforcement
 
 - Calculated by `qa-auditor` on consensus server C2 after merging.
 - If `jd_coverage_score < floor`, `qa-auditor`'s test-result is FAIL
@@ -72,8 +78,24 @@ JD_COVERAGE_FLOOR: 0.70
 - If still below floor after the bounded loop, finalization is
   **blocked** and the missing terms are surfaced to the user.
 
-### Why this is the only place numeric scoring is well-defined
+### E2b. Requirement-by-requirement coverage matrix
+
+At R2, `qa-auditor` maps each core JD requirement from
+`phase1_2_core_requirements.md` across the canonical Admin Profile, CV, Cover
+Letter, Qualification Answers, and Motivation Statement if present. Each
+requirement is marked `HIGH`, `MEDIUM`, `LOW`, or `GAP`; any `GAP` requires a
+remediation-plan entry.
+
+### E2c. Unsupported-claim scan
+
+At R2, `qa-auditor` checks factual claims in canonical outputs against
+`inputs/application_context.md` and `metric_ledger.md`. Claims with no support
+are flagged as `UNSUPPORTED`; claims that conflict with metric lineage are
+flagged as `CONTRADICTORY`.
+
+### Why only E2a uses numeric scoring
 
 Keyword presence is a Boolean fact, not an aesthetic judgment. Replacing
 subjective "keyword integrity" guidance with a numeric floor is the one
-place numeric scoring genuinely works.
+place numeric scoring genuinely works. E2b and E2c are structured semantic
+checks, not numeric score forecasts.

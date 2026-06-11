@@ -32,11 +32,14 @@ Common paths:
 
 Write scope on P0b (HARD):
 - <OUTDIR>/ccog_reference_resolved.md
+- <OUTDIR>/_discussion/run_manifest.json
 
 Round plan on P0b:
 1. IMPLEMENT pass 1:
    - Run `apex-ccog-resolver` against the confirmed classification.
    - Write `ccog_reference_resolved.md` (compact 10-20 entry subset).
+   - Record the invocation:
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-ccog-resolver --server P0b --artifact ccog_reference_resolved.md
    - Call `impl-done` (advances IMPLEMENT -> TEST):
      python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST / DISCUSS / loop pattern: standard pattern. DISCUSS: submit one structured `discuss`, then call `discuss-done` WITHOUT `--next-impl` so the barrier advances. (same as P0a) but for this single artifact.

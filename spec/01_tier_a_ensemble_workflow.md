@@ -51,8 +51,11 @@ to close the round.
   WRITER or qa-auditor calls get-discussion, appends to
     _discussion/advisor_notes_<server>.md.
   Non-qa agents: discuss-done WITHOUT --next-impl.
-  qa-auditor: discuss-done --next-impl <writer-name> to loop, OR
-              discuss-done --next-impl <shutdown-marker> to end.
+  qa-auditor: To loop, use discuss-done --next-impl <writer-name>.
+              To end, call discuss-done without --next-impl, then call the
+              separate shutdown --reason "<server> complete" command.
+              Never use discuss-done --next-impl shutdown or any shutdown
+              marker wording.
 
 [ Loop bounded by MAX_REVISION_PASSES ]
   Default 1. Cross-pollination reaches the writer in the NEXT IMPLEMENT

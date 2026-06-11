@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import statistics
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -28,6 +29,60 @@ HEADER_RE = re.compile(r"^(?P<code>.+?)\s+[—-]\s+(?P<title>.+?)\s*$")
 # Match both **Label:** value (colon inside bold) and **Label**: value (colon outside)
 FIELD_RE = re.compile(r"^\*\*(?P<label>[^*:]+):?\*\*:?\s*(?P<value>.+?)\s*$")
 WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9./-]*")
+
+GENERIC_MATCH_TERMS = {
+    "administer",
+    "advise",
+    "apply",
+    "assist",
+    "coordinate",
+    "develop",
+    "development",
+    "ensure",
+    "establish",
+    "implement",
+    "manage",
+    "management",
+    "monitor",
+    "organize",
+    "perform",
+    "plan",
+    "prepare",
+    "provide",
+    "review",
+    "service",
+    "services",
+    "support",
+    "system",
+    "systems",
+    "work",
+}
+
+TITLE_STOPWORDS = GENERIC_MATCH_TERMS | {
+    "and",
+    "assistant",
+    "associate",
+    "chief",
+    "for",
+    "head",
+    "international",
+    "junior",
+    "lead",
+    "national",
+    "of",
+    "officer",
+    "senior",
+    "specialist",
+    "the",
+}
+
+TITLE_SYNONYMS: Dict[str, Sequence[str]] = {
+    "analytics": ("analysis", "statistics", "information"),
+    "data": ("database", "databases", "information", "statistics", "analytics"),
+    "management": ("knowledge", "information", "records", "documentation"),
+    "monitoring": ("evaluation", "statistics", "analysis"),
+    "reporting": ("reports", "documentation", "information", "statistics"),
+}
 
 VACANCY_TYPE_HINTS: Dict[str, Sequence[str]] = {
     "SECRETARIAT": ("1.A.02.e", "1.A.10.b", "1.L.03.a"),
@@ -66,13 +121,16 @@ class CCOGEntry:
 @dataclass
 class ScoredEntry:
     entry: CCOGEntry
-    verb_overlap: int
-    scope_overlap: int
-    title_bonus: int
+    verb_overlap: float
+    scope_overlap: float
+    title_bonus: float
     vacancy_type_bonus: int
-    total_score: int
+    title_mismatch_penalty: float
+    domain_gate_penalty: float
+    total_score: float
     matched_verbs: List[str]
     matched_scope: List[str]
+    title_overlap_tokens: List[str]
 
 
 def normalize(text: str) -> str:
@@ -85,6 +143,21 @@ def normalize(text: str) -> str:
 
 def tokenize(text: str) -> set[str]:
     return {w.lower() for w in WORD_RE.findall(text or "")}
+
+
+def significant_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in tokenize(text)
+        if len(token) >= 3 and token not in TITLE_STOPWORDS and not token.isdigit()
+    }
+
+
+def expand_title_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in list(tokens):
+        expanded.update(TITLE_SYNONYMS.get(token, ()))
+    return expanded
 
 
 def split_list_field(value: str) -> List[str]:
@@ -111,6 +184,28 @@ def extract_section(markdown: str, heading: str) -> str:
     return text.strip()
 
 
+def extract_vacancy_title(jd_text: str) -> Optional[str]:
+    patterns = (
+        r"(?im)^\|\s*Job Title\s*\|\s*(?P<title>[^|]+?)\s*\|",
+        r"(?im)^\s*Job Title\s*[:|-]\s*(?P<title>.+?)\s*$",
+        r"(?im)^\s*Post Title\s*[:|-]\s*(?P<title>.+?)\s*$",
+        r"(?im)^\s*Position\s*[:|-]\s*(?P<title>.+?)\s*$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, jd_text)
+        if match:
+            title = match.group("title").strip()
+            if title:
+                return title
+    for line in jd_text.splitlines():
+        line = line.strip().strip("|").strip()
+        if not line or line.lower().startswith(("job opening", "department", "org.", "posting")):
+            continue
+        if 3 <= len(line.split()) <= 12:
+            return line
+    return None
+
+
 def parse_context_pack(path: Path) -> Tuple[str, str, Optional[str], Optional[str]]:
     raw = path.read_text(encoding="utf-8")
     jd = extract_section(raw, "JOB_DESCRIPTION_TEXT")
@@ -124,11 +219,7 @@ def parse_context_pack(path: Path) -> Tuple[str, str, Optional[str], Optional[st
                 if value and value != "[PASTE HERE]":
                     vacancy_type = value
                     break
-    title = None
-    for line in jd.splitlines():
-        if line.strip():
-            title = line.strip()
-            break
+    title = extract_vacancy_title(jd)
     return jd, req, vacancy_type, title
 
 
@@ -176,33 +267,76 @@ def parse_ccog_entries(markdown_text: str) -> List[CCOGEntry]:
     return entries
 
 
-def phrase_overlap(phrases: Sequence[str], haystack_norm: str, haystack_tokens: set[str]) -> Tuple[int, List[str]]:
+def phrase_document_frequencies(entries: Sequence[CCOGEntry]) -> Dict[str, int]:
+    frequencies: Dict[str, int] = defaultdict(int)
+    for entry in entries:
+        seen: set[str] = set()
+        for phrase in [*entry.canonical_verbs, *entry.scope_descriptors]:
+            p = normalize(phrase)
+            if p and not is_generic_phrase(p):
+                seen.add(p)
+        for phrase in seen:
+            frequencies[phrase] += 1
+    return frequencies
+
+
+def is_generic_phrase(phrase: str) -> bool:
+    tokens = tokenize(phrase)
+    if not tokens:
+        return True
+    return all(token in GENERIC_MATCH_TERMS for token in tokens)
+
+
+def phrase_weight(phrase: str, document_frequencies: Dict[str, int], corpus_size: int) -> float:
+    p = normalize(phrase)
+    if is_generic_phrase(p):
+        return 0.0
+    df = max(1, document_frequencies.get(p, 1))
+    return 1.0 + math.log((1 + corpus_size) / (1 + df))
+
+
+def phrase_overlap(
+    phrases: Sequence[str],
+    haystack_norm: str,
+    haystack_tokens: set[str],
+    document_frequencies: Dict[str, int],
+    corpus_size: int,
+) -> Tuple[float, List[str]]:
     hits: List[str] = []
+    score = 0.0
     for phrase in phrases:
         p = normalize(phrase)
-        if not p or p.startswith("["):
+        if not p or p.startswith("[") or is_generic_phrase(p):
             continue
         if " " in p:
             if p in haystack_norm:
                 hits.append(phrase)
+                score += phrase_weight(p, document_frequencies, corpus_size)
         else:
             if p in haystack_tokens:
                 hits.append(phrase)
+                score += phrase_weight(p, document_frequencies, corpus_size)
     # Deduplicate while preserving order
     deduped = list(dict.fromkeys(hits))
-    return len(deduped), deduped
+    return score, deduped
 
 
-def title_bonus(entry: CCOGEntry, title: str) -> int:
+def title_score(entry: CCOGEntry, title: str) -> Tuple[float, float, List[str]]:
     if not title:
-        return 0
-    title_tokens = tokenize(title)
+        return 0.0, 0.0, []
+    title_tokens = significant_tokens(title)
+    expanded_title_tokens = expand_title_tokens(title_tokens)
     combined = " ".join([entry.title] + entry.common_job_code_titles)
-    entry_tokens = tokenize(combined)
-    overlap = title_tokens & entry_tokens
+    entry_tokens = significant_tokens(combined)
+    exact_overlap = title_tokens & entry_tokens
+    overlap = expanded_title_tokens & entry_tokens
     if not overlap:
-        return 0
-    return 2 if len(overlap) >= 2 else 1
+        return 0.0, -6.0, []
+    if exact_overlap:
+        bonus = 6.0 if len(exact_overlap) >= 2 else 4.0
+    else:
+        bonus = 3.0 if len(overlap) >= 2 else 1.5
+    return bonus, 0.0, sorted(overlap)
 
 
 def vacancy_type_bonus(entry: CCOGEntry, vacancy_type: str) -> int:
@@ -211,6 +345,25 @@ def vacancy_type_bonus(entry: CCOGEntry, vacancy_type: str) -> int:
         if entry.code.startswith(code) or entry.family.startswith(code):
             return 2
     return 0
+
+
+def domain_gate_penalty(
+    entry: CCOGEntry,
+    title: str,
+    source_text: str,
+    title_overlap_tokens: Sequence[str],
+    vacancy_type_bonus_value: int,
+) -> float:
+    if title_overlap_tokens or vacancy_type_bonus_value:
+        return 0.0
+    source_tokens = significant_tokens(f"{title}\n{source_text}")
+    entry_tokens = significant_tokens(
+        " ".join([entry.title, entry.family, *entry.common_job_code_titles, *entry.scope_descriptors])
+    )
+    domain_overlap = source_tokens & entry_tokens
+    if len(domain_overlap) >= 2:
+        return -5.0
+    return -10.0
 
 
 def score_entries(
@@ -223,14 +376,21 @@ def score_entries(
     source_text = f"{jd_text}\n{requirements_text}".strip()
     haystack_norm = normalize(source_text)
     haystack_tokens = tokenize(source_text)
+    document_frequencies = phrase_document_frequencies(entries)
+    corpus_size = len(entries)
 
     scored: List[ScoredEntry] = []
     for entry in entries:
-        v_count, v_hits = phrase_overlap(entry.canonical_verbs, haystack_norm, haystack_tokens)
-        s_count, s_hits = phrase_overlap(entry.scope_descriptors, haystack_norm, haystack_tokens)
-        t_bonus = title_bonus(entry, title)
+        v_count, v_hits = phrase_overlap(
+            entry.canonical_verbs, haystack_norm, haystack_tokens, document_frequencies, corpus_size
+        )
+        s_count, s_hits = phrase_overlap(
+            entry.scope_descriptors, haystack_norm, haystack_tokens, document_frequencies, corpus_size
+        )
+        t_bonus, t_penalty, title_overlap = title_score(entry, title)
         vt_bonus = vacancy_type_bonus(entry, vacancy_type)
-        total = (v_count * 2) + s_count + t_bonus + vt_bonus
+        gate_penalty = domain_gate_penalty(entry, title, source_text, title_overlap, vt_bonus)
+        total = (v_count * 2.0) + s_count + t_bonus + vt_bonus + t_penalty + gate_penalty
         scored.append(
             ScoredEntry(
                 entry=entry,
@@ -238,12 +398,22 @@ def score_entries(
                 scope_overlap=s_count,
                 title_bonus=t_bonus,
                 vacancy_type_bonus=vt_bonus,
+                title_mismatch_penalty=t_penalty,
+                domain_gate_penalty=gate_penalty,
                 total_score=total,
                 matched_verbs=v_hits,
                 matched_scope=s_hits,
+                title_overlap_tokens=title_overlap,
             )
         )
-    scored.sort(key=lambda s: (-s.total_score, s.entry.code, s.entry.title))
+    scored.sort(
+        key=lambda s: (
+            0 if s.title_overlap_tokens or s.vacancy_type_bonus else 1,
+            -s.total_score,
+            s.entry.code,
+            s.entry.title,
+        )
+    )
     return scored
 
 
@@ -291,7 +461,15 @@ def select_entries(
     for s in force_selected:
         by_code[s.entry.code] = s
 
-    merged = sorted(by_code.values(), key=lambda s: (-s.total_score, s.entry.code, s.entry.title))
+    merged = sorted(
+        by_code.values(),
+        key=lambda s: (
+            0 if s.title_overlap_tokens or s.vacancy_type_bonus else 1,
+            -s.total_score,
+            s.entry.code,
+            s.entry.title,
+        ),
+    )
 
     if len(merged) > max(20, top_n):
         merged = merged[: max(20, top_n)]
@@ -343,7 +521,7 @@ def render_output(
     ordered_groups = [group for group, _ in REGISTER_GROUPS] + [FALLBACK_REGISTER]
     lines: List[str] = [
         f"# CCOG Resolved Reference — {vacancy_title or 'Target Vacancy'}",
-        f"## Resolved on: {datetime.utcnow().date().isoformat()}",
+        f"## Resolved on: {datetime.now(timezone.utc).date().isoformat()}",
         f"## Vacancy type: {vacancy_type}",
         f"## Total entries: {len(selected)}",
         f"## Primary family: {primary.code + ' — ' + primary.title if primary else 'Not resolved'}",
@@ -378,9 +556,12 @@ def dump_debug_json(scored: Sequence[ScoredEntry], path: Path) -> None:
                 "scope_overlap": s.scope_overlap,
                 "title_bonus": s.title_bonus,
                 "vacancy_type_bonus": s.vacancy_type_bonus,
+                "title_mismatch_penalty": s.title_mismatch_penalty,
+                "domain_gate_penalty": s.domain_gate_penalty,
                 "total_score": s.total_score,
                 "matched_verbs": s.matched_verbs,
                 "matched_scope": s.matched_scope,
+                "title_overlap_tokens": s.title_overlap_tokens,
             }
         )
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -106,17 +106,28 @@ This file contains all 221 CCOG entries in the following structured format:
 
 For each CCOG entry in the full database:
 
-1. **Verb overlap score:** Count how many of the entry's canonical verbs appear
-   in the JD text (case-insensitive, lemmatised matching).
-2. **Scope overlap score:** Count how many of the entry's scope descriptors
-   appear in the JD text.
-3. **Title match bonus:** If the entry's common job code titles contain words
-   matching the vacancy title, add a bonus.
-4. **Vacancy-type bonus:** If the entry's family is commonly associated with the
+1. **Verb overlap score:** Match the entry's canonical verbs against the JD
+   text using IDF-style weighting. Ignore generic verbs such as "apply",
+   "plan", "provide", "support", and "manage" when they do not carry domain
+   meaning.
+2. **Scope overlap score:** Match scope descriptors using the same IDF-style
+   weighting. Generic scope words such as "services", "systems", and
+   "development" must not inflate relevance by themselves.
+3. **Title match bonus / mismatch penalty:** If the entry's title or common job
+   code titles semantically overlap with the vacancy title, add a bonus. If the
+   entry title has zero meaningful title overlap, apply a negative penalty
+   rather than treating the match as neutral.
+4. **Domain gate penalty:** If an entry has neither title overlap nor at least
+   two domain-specific overlaps with the vacancy title/JD signal set, apply an
+   additional domain-gate penalty before sorting.
+5. **Vacancy-type bonus:** If the entry's family is commonly associated with the
    confirmed vacancy type (using the register grouping table below), add a bonus.
-5. **Compute JD relevance score:** `(verb_overlap × 2) + scope_overlap + title_bonus + vacancy_type_bonus`
-6. **Rank** all entries by JD relevance score descending.
-7. **Select** entries with score above the median of non-zero scores as
+6. **Compute JD relevance score:** `(verb_overlap_weight × 2) + scope_overlap_weight + title_bonus + vacancy_type_bonus + penalties`
+7. **Domain-gated sort:** Rank entries with title overlap or vacancy-type
+   alignment ahead of entries that score only through generic JD overlap.
+   Generic high scorers may remain in debug output, but they must not outrank
+   title/domain-aligned families.
+8. **Select** entries with score above the median of non-zero scores as
    **JD-relevant candidates**.
 
 ### Stage 3 — Validate and cap

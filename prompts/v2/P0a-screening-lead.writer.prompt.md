@@ -24,21 +24,29 @@ Common paths:
 - HISTORY         = inputs/history/<JOB_SLUG>.md
 - OUTDIR          = output/generated_documents/history/<JOB_SLUG>
 - LEDGER_CONTRACT = contracts/metric_ledger_contract.md
+- TARGET_SYSTEM   = value of `TARGET_SYSTEM:` under CONTEXT `## LIMITS`
 
 Write scope on P0a (HARD — do not write outside this list):
 - <OUTDIR>/classification_proposal.md
 - <OUTDIR>/phase1_2_core_requirements.md
 - <OUTDIR>/metric_ledger.md
+- <OUTDIR>/_discussion/run_manifest.json
 
 Round plan on P0a:
 1. IMPLEMENT pass 1:
    - Read CONTEXT, HISTORY, LEDGER_CONTRACT.
    - Run `term-extractor` if missing or stale.
    - Create or refresh OUTDIR (do not delete OUTDIR itself).
+   - Initialize the run manifest:
+     python .agents/scripts/write_run_manifest.py init --outdir <OUTDIR> --job-slug <JOB_SLUG> --target-system <TARGET_SYSTEM>
    - Create `metric_ledger.md` from LEDGER_CONTRACT and populate role-local
      metrics, scope facts, aggregation notes.
    - Run `apex-jd-core-requirements`; write `phase1_2_core_requirements.md`.
    - Write `classification_proposal.md` (Mode A vs Mode B vacancy classification).
+   - Record invoked skills in `_discussion/run_manifest.json`:
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill term-extractor --server P0a --artifact phase1_2_core_requirements.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-jd-core-requirements --server P0a --artifact phase1_2_core_requirements.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-progression-metric-ledger --server P0a --artifact metric_ledger.md
    - Call `impl-done` (advances IMPLEMENT -> TEST):
      python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: stay live. Co-resident `qa-auditor` will consume advisor messages

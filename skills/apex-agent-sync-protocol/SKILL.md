@@ -86,6 +86,7 @@ Purpose:
   - `option2_cv.md`
   - `option3_cover_letter.md`
   - optional `option4_qualification_answers.md`
+  - optional `option7_motivation_statement.md`
 
 ### Round 5+ — narrow fix rounds
 Purpose:
@@ -140,26 +141,35 @@ apply.
 - `D2`  9832 — technical-lead writer / qa-auditor canonical tester
 - `D3`  9833 — ats-format-lead writer / qa-auditor canonical tester
 - `C2`  9840 — qa-auditor writer (consensus, no separate canonical tester)
+- `E1`  9851 — independent-panel-evaluator writer (isolated, self-evaluating)
+- `E2`  9852 — independent-shortlisting-redteam writer (isolated, self-evaluating)
+- `R1`  9860 — screening-lead writer / qa-auditor canonical tester
+- `R2`  9861 — qa-auditor writer (remediation consensus, no separate canonical tester)
 
 P0a runs first, then the human confirmation gate, then P0b.
 S1/S2/S3 run in parallel and feed C1.
 D1/D2/D3 run in parallel and feed C2.
+E1/E2 run in parallel after C2 and feed R1.
+R1 feeds R2.
 
 ### Phase 8 ensemble scope
-Ensemble v2 generation currently covers Phase 8 Options 1-4 only.
-For Options 5-8, fall back to v1 single-agent generation skills.
+Ensemble v2 generation currently covers Phase 8 Options 1-4 and Option 7.
+Options 5, 6, and 8 fall back to v1 single-agent generation unless the user
+explicitly expands the v2 D/C2 scopes.
 
 ### Closer rule (v2)
-- All writer agents on author servers (P0a/P0b/S1/S2/S3/D1/D2/D3) call
+- All writer agents on author servers (P0a/P0b/S1/S2/S3/D1/D2/D3/R1) call
   `discuss-done` **without** `--next-impl` so the DISCUSS barrier
   advances.
 - `qa-auditor` is the canonical tester on all author servers and uses
   `discuss-done --next-impl <writer>` to loop revision passes, or
   `discuss-done` (no `--next-impl`) followed by the separate
   `shutdown --reason "<server> complete"` command to end the stage.
-- `discuss-done --next-impl shutdown` is **not** a valid shutdown
-  trigger in stock `server_v6.py`; the explicit `shutdown` command is
-  required.
+- E1 and E2 have no advisors or canonical tester. Their writer may submit
+  the self-checking `test-result` needed by stock `server_v6.py` to move
+  TEST -> DISCUSS, then shut down.
+- `discuss-done --next-impl shutdown` is **not** valid; the explicit
+  `shutdown` command is required.
 
 ### Advisor notes ownership
 For each server, `_discussion/advisor_notes_<server>.md` is owned by
@@ -210,14 +220,36 @@ The canonical tester submits:
 
 The message should be concise but exact.
 
+### Substantive advisor review rule
+Before an author server can shut down, `_discussion/advisor_notes_<server>.md`
+must contain at least one specific observation, issue, or suggestion from each
+advisor on that server. A notes file made only of confirmations such as "no
+blocker" or "ready for next step" fails pre-shutdown validation.
+
+Use the deterministic helper:
+
+```bash
+python .agents/scripts/validate_advisor_notes.py \
+  --advisor-notes output/generated_documents/history/<JOB_SLUG>/_discussion/advisor_notes_<SERVER>.md \
+  --advisors "<advisor-1>,<advisor-2>" --json
+```
+
+Advisors may send several TEST-phase messages within `MAX_ADVISOR_MESSAGES`
+when genuine review requires back-and-forth. DISCUSS still records one final
+structured position per agent so the stock server barrier remains deterministic.
+
 ---
 
 ## DISCUSS
 
 ### Structured discuss rule
-Every agent submits exactly one structured discuss message for the round:
+Every agent submits exactly one final structured discuss message for the round:
 
 `ISSUE=<top issue> | FILE=<affected file or none> | OWNER=<file owner> | NEXT=<recommended implementer> | ACTION=<next concrete action> | BLOCKER=<yes/no>`
+
+This is the final-position record, not the whole debate. Substantive
+back-and-forth should happen during TEST via `send` / `broadcast`, and must be
+persisted into advisor notes before QA closes the server.
 
 ### Canonical closer rule
 To make stock `agent_sync` deterministic:
@@ -292,15 +324,25 @@ Independent evaluation agents activate only after at least one
 candidate-facing document exists.
 
 ### What they evaluate
-- Option 1 admin profile
-- Option 2 CV
-- Option 3 cover letter
-- Option 4 qualification answers
-- assembled `application_content.md` if present
+Independent evaluators may read only:
+- `<OUTDIR>/_discussion/independent_eval_input.md`
+- final canonical candidate-facing option files:
+  - `option1_admin_profile.md`
+  - `option2_cv.md`
+  - `option3_cover_letter.md`
+  - `option4_qualification_answers.md`
+  - `option7_motivation_statement.md`, if requested/generated
 
-### What they do not evaluate by default
-- planning-only artifacts such as the Phase 1-7 strategy report, except as
-  supporting context
+They must not read:
+- full `inputs/application_context.md`
+- candidate history
+- `metric_ledger.md`
+- `phase1_7_strategy_report.md`
+- D1/D2/D3 drafts
+- advisor notes
+- consensus notes
+- `panel_response.md`
+- `remediation_plan.md`
 
 ### Hard independence rule
 Independent evaluators:

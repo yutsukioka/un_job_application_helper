@@ -57,6 +57,11 @@ DISCUSS-phase responsibilities:
 
 Pre-shutdown checklist (mandatory — do not shut down if any fails):
 - [ ] advisor_notes_<SERVER>.md exists and is non-empty.
+- [ ] advisor_notes_<SERVER>.md contains at least one substantive technical
+      observation, issue, or suggestion per advisor. Validate with:
+      python .agents/scripts/validate_advisor_notes.py \
+          --advisor-notes output/generated_documents/history/<JOB_SLUG>/_discussion/advisor_notes_<SERVER>.md \
+          --advisors "<ADVISOR_1>,<ADVISOR_2>" --json
 - [ ] Writer's draft file exists.
 - [ ] No `test-result PASS` was sent by anyone other than qa-auditor.
 

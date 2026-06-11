@@ -20,6 +20,9 @@
 #   consensus1 -> C1 (port 9820)
 #   document  -> D1, D2, D3 (ports 9831, 9832, 9833)   [concurrent]
 #   consensus2 -> C2 (port 9840)
+#   evaluation -> E1, E2 (ports 9851, 9852)             [concurrent]
+#   response1 -> R1 (port 9860)
+#   response2 -> R2 (port 9861)
 #   all       -> every server (NOT recommended; for status only)
 #
 # Layout:
@@ -33,6 +36,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SERVER_PY="${REPO_ROOT}/.agents/agent_sync/server_v6.py"
+START_HELPER="${REPO_ROOT}/.agents/scripts/start_agent_sync_server.py"
 RUN_BASE="${REPO_ROOT}/tmp/agent_sync"
 PYTHON_BIN=""
 
@@ -51,6 +55,10 @@ port_for() {
     D2)  echo 9832 ;;
     D3)  echo 9833 ;;
     C2)  echo 9840 ;;
+    E1)  echo 9851 ;;
+    E2)  echo 9852 ;;
+    R1)  echo 9860 ;;
+    R2)  echo 9861 ;;
     *)   echo "" ;;
   esac
 }
@@ -75,6 +83,10 @@ agents_for() {
     D2)  echo "technical-lead,screening-lead,ats-format-lead,qa-auditor" ;;
     D3)  echo "ats-format-lead,screening-lead,technical-lead,qa-auditor" ;;
     C2)  echo "qa-auditor,screening-lead,technical-lead,ats-format-lead" ;;
+    E1)  echo "independent-panel-evaluator" ;;
+    E2)  echo "independent-shortlisting-redteam" ;;
+    R1)  echo "screening-lead,technical-lead,ats-format-lead,qa-auditor" ;;
+    R2)  echo "qa-auditor,screening-lead,technical-lead,ats-format-lead" ;;
     *)   echo "" ;;
   esac
 }
@@ -87,7 +99,10 @@ stage_servers() {
     consensus1) echo "C1" ;;
     document)   echo "D1 D2 D3" ;;
     consensus2) echo "C2" ;;
-    all)        echo "P0a P0b S1 S2 S3 C1 D1 D2 D3 C2" ;;
+    evaluation) echo "E1 E2" ;;
+    response1)  echo "R1" ;;
+    response2)  echo "R2" ;;
+    all)        echo "P0a P0b S1 S2 S3 C1 D1 D2 D3 C2 E1 E2 R1 R2" ;;
     *)          echo "unknown stage: $1" >&2; exit 2 ;;
   esac
 }
@@ -102,6 +117,7 @@ ensure_runtime() {
     exit 3
   fi
   [[ -f "${SERVER_PY}" ]] || { echo "missing ${SERVER_PY}" >&2; exit 3; }
+  [[ -f "${START_HELPER}" ]] || { echo "missing ${START_HELPER}" >&2; exit 3; }
 }
 
 start_one() {
@@ -131,9 +147,13 @@ start_one() {
     return 1
   fi
 
-  ( cd "${rundir}" && AGENTS_LIST="${agents}" nohup "${PYTHON_BIN}" "${SERVER_PY}" --port "${port}" \
-      >>"${logfile}" 2>&1 & echo $! >"${pidfile}" )
-  sleep 0.3
+  "${PYTHON_BIN}" "${START_HELPER}" \
+      --server-py "${SERVER_PY}" \
+      --port "${port}" \
+      --agents "${agents}" \
+      --rundir "${rundir}" \
+      --logfile "${logfile}" \
+      --pidfile "${pidfile}"
   if kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
     echo "[${id}] started (pid $(cat "${pidfile}"), port ${port}, agents=${agents}, log ${logfile})"
   else

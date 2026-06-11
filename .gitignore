@@ -18,3 +18,4 @@ logs/
 
 .bak
 agent_sync/
+prompts/Run ApexStrategist v2 full ensemble run .prompt.md

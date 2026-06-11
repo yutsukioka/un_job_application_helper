@@ -36,6 +36,7 @@ Write scope on D3 (HARD):
 - <OUTDIR>/ats-format-lead/option2_cv.md
 - <OUTDIR>/ats-format-lead/option3_cover_letter.md
 - <OUTDIR>/ats-format-lead/option4_qualification_answers.md   (if requested)
+- <OUTDIR>/ats-format-lead/option7_motivation_statement.md   (if requested)
 - <OUTDIR>/_discussion/advisor_notes_D3.md   (writer or qa-auditor only)
 
 Forbidden:
@@ -45,11 +46,15 @@ Forbidden:
 
 Round plan on D3:
 1. IMPLEMENT pass 1:
+   - Run the D-writer scaffold preflight before drafting:
+     python .agents/scripts/prepare_d_writer_scaffold.py --outdir <OUTDIR> --role ats-format-lead
+     If it reports `D_WRITER_PREFLIGHT_FAILURE`, stop and surface the issue.
    - Read canonical `phase1_7_strategy_report.md`.
    - Read `## LIMITS` and active lint profile (INSPIRA_FIELD / UNICEF_FIELD
      / IOM_RA / ATS_DRA).
    - Read `apex-jd-keyword-bank` output and term-extractor terms.
-   - Generate the requested Option drafts through your ATS / format lens:
+   - Generate the requested Option drafts, including Option 7 when requested,
+     through your ATS / format lens:
      keyword-density first, JD-phrase mirroring, strict format-profile
      compliance, character-band fit.
    - Run `capel-fit` on character-banded fields when applicable.
@@ -72,4 +77,5 @@ Start now:
 - join
 - check status
 - announce write scope before editing
+- run the D-writer scaffold preflight
 - begin IMPLEMENT

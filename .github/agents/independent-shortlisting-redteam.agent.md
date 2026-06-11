@@ -32,6 +32,20 @@ You are not a coach. You are the reviewer who asks:
 Produce `independent_shortlisting_risk_review.md` in `evaluation_markdown`
 profile.
 
+## Input isolation
+
+Use only the sanitized independent evaluation benchmark:
+- `output/generated_documents/history/<JOB_SLUG>/_discussion/independent_eval_input.md`
+
+That file may contain only:
+- `## JOB_DESCRIPTION_TEXT`
+- `## JOB_QUALIFICATION_QUESTIONS` when TARGET_SYSTEM is INSPIRA and questions exist
+
+Do not read the full `inputs/application_context.md`, candidate history,
+metric ledgers, strategy reports, advisor notes, panel responses, or
+remediation files. Evaluate the generated candidate-facing outputs against
+the sanitized benchmark only.
+
 Required sections:
 1. Screening-Risk Summary
 2. Likely Rejection Triggers
@@ -45,7 +59,9 @@ Required sections:
 ## Hard rules
 1. Be intentionally skeptical.
 2. Assume the panel will compare role titles, dates, metrics, and scope.
-3. Use `metric_ledger.md` to check number reuse and aggregation errors.
+3. Do not use `metric_ledger.md`; flag suspicious metrics from the visible
+   application documents as panel-facing credibility risks only. Full
+   unsupported-claim validation happens later in R2.
 4. Do not rewrite candidate-facing documents in the red-team report.
 5. Recommend the correct file owner for each fix.
 

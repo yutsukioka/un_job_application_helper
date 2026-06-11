@@ -40,6 +40,7 @@ Write scope on D1 (HARD):
 - <OUTDIR>/screening-lead/option2_cv.md
 - <OUTDIR>/screening-lead/option3_cover_letter.md
 - <OUTDIR>/screening-lead/option4_qualification_answers.md   (if requested)
+- <OUTDIR>/screening-lead/option7_motivation_statement.md   (if requested)
 - <OUTDIR>/_discussion/advisor_notes_D1.md   (writer or qa-auditor only)
 
 Forbidden:
@@ -50,10 +51,14 @@ Forbidden:
 
 Round plan on D1:
 1. IMPLEMENT pass 1:
+   - Run the D-writer scaffold preflight before drafting:
+     python .agents/scripts/prepare_d_writer_scaffold.py --outdir <OUTDIR> --role screening-lead
+     If it reports `D_WRITER_PREFLIGHT_FAILURE`, stop and surface the issue.
    - Read canonical `phase1_7_strategy_report.md` (full).
    - Read `metric_ledger.md` (for metric reuse rules).
    - Read approved updates if present.
-   - Generate the requested Option drafts through your screening lens:
+   - Generate the requested Option drafts, including Option 7 when requested,
+     through your screening lens:
      competency framing, evidence-density-first sentence shape,
      qualification-question coverage.
    - Call `impl-done` (advances IMPLEMENT -> TEST):
@@ -75,4 +80,5 @@ Start now:
 - join
 - check status
 - announce write scope before editing
+- run the D-writer scaffold preflight
 - begin IMPLEMENT

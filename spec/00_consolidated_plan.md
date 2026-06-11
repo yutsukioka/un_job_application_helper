@@ -82,9 +82,10 @@ DISCUSS
   - WRITER or qa-auditor calls `get-discussion` and appends its content
     to `_discussion/advisor_notes_<server>.md`.
   - All non-qa agents call `discuss-done` WITHOUT `--next-impl`.
-  - qa-auditor calls `discuss-done --next-impl <writer-name>` to loop
-    back to IMPLEMENT for another revision pass, OR
-    `discuss-done --next-impl shutdown` (or equivalent) when done.
+  - To loop, qa-auditor uses `discuss-done --next-impl <writer-name>`.
+  - To end, qa-auditor calls `discuss-done` without `--next-impl`, then
+    calls the separate `shutdown --reason "<server> complete"` command.
+  - Never use `discuss-done --next-impl shutdown` or any shutdown marker wording.
 
 REVISION CAP
   - The IMPLEMENT/TEST/DISCUSS loop repeats at most MAX_REVISION_PASSES
@@ -723,3 +724,388 @@ opt-in per vacancy via `## RUN_MODE`. This gives a clear, incremental
 path from today's pipeline to a robust multi-agent system without a
 single big-bang rewrite and without modifying the upstream `agent_sync`
 runtime.
+
+## Section: Discussion Quality Standards
+
+### Advisor Content Quality Gate
+
+The pre-shutdown check "advisor_notes_<server>.md exists and is non-empty"
+is NECESSARY but NOT SUFFICIENT. The following additional quality gate
+applies to all servers (P0a, P0b, S*, D*, C*):
+
+**Each advisor's notes for a given server MUST contain at least one entry
+that includes all three of the following fields:**
+
+```
+OBSERVATION: <what was reviewed — specific artifact section, quality
+             dimension, or compliance criterion>
+FINDING:     <specific issue, risk, strength, or gap identified —
+             must reference concrete content, not generic status>
+RECOMMENDATION: <action: ACCEPT / REVISE <specific change> /
+                 FLAG_FOR_USER <reason>>
+```
+
+**Validation rules:**
+- Pure confirmations without specifics do NOT satisfy the gate.
+  Examples of FAILING entries:
+  - "No blocker; artifact is ready for next step."
+  - "Looks good. No issues found."
+  - "PASS — ready to proceed."
+- Examples of PASSING entries:
+  - "OBSERVATION: Option 1, Duty 3 (data management). FINDING: The duty
+    description uses 'managed' without specifying team size or data volume,
+    which weakens the INSPIRA screening score. RECOMMENDATION: REVISE —
+    add '5-member team' and 'datasets covering 47 counties' per
+    metric_ledger entries ML-012 and ML-023."
+  - "OBSERVATION: Cover letter paragraph 2. FINDING: Strong alignment
+    with JD requirement 'experience in humanitarian data systems' —
+    cites UNICEF Kenya HCT dashboard with specific coverage metrics.
+    RECOMMENDATION: ACCEPT — no change needed; this is a model paragraph."
+
+**If the gate fails**, the server MUST NOT shut down. qa-auditor reopens
+the round and requests specific technical observations from the
+non-compliant advisor(s).
+
+### Minimum Revision Justification
+
+If ALL advisors AND qa-auditor report zero revision-worthy issues for a
+server, qa-auditor MUST produce a `ZERO_REVISION_JUSTIFICATION` block
+before issuing shutdown:
+
+```
+ZERO_REVISION_JUSTIFICATION:
+  server: <server_id>
+  pass_number: <n>
+  criteria_checked:
+    - <criterion_1>: <status and evidence>
+    - <criterion_2>: <status and evidence>
+    ...
+  conclusion: No revision needed because <specific reasoning>.
+```
+
+This block is appended to `advisor_notes_<server>.md`.
+
+### Extended Discuss Phase
+
+The base protocol allows each advisor exactly one structured discuss
+message. The following extension applies:
+
+- If Advisor A's FINDING directly contradicts or materially extends
+  Advisor B's FINDING on the same artifact section, qa-auditor MAY
+  request ONE follow-up round.
+- In the follow-up round, each involved advisor submits one additional
+  structured message responding to the contradiction/extension.
+- qa-auditor then closes the discuss phase normally.
+- Maximum discuss messages per advisor per server: **2** (base + 1
+  follow-up). No further extensions.
+
+---
+
+## Section: CCOG Resolver Scoring Refinement
+
+### Title-Mismatch Penalty
+
+Before score sorting, apply the following penalty:
+
+1. Extract content words (nouns, adjectives) from the vacancy title
+   after stopword removal. Call this set `V_title`.
+2. Extract content words from the CCOG entry title after stopword
+   removal. Call this set `C_title`.
+3. Compute `title_overlap = |V_title ∩ C_title|`.
+4. If `title_overlap == 0`, apply a penalty of **-10** to the raw
+   score for that CCOG entry.
+
+**Rationale**: Entries like "Air traffic management specialists" share
+zero title content words with "Data Management Reporting Officer" once
+generic words are removed. The penalty ensures these entries sink below
+the selection threshold regardless of body-text verb matches.
+
+### TF-IDF Weighting
+
+Replace raw term overlap counts with TF-IDF weighted scores:
+
+- **Term Frequency (TF)**: Computed against the JD full text.
+  Terms appearing more frequently in the JD receive higher weight.
+- **Inverse Document Frequency (IDF)**: Computed against the full
+  CCOG corpus (~221 entries). Terms appearing in many CCOG entries
+  (e.g., "apply", "plan", "provide", "services") receive LOW IDF.
+  Terms appearing in few entries (e.g., "humanitarian", "data management",
+  "reporting framework") receive HIGH IDF.
+- **Score formula**: For each CCOG entry, `score = Σ(TF(term) × IDF(term))`
+  for all terms shared between the JD and the CCOG entry description.
+
+### Domain Gating Pre-Filter
+
+Before scoring, reduce the candidate pool:
+
+1. Extract the JD's functional domain keywords (top 10 by TF-IDF from
+   the JD text).
+2. For each CCOG entry, check whether its ISCO-08 major group or
+   sub-major group description contains at least ONE of these domain
+   keywords.
+3. Entries with zero domain keyword overlap are EXCLUDED from scoring.
+4. Expected reduction: from ~221 entries to ~30-50 candidates.
+
+The domain gating pre-filter is applied BEFORE scoring and BEFORE the
+title-mismatch penalty. Entries excluded by the pre-filter are logged
+in `ccog_resolver_debug.json` with `status: "domain_gated_out"`.
+
+---
+
+## Section: Independent Evaluation Isolation Protocol
+
+### Principle
+
+Real UN application processes follow: document check → written test →
+interview. This AI Agent focuses on the first layer: application
+document generation. Independent evaluators MUST simulate what a real
+screening panel sees.
+
+### Permitted Inputs for E1/E2
+
+| Input | Source | Required |
+|-------|--------|----------|
+| JD text | `## JOB_DESCRIPTION_TEXT` section of `inputs/application_context.md` ONLY | YES |
+| Qualification questions | `## JOB_QUALIFICATION_QUESTIONS` section (when present, INSPIRA only) | CONDITIONAL |
+| Canonical Option outputs | `option1_admin_profile.md`, `option2_cv.md`, `option3_cover_letter.md`, `option4_qualification_answers.md`, `option7_motivation_statement.md` | YES |
+
+### Prohibited Inputs for E1/E2
+
+The following MUST NOT be provided to evaluators:
+
+- `## APPLICANT_PROFILE` or any other section of `inputs/application_context.md`
+- `metric_ledger.md`
+- `phase1_2_core_requirements.md`
+- `phase1_7_strategy_report.md`
+- `ccog_reference_resolved.md`
+- `classification_proposal.md`
+- Any `_discussion/` artifacts (advisor_notes, consensus, disagreement_log)
+- Any D-server draft folders
+- `user_feedback_updates.md`
+
+### INSPIRA-Specific Evaluation Flow
+
+When `## JOB_QUALIFICATION_QUESTIONS` is present in `application_context.md`:
+
+1. E1/E2 first perform **knockout assessment**: do the Option documents
+   demonstrate the minimum qualifications stated in the JD? If knockout
+   criteria are not met, the evaluation terminates with a FAIL.
+2. After knockout passes, E1/E2 assess **document-to-job fit**: how well
+   do the application documents address each qualification question and
+   JD requirement?
+3. E1 (panel evaluator) produces a scored evaluation.
+4. E2 (red-team) produces a risk review identifying weaknesses a real
+   panel would flag.
+
+### Session Isolation
+
+- E1 and E2 MUST run in a **fresh session** with no shared context
+  from the document generation phase.
+- If running on a single-model platform (e.g., Codex), E1/E2 must be
+  launched as separate tasks/sessions after the Phase 8 run completes.
+- If running on a multi-model platform, E1/E2 SHOULD use a different
+  LLM than the D-server writers for maximum independence.
+
+---
+
+## Section: Draft Diversity Gate (C2 Precondition)
+
+### C2 Precondition: Draft Diversity Check
+
+Before C2 IMPLEMENT pass 1, the following check MUST pass:
+
+1. For each Option file (option1 through option7), compute pairwise
+   character-level similarity between the three D-server versions:
+   - `screening-lead/option<N>.md` vs `technical-lead/option<N>.md`
+   - `screening-lead/option<N>.md` vs `ats-format-lead/option<N>.md`
+   - `technical-lead/option<N>.md` vs `ats-format-lead/option<N>.md`
+
+2. Similarity metric: Levenshtein ratio (normalized edit distance).
+   `similarity = 1 - (edit_distance / max(len(a), len(b)))`
+
+3. **Threshold**: 0.95 (95% character-level similarity).
+
+4. **If any pair on any Option file exceeds the threshold**:
+   - Flag as `DIVERSITY_FAILURE`.
+   - Log the failing pairs with their similarity scores.
+   - Surface to the user with the message:
+     ```
+     DIVERSITY_FAILURE: The following D-server draft pairs exceed 95%
+     similarity, indicating insufficient ensemble independence:
+     - <pair>: <score>
+     Proceed with merge anyway? (y/n)
+     If no, recommend re-running D-servers with heterogeneous LLMs
+     or manual D-writer independence enforcement.
+     ```
+   - Do NOT proceed with C2 merge until the user responds.
+
+### D-Writer Independence Scaffold
+
+To prevent D2/D3 from copying D1's output:
+
+1. **Preflight step** (runs before D1/D2/D3 IMPLEMENT):
+   - Create empty draft target folders for each D-server writer.
+   - Verify that no draft folder contains files from another writer.
+
+2. **IMPLEMENT constraint**:
+   - Each D-server writer reads ONLY from:
+     - Frozen prep artifacts (read-only)
+     - Canonical `phase1_7_strategy_report.md` (read-only)
+   - Each D-server writer writes ONLY to its own `<agent>/` subfolder.
+   - Cross-reading between D-server draft folders is PROHIBITED
+     during IMPLEMENT.
+
+3. **Enforcement**:
+   - Before each D-server's IMPLEMENT phase begins, verify that the
+     writer's draft folder is empty.
+   - If the folder contains files, BLOCK IMPLEMENT and surface to user.
+
+---
+
+## Section: Run Manifest
+
+### Schema
+
+File: `_discussion/run_manifest.json`
+
+```json
+{
+  "schema_version": "1.0",
+  "job_slug": "<JOB_SLUG>",
+  "target_system": "<INSPIRA | OTHER>",
+  "run_start_utc": "<ISO 8601>",
+  "run_end_utc": "<ISO 8601>",
+  "max_revision_passes": "<int>",
+  "jd_coverage_floor": "<float>",
+  "servers_launched": [
+    {
+      "server": "<P0a | P0b | S1 | ... | C2 | E1 | E2 | R1 | R2>",
+      "port": "<int>",
+      "writer": "<agent_name>",
+      "start_utc": "<ISO 8601>",
+      "end_utc": "<ISO 8601>",
+      "revision_passes_used": "<int>",
+      "shutdown_reason": "<normal | error | user_abort>"
+    }
+  ],
+  "skills_invoked": [
+    {
+      "skill": "<skill_name>",
+      "server": "<server_id>",
+      "artifact": "<output_file_path>",
+      "invoked_utc": "<ISO 8601>"
+    }
+  ],
+  "skills_not_invoked": [
+    {
+      "skill": "<skill_name>",
+      "expected_server": "<server_id>",
+      "reason": "<why_skipped>"
+    }
+  ],
+  "unexpected_invocations": [
+    {
+      "skill": "<skill_name>",
+      "server": "<server_id>",
+      "reason": "<why_unexpected>"
+    }
+  ],
+  "quality_gates": {
+    "jd_coverage_score": "<float>",
+    "diversity_check_passed": "<bool>",
+    "advisor_quality_gate_passed": "<bool>",
+    "all_pre_shutdown_checks_passed": "<bool>"
+  }
+}
+```
+
+### Lifecycle
+
+1. **Initialized at P0a**: qa-auditor creates the manifest with
+   `job_slug`, `target_system`, `run_start_utc`, and configuration
+   parameters.
+2. **Updated per server**: Before each server's shutdown, qa-auditor
+   appends the server's entry to `servers_launched` and any
+   `skills_invoked` entries.
+3. **Finalized at R2**: qa-auditor fills `run_end_utc`,
+   `skills_not_invoked`, `unexpected_invocations`, and `quality_gates`.
+4. **Immutable after R2**: The manifest MUST NOT be modified after
+   R2 shutdown.
+
+---
+
+## Section: E1/E2/R1/R2 Evaluation Server Topology
+
+### Server Definitions
+
+| Server | Port | Writer/Evaluator | Role | Inputs |
+|--------|------|-------------------|------|--------|
+| E1 | 9851 | independent-panel-evaluator | Scored evaluation of Option outputs | JD text + Option outputs ONLY |
+| E2 | 9852 | independent-shortlisting-redteam | Risk review identifying panel-flaggable weaknesses | JD text + Option outputs ONLY |
+| R1 | 9860 | screening-lead | Writes `panel_response.md` (accept / contest / defer each E1/E2 finding) | E1/E2 outputs + full context |
+| R2 | 9861 | qa-auditor | Consolidates into `remediation_plan.md` + runs `apex-application-audit` (mandatory) | R1 output + E1/E2 outputs + full context |
+
+### Sequencing
+
+- E1 and E2 launch concurrently AFTER all canonical Option outputs exist.
+- E1 and E2 MUST both complete before R1 launches.
+- R1 MUST complete before R2 launches.
+- R2 finalizes the run manifest.
+
+### Session Isolation for E1/E2
+
+See "Independent Evaluation Isolation Protocol" section above.
+E1 and E2 run in fresh sessions. On single-model platforms, they are
+launched as separate tasks. On multi-model platforms, they SHOULD use
+a different LLM than the D-server writers.
+
+---
+
+## Section: Semantic Coverage Assessment
+
+### Three-Layer JD Coverage
+
+The single-metric `jd_coverage_score` (phrase presence) is RETAINED
+as Layer 1 but is no longer sufficient alone. Three layers are now
+required:
+
+#### E2a: Phrase Coverage Floor (Existing)
+
+- Deterministic check: each JD keyword/phrase is present in at least
+  one Option document.
+- Floor: `JD_COVERAGE_FLOOR` (default 0.80).
+- Metric: binary term presence.
+- This layer catches obvious keyword omissions.
+
+#### E2b: Requirement-by-Requirement Coverage Matrix (New)
+
+- For each JD requirement (extracted from `phase1_2_core_requirements.md`),
+  assess coverage across ALL Option documents:
+
+| JD Requirement | Option 1 | Option 2 | Option 3 | Option 4 | Option 7 | Strength |
+|---------------|----------|----------|----------|----------|----------|----------|
+| Req 1: ... | ✓ strong | ✓ brief | ✓ strong | ✓ direct | ○ absent | HIGH |
+| Req 2: ... | ○ absent | ✓ brief | ✓ strong | ○ absent | ✓ brief | MEDIUM |
+| ... | ... | ... | ... | ... | ... | ... |
+
+- Strength ratings: HIGH (addressed with specific evidence in 3+ docs),
+  MEDIUM (addressed in 1-2 docs), LOW (mentioned but not evidenced),
+  GAP (absent from all docs).
+- Any requirement rated GAP triggers a remediation flag.
+
+#### E2c: Unsupported-Claim Scan (New)
+
+- For each factual claim in the Option documents, verify that it has
+  backing in either:
+  - `metric_ledger.md` (for quantitative claims)
+  - `inputs/application_context.md` (for biographical/qualification claims)
+- Claims with no backing are flagged as `UNSUPPORTED`.
+- Claims that contradict the metric_ledger are flagged as `CONTRADICTORY`.
+- Claims in the metric_ledger's `DO_NOT_USE` list are flagged as
+  `PROHIBITED`.
+
+### Assessment Timing
+
+- E2a runs at C2 (existing behavior).
+- E2b runs at R2 as part of the consolidated quality assessment.
+- E2c runs at R2 as part of `apex-application-audit`.

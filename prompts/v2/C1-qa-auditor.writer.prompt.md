@@ -38,6 +38,7 @@ Write scope on C1 (HARD):
 - <OUTDIR>/phase1_7_strategy_report.md   (canonical, flat path)
 - <OUTDIR>/_discussion/round2_consensus.md
 - <OUTDIR>/_discussion/disagreement_log.md   (append)
+- <OUTDIR>/_discussion/run_manifest.json
 
 Forbidden:
 - <OUTDIR>/screening-lead/**, technical-lead/**, ats-format-lead/**
@@ -60,6 +61,8 @@ Round plan on C1:
    - Merge into `phase1_7_strategy_report.md`.
    - Write `_discussion/round2_consensus.md` summarizing merge decisions.
    - Append unresolved disagreements to `_discussion/disagreement_log.md`.
+   - Record the consensus skill chain:
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-orchestrator-report --server C1 --artifact phase1_7_strategy_report.md
    - Call `impl-done` (advances IMPLEMENT -> TEST):
      python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
 2. TEST: you are both writer and tester. Run validation checks; submit
@@ -73,8 +76,8 @@ Round plan on C1:
      python .agents/agent_sync/client_v6.py discuss-done qa-auditor --next-impl qa-auditor --port 9820   # loop
      python .agents/agent_sync/client_v6.py discuss-done qa-auditor --port 9820                          # close, no loop
      python .agents/agent_sync/client_v6.py shutdown --reason "C1 complete" --port 9820                  # end stage
-   NOTE: `discuss-done --next-impl shutdown` is NOT a valid shutdown
-   trigger in stock server_v6.py. Use the explicit `shutdown` command.
+   NOTE: `discuss-done --next-impl shutdown` is NOT valid; use the explicit
+   `shutdown` command.
 
 Post-shutdown:
 - The canonical `phase1_7_strategy_report.md` is now READ-ONLY for all

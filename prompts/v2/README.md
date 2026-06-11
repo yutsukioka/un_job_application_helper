@@ -14,10 +14,9 @@ v1 prompts in the parent directory (single-agent linear mode).
 
 ## Phase 8 ensemble scope
 
-Ensemble v2 generation currently covers **Phase 8 Options 1-4 only**
-(Admin Profile, CV, Cover Letter, Qualification Answers). For
-Options 5-8 (RA Split, Competency Mapping, Motivation Statement,
-DRA Split), fall back to v1 single-agent generation skills.
+Ensemble v2 generation currently covers Phase 8 Options 1-4 and Option 7.
+Options 5, 6, and 8 fall back to v1 single-agent generation unless the user
+explicitly expands the v2 D/C2 scopes.
 
 ## File naming
 
@@ -25,11 +24,12 @@ DRA Split), fall back to v1 single-agent generation skills.
 <server>-<agent>.<role>.prompt.md
 ```
 
-- `<server>` ∈ {P0a, P0b, S1, S2, S3, C1, D1, D2, D3, C2}
-- `<agent>`  ∈ {screening-lead, technical-lead, ats-format-lead, qa-auditor}
+- `<server>` ∈ {P0a, P0b, S1, S2, S3, C1, D1, D2, D3, C2, E1, E2, R1, R2}
+- `<agent>`  ∈ {screening-lead, technical-lead, ats-format-lead, qa-auditor,
+  independent-panel-evaluator, independent-shortlisting-redteam}
 - `<role>`   ∈ {writer, advisor, canonical-tester}
 
-## Writer prompts (10 explicit files)
+## Writer prompts (14 explicit files)
 
 | File | Server | Port | Writer |
 |---|---|---|---|
@@ -43,6 +43,10 @@ DRA Split), fall back to v1 single-agent generation skills.
 | `D2-technical-lead.writer.prompt.md` | D2 | 9832 | technical-lead |
 | `D3-ats-format-lead.writer.prompt.md` | D3 | 9833 | ats-format-lead |
 | `C2-qa-auditor.writer.prompt.md` | C2 | 9840 | qa-auditor |
+| `E1-independent-panel-evaluator.writer.prompt.md` | E1 | 9851 | independent-panel-evaluator |
+| `E2-independent-shortlisting-redteam.writer.prompt.md` | E2 | 9852 | independent-shortlisting-redteam |
+| `R1-screening-lead.writer.prompt.md` | R1 | 9860 | screening-lead |
+| `R2-qa-auditor.writer.prompt.md` | R2 | 9861 | qa-auditor |
 
 ## Role templates (use with placeholders)
 
@@ -54,8 +58,9 @@ Author servers also need an advisor and a canonical-tester instance. Use:
 Per server you launch the writer prompt + 2 advisor instances (one per
 non-writer authoring agent) + 1 canonical-tester instance (qa-auditor).
 
-Consensus servers C1 and C2 do NOT use a canonical-tester instance —
-the writer is qa-auditor. They use 3 advisor instances.
+Consensus servers C1, C2, and R2 do NOT use a canonical-tester instance —
+the writer is qa-auditor. They use 3 advisor instances. Isolated
+evaluation servers E1 and E2 use no advisors or canonical tester.
 
 Join order is operationally significant. Stock `server_v6.py` assigns the
 first joining agent as implementer. Start the writer prompt first, then

@@ -30,6 +30,10 @@ Preconditions (verify before IMPLEMENT pass 1):
   - <OUTDIR>/_discussion/advisor_notes_D1.md
   - <OUTDIR>/_discussion/advisor_notes_D2.md
   - <OUTDIR>/_discussion/advisor_notes_D3.md
+- Draft diversity gate passes before merge:
+  python .agents/scripts/check_draft_diversity.py --outdir <OUTDIR> --option option1_admin_profile.md --threshold 0.95 --json
+  If any pair reports `DIVERSITY_FAILURE`, stop, append the result to
+  `_discussion/disagreement_log.md`, and surface to the user before merging.
 - Canonical `phase1_7_strategy_report.md` and frozen prep artifacts unchanged.
 
 Common paths:
@@ -40,8 +44,10 @@ Write scope on C2 (HARD):
 - <OUTDIR>/option2_cv.md
 - <OUTDIR>/option3_cover_letter.md
 - <OUTDIR>/option4_qualification_answers.md   (if requested)
+- <OUTDIR>/option7_motivation_statement.md   (if requested)
 - <OUTDIR>/_discussion/round4_consensus.md
 - <OUTDIR>/_discussion/disagreement_log.md   (append)
+- <OUTDIR>/_discussion/run_manifest.json
 
 Forbidden:
 - <OUTDIR>/screening-lead/**, technical-lead/**, ats-format-lead/**
@@ -60,14 +66,24 @@ Consensus discipline:
 
 Round plan on C2:
 1. IMPLEMENT pass 1:
+   - Run the draft diversity gate before reading for merge. Do not merge if
+     D1/D2/D3 option1 drafts are more than 95% character-similar.
    - Read all three draft folders and all three advisor_notes_D*.md.
    - Merge into canonical `option*.md` files at the flat path.
    - Run `capel-fit` and `apex-output-lint` per profile.
    - Write `_discussion/round4_consensus.md`; append disagreements.
+   - Record document-generation and linting skills actually used:
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-generate-admin-profile --server C2 --artifact option1_admin_profile.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-generate-cv --server C2 --artifact option2_cv.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-generate-cover-letter --server C2 --artifact option3_cover_letter.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-generate-qualification-answers --server C2 --artifact option4_qualification_answers.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-generate-motivation-statement --server C2 --artifact option7_motivation_statement.md
+     python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-output-lint --server C2 --artifact option*.md
    - Call `impl-done` (advances IMPLEMENT -> TEST):
      python .agents/agent_sync/client_v6.py impl-done <AGENT_NAME> --summary "<short>" --port <PORT>
-2. TEST: writer + tester role. Run E2 JD-coverage floor check
-   (`JD_COVERAGE_FLOOR` in `## RUN_MODE`).
+2. TEST: writer + tester role. Run E2a phrase coverage floor check
+   (`JD_COVERAGE_FLOOR` in `## RUN_MODE`). Record that E2b requirement
+   coverage matrix and E2c unsupported-claim scan are deferred to R2.
 3. DISCUSS: read advisor `discuss` via `get-discussion`; append to
    working notes.
 4. Wait until all three advisors have called `discuss-done` without
@@ -77,8 +93,8 @@ Round plan on C2:
      python .agents/agent_sync/client_v6.py discuss-done qa-auditor --next-impl qa-auditor --port 9840   # loop
      python .agents/agent_sync/client_v6.py discuss-done qa-auditor --port 9840                          # close, no loop
      python .agents/agent_sync/client_v6.py shutdown --reason "C2 complete" --port 9840                  # end stage
-   NOTE: `discuss-done --next-impl shutdown` is NOT a valid shutdown
-   trigger in stock server_v6.py. Use the explicit `shutdown` command.
+   NOTE: `discuss-done --next-impl shutdown` is NOT valid; use the explicit
+   `shutdown` command.
 
 Post-shutdown:
 - Canonical option*.md files are the deliverables.

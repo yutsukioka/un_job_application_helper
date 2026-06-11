@@ -19,6 +19,10 @@ If `RUN_MODE.ENSEMBLE_PHASE_1_7` and `RUN_MODE.ENSEMBLE_PHASE_8` are
 both `[]`, **stop here** and use the existing single-agent linear
 pipeline. The remainder of this runbook is for ensemble mode.
 
+Ensemble v2 document generation supports Phase 8 Options 1-4 and Option 7.
+Options 5, 6, and 8 remain v1 single-agent fallback paths unless explicitly
+enabled in a later v2 expansion.
+
 ## 1. Prep stage
 
 ### 1a. Launch P0a
@@ -35,6 +39,8 @@ pipeline. The remainder of this runbook is for ensemble mode.
   `MAX_REVISION_PASSES`.
 - Live persistence: writer or qa-auditor consumes advisor `listen`
   traffic and appends to `_discussion/advisor_notes_P0a.md`.
+- Initialize `<OUTDIR>/_discussion/run_manifest.json` with
+  `.agents/scripts/write_run_manifest.py init`.
 - Pre-shutdown check: `advisor_notes_P0a.md` non-empty.
 - Shut down P0a.
 
@@ -67,13 +73,31 @@ The metric ledger in particular is **frozen** (see Tier E1).
 
 ## 2. Strategy fold
 
-### 2a. Launch S1, S2, S3 concurrently
+### 2a. Server Topology and Ports
 
-| Server | Port | Writer | Advisors | Canonical tester |
-|---|---|---|---|---|
-| S1 | 9811 | screening-lead | technical-lead, ats-format-lead | qa-auditor |
-| S2 | 9812 | technical-lead | screening-lead, ats-format-lead | qa-auditor |
-| S3 | 9813 | ats-format-lead | screening-lead, technical-lead | qa-auditor |
+| Server | Port | Writer          | Advisors                              | Tester     |
+|--------|------|-----------------|---------------------------------------|------------|
+| P0a    | 9800 | screening-lead  | technical-lead, ats-format-lead       | qa-auditor |
+| P0b    | 9801 | technical-lead  | screening-lead, ats-format-lead       | qa-auditor |
+| S1     | 9811 | screening-lead  | technical-lead, ats-format-lead       | qa-auditor |
+| S2     | 9812 | technical-lead  | screening-lead, ats-format-lead       | qa-auditor |
+| S3     | 9813 | ats-format-lead | screening-lead, technical-lead        | qa-auditor |
+| C1     | 9820 | qa-auditor      | screening-lead, technical-lead, ats-format-lead | (writer is qa) |
+| D1     | 9831 | screening-lead  | technical-lead, ats-format-lead       | qa-auditor |
+| D2     | 9832 | technical-lead  | screening-lead, ats-format-lead       | qa-auditor |
+| D3     | 9833 | ats-format-lead | screening-lead, technical-lead        | qa-auditor |
+| C2     | 9840 | qa-auditor      | screening-lead, technical-lead, ats-format-lead | (writer is qa) |
+| **E1** | **9851** | **independent-panel-evaluator** | **(none — isolated session)** | **(self-evaluating)** |
+| **E2** | **9852** | **independent-shortlisting-redteam** | **(none — isolated session)** | **(self-evaluating)** |
+| **R1** | **9860** | **screening-lead** | **technical-lead, ats-format-lead** | **qa-auditor** |
+| **R2** | **9861** | **qa-auditor** | **screening-lead, technical-lead, ats-format-lead** | **(writer is qa)** |
+
+**Notes on E1/E2**:
+- E1 and E2 do NOT follow the standard IMPLEMENT/TEST/DISCUSS loop.
+- E1 and E2 run in isolated sessions with restricted inputs (see
+  `independent_evaluation_protocol.md`).
+- E1 and E2 produce evaluation artifacts and shut down.
+- E1 and E2 launch concurrently AFTER all canonical Option outputs exist.
 
 Concurrency: same agent name may be advisor on multiple servers
 simultaneously, but writer on at most one (this constraint is satisfied
@@ -114,6 +138,10 @@ DISCUSS
 Before shutting down S1, S2, or S3:
 
 - [ ] `_discussion/advisor_notes_<server>.md` exists and is non-empty.
+- [ ] `_discussion/advisor_notes_<server>.md` contains at least one
+  substantive technical observation, issue, or suggestion per advisor.
+  Validate with:
+  `python .agents/scripts/validate_advisor_notes.py --advisor-notes <OUTDIR>/_discussion/advisor_notes_<server>.md --advisors "<advisor1>,<advisor2>" --json`
 - [ ] Writer's draft `<agent>/phase1_7_strategy_report.md` exists.
 - [ ] No `test-result PASS` was sent by anyone other than `qa-auditor`.
 
@@ -146,6 +174,9 @@ Run `apex-user-feedback-revision` on the canonical
 `phase1_7_strategy_report.md`. Surface gaps, mitigation strategies, and
 the "Metrics & Specifics Needed" list to the user.
 
+Record the Phase 7.5 invocation in `_discussion/run_manifest.json`:
+`python .agents/scripts/write_run_manifest.py add-skill --outdir <OUTDIR> --skill apex-user-feedback-revision --server Phase7.5 --artifact inputs/user_feedback_updates.md`
+
 This is the **sole** pre-Phase-8 gate. v1's "A3 pre-generation red-team
 pass" has been deleted in v2 (see [../CHANGELOG.md](../CHANGELOG.md) Edit 7).
 
@@ -167,6 +198,12 @@ Same per-server loop pattern as 2a, with:
 
 Each writer produces `<agent>/option*.md` for the requested options.
 
+Before IMPLEMENT pass 1, each D writer runs:
+`python .agents/scripts/prepare_d_writer_scaffold.py --outdir <OUTDIR> --role <agent>`
+
+This creates empty draft targets and fails if the writer's draft folder already
+contains non-empty option files from a copied or pre-populated draft.
+
 ### 4b. Pre-shutdown verification (per author server)
 
 Same as 2b, with `D*` substituted.
@@ -181,10 +218,15 @@ All three must be shut down before C2 launches.
 - Writer: `qa-auditor`
 - Advisors: `screening-lead`, `technical-lead`, `ats-format-lead`
 - Reads three draft folders + three `advisor_notes_D*.md`.
+- Before merging, run the draft diversity gate:
+  `python .agents/scripts/check_draft_diversity.py --outdir <OUTDIR> --option option1_admin_profile.md --threshold 0.95 --json`
+  If any pair exceeds 95% character-level similarity, stop with
+  `DIVERSITY_FAILURE` and surface the issue to the user before merging.
 - Writes canonical flat-path `option*.md` files plus
   `_discussion/round4_consensus.md` and append to
   `_discussion/disagreement_log.md`.
-- E2 JD-coverage floor enforced here (see Tier E2).
+- E2a phrase coverage floor enforced here (see Tier E2). R2 later performs
+  E2b requirement-by-requirement coverage and E2c unsupported-claim scan.
 - Shut down C2.
 
 ## 5. Post-eval
@@ -195,6 +237,13 @@ Run `independent-panel-evaluator` and
 `independent-shortlisting-redteam` on the canonical Option outputs.
 Topology unchanged from v1.
 
+Before E1/E2 join, create a sanitized benchmark:
+`python .agents/scripts/prepare_independent_eval_input.py --context-pack inputs/application_context.md --output-file <OUTDIR>/_discussion/independent_eval_input.md`
+
+E1/E2 may read only that sanitized benchmark plus canonical Option outputs.
+They must not read full `inputs/application_context.md`, `metric_ledger.md`,
+strategy reports, advisor notes, panel responses, or remediation files.
+
 ### 5b. Author response round (A3)
 
 `screening-lead` writes `panel_response.md` accepting / contesting /
@@ -204,6 +253,8 @@ deferring each finding. `qa-auditor` consolidates accepted fixes into
 ### 5c. Mandatory `apex-application-audit` (D4)
 
 Run audit. Findings merge into `panel_response.md`.
+R2 writes `application_audit.md`, `remediation_plan.md`, and finalizes
+`_discussion/run_manifest.json`.
 
 ### 5d. Optional revision pass
 

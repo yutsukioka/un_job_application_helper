@@ -39,12 +39,17 @@ Do not rewrite the application unless the user later asks for a separate
 remediation step.
 
 ## Input rule
-If `application_content.md` exists, use it as the primary evaluation file.
+Use only the sanitized independent evaluation benchmark:
+- `output/generated_documents/history/<JOB_SLUG>/_discussion/independent_eval_input.md`
 
-If it does not exist, assemble the evaluation benchmark from:
-- `inputs/application_context.md` (especially `## JOB_DESCRIPTION_TEXT`)
-- generated candidate-facing outputs
-- optional qualification answers
+That file may contain only:
+- `## JOB_DESCRIPTION_TEXT`
+- `## JOB_QUALIFICATION_QUESTIONS` when TARGET_SYSTEM is INSPIRA and questions exist
+
+Do not read the full `inputs/application_context.md`, candidate history,
+metric ledgers, strategy reports, advisor notes, panel responses, or
+remediation files. Evaluate the generated candidate-facing outputs against
+the sanitized benchmark only.
 
 If education or language sections are explicitly unavailable for the task,
 do not deduct points for missing education or language details.

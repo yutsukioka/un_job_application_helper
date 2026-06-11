@@ -55,10 +55,12 @@ Per server, in `tmp/_budget_<server>.json`:
   `messages_sent` count and refuses additional sends past
   `MAX_ADVISOR_MESSAGES` (prompt-level discipline; not mechanically
   enforced).
-- **Pre-DISCUSS:** `qa-auditor` re-reads counters and decides
-  whether to invoke `discuss-done --next-impl <writer>` (loop) or
-  `discuss-done --next-impl shutdown` (terminate) based on
-  `revision_pass` and `MAX_REVISION_PASSES`.
+- **Pre-DISCUSS:** `qa-auditor` re-reads counters and decides based on
+  `revision_pass` and `MAX_REVISION_PASSES`. To loop, use
+  `discuss-done --next-impl <writer-name>`. To end, call `discuss-done`
+  without `--next-impl`, then call the separate
+  `shutdown --reason "<server> complete"` command.
+  Never use `discuss-done --next-impl shutdown` or any shutdown marker wording.
 
 ### `ON_BUDGET_EXCEEDED` policies
 

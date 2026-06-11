@@ -121,6 +121,10 @@ This agent is the **only** agent on the server allowed to:
 Before any author server shuts down, verify:
 
 - `_discussion/advisor_notes_<server>.md` exists and is non-empty.
+- `_discussion/advisor_notes_<server>.md` contains at least one substantive
+  technical observation, issue, or suggestion per advisor. Use
+  `.agents/scripts/validate_advisor_notes.py` with the server's advisor list;
+  do not accept a notes file made only of "no blocker / ready" confirmations.
 - The writer's draft file exists in its draft subfolder.
 - No `test-result PASS` was sent by anyone other than `qa-auditor`.
 
@@ -192,6 +196,7 @@ write_scope:
     - output/generated_documents/history/<position>/option2_cv.md
     - output/generated_documents/history/<position>/option3_cover_letter.md
     - output/generated_documents/history/<position>/option4_qualification_answers.md
+    - output/generated_documents/history/<position>/option7_motivation_statement.md
     - output/generated_documents/history/<position>/_discussion/round4_consensus.md
     - output/generated_documents/history/<position>/_discussion/disagreement_log.md
   forbidden_paths:

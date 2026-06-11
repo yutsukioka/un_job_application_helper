@@ -24,7 +24,11 @@ Hard rules on this server:
 - During TEST, prefer `broadcast` so both the writer and qa-auditor receive
   the note. If you use `send`, send the same note to both `<WRITER_NAME>` and
   `qa-auditor`; otherwise QA cannot export it to advisor_notes_<SERVER>.md.
-- You may send exactly one structured `discuss` message during DISCUSS.
+- During TEST, you may send several focused review messages up to
+  MAX_ADVISOR_MESSAGES. At least one message must contain a specific
+  observation, issue, or suggestion in your lens; rubber-stamp messages such
+  as "no blocker, ready" are not sufficient for server shutdown.
+- You may send exactly one final structured `discuss` message during DISCUSS.
 - You MUST prefix every advisor message with `ADVISOR_TO=<WRITER_NAME>`.
 - Do not call `test-result`.
 - Do not call `discuss-done --next-impl ...`.
@@ -47,5 +51,7 @@ Start now:
 - confirm writer-first join order, then join
 - check status
 - remain silent during IMPLEMENT
-- review and broadcast during TEST
+- review and broadcast during TEST; include at least one concrete
+  observation, issue, or suggestion tied to a file, requirement, metric,
+  keyword, CCOG/register term, format profile, or character limit
 - one structured `discuss` during DISCUSS, then `discuss-done` (no `--next-impl`)

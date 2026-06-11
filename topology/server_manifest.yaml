@@ -25,6 +25,7 @@ servers:
       - <base_output_dir>/classification_proposal.md
       - <base_output_dir>/phase1_2_core_requirements.md
       - <base_output_dir>/metric_ledger.md
+      - <base_output_dir>/_discussion/run_manifest.json
     notes: >
       Hand off to a HUMAN CONFIRMATION GATE on classification_proposal.md
       before launching P0b.
@@ -37,6 +38,7 @@ servers:
     canonical_tester: qa-auditor
     writer_allowed_paths:
       - <base_output_dir>/ccog_reference_resolved.md
+      - <base_output_dir>/_discussion/run_manifest.json
 
   - id: S1
     port: 9811
@@ -78,6 +80,7 @@ servers:
       - <base_output_dir>/phase1_7_strategy_report.md
       - <base_output_dir>/_discussion/round2_consensus.md
       - <base_output_dir>/_discussion/disagreement_log.md
+      - <base_output_dir>/_discussion/run_manifest.json
 
   - id: D1
     port: 9831
@@ -120,7 +123,55 @@ servers:
       - <base_output_dir>/option2_cv.md
       - <base_output_dir>/option3_cover_letter.md
       - <base_output_dir>/option4_qualification_answers.md
+      - <base_output_dir>/option7_motivation_statement.md
       - <base_output_dir>/_discussion/round4_consensus.md
+      - <base_output_dir>/_discussion/disagreement_log.md
+      - <base_output_dir>/_discussion/run_manifest.json
+
+  - id: E1
+    port: 9851
+    role: independent_evaluation
+    writer: independent-panel-evaluator
+    advisors: []
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/independent_panel_evaluation.md
+    notes: >
+      Isolated self-evaluating session. Read only the JD benchmark,
+      metric ledger, and canonical Option outputs.
+
+  - id: E2
+    port: 9852
+    role: independent_evaluation
+    writer: independent-shortlisting-redteam
+    advisors: []
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/independent_shortlisting_risk_review.md
+    notes: >
+      Isolated self-evaluating session. Read only the JD benchmark,
+      metric ledger, and canonical Option outputs.
+
+  - id: R1
+    port: 9860
+    role: panel_response
+    writer: screening-lead
+    advisors: [technical-lead, ats-format-lead]
+    canonical_tester: qa-auditor
+    writer_allowed_paths:
+      - <base_output_dir>/panel_response.md
+      - <base_output_dir>/_discussion/advisor_notes_R1.md
+
+  - id: R2
+    port: 9861
+    role: remediation_consensus
+    writer: qa-auditor
+    advisors: [screening-lead, technical-lead, ats-format-lead]
+    canonical_tester: null
+    writer_allowed_paths:
+      - <base_output_dir>/remediation_plan.md
+      - <base_output_dir>/application_audit.md
+      - <base_output_dir>/_discussion/round5_consensus.md
       - <base_output_dir>/_discussion/disagreement_log.md
 
 concurrency:
@@ -129,9 +180,10 @@ concurrency:
   prep_serialization:
     - "P0a -> [HUMAN_CONFIRMATION] -> P0b"
   fold_serialization:
-    - "[P0a, P0b] -> [S1, S2, S3] -> C1 -> [USER_FEEDBACK_REVISION] -> [D1, D2, D3] -> C2"
+    - "[P0a, P0b] -> [S1, S2, S3] -> C1 -> [USER_FEEDBACK_REVISION] -> [D1, D2, D3] -> C2 -> [E1, E2] -> R1 -> R2"
 
 pre_shutdown_checks:
   - file_exists_and_nonempty: "<base_output_dir>/_discussion/advisor_notes_<server>.md"
+  - advisor_notes_substantive_per_advisor: true
   - file_exists: "writer's primary draft output"
   - test_result_caller_is: qa-auditor
