@@ -380,11 +380,153 @@ def test_source_run_diagnostics_are_persisted_with_source_run(tmp_path):
             "observed_organization_counts": {},
             "count_delta_pct": None,
             "health_status": "ok_empty",
+            "run_classification": None,
+            "publishability_classification": None,
+            "blocked": False,
+            "transient_error": False,
+            "list_breaker_state": None,
+            "detail_breaker_state": None,
             "scope_validation_status": "passed",
             "missing_transition_allowed": True,
             "observed_at": diagnostics[0]["observed_at"],
         }
     ]
+
+
+def test_source_circuit_breaker_state_persists_across_reopen(tmp_path):
+    path = tmp_path / "jobs.sqlite3"
+    db = JobDatabase(path)
+    db.initialize()
+    db.set_source_breaker(
+        source_id="icc_successfactors_legacy",
+        breaker_type="detail",
+        state="open",
+        failure_count=3,
+        success_count=0,
+        reason="adapter_failed",
+    )
+
+    reopened = JobDatabase(path)
+    reopened.initialize()
+    breaker = reopened.get_source_breaker("icc_successfactors_legacy", "detail")
+
+    assert breaker is not None
+    assert breaker["state"] == "open"
+    assert breaker["failure_count"] == 3
+    assert breaker["success_count"] == 0
+    assert breaker["last_reason"] == "adapter_failed"
+
+
+def test_old_schema_upgrade_adds_publishability_and_breaker_support(tmp_path):
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE source_run_diagnostics (
+                source_run_id INTEGER PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                adapter_version TEXT,
+                fetch_method TEXT,
+                platform_host TEXT,
+                site_number TEXT,
+                expected_site_name TEXT,
+                observed_site_name TEXT,
+                endpoint_family TEXT,
+                http_status INTEGER,
+                total_reported_by_source INTEGER,
+                pages_fetched INTEGER,
+                pagination_complete INTEGER,
+                list_error_count INTEGER NOT NULL DEFAULT 0,
+                detail_attempted INTEGER NOT NULL DEFAULT 0,
+                detail_succeeded INTEGER NOT NULL DEFAULT 0,
+                detail_failed INTEGER NOT NULL DEFAULT 0,
+                empty_reason TEXT,
+                zero_fetched_evidence TEXT NOT NULL DEFAULT '{}',
+                observed_agency_counts TEXT NOT NULL DEFAULT '{}',
+                observed_organization_counts TEXT NOT NULL DEFAULT '{}',
+                count_delta_pct REAL,
+                health_status TEXT,
+                scope_validation_status TEXT,
+                missing_transition_allowed INTEGER NOT NULL DEFAULT 0,
+                observed_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE detail_backlog (
+                job_key TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                detail_status TEXT NOT NULL
+                    CHECK (detail_status IN (
+                        'pending',
+                        'complete',
+                        'transient_failed',
+                        'permanent_failed',
+                        'skipped'
+                    )),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                last_success_at TEXT,
+                last_error TEXT,
+                cooldown_until TEXT,
+                listing_hash_at_detail_fetch TEXT,
+                queued_reason TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO detail_backlog (
+                job_key, source_id, detail_status, listing_hash_at_detail_fetch,
+                queued_reason, updated_at
+            )
+            VALUES (
+                'icc_successfactors_legacy:1', 'icc_successfactors_legacy',
+                'pending', 'abc', 'new', '2026-06-12T00:00:00+00:00'
+            )
+            """
+        )
+
+    db = JobDatabase(path)
+    db.initialize()
+
+    with sqlite3.connect(path) as conn:
+        diagnostic_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(source_run_diagnostics)")
+        }
+        detail_sql = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'detail_backlog'
+            """
+        ).fetchone()[0]
+        assert "publishability_classification" in diagnostic_columns
+        assert "list_breaker_state" in diagnostic_columns
+        assert "detail_breaker_state" in diagnostic_columns
+        assert "blocked_by_circuit_breaker" in detail_sql
+        assert conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'source_circuit_breakers'
+            """
+        ).fetchone()[0] == 1
+
+    db.update_detail_backlog_status(
+        job_key="icc_successfactors_legacy:1",
+        source_id="icc_successfactors_legacy",
+        status="blocked_by_circuit_breaker",
+        listing_hash="abc",
+        reason="blocked_by_circuit_breaker",
+    )
+
+    backlog = db.get_detail_backlog("icc_successfactors_legacy:1")
+    assert backlog is not None
+    assert backlog["detail_status"] == "blocked_by_circuit_breaker"
 
 
 def test_initialize_migrates_legacy_classification_table_before_standard_indexes(tmp_path):

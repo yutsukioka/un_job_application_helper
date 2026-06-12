@@ -82,6 +82,7 @@ class VacancySearchRequest:
     contract_groups: list[str] = field(default_factory=list)
     seniority_groups: list[str] = field(default_factory=list)
     work_modalities: list[str] = field(default_factory=list)
+    volunteer_kinds: list[str] = field(default_factory=list)
     unv_categories: list[str] = field(default_factory=list)
     unv_volunteer_types: list[str] = field(default_factory=list)
     closing_date_from: date | str | None = None
@@ -91,6 +92,7 @@ class VacancySearchRequest:
     min_location_confidence: float = 0.70
     min_grade_confidence: float = 0.70
     include_low_confidence: bool = False
+    exclude_expired_open: bool = True
     limit: int = 50
     offset: int = 0
     sort: str = "closing_date_asc"

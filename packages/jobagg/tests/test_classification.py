@@ -727,6 +727,50 @@ def test_fao_volunteer_programme_standardizes_as_other_volunteer(tmp_path):
     assert row["standard_employment_category"] == "Volunteer / other; not staff"
 
 
+def test_unv_category_can_be_read_from_nested_category_details(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = OrganizationSource(
+        id="unv_uvp",
+        name="United Nations Volunteers",
+        ats_family="unv",
+        base_url="https://app.unv.org",
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Research Specialist",
+            external_id="nested-specialist",
+            location="Rwanda",
+            apply_url="https://app.unv.org/opportunities/nested-specialist",
+            raw={
+                "name": "Research Specialist",
+                "country": {"longDescription": "Rwanda", "props": {"codeISO2": "RW"}},
+                "dutyStations": [{"longDescription": "Kigali"}],
+                "volunteersCategoryDetails": {
+                    "categoryName": {
+                        "value": {"code": "SPECIALIST"},
+                        "longDescription": "Specialist",
+                    },
+                    "categoryType": {"longDescription": "International"},
+                    "workArrangement": {"longDescription": "Full time"},
+                    "assignmentDuration": {"longDescription": "12 months"},
+                },
+            },
+        )
+    )
+
+    classify_database(db)
+    row = next(db.iter_jobs_with_classification(source_id="unv_uvp"))
+
+    assert row["contract_category"] == "volunteering_unv"
+    assert row["unv_category"] == "un_volunteer_specialist"
+    assert row["unv_volunteer_type"] == "unv_international"
+    assert row["grade_mapping_organization"] == "United Nations Volunteers"
+    assert row["grade_mapping_raw_grade_code"] == "International UNV Specialist"
+    assert row["standard_seniority_tier"] == "T2_JUNIOR_PROFESSIONAL"
+
+
 def test_fao_volunteer_programme_standardizes_from_title_when_taleo_field_absent(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()

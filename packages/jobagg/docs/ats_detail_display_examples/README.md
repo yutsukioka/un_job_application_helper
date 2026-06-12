@@ -1,0 +1,27 @@
+# ATS Detail Display Examples
+
+Generated from `private/jobagg/output/all_jobs.sqlite3` using `services/job-api/job_api/app.py::_job_detail_payload`, the same detail payload consumed by the Apple right pane.
+
+| ATS family | Example file | Job key | Title | Status |
+|---|---|---|---|---|
+| `avature` | [avature.md](./avature.md) | `unops_avature:3391` | WASH Engineer | `open` |
+| `csod` | [csod.md](./csod.md) | `worldbank_csod:36658` | (Senior) Investment Officer, Corporate Finance Services (CFS) | `open` |
+| `custom_html` | [custom_html.md](./custom_html.md) | `cern_custom_html:hr-ta-2026-57-grae` | Talent Acquisition Officer | `open` |
+| `eu_careers_static` | [eu_careers_static.md](./eu_careers_static.md) | `eu_careers_static:euspa-2026-ad-008` | GSMC Local Security Office Team Leader | `open` |
+| `icddrb_custom_html` | [icddrb_custom_html.md](./icddrb_custom_html.md) | `icddrb_custom_html:32230` | Data Management Assistant with Maternal and Child Nutrition under the Nutrition Research Division (Re-adv#72/2026) | `open` |
+| `imo_api` | [imo_api.md](./imo_api.md) | `imo_api:1033` | Administrative Assistant (Roster) | `open` |
+| `inspira` | [inspira.md](./inspira.md) | `un_inspira:191928` | Sanctions Expert | `open` |
+| `itlos_static_html` | [itlos_static_html.md](./itlos_static_html.md) | `itlos_static_html:Model_MoU_JPO_Eng.pdf` | Untitled role | `open` |
+| `opcw_talentsoft_candidatespace` | [opcw_talentsoft_candidatespace.md](./opcw_talentsoft_candidatespace.md) | `opcw_talentsoft_candidatespace:564` | Organisation for the Prohibition of Chemical Weapons | `open` |
+| `oracle_hcm` | [oracle_hcm.md](./oracle_hcm.md) | `wmo_oracle_hcm:34548` | Human Resources Officer, P.3 (Fixed-term - 1 year) | `open` |
+| `osce_custom_html` | [osce_custom_html.md](./osce_custom_html.md) | `osce_custom_html:consultant-adviser-to-the-military-ombudsman-of-ukraine-communications-%D0%B5%D0%BA%D1%81%D0%BF%D0%B5%D1%80%D1%82-%D1%80%D0%B0%D0%B4%D0%BD%D0%B8%D0%BA-%D0%B7-%D0%BA%D0%BE%D0%BC%D1%83%D0%BD%D1%96%D0%BA%D0%B0%D1%86%D1%96%D0%B9-%D0%B2%D1%96%D0%B9%D1%81%D1%8C%D0%BA%D0%BE%D0%B2%D0%BE%D0%B3%D0%BE-%D0%BE%D0%BC%D0%B1%D1%83%D0%B4%D1%81%D0%BC%D0%B0%D0%BD%D0%B0-%D1%83%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D0%B8-k%D0-4756` | Consultant, Adviser to the Military Ombudsman of Ukraine (Communications) / Експерт, радник з комунікацій Військового омбудсмана України (Kомунікації) in OSCE | `open` |
+| `pageup` | [pageup.md](./pageup.md) | `unicef_pageup:593666` | Technical Support for Child-Friendly Service Spaces , Samoa, Fiji/ Child protection, 9 months, remote with trip (NATIONAL only) | `open` |
+| `peoplesoft` | [peoplesoft.md](./peoplesoft.md) | `ifad_peoplesoft:2095` | Search Jobs | `open` |
+| `smartrecruiters` | [smartrecruiters.md](./smartrecruiters.md) | `oecd_smartrecruiters:REF2793W` | Le Programme de stages | `open` |
+| `successfactors_legacy` | [successfactors_legacy.md](./successfactors_legacy.md) | `aiib_successfactors_legacy:25251` | Senior Investment Officer | `open` |
+| `successfactors_rmk` | [successfactors_rmk.md](./successfactors_rmk.md) | `interpol_jobs2web:1392446000` | Compliance Officer | `open` |
+| `taleo` | [taleo.md](./taleo.md) | `adb_taleo:260551` | Security Specialist | `open` |
+| `unssc_drupal_custom` | [unssc_drupal_custom.md](./unssc_drupal_custom.md) | `unssc_drupal_custom:IC_006_2026` | Untitled role | `open` |
+| `unu_recruitee` | [unu_recruitee.md](./unu_recruitee.md) | `unu_recruitee:academic-partnerships-coordinator-ctc` | Academic Partnerships Coordinator (CTC) | `open` |
+| `unv` | [unv.md](./unv.md) | `unv_uvp:1784888021261968` | Support resource mobilization | `open` |
+| `workday` | [workday.md](./workday.md) | `paho_workday:Req-05303` | PAHO Internships | `open` |

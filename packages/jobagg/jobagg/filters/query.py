@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from jobagg.db import JobDatabase
@@ -31,6 +32,7 @@ def _add_text_clause(
     text: str,
     *,
     include_department: bool = False,
+    include_classification: bool = False,
     use_fts: bool = True,
 ) -> None:
     """Add a free-text predicate, preferring FTS5 with a LIKE fallback.
@@ -53,6 +55,7 @@ def _add_text_clause(
             "(j.rowid IN (SELECT rowid FROM jobs_fts WHERE jobs_fts MATCH ?)"
             " OR j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
             + (" OR j.department LIKE ?" if include_department else "")
+            + _classification_text_sql(include_classification)
             + ")"
         )
         params.append(f"{fts_columns} : {phrase}")
@@ -60,11 +63,36 @@ def _add_text_clause(
         clauses.append(
             "(j.title LIKE ? OR j.description LIKE ? OR j.location LIKE ?"
             + (" OR j.department LIKE ?" if include_department else "")
+            + _classification_text_sql(include_classification)
             + ")"
         )
     params.extend([needle, needle, needle])
     if include_department:
         params.append(needle)
+    if include_classification:
+        params.extend([needle] * len(_CLASSIFICATION_TEXT_COLUMNS))
+
+
+_CLASSIFICATION_TEXT_COLUMNS = (
+    "c.capability_tags",
+    "c.ccog_primary_label",
+    "c.ccog_family_label",
+    "c.occupational_family_label",
+    "c.occupational_medium_label",
+    "c.mandate_network_label",
+    "c.mandate_family_label",
+    "c.contract_category",
+    "c.contract_group",
+    "c.seniority_group",
+    "c.grade_code",
+    "c.standard_un_equivalent",
+)
+
+
+def _classification_text_sql(include_classification: bool) -> str:
+    if not include_classification:
+        return ""
+    return "".join(f" OR {column} LIKE ?" for column in _CLASSIFICATION_TEXT_COLUMNS)
 
 
 def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str, Any]]:
@@ -305,6 +333,7 @@ def search_facet_counts(
         "work_modalities": "c.work_modality",
         "regions": "c.region",
         "unv_categories": "c.unv_category",
+        "unv_volunteer_types": "c.unv_volunteer_type",
     }
     result: dict[str, dict[str, int]] = {}
     with db.connect() as conn:
@@ -323,6 +352,13 @@ def search_facet_counts(
                 for row in rows
                 if row["value"] not in (None, "")
             }
+        result["volunteer_kinds"] = _volunteer_kind_facets(conn, where_clause, params)
+        result["capability_tags"] = _json_array_facets(
+            conn,
+            where_clause,
+            params,
+            "c.capability_tags",
+        )
     return result
 
 
@@ -342,6 +378,9 @@ def _search_conditions(
     params: list[Any] = []
     if request.status:
         _add_in_clause(clauses, params, "j.status", [status.casefold() for status in request.status])
+        if request.exclude_expired_open and "open" in {status.casefold() for status in request.status}:
+            clauses.append("(j.closes_at IS NULL OR j.closes_at >= ?)")
+            params.append(datetime.now(tz=UTC).isoformat())
     _add_in_clause(clauses, params, "j.org_id", request.organizations)
     _add_in_clause(clauses, params, "j.source_id", request.source_ids)
     _add_in_clause(clauses, params, "j.ats_family", request.ats_families)
@@ -356,22 +395,34 @@ def _search_conditions(
         params.append(request.min_grade_confidence)
     scopes = [scope for scope in (normalize_scope(value) for value in request.national_international) if scope]
     if scopes:
-        if "international" in scopes and ("P" in grade_families or any(code.startswith("P") for code in grade_codes)):
-            placeholders = ", ".join("?" for _ in scopes)
-            clauses.append(f"(c.national_international IN ({placeholders}) OR c.grade_family = 'P')")
-            params.extend(scopes)
-        else:
-            _add_in_clause(clauses, params, "c.national_international", scopes)
+        scope_parts: list[str] = []
+        non_unknown_scopes = [scope for scope in scopes if scope != "unknown"]
+        if non_unknown_scopes:
+            placeholders = ", ".join("?" for _ in non_unknown_scopes)
+            part = f"c.national_international IN ({placeholders})"
+            if "international" in non_unknown_scopes and (
+                "P" in grade_families or any(code.startswith("P") for code in grade_codes)
+            ):
+                part = f"({part} OR c.grade_family = 'P')"
+            scope_parts.append(part)
+            params.extend(non_unknown_scopes)
+        if "unknown" in scopes:
+            scope_parts.append(
+                "(c.national_international IS NULL OR c.national_international = '' "
+                "OR c.national_international = 'unknown')"
+            )
+        clauses.append("(" + " OR ".join(scope_parts) + ")")
     _add_in_clause(clauses, params, "c.ccog_primary_code", request.ccog_codes)
     _add_ccog_family_clause(clauses, params, request.ccog_families)
     _add_in_clause(clauses, params, "c.occupational_family_code", request.occupational_family_codes)
     _add_in_clause(clauses, params, "c.occupational_medium_code", request.occupational_medium_codes)
     _add_in_clause(clauses, params, "c.mandate_network_code", request.mandate_network_codes)
     _add_in_clause(clauses, params, "c.mandate_family_code", request.mandate_family_codes)
-    _add_json_array_contains_clause(clauses, params, "c.capability_tags", request.capability_tags)
+    _add_capability_tags_clause(clauses, params, request.capability_tags)
     _add_in_clause(clauses, params, "c.contract_group", request.contract_groups)
     _add_in_clause(clauses, params, "c.seniority_group", request.seniority_groups)
     _add_in_clause(clauses, params, "c.work_modality", request.work_modalities)
+    _add_volunteer_kind_clause(clauses, params, request.volunteer_kinds)
     _add_in_clause(clauses, params, "c.unv_category", request.unv_categories)
     _add_in_clause(clauses, params, "c.unv_volunteer_type", request.unv_volunteer_types)
     _add_date_clause(clauses, params, "j.closes_at", ">=", request.closing_date_from)
@@ -379,7 +430,13 @@ def _search_conditions(
     _add_date_clause(clauses, params, "j.posted_at", ">=", request.posted_date_from)
     _add_date_clause(clauses, params, "j.posted_at", "<=", request.posted_date_to)
     if request.text:
-        _add_text_clause(clauses, params, request.text, use_fts=use_fts)
+        _add_text_clause(
+            clauses,
+            params,
+            request.text,
+            include_classification=True,
+            use_fts=use_fts,
+        )
     location_clause, location_params = _location_exists_clause(request)
     if location_clause:
         clauses.append(location_clause)
@@ -534,6 +591,116 @@ def _add_json_array_contains_clause(
     clauses.append("(" + " OR ".join(parts) + ")")
 
 
+def _add_capability_tags_clause(
+    clauses: list[str],
+    params: list[Any],
+    values: list[str],
+) -> None:
+    cleaned = [value.strip() for value in values if value and value.strip()]
+    if not cleaned:
+        return
+    parts = []
+    for value in cleaned:
+        for term in _capability_search_terms(value):
+            parts.append("c.capability_tags LIKE ?")
+            params.append(f"%{term}%")
+    clauses.append("(" + " OR ".join(parts) + ")")
+
+
+def _capability_search_terms(value: str) -> list[str]:
+    normalized = re.sub(r"[\s/-]+", "_", value.casefold().strip()).strip("_")
+    compact = value.casefold().strip()
+    terms = [term for term in (compact, normalized) if term]
+    return list(dict.fromkeys(terms))
+
+
+def _add_volunteer_kind_clause(
+    clauses: list[str],
+    params: list[Any],
+    values: list[str],
+) -> None:
+    cleaned = {value for value in values if value}
+    if not cleaned:
+        return
+    parts: list[str] = []
+    if "un_volunteer" in cleaned:
+        parts.append(_UN_VOLUNTEER_SQL)
+    if "volunteer" in cleaned:
+        parts.append(_GENERIC_VOLUNTEER_SQL)
+    if parts:
+        clauses.append("(" + " OR ".join(parts) + ")")
+
+
+_UN_VOLUNTEER_SQL = (
+    "(j.source_id = 'unv_uvp' OR c.contract_category = 'volunteering_unv' "
+    "OR (c.unv_category IS NOT NULL AND c.unv_category <> '' AND c.unv_category <> 'unknown'))"
+)
+
+_GENERIC_VOLUNTEER_SQL = (
+    "((c.contract_group IN ('volunteer', 'roster_pipeline', 'other') "
+    "OR c.contract_category LIKE '%volunteer%' "
+    "OR c.standard_employment_category LIKE '%Volunteer%') "
+    f"AND NOT {_UN_VOLUNTEER_SQL})"
+)
+
+
+def _volunteer_kind_facets(
+    conn: Any,
+    where_clause: str,
+    params: list[Any],
+) -> dict[str, int]:
+    result: dict[str, int] = {}
+    queries = {
+        "un_volunteer": f"""
+            SELECT COUNT(DISTINCT j.job_key) AS count
+            FROM jobs j
+            JOIN vacancy_classifications c ON c.vacancy_id = j.job_key
+            {where_clause}
+            {"AND" if where_clause else "WHERE"} {_UN_VOLUNTEER_SQL}
+        """,
+        "volunteer": f"""
+            SELECT COUNT(DISTINCT j.job_key) AS count
+            FROM jobs j
+            JOIN vacancy_classifications c ON c.vacancy_id = j.job_key
+            {where_clause}
+            {"AND" if where_clause else "WHERE"} {_GENERIC_VOLUNTEER_SQL}
+        """,
+    }
+    for key, query in queries.items():
+        count = int(conn.execute(query, tuple(params)).fetchone()["count"])
+        if count:
+            result[key] = count
+    return result
+
+
+def _json_array_facets(
+    conn: Any,
+    where_clause: str,
+    params: list[Any],
+    column: str,
+) -> dict[str, int]:
+    if column not in {"c.capability_tags"}:
+        raise ValueError(f"Refusing JSON facet for unknown column: {column!r}")
+    query = f"""
+        SELECT json_each.value AS value, COUNT(DISTINCT j.job_key) AS count
+        FROM jobs j
+        JOIN vacancy_classifications c ON c.vacancy_id = j.job_key
+        JOIN json_each({column})
+        {where_clause}
+        GROUP BY json_each.value
+        ORDER BY count DESC, value
+    """
+    try:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    except Exception:
+        return {}
+    return {
+        str(row["value"]): int(row["count"])
+        for row in rows
+        if row["value"] not in (None, "")
+    }
+
+
 def _add_date_clause(
     clauses: list[str],
     params: list[Any],
@@ -638,8 +805,10 @@ def _add_filters(
         )
         params.extend([filters.ccog_family, filters.ccog_family, f"{filters.ccog_family}.%"])
     if filters.capability_tag:
-        clauses.append("c.capability_tags LIKE ?")
-        params.append(f'%"{filters.capability_tag}"%')
+        terms = _capability_search_terms(filters.capability_tag)
+        if terms:
+            clauses.append("(" + " OR ".join("c.capability_tags LIKE ?" for _ in terms) + ")")
+            params.extend(f"%{term}%" for term in terms)
     if filters.max_min_years_experience is not None:
         clauses.append("(c.min_years_experience IS NULL OR c.min_years_experience <= ?)")
         params.append(filters.max_min_years_experience)
@@ -659,6 +828,7 @@ def _add_filters(
             params,
             filters.text,
             include_department=True,
+            include_classification=True,
             use_fts=use_fts,
         )
 

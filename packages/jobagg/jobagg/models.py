@@ -168,6 +168,12 @@ class SourceRunDiagnostics:
     observed_organization_counts: dict[str, int] = field(default_factory=dict)
     count_delta_pct: float | None = None
     health_status: str | None = None
+    run_classification: str | None = None
+    publishability_classification: str | None = None
+    blocked: bool = False
+    transient_error: bool = False
+    list_breaker_state: str | None = None
+    detail_breaker_state: str | None = None
     scope_validation_status: str | None = None
     missing_transition_allowed: bool = False
     observed_at: datetime = field(default_factory=utc_now)

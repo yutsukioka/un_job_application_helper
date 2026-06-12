@@ -8,7 +8,7 @@ from jobagg.adapters.csod import CSODAdapter, _extract_balanced_json_object
 from jobagg.adapters.custom_html import CustomHTMLAdapter
 from jobagg.adapters.icddrb import ICDDRBAdapter, _vacancy_links
 from jobagg.adapters.imo import IMOAPIAdapter
-from jobagg.adapters.oracle_hcm import OracleHCMAdapter, classify_fetch_error
+from jobagg.adapters.oracle_hcm import OracleHCMAdapter, SourceInconclusiveError, classify_fetch_error
 from jobagg.adapters.pageup import PageUpAdapter
 from jobagg.adapters.peoplesoft import PeopleSoftAdapter
 from jobagg.adapters.smartrecruiters import SmartRecruitersAdapter
@@ -29,9 +29,12 @@ from jobagg.models import OrganizationSource
 
 
 class FakeResponse:
-    def __init__(self, payload=None, *, text=None):
+    def __init__(self, payload=None, *, text=None, headers=None, status_code=200, url="https://example.org/api"):
         self.payload = payload
         self.text = text if text is not None else json.dumps(payload)
+        self.headers = headers or {}
+        self.status_code = status_code
+        self.url = url
 
     def json(self):
         return self.payload
@@ -275,6 +278,60 @@ def test_oracle_hcm_classifies_dns_resolution_errors():
     assert classify_fetch_error(RuntimeError("GET failed with HTTP 401: no auth")) == "auth_or_forbidden"
 
 
+def test_oracle_hcm_malformed_json_responses_raise_source_inconclusive_before_json_parse():
+    org = OrganizationSource(
+        id="iom_oracle_hcm",
+        name="IOM",
+        ats_family="oracle_hcm",
+        base_url="https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com",
+        extra={"site_number": "CX_1001"},
+    )
+
+    cases = [
+        (
+            "",
+            {"Content-Type": "application/json"},
+            "empty_body_before_json_parse",
+            "",
+        ),
+        (
+            "<html>maintenance</html>",
+            {"Content-Type": "text/html; charset=utf-8"},
+            "non_json_response_before_json_parse",
+            "maintenance",
+        ),
+        (
+            "{not json",
+            {"Content-Type": "application/json; charset=utf-8"},
+            "invalid_json_response",
+            "{not json",
+        ),
+    ]
+    for text, response_headers, reason, expected_snippet in cases:
+        class MalformedHTTP:
+            def get(self, url, *, headers=None, timeout_seconds=None):
+                return FakeResponse(
+                    text=text,
+                    headers=response_headers,
+                    status_code=200,
+                    url=url,
+                )
+
+        adapter = OracleHCMAdapter(AdapterContext(source=org, http=MalformedHTTP()))
+        try:
+            adapter.fetch_jobs()
+        except SourceInconclusiveError as exc:
+            assert exc.source_id == "iom_oracle_hcm"
+            assert exc.reason == reason
+            assert exc.status_code == 200
+            assert exc.content_type == response_headers["Content-Type"]
+            assert exc.final_url.startswith("https://")
+            assert len(exc.body_snippet) <= 500
+            assert expected_snippet in exc.body_snippet
+        else:
+            raise AssertionError(f"Expected SourceInconclusiveError for {reason}")
+
+
 def test_oracle_hcm_validates_site_settings_and_paginates_to_total(monkeypatch):
     monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
     org = source(
@@ -448,6 +505,40 @@ def test_oracle_hcm_reuses_candidate_experience_user_id_within_adapter_run():
         if "recruitingCEJobRequisitionDetails" in call[0]
     ]
     assert len({headers["ora-irc-cx-userid"] for headers in detail_headers}) == 1
+
+
+def test_oracle_hcm_reuses_candidate_experience_user_id_across_list_and_detail(monkeypatch):
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
+    org = source(
+        "oracle_hcm",
+        site_number="CX_1",
+        expected_site_name="UNDP",
+        page_size=1,
+        max_pages=1,
+        fetch_details=True,
+    )
+    detail_payload = fixture_json("oracle", "cx1_undp_hosted_agencies_detail.json")
+    http = FakeOracleCEHTTP(
+        {
+            0: {
+                "items": [
+                    {
+                        "TotalJobsCount": 1,
+                        "requisitionList": [{"Id": "34287", "Title": "Role 34287"}],
+                    }
+                ]
+            }
+        },
+        site_settings={"siteNumber": "CX_1", "siteName": "UNDP"},
+        detail_pages={"34287": detail_payload},
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    adapter.fetch_jobs()
+
+    headers = [call[1] for call in http.get_calls if "ora-irc-cx-userid" in call[1]]
+    assert len(headers) >= 3
+    assert len({header["ora-irc-cx-userid"] for header in headers}) == 1
 
 
 def test_oracle_hcm_site_name_mismatch_aborts_without_jobs(monkeypatch):

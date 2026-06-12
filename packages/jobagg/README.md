@@ -73,6 +73,50 @@ validates that each SQLite database has no duplicate `external_id` or
 existing canonical `{slug}_jobs.sqlite3` before each sync, so change history is
 preserved across regular bundle runs.
 
+### Degraded Sources And Exit Codes
+
+`sync-bundles` separates publish success from source health:
+
+- Exit `0`: consolidation/export/publishing succeeded and selected sources were
+  healthy.
+- Exit `2`: consolidation/export/publishing succeeded, but at least one source
+  was degraded, inconclusive, blocked, parser-failed, or detail-degraded.
+- Exit `1`: consolidation/export/publishing failed, database validation failed,
+  or missing/closed safety gates were violated.
+
+Use `--allow-source-degraded` only for automation that should treat a safe
+publish-with-warnings as shell success. The health report still records
+`publish_result: success_with_source_warnings`, the warning sources, and
+`source_health_exit_code: 2` even when the process exits `0`.
+
+Every run writes `sync_bundles_health.json` in the output directory unless
+`--health-report-output` is provided. Automation should read this file instead of
+inferring health from the shell code alone. Key fields include `publish_result`,
+`fatal_errors_count`, current/history counts, degraded/inconclusive/adapter-broken
+source counts, and per-source fetched count, pagination/verified-empty flags,
+missing-transition gate state, detail attempt counts, detail backlog counts,
+circuit-breaker state, cooldowns, and last error summary.
+
+Detail enrichment is intentionally non-fatal when listing discovery is healthy.
+List discovery controls open/missing/closed transitions, and those transitions
+are allowed only when scope and pagination gates pass and zero-fetched runs are
+explicitly verified empty. Detail failures leave work in the persistent backlog
+and may classify the source as `publishable_detail_degraded` or
+`publishable_list_only`; they must not close jobs.
+
+List circuit breakers open after repeated list failures or unsafe zero-fetched
+incomplete runs, then cool down before a half-open probe. Detail breakers open
+when detail failures are systemic, so the sync stops draining the full backlog
+and performs small periodic probes instead. Transient detail host breakers cool
+down after repeated timeout/429/503/504/remote-closed failures. After fixing a
+source adapter or waiting through cooldown, run a dry-run diagnostic first:
+
+```bash
+jobagg source-health-report --dry-run \
+  --sources undp_oracle_hcm,unicef_pageup,icc_successfactors_legacy,ctbto_successfactors_legacy,iom_oracle_hcm \
+  --output-dir private/jobagg/output
+```
+
 ## Change Detection
 
 `jobagg` tracks two stable keys:

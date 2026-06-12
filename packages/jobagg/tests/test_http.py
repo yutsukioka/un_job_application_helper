@@ -71,6 +71,40 @@ class ServerErrorThenSuccessOpener:
         return FakeResponse()
 
 
+class RetryAfterThenSuccessOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def open(self, request, timeout):
+        self.calls += 1
+        if self.calls == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                503,
+                "Service Unavailable",
+                {"Retry-After": "7"},
+                io.BytesIO(b"temporarily unavailable"),
+            )
+        return FakeResponse()
+
+
+class RetryAfterMsThenSuccessOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def open(self, request, timeout):
+        self.calls += 1
+        if self.calls == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                503,
+                "Service Unavailable",
+                {"Retry-After-Ms": "2500"},
+                io.BytesIO(b"temporarily unavailable"),
+            )
+        return FakeResponse()
+
+
 class RecordingTimeoutOpener:
     def __init__(self):
         self.timeouts = []
@@ -100,6 +134,34 @@ def test_transient_http_5xx_retries_then_succeeds():
 
     assert response.text == "ok"
     assert opener.calls == 2
+
+
+def test_retry_after_header_is_honored(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("jobagg.http.time.sleep", sleeps.append)
+    client = JobAggHTTPClient(max_retries=1, backoff_base_seconds=1, jitter_ratio=0)
+    opener = RetryAfterThenSuccessOpener()
+    client._opener = opener
+
+    response = client.get("https://example.org")
+
+    assert response.text == "ok"
+    assert opener.calls == 2
+    assert sleeps == [7.0]
+
+
+def test_retry_after_ms_header_is_honored(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("jobagg.http.time.sleep", sleeps.append)
+    client = JobAggHTTPClient(max_retries=1, backoff_base_seconds=1, jitter_ratio=0)
+    opener = RetryAfterMsThenSuccessOpener()
+    client._opener = opener
+
+    response = client.get("https://example.org")
+
+    assert response.text == "ok"
+    assert opener.calls == 2
+    assert sleeps == [2.5]
 
 
 def test_retry_attempts_respect_min_delay(monkeypatch):

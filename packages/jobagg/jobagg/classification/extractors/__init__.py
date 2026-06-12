@@ -328,19 +328,24 @@ class UNVExtractor(SourceFeatureExtractor):
         institution = host.get("institution") or {} if isinstance(host, dict) else {}
         duty_stations = raw.get("dutyStations") or []
         expertise = raw.get("expertiseAreas") or []
+        category_details = raw.get("volunteersCategoryDetails") or {}
+        if not isinstance(category_details, dict):
+            category_details = {}
         features = base_features(
             vacancy,
             evidence={
                 "isOnsite": raw.get("isOnsite"),
-                "categoryName": raw.get("categoryName"),
-                "volunteerType": raw.get("volunteerType"),
-                "workLocation": raw.get("workLocation"),
-                "workArrangement": raw.get("workArrangement"),
-                "assignmentDuration": raw.get("assignmentDuration"),
+                "categoryName": raw.get("categoryName") or category_details.get("categoryName"),
+                "volunteerType": raw.get("volunteerType") or category_details.get("categoryType"),
+                "workLocation": raw.get("workLocation") or category_details.get("workLocation"),
+                "workArrangement": raw.get("workArrangement") or category_details.get("workArrangement"),
+                "assignmentDuration": raw.get("assignmentDuration")
+                or category_details.get("assignmentDuration"),
                 "hoursWeek": raw.get("hoursWeek"),
                 "expertiseAreas": expertise,
                 "hostEntity": host,
                 "sdgType": raw.get("sdgType"),
+                "volunteersCategoryCode": raw.get("volunteersCategoryCode"),
             },
         )
         features.title = raw.get("name") or vacancy.get("title")
@@ -350,12 +355,16 @@ class UNVExtractor(SourceFeatureExtractor):
         features.region_raw = label(raw.get("unvRegion"))
         features.contract_raw = "UNV"
         features.contract_source_field = "source_id"
-        features.unv_category_code = code(raw.get("categoryName"))
-        features.unv_category_label = label(raw.get("categoryName"))
-        features.unv_volunteer_type = label(raw.get("volunteerType"))
-        features.unv_work_location = label(raw.get("workLocation"))
-        features.unv_work_arrangement = label(raw.get("workArrangement"))
-        features.unv_assignment_duration = label(raw.get("assignmentDuration"))
+        features.unv_category_code = code(raw.get("categoryName") or category_details.get("categoryName"))
+        features.unv_category_label = label(raw.get("categoryName") or category_details.get("categoryName"))
+        features.unv_volunteer_type = label(raw.get("volunteerType") or category_details.get("categoryType"))
+        features.unv_work_location = label(raw.get("workLocation") or category_details.get("workLocation"))
+        features.unv_work_arrangement = label(
+            raw.get("workArrangement") or category_details.get("workArrangement")
+        )
+        features.unv_assignment_duration = label(
+            raw.get("assignmentDuration") or category_details.get("assignmentDuration")
+        )
         features.unv_hours_week = label(raw.get("hoursWeek"))
         features.unv_host_entity = label(institution) or (host.get("name") if isinstance(host, dict) else None)
         features.unv_sdg = label(raw.get("sdgType"))

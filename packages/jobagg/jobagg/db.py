@@ -204,6 +204,12 @@ class JobDatabase:
                     observed_organization_counts TEXT NOT NULL DEFAULT '{}',
                     count_delta_pct REAL,
                     health_status TEXT,
+                    run_classification TEXT,
+                    publishability_classification TEXT,
+                    blocked INTEGER NOT NULL DEFAULT 0,
+                    transient_error INTEGER NOT NULL DEFAULT 0,
+                    list_breaker_state TEXT,
+                    detail_breaker_state TEXT,
                     scope_validation_status TEXT,
                     missing_transition_allowed INTEGER NOT NULL DEFAULT 0,
                     observed_at TEXT NOT NULL
@@ -211,6 +217,49 @@ class JobDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_source_run_diag_source_observed
                     ON source_run_diagnostics (source_id, observed_at);
+
+                CREATE TABLE IF NOT EXISTS detail_backlog (
+                    job_key TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    detail_status TEXT NOT NULL
+                        CHECK (detail_status IN (
+                            'pending',
+                            'complete',
+                            'transient_failed',
+                            'permanent_failed',
+                            'skipped',
+                            'adapter_failed',
+                            'blocked_by_circuit_breaker'
+                        )),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_success_at TEXT,
+                    last_error TEXT,
+                    cooldown_until TEXT,
+                    listing_hash_at_detail_fetch TEXT,
+                    queued_reason TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_detail_backlog_source_status
+                    ON detail_backlog (source_id, detail_status, cooldown_until);
+
+                CREATE TABLE IF NOT EXISTS source_circuit_breakers (
+                    source_id TEXT NOT NULL,
+                    breaker_type TEXT NOT NULL
+                        CHECK (breaker_type IN ('list', 'detail', 'transient_detail')),
+                    state TEXT NOT NULL
+                        CHECK (state IN ('closed', 'open', 'half_open')),
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    cooldown_until TEXT,
+                    last_reason TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, breaker_type)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_source_breakers_state
+                    ON source_circuit_breakers (breaker_type, state, cooldown_until);
 
                 CREATE TABLE IF NOT EXISTS vacancy_source_features (
                     vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
@@ -541,6 +590,62 @@ class JobDatabase:
                 "observed_organization_counts",
                 "TEXT NOT NULL DEFAULT '{}'",
             )
+            for column, column_type in (
+                ("run_classification", "TEXT"),
+                ("publishability_classification", "TEXT"),
+                ("blocked", "INTEGER NOT NULL DEFAULT 0"),
+                ("transient_error", "INTEGER NOT NULL DEFAULT 0"),
+                ("list_breaker_state", "TEXT"),
+                ("detail_breaker_state", "TEXT"),
+            ):
+                self._ensure_column(conn, "source_run_diagnostics", column, column_type)
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS detail_backlog (
+                    job_key TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    detail_status TEXT NOT NULL
+                        CHECK (detail_status IN (
+                            'pending',
+                            'complete',
+                            'transient_failed',
+                            'permanent_failed',
+                            'skipped',
+                            'adapter_failed',
+                            'blocked_by_circuit_breaker'
+                        )),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_success_at TEXT,
+                    last_error TEXT,
+                    cooldown_until TEXT,
+                    listing_hash_at_detail_fetch TEXT,
+                    queued_reason TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_detail_backlog_source_status
+                    ON detail_backlog (source_id, detail_status, cooldown_until);
+
+                CREATE TABLE IF NOT EXISTS source_circuit_breakers (
+                    source_id TEXT NOT NULL,
+                    breaker_type TEXT NOT NULL
+                        CHECK (breaker_type IN ('list', 'detail', 'transient_detail')),
+                    state TEXT NOT NULL
+                        CHECK (state IN ('closed', 'open', 'half_open')),
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    cooldown_until TEXT,
+                    last_reason TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source_id, breaker_type)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_source_breakers_state
+                    ON source_circuit_breakers (breaker_type, state, cooldown_until);
+                """
+            )
+            self._ensure_detail_backlog_status_schema(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_posting_fingerprint "
                 "ON jobs (posting_fingerprint)"
@@ -753,6 +858,61 @@ class JobDatabase:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _ensure_detail_backlog_status_schema(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'detail_backlog'
+            """
+        ).fetchone()
+        if row is None or "blocked_by_circuit_breaker" in str(row["sql"] or ""):
+            return
+        conn.executescript(
+            """
+            ALTER TABLE detail_backlog RENAME TO detail_backlog_old;
+
+            CREATE TABLE detail_backlog (
+                job_key TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                detail_status TEXT NOT NULL
+                    CHECK (detail_status IN (
+                        'pending',
+                        'complete',
+                        'transient_failed',
+                        'permanent_failed',
+                        'skipped',
+                        'adapter_failed',
+                        'blocked_by_circuit_breaker'
+                    )),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                last_success_at TEXT,
+                last_error TEXT,
+                cooldown_until TEXT,
+                listing_hash_at_detail_fetch TEXT,
+                queued_reason TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT INTO detail_backlog (
+                job_key, source_id, detail_status, attempt_count,
+                last_attempt_at, last_success_at, last_error, cooldown_until,
+                listing_hash_at_detail_fetch, queued_reason, updated_at
+            )
+            SELECT
+                job_key, source_id, detail_status, attempt_count,
+                last_attempt_at, last_success_at, last_error, cooldown_until,
+                listing_hash_at_detail_fetch, queued_reason, updated_at
+            FROM detail_backlog_old;
+
+            DROP TABLE detail_backlog_old;
+
+            CREATE INDEX IF NOT EXISTS idx_detail_backlog_source_status
+                ON detail_backlog (source_id, detail_status, cooldown_until);
+            """
+        )
 
     def _seed_grade_mappings(self, conn: sqlite3.Connection) -> None:
         from jobagg.classification.grade_mapping import (
@@ -1042,10 +1202,13 @@ class JobDatabase:
                     detail_succeeded, detail_failed, detail_skipped, empty_reason,
                     zero_fetched_evidence, observed_agency_counts,
                     observed_organization_counts, count_delta_pct, health_status,
+                    run_classification, publishability_classification,
+                    blocked, transient_error, list_breaker_state,
+                    detail_breaker_state,
                     scope_validation_status,
                     missing_transition_allowed, observed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_run_id) DO UPDATE SET
                     source_id = excluded.source_id,
                     adapter_version = excluded.adapter_version,
@@ -1070,6 +1233,12 @@ class JobDatabase:
                     observed_organization_counts = excluded.observed_organization_counts,
                     count_delta_pct = excluded.count_delta_pct,
                     health_status = excluded.health_status,
+                    run_classification = excluded.run_classification,
+                    publishability_classification = excluded.publishability_classification,
+                    blocked = excluded.blocked,
+                    transient_error = excluded.transient_error,
+                    list_breaker_state = excluded.list_breaker_state,
+                    detail_breaker_state = excluded.detail_breaker_state,
                     scope_validation_status = excluded.scope_validation_status,
                     missing_transition_allowed = excluded.missing_transition_allowed,
                     observed_at = excluded.observed_at
@@ -1103,6 +1272,12 @@ class JobDatabase:
                     ),
                     diagnostics.count_delta_pct,
                     diagnostics.health_status,
+                    diagnostics.run_classification,
+                    diagnostics.publishability_classification,
+                    int(bool(diagnostics.blocked)),
+                    int(bool(diagnostics.transient_error)),
+                    diagnostics.list_breaker_state,
+                    diagnostics.detail_breaker_state,
                     diagnostics.scope_validation_status,
                     int(bool(diagnostics.missing_transition_allowed)),
                     _dt(diagnostics.observed_at),
@@ -1141,6 +1316,8 @@ class JobDatabase:
             for row in rows:
                 data = dict(row)
                 data["pagination_complete"] = _int_to_optional_bool(data["pagination_complete"])
+                data["blocked"] = bool(data.get("blocked", 0))
+                data["transient_error"] = bool(data.get("transient_error", 0))
                 data["missing_transition_allowed"] = bool(data["missing_transition_allowed"])
                 data["zero_fetched_evidence"] = json.loads(data["zero_fetched_evidence"] or "{}")
                 data["observed_agency_counts"] = json.loads(data["observed_agency_counts"] or "{}")
@@ -1148,6 +1325,287 @@ class JobDatabase:
                     data["observed_organization_counts"] or "{}"
                 )
                 yield data
+
+    def get_detail_backlog(self, job_key: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM detail_backlog WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def queue_detail_backlog_item(
+        self,
+        *,
+        job_key: str,
+        source_id: str,
+        listing_hash: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Create or refresh a queued detail item unless it is already complete.
+
+        Complete rows for the same listing hash are intentionally left untouched:
+        they represent an already-enriched unchanged posting and should not be
+        refetched by later selective-detail runs.
+        """
+
+        now = _dt(datetime.now(tz=UTC))
+        with self.connect() as conn:
+            current = conn.execute(
+                "SELECT * FROM detail_backlog WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+            if (
+                current is not None
+                and current["detail_status"] == "complete"
+                and current["listing_hash_at_detail_fetch"] == listing_hash
+            ):
+                return dict(current)
+            if current is None:
+                conn.execute(
+                    """
+                    INSERT INTO detail_backlog (
+                        job_key, source_id, detail_status, attempt_count,
+                        listing_hash_at_detail_fetch, queued_reason, updated_at
+                    )
+                    VALUES (?, ?, 'pending', 0, ?, ?, ?)
+                    """,
+                    (job_key, source_id, listing_hash, reason, now),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE detail_backlog
+                    SET source_id = ?,
+                        detail_status = 'pending',
+                        listing_hash_at_detail_fetch = ?,
+                        queued_reason = ?,
+                        updated_at = ?
+                    WHERE job_key = ?
+                    """,
+                    (source_id, listing_hash, reason, now, job_key),
+                )
+            row = conn.execute(
+                "SELECT * FROM detail_backlog WHERE job_key = ?",
+                (job_key,),
+            ).fetchone()
+            return dict(row)
+
+    def record_detail_backlog_attempt(
+        self,
+        *,
+        job_key: str,
+        source_id: str,
+        status: str,
+        listing_hash: str,
+        error: str | None = None,
+        cooldown_until: datetime | None = None,
+    ) -> None:
+        if status not in {
+            "complete",
+            "transient_failed",
+            "permanent_failed",
+            "skipped",
+            "adapter_failed",
+            "blocked_by_circuit_breaker",
+        }:
+            raise ValueError(f"Unsupported detail backlog status: {status}")
+        now_dt = datetime.now(tz=UTC)
+        now = _dt(now_dt)
+        success_at = now if status == "complete" else None
+        last_error = None if status == "complete" else error
+        cooldown_text = None if status == "complete" else _dt(cooldown_until)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO detail_backlog (
+                    job_key, source_id, detail_status, attempt_count,
+                    last_attempt_at, last_success_at, last_error,
+                    cooldown_until, listing_hash_at_detail_fetch, updated_at
+                )
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_key) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    detail_status = excluded.detail_status,
+                    attempt_count = detail_backlog.attempt_count + 1,
+                    last_attempt_at = excluded.last_attempt_at,
+                    last_success_at = COALESCE(excluded.last_success_at, detail_backlog.last_success_at),
+                    last_error = excluded.last_error,
+                    cooldown_until = excluded.cooldown_until,
+                    listing_hash_at_detail_fetch = excluded.listing_hash_at_detail_fetch,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_key,
+                    source_id,
+                    status,
+                    now,
+                    success_at,
+                    last_error,
+                    cooldown_text,
+                    listing_hash,
+                    now,
+                ),
+            )
+
+    def defer_detail_backlog_item(
+        self,
+        *,
+        job_key: str,
+        source_id: str,
+        listing_hash: str,
+        reason: str,
+        cooldown_until: datetime | None = None,
+    ) -> None:
+        now = _dt(datetime.now(tz=UTC))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO detail_backlog (
+                    job_key, source_id, detail_status, attempt_count,
+                    cooldown_until, listing_hash_at_detail_fetch,
+                    queued_reason, updated_at
+                )
+                VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)
+                ON CONFLICT(job_key) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    detail_status = 'pending',
+                    cooldown_until = excluded.cooldown_until,
+                    listing_hash_at_detail_fetch = excluded.listing_hash_at_detail_fetch,
+                    queued_reason = excluded.queued_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_key,
+                    source_id,
+                    _dt(cooldown_until),
+                    listing_hash,
+                    reason,
+                    now,
+                ),
+            )
+
+    def update_detail_backlog_status(
+        self,
+        *,
+        job_key: str,
+        source_id: str,
+        status: str,
+        listing_hash: str,
+        reason: str,
+        error: str | None = None,
+        cooldown_until: datetime | None = None,
+    ) -> None:
+        if status not in {"pending", "adapter_failed", "blocked_by_circuit_breaker"}:
+            raise ValueError(f"Unsupported detail backlog status update: {status}")
+        now = _dt(datetime.now(tz=UTC))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO detail_backlog (
+                    job_key, source_id, detail_status, attempt_count,
+                    last_error, cooldown_until, listing_hash_at_detail_fetch,
+                    queued_reason, updated_at
+                )
+                VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_key) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    detail_status = excluded.detail_status,
+                    last_error = excluded.last_error,
+                    cooldown_until = excluded.cooldown_until,
+                    listing_hash_at_detail_fetch = excluded.listing_hash_at_detail_fetch,
+                    queued_reason = excluded.queued_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_key,
+                    source_id,
+                    status,
+                    error,
+                    _dt(cooldown_until),
+                    listing_hash,
+                    reason,
+                    now,
+                ),
+            )
+
+    def get_source_breaker(self, source_id: str, breaker_type: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM source_circuit_breakers
+                WHERE source_id = ? AND breaker_type = ?
+                """,
+                (source_id, breaker_type),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def set_source_breaker(
+        self,
+        *,
+        source_id: str,
+        breaker_type: str,
+        state: str,
+        failure_count: int = 0,
+        success_count: int = 0,
+        cooldown_until: datetime | None = None,
+        reason: str | None = None,
+    ) -> None:
+        if breaker_type not in {"list", "detail", "transient_detail"}:
+            raise ValueError(f"Unsupported breaker type: {breaker_type}")
+        if state not in {"closed", "open", "half_open"}:
+            raise ValueError(f"Unsupported breaker state: {state}")
+        now = _dt(datetime.now(tz=UTC))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO source_circuit_breakers (
+                    source_id, breaker_type, state, failure_count, success_count,
+                    cooldown_until, last_reason, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, breaker_type) DO UPDATE SET
+                    state = excluded.state,
+                    failure_count = excluded.failure_count,
+                    success_count = excluded.success_count,
+                    cooldown_until = excluded.cooldown_until,
+                    last_reason = excluded.last_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    source_id,
+                    breaker_type,
+                    state,
+                    int(failure_count),
+                    int(success_count),
+                    _dt(cooldown_until),
+                    reason,
+                    now,
+                ),
+            )
+
+    def iter_detail_backlog(
+        self,
+        source_id: str | None = None,
+        *,
+        status: str | None = None,
+    ) -> Iterable[dict[str, Any]]:
+        query = "SELECT * FROM detail_backlog"
+        clauses = []
+        params = []
+        if source_id:
+            clauses.append("source_id = ?")
+            params.append(source_id)
+        if status:
+            clauses.append("detail_status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY source_id, job_key"
+        with self.connect() as conn:
+            for row in conn.execute(query, tuple(params)).fetchall():
+                yield dict(row)
 
     def mark_missing(
         self,

@@ -49,8 +49,13 @@ def upsert_record(path: Path, record: ApplicationRecord) -> ApplicationRecord:
 
 def create_record(path: Path, job_key: str) -> ApplicationRecord:
     now = _now()
-    record = ApplicationRecord(id=str(uuid4()), job_key=job_key, status="saved", updated_at=now)
     records = _load(path)
+    for record in records:
+        if record.job_key == job_key:
+            record.updated_at = now
+            _save(path, records)
+            return record
+    record = ApplicationRecord(id=str(uuid4()), job_key=job_key, status="saved", updated_at=now)
     records.append(record)
     _save(path, records)
     return record
