@@ -182,6 +182,7 @@ def test_search_filters_by_taxonomy_facets(tmp_path):
 
     assert response.total == 1
     assert response.results[0]["title"] == "Finance Officer, P-3, Nairobi, Kenya"
+    assert "budgeting" in response.facets["capability_tags"]
     assert response.facets["mandate_families"] == {"MAGNET.finance": 1}
     explanation = explain_job_match(
         db,
@@ -189,6 +190,50 @@ def test_search_filters_by_taxonomy_facets(tmp_path):
         VacancySearchRequest(capability_tags=["budgeting"], contract_groups=["staff"]),
     )
     assert explanation["matched"] is True
+
+
+def test_seniority_filter_values_are_or_within_group(tmp_path):
+    db = _db(tmp_path)
+    source = _source("un_inspira", "inspira")
+    db.upsert_job(
+        build_job(
+            source,
+            title="Programme Officer, P-3",
+            external_id="mid",
+            location="Geneva",
+            apply_url="https://careers.un.org/jobSearchDescription/mid?language=en",
+            raw={"jl": {"name": "P-3"}},
+        )
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Senior Programme Officer, P-5",
+            external_id="senior",
+            location="Geneva",
+            apply_url="https://careers.un.org/jobSearchDescription/senior?language=en",
+            raw={"jl": {"name": "P-5"}},
+        )
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Director, D-1",
+            external_id="director",
+            location="Geneva",
+            apply_url="https://careers.un.org/jobSearchDescription/director?language=en",
+            raw={"jl": {"name": "D-1"}},
+        )
+    )
+
+    classify_database(db)
+    response = search_collected_jobs(
+        db,
+        VacancySearchRequest(seniority_groups=["mid", "senior"]),
+    )
+
+    assert response.total == 2
+    assert {row["job_key"] for row in response.results} == {"un_inspira:mid", "un_inspira:senior"}
 
 
 def test_text_search_falls_back_to_like_when_fts_table_is_absent(tmp_path):
@@ -252,6 +297,64 @@ def test_unv_region_does_not_create_nairobi_duty_station(tmp_path):
     locations = list(db.iter_vacancy_locations("unv_uvp:unv-1"))
     assert locations[0]["city"] == "Kigali"
     assert locations[0]["location_type"] == "duty_station"
+
+
+def test_volunteer_kind_filter_separates_unv_from_generic_volunteer_programmes(tmp_path):
+    db = _db(tmp_path)
+    unv = _source("unv_uvp", "unv")
+    fao = _source("fao_taleo", "taleo")
+    db.upsert_job(
+        build_job(
+            unv,
+            title="Access to Finance Specialist",
+            external_id="unv-specialist",
+            location="Rwanda",
+            apply_url="https://app.unv.org/opportunities/unv-specialist",
+            raw={
+                "name": "Access to Finance Specialist",
+                "country": {"longDescription": "Rwanda", "props": {"codeISO2": "RW"}},
+                "dutyStations": [{"longDescription": "Kigali"}],
+                "categoryName": {
+                    "value": {"code": "SPECIALIST"},
+                    "longDescription": "Specialist",
+                },
+                "volunteerType": {"longDescription": "International"},
+                "isOnsite": True,
+            },
+        )
+    )
+    db.upsert_job(
+        build_job(
+            fao,
+            title="Call for Expression of Interest - FAO Regular Volunteer Programme",
+            external_id="2600018",
+            employment_type="Volunteer Programme",
+            description="Type of Requisition: Volunteer Programme.",
+            apply_url="https://jobs.fao.org/careersection/fao_external/jobdetail.ftl?job=2600018",
+            raw={
+                "_taleo_flat": {
+                    "TYPE_OF_REQUISITION": "Volunteer Programme",
+                    "Type of Requisition": "Volunteer Programme",
+                }
+            },
+        )
+    )
+
+    classify_database(db)
+
+    unv_response = search_collected_jobs(
+        db,
+        VacancySearchRequest(volunteer_kinds=["un_volunteer"]),
+    )
+    generic_response = search_collected_jobs(
+        db,
+        VacancySearchRequest(volunteer_kinds=["volunteer"]),
+    )
+    all_response = search_collected_jobs(db, VacancySearchRequest())
+
+    assert [row["job_key"] for row in unv_response.results] == ["unv_uvp:unv-specialist"]
+    assert [row["job_key"] for row in generic_response.results] == ["fao_taleo:2600018"]
+    assert all_response.facets["volunteer_kinds"] == {"un_volunteer": 1, "volunteer": 1}
 
 
 def test_multiple_locations_placeholder_does_not_match_city_search(tmp_path):

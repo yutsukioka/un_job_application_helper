@@ -36,6 +36,25 @@ class StaticBundleTestAdapter(JobAdapter):
         ]
 
 
+@register_adapter
+class DegradedBundleTestAdapter(JobAdapter):
+    family = "degraded_bundle_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="Listing Role",
+                external_id="A1",
+                apply_url="https://example.org/jobs/A1",
+                raw={"id": "A1"},
+            )
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        return None
+
+
 def test_source_output_slug_uses_configured_slug_and_known_suffixes():
     assert (
         source_output_slug(
@@ -328,6 +347,83 @@ sources:
     assert (output / "all_jobs.sqlite3").exists()
     rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
     assert [row["title"] for row in rows] == ["Role 1"]
+
+
+def test_sync_bundles_degraded_source_returns_exit_2_after_publish(tmp_path):
+    config = tmp_path / "organizations.yaml"
+    output = tmp_path / "output"
+    config.write_text(
+        """
+sources:
+  - id: org_degraded_bundle
+    name: Org
+    ats_family: degraded_bundle_test
+    base_url: https://example.org
+    enabled: true
+    extra:
+      output_slug: org
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--output-dir",
+            str(output),
+            "--no-archive",
+            "--skip-classify",
+        ]
+    )
+
+    assert exit_code == 2
+    assert (output / "all_jobs.sqlite3").exists()
+    report = json.loads((output / "sync_bundles_health.json").read_text(encoding="utf-8"))
+    assert report["publish_result"] == "success_with_source_warnings"
+    assert report["fatal_errors_count"] == 0
+    assert report["exit_code"] == 2
+    assert report["publishable_degraded_sources"] == ["org_degraded_bundle"]
+    assert report["current_jobs_count"] == 1
+    assert report["total_jobs_count"] == 1
+    assert report["bundles_published_count"] == 1
+
+
+def test_sync_bundles_allow_source_degraded_converts_exit_2_to_0(tmp_path):
+    config = tmp_path / "organizations.yaml"
+    output = tmp_path / "output"
+    config.write_text(
+        """
+sources:
+  - id: org_degraded_bundle
+    name: Org
+    ats_family: degraded_bundle_test
+    base_url: https://example.org
+    enabled: true
+    extra:
+      output_slug: org
+""",
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--output-dir",
+            str(output),
+            "--no-archive",
+            "--skip-classify",
+            "--allow-source-degraded",
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads((output / "sync_bundles_health.json").read_text(encoding="utf-8"))
+    assert report["publish_result"] == "success_with_source_warnings"
+    assert report["exit_code"] == 0
 
 
 def _staged_result(tmp_path, *, source_id, slug, fetched):

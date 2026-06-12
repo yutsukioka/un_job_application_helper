@@ -26,6 +26,9 @@ class OpsSourceCheck:
     closed_jobs: int = 0
     error_count: int = 0
     health_status: str | None = None
+    run_classification: str | None = None
+    blocked: bool = False
+    transient_error: bool = False
     scope_validation_status: str | None = None
     pagination_complete: bool | None = None
     total_reported_by_source: int | None = None
@@ -102,6 +105,7 @@ def ops_check_to_markdown(report: OpsCheckReport) -> str:
         ("closed_jobs", "Closed"),
         ("error_count", "Errors"),
         ("health_status", "Health"),
+        ("run_classification", "Class"),
         ("scope_validation_status", "Scope"),
         ("pagination", "Pagination"),
         ("details", "Details"),
@@ -226,6 +230,13 @@ def _apply_latest_diagnostics(conn: sqlite3.Connection, check: OpsSourceCheck) -
         check.findings.append("source_run_diagnostics has no rows")
         return
     check.health_status = row["health_status"]
+    columns = set(row.keys())
+    if "run_classification" in columns:
+        check.run_classification = row["run_classification"]
+    if "blocked" in columns:
+        check.blocked = bool(row["blocked"])
+    if "transient_error" in columns:
+        check.transient_error = bool(row["transient_error"])
     check.scope_validation_status = row["scope_validation_status"]
     check.pagination_complete = _optional_bool(row["pagination_complete"])
     check.total_reported_by_source = _optional_int(row["total_reported_by_source"])
@@ -241,6 +252,14 @@ def _grade_check(check: OpsSourceCheck) -> None:
         check.findings.append(f"health_status is {check.health_status}")
     elif check.health_status in WARN_HEALTH_STATUSES:
         check.findings.append(f"health_status is {check.health_status}")
+    if check.run_classification in {"blocked", "transient_error", "inconclusive", "parser_error"}:
+        check.findings.append(f"run_classification is {check.run_classification}")
+    elif check.run_classification == "detail_degraded":
+        check.findings.append("run_classification is detail_degraded")
+    if check.blocked:
+        check.findings.append("source appears blocked")
+    if check.transient_error:
+        check.findings.append("source hit a transient list error")
 
     if check.scope_validation_status and check.scope_validation_status not in {"passed", "not_applicable"}:
         check.findings.append(f"scope validation is {check.scope_validation_status}")
@@ -264,6 +283,9 @@ def _grade_check(check: OpsSourceCheck) -> None:
     fail_signals = (
         check.error_count > 0
         or check.health_status in ISSUE_HEALTH_STATUSES
+        or check.run_classification in {"blocked", "transient_error", "parser_error"}
+        or check.blocked
+        or check.transient_error
         or check.pagination_complete is False
         or (check.fetched == 0 and check.active_jobs and check.empty_reason not in VERIFIED_EMPTY_REASONS)
         or (
@@ -274,6 +296,7 @@ def _grade_check(check: OpsSourceCheck) -> None:
     )
     warn_signals = (
         check.health_status in WARN_HEALTH_STATUSES
+        or check.run_classification in {"inconclusive", "detail_degraded"}
         or any("source_run_diagnostics table is missing" in finding for finding in check.findings)
         or any("source_runs" in finding for finding in check.findings)
         or (check.fetched == 0 and check.empty_reason not in VERIFIED_EMPTY_REASONS)

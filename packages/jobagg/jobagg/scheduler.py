@@ -28,7 +28,7 @@ from jobagg.filters.saved_searches import (
     save_search,
 )
 from jobagg.filters.schemas import VacancyFilters, VacancySearchRequest
-from jobagg.models import OrganizationSource
+from jobagg.models import OrganizationSource, SyncResult
 from jobagg.observability.logging import configure_logging, get_logger
 from jobagg.ops_check import collect_ops_check, ops_check_to_markdown
 from jobagg.pipelines.bundles import (
@@ -45,6 +45,7 @@ from jobagg.pipelines.consolidation import (
 )
 from jobagg.pipelines.exports import export_jobs
 from jobagg.pipelines.sync_source import (
+    fetch_schedule_policy,
     load_sources,
     sync_all,
     sync_source_with_selective_details,
@@ -82,6 +83,30 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--robots-policy", default=str(DEFAULT_ROBOTS_POLICY_PATH), help="Robots policy path.")
     sync.add_argument("--include-disabled", action="store_true", help="Run disabled sample sources too.")
     sync.set_defaults(handler=handle_sync)
+
+    fetch_schedule = subcommands.add_parser(
+        "fetch-schedule",
+        help="Dry-run the effective list/detail fetch schedule without contacting sources.",
+    )
+    fetch_schedule.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Organizations config path.")
+    fetch_schedule.add_argument(
+        "--source-id",
+        action="append",
+        help="Only show this source ID. Repeat to show multiple sources.",
+    )
+    fetch_schedule.add_argument(
+        "--include-disabled",
+        action="store_true",
+        help="Include disabled sources in the dry-run schedule.",
+    )
+    fetch_schedule.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    fetch_schedule.add_argument("--output", help="Optional output path. Defaults to stdout.")
+    fetch_schedule.set_defaults(handler=handle_fetch_schedule)
 
     bundles = subcommands.add_parser(
         "sync-bundles",
@@ -161,6 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-consolidate",
         action="store_true",
         help="Do not refresh all_jobs.sqlite3/current/history after publishing bundles.",
+    )
+    bundles.add_argument(
+        "--allow-source-degraded",
+        action="store_true",
+        help="Return exit 0 when publishing succeeds but one or more sources are degraded.",
+    )
+    bundles.add_argument(
+        "--health-report-output",
+        help="Optional JSON health report path. Defaults to sync_bundles_health.json in --output-dir.",
     )
     bundles.set_defaults(handler=handle_sync_bundles)
 
@@ -399,6 +433,69 @@ def handle_sync(args: argparse.Namespace) -> int:
     return 1 if any(result.errors for result in results) else 0
 
 
+def handle_fetch_schedule(args: argparse.Namespace) -> int:
+    selected_ids = set(args.source_id or [])
+    sources = [
+        source
+        for source in load_sources(args.config)
+        if (source.enabled or args.include_disabled)
+        and (not selected_ids or source.id in selected_ids)
+    ]
+    missing = selected_ids.difference(source.id for source in sources)
+    if missing:
+        LOGGER.error("Unknown or disabled source IDs: %s", ", ".join(sorted(missing)))
+        return 1
+
+    rows = [
+        {
+            "source_id": source.id,
+            "name": source.name,
+            "ats_family": source.ats_family,
+            "enabled": source.enabled,
+            "policy": fetch_schedule_policy(source),
+        }
+        for source in sources
+    ]
+    if args.format == "json":
+        _write_text(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=True) + "\n", args.output)
+        return 0
+
+    lines = []
+    for row in rows:
+        policy = row["policy"]
+        delay = policy.get("oracle_detail_min_delay_seconds", policy.get("detail_min_delay_seconds", 0))
+        jitter = policy.get("oracle_detail_jitter_seconds", policy.get("detail_jitter_seconds", 0))
+        batch_size = policy.get("oracle_detail_batch_size", policy.get("detail_batch_size", ""))
+        batch_pause = policy.get(
+            "oracle_detail_batch_pause_seconds",
+            policy.get("detail_batch_pause_seconds", 0),
+        )
+        stop_after = policy.get(
+            "oracle_detail_stop_after_transient_failures",
+            policy.get("stop_after_transient_failures", policy.get("detail_stop_after_transient_failures", "")),
+        )
+        cooldown = policy.get(
+            "oracle_detail_failure_cooldown_seconds",
+            policy.get("host_cooldown_seconds", policy.get("detail_failure_cooldown_seconds", "")),
+        )
+        concurrency = policy.get("oracle_detail_concurrency", policy.get("detail_concurrency", 1))
+        lines.append(
+            (
+                f"{row['source_id']} list_interval={policy.get('list_fetch_interval_minutes')}m "
+                f"jitter={policy.get('list_fetch_jitter_minutes')}m "
+                f"failed_cooldown={policy.get('failed_source_cooldown_minutes')}m "
+                f"repeated_failed_cooldown={policy.get('repeated_failed_source_cooldown_minutes')}m "
+                f"detail_concurrency={concurrency} "
+                f"detail_max={policy.get('max_detail_pages_per_run', '')} "
+                f"detail_delay={delay}s+0..{jitter}s "
+                f"batch={batch_size} pause={batch_pause}s "
+                f"stop_after_transient={stop_after} cooldown={cooldown}s"
+            )
+        )
+    _write_text("\n".join(lines) + ("\n" if lines else ""), args.output)
+    return 0
+
+
 def handle_sync_bundles(args: argparse.Namespace) -> int:
     policy = load_policy(args.robots_policy)
     if args.ignore_robots_txt:
@@ -423,6 +520,7 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     archive_dir = None if args.no_archive else _archive_dir_for(output_dir)
     all_results = []
+    consolidated = None
     with tempfile.TemporaryDirectory(prefix="jobagg_bundles_", dir=output_dir.parent) as staging:
         staging_dir = Path(staging)
         for source in sources:
@@ -470,6 +568,27 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     validation = validate_bundle_dir(output_dir, {result.slug for result in selected})
     if not validation.ok:
         LOGGER.error("Bundle validation failed: %s", validation)
+        _write_sync_bundles_health_report(
+            selected,
+            output_dir=output_dir,
+            output_path=args.health_report_output,
+            consolidated=None,
+            fatal_errors_count=1,
+            exit_code=1,
+        )
+        return 1
+    safety_violations = _source_safety_gate_violations(selected)
+    if safety_violations:
+        for violation in safety_violations:
+            LOGGER.error("Safety gate violation: %s", violation)
+        _write_sync_bundles_health_report(
+            selected,
+            output_dir=output_dir,
+            output_path=args.health_report_output,
+            consolidated=None,
+            fatal_errors_count=len(safety_violations),
+            exit_code=1,
+        )
         return 1
     if duplicates:
         LOGGER.info(
@@ -479,7 +598,18 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     if archive_dir is not None:
         LOGGER.info("Archived previous/noncanonical output files at %s", archive_dir)
     if not args.skip_consolidate:
-        consolidated = consolidate_bundle_databases(output_dir=output_dir)
+        try:
+            consolidated = consolidate_bundle_databases(output_dir=output_dir)
+        except Exception:
+            _write_sync_bundles_health_report(
+                selected,
+                output_dir=output_dir,
+                output_path=args.health_report_output,
+                consolidated=None,
+                fatal_errors_count=1,
+                exit_code=1,
+            )
+            raise
         LOGGER.info(
             "Refreshed consolidated database %s with %s current and %s history jobs",
             consolidated.db_path,
@@ -487,7 +617,24 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
             consolidated.history_count,
         )
     LOGGER.info("Published %s canonical organization bundles to %s", len(selected), output_dir)
-    return 1 if any(result.sync_result.errors for result in selected) else 0
+    source_warnings = _source_warning_results(selected)
+    exit_code = 2 if source_warnings else 0
+    if exit_code == 2 and args.allow_source_degraded:
+        exit_code = 0
+    health_report = _write_sync_bundles_health_report(
+        selected,
+        output_dir=output_dir,
+        output_path=args.health_report_output,
+        consolidated=consolidated,
+        fatal_errors_count=0,
+        exit_code=exit_code,
+    )
+    if source_warnings:
+        LOGGER.warning(
+            "Published with source warnings: %s",
+            ", ".join(item["source_id"] for item in health_report["sources"] if item["warning"]),
+        )
+    return exit_code
 
 
 def handle_consolidate_bundles(args: argparse.Namespace) -> int:
@@ -510,6 +657,141 @@ def handle_consolidate_bundles(args: argparse.Namespace) -> int:
     LOGGER.info("History JSON: %s", result.history_json_path)
     LOGGER.info("History CSV: %s", result.history_csv_path)
     return 0
+
+
+def _source_safety_gate_violations(results) -> list[str]:
+    violations = []
+    for result in results:
+        sync = result.sync_result
+        diagnostics = sync.diagnostics
+        if diagnostics is None:
+            continue
+        if (sync.missing or sync.closed) and not diagnostics.missing_transition_allowed:
+            violations.append(
+                f"{sync.source_id}: missing={sync.missing} closed={sync.closed} "
+                "while missing_transition_allowed=false"
+            )
+    return violations
+
+
+def _source_warning_results(results) -> list:
+    return [
+        result
+        for result in results
+        if _publishability_for_sync_result(result.sync_result)
+        not in {"ok", "ok_empty"}
+    ]
+
+
+def _publishability_for_sync_result(sync: SyncResult) -> str:
+    diagnostics = sync.diagnostics
+    if diagnostics is None:
+        return "source_inconclusive" if sync.errors else "ok"
+    if diagnostics.publishability_classification:
+        return diagnostics.publishability_classification
+    classification = diagnostics.run_classification or ""
+    if classification in {"ok", "ok_empty"} and not sync.errors:
+        return classification
+    if classification in {"detail_degraded", "publishable_detail_degraded"}:
+        return "publishable_detail_degraded"
+    if classification in {"source_adapter_broken", "adapter_failed"}:
+        return "publishable_list_only"
+    if classification in {"blocked", "source_blocked"} or diagnostics.blocked:
+        return "source_blocked"
+    if classification in {"parser_error", "source_parser_error"}:
+        return "source_parser_error"
+    return "source_inconclusive" if sync.errors else "ok"
+
+
+def _write_sync_bundles_health_report(
+    results,
+    *,
+    output_dir: Path,
+    output_path: str | None,
+    consolidated,
+    fatal_errors_count: int,
+    exit_code: int,
+) -> dict:
+    source_rows = []
+    for result in results:
+        sync = result.sync_result
+        diagnostics = sync.diagnostics
+        publishability = _publishability_for_sync_result(sync)
+        source_rows.append(
+            {
+                "source_id": sync.source_id,
+                "slug": result.slug,
+                "publishability_classification": publishability,
+                "run_classification": diagnostics.run_classification if diagnostics else None,
+                "health_status": diagnostics.health_status if diagnostics else None,
+                "list_breaker_state": diagnostics.list_breaker_state if diagnostics else None,
+                "detail_breaker_state": diagnostics.detail_breaker_state if diagnostics else None,
+                "fetched": sync.fetched,
+                "inserted": sync.inserted,
+                "updated": sync.updated,
+                "unchanged": sync.unchanged,
+                "missing": sync.missing,
+                "closed": sync.closed,
+                "detail_attempted": diagnostics.detail_attempted if diagnostics else 0,
+                "detail_succeeded": diagnostics.detail_succeeded if diagnostics else 0,
+                "detail_failed": diagnostics.detail_failed if diagnostics else 0,
+                "pagination_complete": diagnostics.pagination_complete if diagnostics else None,
+                "missing_transition_allowed": (
+                    diagnostics.missing_transition_allowed if diagnostics else False
+                ),
+                "errors": list(sync.errors),
+                "warning": publishability not in {"ok", "ok_empty"},
+            }
+        )
+    publishable_degraded = [
+        row["source_id"]
+        for row in source_rows
+        if row["publishability_classification"]
+        in {"publishable_detail_degraded", "publishable_list_only"}
+    ]
+    source_inconclusive = [
+        row["source_id"]
+        for row in source_rows
+        if row["publishability_classification"]
+        in {"source_inconclusive", "source_blocked", "source_parser_error"}
+    ]
+    adapter_broken = [
+        row["source_id"]
+        for row in source_rows
+        if row["run_classification"] == "source_adapter_broken"
+        or row["publishability_classification"] == "publishable_list_only"
+    ]
+    report = {
+        "publish_result": (
+            "failed"
+            if fatal_errors_count
+            else "success_with_source_warnings"
+            if publishable_degraded or source_inconclusive
+            else "success"
+        ),
+        "fatal_errors_count": fatal_errors_count,
+        "publishable_degraded_sources": publishable_degraded,
+        "source_inconclusive_sources": source_inconclusive,
+        "detail_adapter_broken_sources": adapter_broken,
+        "current_jobs_count": consolidated.current_count if consolidated is not None else None,
+        "total_jobs_count": consolidated.history_count if consolidated is not None else None,
+        "bundles_published_count": len(results),
+        "exit_code": exit_code,
+        "sources": source_rows,
+    }
+    destination = Path(output_path) if output_path else output_dir / "sync_bundles_health.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
+    LOGGER.info("Wrote sync-bundles health report to %s", destination)
+    LOGGER.info(
+        "publish_result=%s fatal_errors_count=%s degraded_sources=%s inconclusive_sources=%s exit_code=%s",
+        report["publish_result"],
+        fatal_errors_count,
+        len(publishable_degraded),
+        len(source_inconclusive),
+        exit_code,
+    )
+    return report
 
 
 def handle_export(args: argparse.Namespace) -> int:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import socket
 import uuid
@@ -33,6 +34,30 @@ _FRAUD_WARNING = (
 
 _SPACE_RE = re.compile(r"\s+")
 _HTTP_STATUS_RE = re.compile(r"http\s+(\d{3})", re.IGNORECASE)
+
+
+class SourceInconclusiveError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        source_id: str,
+        status_code: int | None,
+        content_type: str | None,
+        final_url: str | None,
+        body_snippet: str,
+        reason: str,
+    ) -> None:
+        self.source_id = source_id
+        self.status_code = status_code
+        self.content_type = content_type
+        self.final_url = final_url
+        self.body_snippet = body_snippet
+        self.reason = reason
+        super().__init__(
+            f"{source_id}: {reason}; status_code={status_code}; "
+            f"content_type={content_type!r}; final_url={final_url!r}; "
+            f"body_snippet={body_snippet!r}"
+        )
 
 
 @register_adapter
@@ -75,7 +100,7 @@ class OracleHCMAdapter(JobAdapter):
             offset = page * page_size
             page_url = self._page_url(api_url, limit=page_size, offset=offset)
             self.ensure_allowed(page_url)
-            payload = self.context.http.get(page_url, headers=self._oracle_headers()).json()
+            payload = self._json_response(self.context.http.get(page_url, headers=self._oracle_headers()))
             self._record_scope_facets(payload)
             page_jobs = self.parse_jobs(payload)
             self.run_diagnostics.pages_fetched = page + 1
@@ -142,11 +167,13 @@ class OracleHCMAdapter(JobAdapter):
         if detail_url is None:
             return None
         self.ensure_allowed(detail_url)
-        payload = self.context.http.get(
-            detail_url,
-            headers=self._oracle_headers(),
-            timeout_seconds=self._detail_timeout_seconds(),
-        ).json()
+        payload = self._json_response(
+            self.context.http.get(
+                detail_url,
+                headers=self._oracle_headers(),
+                timeout_seconds=self._detail_timeout_seconds(),
+            )
+        )
         detail_jobs = self.parse_jobs(payload)
         if detail_jobs:
             return detail_jobs[0]
@@ -211,7 +238,7 @@ class OracleHCMAdapter(JobAdapter):
             raise ValueError(f"{self.source.id} requires extra.site_number for Oracle CE site validation")
         url = self._site_settings_url(str(site_number))
         self.ensure_allowed(url)
-        payload = self.context.http.get(url, headers=self._oracle_headers()).json()
+        payload = self._json_response(self.context.http.get(url, headers=self._oracle_headers()))
         observed_site_number = _find_first_value(payload, ("siteNumber", "SiteNumber", "siteCode"))
         observed_site_name = _find_first_value(payload, ("siteName", "SiteName", "name", "Name"))
         self.run_diagnostics.site_number = str(site_number)
@@ -308,6 +335,52 @@ class OracleHCMAdapter(JobAdapter):
             return None
         timeout = _as_int(value, default=0)
         return timeout if timeout > 0 else None
+
+    def _json_response(self, response: Any) -> Any:
+        text = str(getattr(response, "text", "") or "")
+        headers = getattr(response, "headers", {}) or {}
+        status_code = getattr(response, "status_code", None)
+        final_url = getattr(response, "url", None)
+        content_type = _header_value(headers, "content-type")
+        body_snippet = text[:500]
+        if isinstance(status_code, int) and status_code >= 400:
+            raise SourceInconclusiveError(
+                source_id=self.source.id,
+                status_code=status_code,
+                content_type=content_type,
+                final_url=final_url,
+                body_snippet=body_snippet,
+                reason="http_status_before_json_parse",
+            )
+        if not text.strip():
+            raise SourceInconclusiveError(
+                source_id=self.source.id,
+                status_code=status_code,
+                content_type=content_type,
+                final_url=final_url,
+                body_snippet=body_snippet,
+                reason="empty_body_before_json_parse",
+            )
+        if content_type and "json" not in content_type.casefold():
+            raise SourceInconclusiveError(
+                source_id=self.source.id,
+                status_code=status_code,
+                content_type=content_type,
+                final_url=final_url,
+                body_snippet=body_snippet,
+                reason="non_json_response_before_json_parse",
+            )
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SourceInconclusiveError(
+                source_id=self.source.id,
+                status_code=status_code,
+                content_type=content_type,
+                final_url=final_url,
+                body_snippet=body_snippet,
+                reason="invalid_json_response",
+            ) from exc
 
     def _oracle_headers(self) -> dict[str, str]:
         return {
@@ -421,6 +494,24 @@ def _first_link_href(value: object) -> str | None:
     for item in value:
         if isinstance(item, dict) and item.get("href"):
             return str(item["href"])
+    return None
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    if not headers:
+        return None
+    lower_name = name.casefold()
+    if hasattr(headers, "get"):
+        direct = headers.get(name) or headers.get(name.title()) or headers.get(name.upper())
+        if direct not in (None, ""):
+            return str(direct)
+    try:
+        items = headers.items()
+    except AttributeError:
+        return None
+    for key, value in items:
+        if str(key).casefold() == lower_name and value not in (None, ""):
+            return str(value)
     return None
 
 

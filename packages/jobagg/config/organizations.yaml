@@ -409,11 +409,16 @@ sources:
       page_size: 20
       max_pages: 25
       fetch_details: true
-      max_detail_pages_per_run: 25
-      detail_min_delay_seconds: 2
-      detail_jitter_seconds: 1
-      detail_batch_size: 10
-      detail_batch_pause_seconds: 30
+      unstable_detail_source: true
+      detail_concurrency: 1
+      max_detail_pages_per_run: 10
+      detail_min_delay_seconds: 15
+      detail_jitter_seconds: 5
+      detail_batch_size: 5
+      detail_batch_pause_seconds: 120
+      detail_permanent_failure_quarantine_days: 7
+      stop_after_transient_failures: 2
+      host_cooldown_seconds: 1800
       query:
         search-keyword: ""
 
@@ -610,12 +615,14 @@ sources:
       fraud_warning: UNDP does not charge recruitment-related fees. Use official vacancy pages and beware of fraudulent vacancy announcements.
       page_size: 100
       max_pages: 12
+      list_fetch_interval_minutes: 180
       max_detail_pages_per_run: 20
       fetch_details: false
       request_timeout_seconds: 60
       detail_timeout_seconds: 120
       max_retries: 4
       backoff_base_seconds: 2
+      oracle_detail_concurrency: 1
       oracle_detail_min_delay_seconds: 8
       oracle_detail_jitter_seconds: 3
       oracle_detail_batch_size: 10
@@ -684,6 +691,8 @@ sources:
       detail_timeout_seconds: 120
       max_retries: 4
       backoff_base_seconds: 2
+      failed_source_cooldown_minutes: 360
+      repeated_failed_source_cooldown_minutes: 720
       oracle_detail_min_delay_seconds: 8
       oracle_detail_jitter_seconds: 3
       oracle_detail_batch_size: 10
@@ -861,6 +870,16 @@ sources:
       search_url: https://career2.successfactors.eu/career?company=ctbtoprepa&career_ns=job_listing_summary&navBarLevel=JOB_SEARCH
       max_pages: 1
       fetch_details: false
+      unstable_detail_source: true
+      detail_concurrency: 1
+      max_detail_pages_per_run: 10
+      detail_min_delay_seconds: 30
+      detail_jitter_seconds: 10
+      detail_batch_size: 5
+      detail_batch_pause_seconds: 300
+      stop_after_transient_failures: 2
+      host_cooldown_seconds: 1800
+      detail_breaker_probe_cooldown_seconds: 86400
       allow_empty_source: false
 
   - id: icc_successfactors_legacy
@@ -880,6 +899,16 @@ sources:
       empty_policy: verified_empty_required
       max_pages: 1
       fetch_details: false
+      unstable_detail_source: true
+      detail_concurrency: 1
+      max_detail_pages_per_run: 10
+      detail_min_delay_seconds: 30
+      detail_jitter_seconds: 10
+      detail_batch_size: 5
+      detail_batch_pause_seconds: 300
+      stop_after_transient_failures: 2
+      host_cooldown_seconds: 1800
+      detail_breaker_probe_cooldown_seconds: 86400
       allow_empty_source: false
 
   - id: icddrb_custom_html

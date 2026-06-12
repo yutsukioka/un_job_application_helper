@@ -33,6 +33,7 @@ class SearchRequest(BaseModel):
     contract_groups: list[str] = Field(default_factory=list)
     seniority_groups: list[str] = Field(default_factory=list)
     work_modalities: list[str] = Field(default_factory=list)
+    volunteer_kinds: list[str] = Field(default_factory=list)
     unv_categories: list[str] = Field(default_factory=list)
     unv_volunteer_types: list[str] = Field(default_factory=list)
     closing_date_from: str | None = None
@@ -42,6 +43,7 @@ class SearchRequest(BaseModel):
     min_location_confidence: float = 0.70
     min_grade_confidence: float = 0.70
     include_low_confidence: bool = False
+    exclude_expired_open: bool = True
     include_facets: bool = True
     include_explain: bool = False
     score_against: str | None = None
@@ -57,6 +59,7 @@ class SearchResponse(BaseModel):
     offset: int
     results: list[dict[str, Any]]
     facets: dict[str, dict[str, int]] = Field(default_factory=dict)
+    facet_labels: dict[str, dict[str, str]] = Field(default_factory=dict)
     unclassified_count: int = 0
 
 

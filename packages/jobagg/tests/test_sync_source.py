@@ -138,6 +138,85 @@ class SelectiveDetailTransientStopTestAdapter(JobAdapter):
 
 
 @register_adapter
+class SelectiveDetailTransientRecoverTestAdapter(JobAdapter):
+    family = "selective_detail_transient_recover_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title=f"Listing Role {index}",
+                external_id=f"A{index}",
+                apply_url=f"https://example.org/jobs/A{index}",
+                raw={"id": f"A{index}"},
+            )
+            for index in range(1, 21)
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        if item["id"] in {"A1", "A2"}:
+            raise RuntimeError("Remote end closed connection without response")
+        return build_job(
+            self.source,
+            title=f"Detailed Role {item['id']}",
+            external_id=item["id"],
+            closes_at="2026-06-15",
+            description=f"Detailed responsibilities for {item['id']}.",
+            apply_url=f"https://example.org/jobs/{item['id']}",
+            raw={"id": item["id"], "detail": True},
+        )
+
+
+@register_adapter
+class SelectiveDetailIsolatedPermanentFailureTestAdapter(JobAdapter):
+    family = "selective_detail_isolated_permanent_failure_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title=f"Listing Role {index}",
+                external_id=f"A{index}",
+                apply_url=f"https://example.org/jobs/A{index}",
+                raw={"id": f"A{index}"},
+            )
+            for index in range(1, 11)
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        if item["id"] == "A10":
+            return None
+        return build_job(
+            self.source,
+            title=f"Detailed Role {item['id']}",
+            external_id=item["id"],
+            description=f"Detailed responsibilities for {item['id']}.",
+            apply_url=f"https://example.org/jobs/{item['id']}",
+            raw={"id": item["id"], "detail": True},
+        )
+
+
+@register_adapter
+class SelectiveDetailAdapterBrokenTestAdapter(JobAdapter):
+    family = "selective_detail_adapter_broken_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title=f"Listing Role {index}",
+                external_id=f"A{index}",
+                apply_url=f"https://example.org/jobs/A{index}",
+                raw={"id": f"A{index}"},
+            )
+            for index in range(1, 6)
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        return None
+
+
+@register_adapter
 class SelectiveDetailPriorityTestAdapter(JobAdapter):
     family = "selective_detail_priority_test"
 
@@ -163,6 +242,36 @@ class SelectiveDetailPriorityTestAdapter(JobAdapter):
             description=f"Detailed responsibilities for {item['id']}.",
             apply_url=f"https://example.org/jobs/{item['id']}",
             raw={"id": item["id"], "detail_html": "<article>detail</article>"},
+        )
+
+
+@register_adapter
+class SelectiveDetailCountingTestAdapter(JobAdapter):
+    family = "selective_detail_counting_test"
+    calls = []
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="Listing Role A1",
+                external_id="A1",
+                closes_at="2026-12-31",
+                apply_url="https://example.org/jobs/A1",
+                raw={"id": "A1"},
+            )
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        self.__class__.calls.append(item["id"])
+        return build_job(
+            self.source,
+            title="Detailed Role A1",
+            external_id="A1",
+            closes_at="2026-12-31",
+            description="Detailed responsibilities for A1.",
+            apply_url="https://example.org/jobs/A1",
+            raw={"id": "A1", "detail": True},
         )
 
 
@@ -307,6 +416,31 @@ def test_zero_fetch_with_active_jobs_skips_missing_marking(tmp_path):
     assert runs[0]["errors"] == result.errors
 
 
+def test_zero_fetch_without_verified_empty_does_not_close_past_deadline_job(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("active_zero_fetch_past", "zero_fetch_test", empty=True)
+    existing = build_job(
+        source,
+        title="Existing Past Role",
+        external_id="OLD",
+        closes_at="2026-01-01",
+        apply_url="https://example.org/jobs/OLD",
+    )
+    db.upsert_job(existing)
+
+    result = sync_source(source, db=db, policy=_policy(), missing_run_threshold=1)
+
+    assert result.fetched == 0
+    assert result.missing == 0
+    assert result.closed == 0
+    stored = db.get_job(existing.identity_key())
+    assert stored["status"] == "open"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["run_classification"] == "inconclusive"
+    assert diagnostics[0]["missing_transition_allowed"] is False
+
+
 def test_zero_fetch_allow_empty_source_without_evidence_does_not_mark_missing(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -407,6 +541,35 @@ def test_selective_detail_failure_keeps_listing_job_and_records_error(tmp_path):
     assert diagnostics[0]["detail_succeeded"] == 1
     assert diagnostics[0]["detail_failed"] == 1
     assert diagnostics[0]["health_status"] == "issue"
+    assert diagnostics[0]["run_classification"] == "detail_degraded"
+
+
+def test_selective_detail_failure_does_not_close_seen_past_deadline_job(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("selective_detail_seen_past", "selective_detail_failure_test")
+    existing = build_job(
+        source,
+        title="Listing Role 1",
+        external_id="A1",
+        closes_at="2026-01-01",
+        apply_url="https://example.org/jobs/A1",
+    )
+    db.upsert_job(existing)
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+        missing_run_threshold=1,
+    )
+
+    assert result.closed == 0
+    stored = db.get_job(existing.identity_key())
+    assert stored["status"] == "open"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["missing_transition_allowed"] is True
 
 
 def test_selective_detail_none_counts_as_failure(tmp_path):
@@ -537,6 +700,125 @@ def test_selective_detail_stops_after_transient_failure_limit(tmp_path):
     assert diagnostics[0]["detail_failed"] == 3
     assert diagnostics[0]["detail_skipped"] == 2
     assert diagnostics[0]["health_status"] == "issue"
+    backlog = list(db.iter_detail_backlog(source.id))
+    assert [row["detail_status"] for row in backlog].count("transient_failed") == 3
+    assert [row["detail_status"] for row in backlog].count("pending") == 2
+    assert all(row["cooldown_until"] for row in backlog)
+
+
+def test_undp_transient_detail_failures_are_publishable_detail_degraded(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "undp_oracle_hcm",
+        "selective_detail_transient_recover_test",
+        max_detail_pages_per_run=20,
+        oracle_detail_stop_after_transient_failures=3,
+        oracle_detail_failure_cooldown_seconds=900,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 20
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))[0]
+    assert diagnostics["detail_attempted"] == 20
+    assert diagnostics["detail_failed"] == 2
+    assert diagnostics["run_classification"] == "detail_degraded"
+    assert diagnostics["publishability_classification"] == "publishable_detail_degraded"
+    statuses = [row["detail_status"] for row in db.iter_detail_backlog(source.id)]
+    assert statuses.count("transient_failed") == 2
+    assert statuses.count("complete") == 18
+
+
+def test_unicef_isolated_permanent_detail_failure_is_publishable(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "unicef_pageup",
+        "selective_detail_isolated_permanent_failure_test",
+        max_detail_pages_per_run=10,
+        detail_permanent_failure_quarantine_days=7,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 10
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))[0]
+    assert diagnostics["detail_attempted"] == 10
+    assert diagnostics["detail_failed"] == 1
+    assert diagnostics["publishability_classification"] == "publishable_detail_degraded"
+    statuses = [row["detail_status"] for row in db.iter_detail_backlog(source.id)]
+    assert statuses.count("permanent_failed") == 1
+    assert statuses.count("complete") == 9
+
+
+def test_systemic_detail_failures_open_breaker_and_keep_backlog_blocked(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "icc_successfactors_legacy",
+        "selective_detail_adapter_broken_test",
+        max_detail_pages_per_run=10,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 5
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))[0]
+    assert diagnostics["run_classification"] == "source_adapter_broken"
+    assert diagnostics["publishability_classification"] == "publishable_list_only"
+    assert diagnostics["detail_breaker_state"] == "open"
+    breaker = db.get_source_breaker(source.id, "detail")
+    assert breaker["state"] == "open"
+    statuses = [row["detail_status"] for row in db.iter_detail_backlog(source.id)]
+    assert "permanent_failed" not in statuses
+    assert set(statuses) <= {"pending", "blocked_by_circuit_breaker"}
+    assert statuses.count("blocked_by_circuit_breaker") >= 3
+
+
+def test_complete_unchanged_details_are_skipped_from_backlog(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("selective_detail_counting", "selective_detail_counting_test")
+    SelectiveDetailCountingTestAdapter.calls = []
+
+    first = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+    second = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert first.fetched == 1
+    assert second.fetched == 1
+    assert SelectiveDetailCountingTestAdapter.calls == ["A1"]
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 1
+    assert diagnostics[1]["detail_attempted"] == 0
+    backlog = list(db.iter_detail_backlog(source.id))
+    assert len(backlog) == 1
+    assert backlog[0]["detail_status"] == "complete"
 
 
 def test_selective_detail_budget_prioritizes_null_classification_rows(tmp_path):

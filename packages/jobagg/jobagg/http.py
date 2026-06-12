@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import email.utils
 import gzip
 import json
 import random
@@ -133,7 +134,7 @@ class JobAggHTTPClient:
                 )
                 response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
-                    retry_after = _retry_after_seconds(exc.headers.get("Retry-After"))
+                    retry_after = _retry_after_from_headers(exc.headers)
                     delay = retry_after or self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
                         time.sleep(self._with_jitter(delay))
@@ -236,13 +237,37 @@ class JobAggHTTPClient:
         )
 
 
+def _retry_after_from_headers(headers: Any) -> float | None:
+    if not headers:
+        return None
+    for name in ("Retry-After", "X-Retry-After", "X-Oracle-Retry-After"):
+        delay = _retry_after_seconds(headers.get(name))
+        if delay is not None:
+            return delay
+    for name in ("Retry-After-Ms", "X-Retry-After-Ms", "X-Oracle-Retry-After-Ms"):
+        delay_ms = _retry_after_seconds(headers.get(name))
+        if delay_ms is not None:
+            return delay_ms / 1000
+    for name in ("X-RateLimit-Reset", "X-Rate-Limit-Reset", "X-Oracle-RateLimit-Reset"):
+        reset_at = _retry_after_seconds(headers.get(name))
+        if reset_at is not None:
+            return max(0.0, reset_at - time.time())
+    return None
+
+
 def _retry_after_seconds(value: str | None) -> float | None:
     if not value:
         return None
     try:
         return max(0.0, float(value))
     except ValueError:
-        return None
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return max(0.0, parsed.timestamp() - time.time())
 
 
 _TRANSIENT_ERRNOS = {

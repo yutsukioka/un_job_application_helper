@@ -6,13 +6,13 @@ Primary data authority: local server-side job aggregator, not client-side job st
 
 ## 1. Purpose
 
-Build a native iPhone and Mac search interface over the latest `jobagg` functionality. The app should provide the fast, readable job-discovery experience of UN Talent while exposing the richer classification, confidence, scoring, and saved-search capabilities already present in `jobagg`.
+Build a native iPhone and Mac search interface over the latest `jobagg` functionality. The app should provide the fast, readable job-discovery experience of the latest UN job search experience while exposing the richer classification, confidence, scoring, and saved-search capabilities already present in `jobagg`.
 
 The client apps must not own the canonical job lists or job detail records. Current vacancy lists, job descriptions, classification evidence, source-run health, and historical update state stay on the local server side for now, backed by SQLite and the existing bundle outputs.
 
 ## 2. Source Research Summary
 
-Observed UN Talent patterns worth adapting:
+Observed the latest UN job search patterns worth adapting:
 
 - Top-level navigation is simple: Openings, Search, Account, Pro.
 - The openings page prioritizes a readable stream: organization logo/name, title, location, short summary, freshness/deadline, tags, More info, Apply.
@@ -25,7 +25,7 @@ Observed UN Talent patterns worth adapting:
 
 Adaptation principle:
 
-Use UN Talent's clarity and progressive disclosure, but avoid a web-style wall of hundreds of checkboxes. Native iPhone/Mac should use search bars, chips, searchable pickers, grouped filter sheets, result density controls, and split views.
+Use the latest UN job search's clarity and progressive disclosure, but avoid a web-style wall of hundreds of checkboxes. Native iPhone/Mac should use search bars, chips, searchable pickers, grouped filter sheets, result density controls, and split views.
 
 ## 3. Local Job Aggregator Capabilities To Expose
 
@@ -85,7 +85,7 @@ Some newer taxonomy fields can be sparse depending on the database's classificat
 - No direct scraping from the iPhone or Mac client.
 - No account/password system unless remote access is added later.
 - No automatic external job applications.
-- No cloning of UN Talent's exact visual design, content, or proprietary flow.
+- No cloning of the latest UN job search's exact visual design, content, or proprietary flow.
 
 ## 6. Target Platforms
 
@@ -339,7 +339,7 @@ Stored fields:
 
 UI behavior:
 
-- List saved searches as readable sentences, similar to UN Talent's alert summaries.
+- List saved searches as readable sentences, similar to the latest UN job search's alert summaries.
 - Run saved search immediately.
 - Edit with the same filter sheet.
 - Duplicate a saved search.
@@ -539,7 +539,7 @@ Server-side retention:
 
 Visual direction:
 
-- Bright but restrained header accent inspired by UN Talent cyan.
+- Bright but restrained header accent inspired by the latest UN job search cyan.
 - Neutral content background.
 - Orange reserved for primary action or Pro/strategy-fit emphasis.
 - Rounded cards no more than 8px radius unless platform defaults apply.

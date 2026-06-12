@@ -74,6 +74,7 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
     detail = client.get(f"/api/jobs/{job_key}")
     assert detail.status_code == 200
     assert detail.json()["title"] == "Programme Management Officer, P-3"
+    assert "deadline_info" in detail.json()
 
     saved = client.post(
         "/api/saved-searches",
@@ -81,8 +82,45 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
     )
     assert saved.status_code == 200
     assert client.post("/api/saved-searches/programme/run").json()["total"] == 1
+    assert client.delete("/api/saved-searches/programme").json()["deleted"] is True
 
     tracker = client.post(f"/api/tracker/jobs/{job_key}")
     assert tracker.status_code == 200
     assert tracker.json()["job_key"] == job_key
     assert len(client.get("/api/tracker").json()) == 1
+
+
+def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    db = JobDatabase(settings.db_path)
+    db.initialize()
+    source = _source()
+    db.upsert_job(
+        build_job(
+            source,
+            title="Expired Programme Management Officer, P-3",
+            external_id="expired",
+            location="Nairobi",
+            closes_at="2020-01-01T00:00:00+00:00",
+            apply_url="https://careers.un.org/jobSearchDescription/expired?language=en",
+            raw={"jl": {"name": "P-3"}, "dutyStation": [{"description": "Nairobi"}]},
+        )
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Current Programme Management Officer, P-3",
+            external_id="current",
+            location="Nairobi",
+            closes_at="2099-01-01T00:00:00+00:00",
+            apply_url="https://careers.un.org/jobSearchDescription/current?language=en",
+            raw={"jl": {"name": "P-3"}, "dutyStation": [{"description": "Nairobi"}]},
+        )
+    )
+    classify_database(db, force=True)
+    client = TestClient(create_app(settings))
+
+    payload = client.post("/api/search", json={"status": ["open"], "limit": 10}).json()
+
+    assert payload["total"] == 1
+    assert payload["results"][0]["job_key"] == "un_inspira:current"
