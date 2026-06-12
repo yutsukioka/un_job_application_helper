@@ -92,7 +92,7 @@ class VacancySearchRequest:
     min_location_confidence: float = 0.70
     min_grade_confidence: float = 0.70
     include_low_confidence: bool = False
-    exclude_expired_open: bool = False
+    exclude_expired_open: bool = True
     limit: int = 50
     offset: int = 0
     sort: str = "closing_date_asc"

@@ -569,7 +569,11 @@ def test_date_only_upper_bounds_include_same_day_datetimes(tmp_path):
 
     collected = search_collected_jobs(
         db,
-        VacancySearchRequest(closing_date_to="2026-06-07", posted_date_to="2026-05-20"),
+        VacancySearchRequest(
+            closing_date_to="2026-06-07",
+            posted_date_to="2026-05-20",
+            exclude_expired_open=False,
+        ),
     )
     legacy = search_vacancies(
         db,
@@ -581,9 +585,44 @@ def test_date_only_upper_bounds_include_same_day_datetimes(tmp_path):
     explanation = explain_job_match(
         db,
         "unicef_pageup:same-day-close",
-        VacancySearchRequest(closing_date_to="2026-06-07", posted_date_to="2026-05-20"),
+        VacancySearchRequest(
+            closing_date_to="2026-06-07",
+            posted_date_to="2026-05-20",
+            exclude_expired_open=False,
+        ),
     )
     assert explanation["matched"] is True
+
+
+def test_default_collected_search_excludes_expired_open_rows(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    db.upsert_job(
+        build_job(
+            source,
+            title="Expired Programme Officer, P-3",
+            external_id="expired-open",
+            location="Nairobi",
+            closes_at="2020-01-01T00:00:00+00:00",
+            apply_url="https://jobs.unicef.org/jobs/expired-open",
+        )
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Current Programme Officer, P-3",
+            external_id="current-open",
+            location="Nairobi",
+            closes_at="2099-01-01T00:00:00+00:00",
+            apply_url="https://jobs.unicef.org/jobs/current-open",
+        )
+    )
+    classify_database(db)
+
+    collected = search_collected_jobs(db, VacancySearchRequest())
+
+    assert collected.total == 1
+    assert collected.results[0]["job_key"] == "unicef_pageup:current-open"
 
 
 def test_filter_cli_writes_markdown_for_unv_facets(tmp_path):
