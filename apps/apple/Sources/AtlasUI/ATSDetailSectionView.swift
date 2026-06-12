@@ -26,7 +26,7 @@ struct FormattedSectionView: View {
                 Spacer()
             }
 
-            ForEach(visibleBlocks) { block in
+            ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { _, block in
                 DetailBlockView(block: block)
             }
 

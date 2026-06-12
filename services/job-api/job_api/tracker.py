@@ -52,7 +52,6 @@ def create_record(path: Path, job_key: str) -> ApplicationRecord:
     records = _load(path)
     for record in records:
         if record.job_key == job_key:
-            record.status = "saved"
             record.updated_at = now
             _save(path, records)
             return record

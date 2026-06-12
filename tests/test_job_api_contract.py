@@ -86,7 +86,16 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
 
     tracker = client.post(f"/api/tracker/jobs/{job_key}")
     assert tracker.status_code == 200
-    assert tracker.json()["job_key"] == job_key
+    tracker_payload = tracker.json()
+    assert tracker_payload["job_key"] == job_key
+    assert tracker_payload["status"] == "saved"
+    tracker_payload["status"] = "applied"
+    applied = client.post("/api/tracker", json=tracker_payload)
+    assert applied.status_code == 200
+    assert applied.json()["status"] == "applied"
+    saved_again = client.post(f"/api/tracker/jobs/{job_key}")
+    assert saved_again.status_code == 200
+    assert saved_again.json()["status"] == "applied"
     assert len(client.get("/api/tracker").json()) == 1
 
 

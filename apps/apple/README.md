@@ -9,11 +9,7 @@ rows are used only by explicit Xcode previews.
 
 ## Xcode Preview Canvas
 
-Open the package at:
-
-```text
-/Users/yutsukioka2/git/un_job_application_helper/apps/apple/Package.swift
-```
+Open the package at `apps/apple/Package.swift` from the repository root.
 
 Then open:
 

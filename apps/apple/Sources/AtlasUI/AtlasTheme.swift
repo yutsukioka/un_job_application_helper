@@ -40,7 +40,7 @@ public enum AtlasTheme {
     /// Deterministic per-source tint. Brightness/saturation are clamped per
     /// appearance so white monogram text stays legible in both modes.
     public static func sourceColor(for value: String) -> Color {
-        let seed = abs(value.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) })
+        let seed = value.unicodeScalars.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1.value) }
         let hue = Double(seed % 360) / 360.0
         return adaptiveColor(
             light: hsb(hue: hue, saturation: 0.52, brightness: 0.58),
