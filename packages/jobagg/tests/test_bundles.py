@@ -384,10 +384,25 @@ sources:
     assert report["publish_result"] == "success_with_source_warnings"
     assert report["fatal_errors_count"] == 0
     assert report["exit_code"] == 2
+    assert report["source_health_exit_code"] == 2
+    assert report["allow_source_degraded"] is False
     assert report["publishable_degraded_sources"] == ["org_degraded_bundle"]
+    assert report["degraded_source_count"] == 1
+    assert report["inconclusive_source_count"] == 0
+    assert report["source_adapter_broken_count"] == 0
     assert report["current_jobs_count"] == 1
     assert report["total_jobs_count"] == 1
     assert report["bundles_published_count"] == 1
+    source_report = report["sources"][0]
+    assert source_report["source_id"] == "org_degraded_bundle"
+    assert source_report["publishability_classification"] == "publishable_detail_degraded"
+    assert source_report["fetched_count"] == 1
+    assert source_report["pagination_complete"] is True
+    assert source_report["verified_empty"] is False
+    assert source_report["missing_transition_allowed"] is True
+    assert "detail_backlog_counts" in source_report
+    assert "circuit_breakers" in source_report
+    assert "last_error_summary" in source_report
 
 
 def test_sync_bundles_allow_source_degraded_converts_exit_2_to_0(tmp_path):
@@ -424,6 +439,109 @@ sources:
     report = json.loads((output / "sync_bundles_health.json").read_text(encoding="utf-8"))
     assert report["publish_result"] == "success_with_source_warnings"
     assert report["exit_code"] == 0
+    assert report["source_health_exit_code"] == 2
+    assert report["allow_source_degraded"] is True
+    assert report["publishable_degraded_sources"] == ["org_degraded_bundle"]
+
+
+def test_sync_bundles_fatal_consolidation_failure_returns_exit_1(tmp_path, monkeypatch):
+    config = tmp_path / "organizations.yaml"
+    output = tmp_path / "output"
+    config.write_text(
+        """
+sources:
+  - id: org_static_bundle
+    name: Org
+    ats_family: static_bundle_test
+    base_url: https://example.org
+    enabled: true
+    extra:
+      output_slug: org
+""",
+        encoding="utf-8",
+    )
+
+    def fail_consolidation(*, output_dir, slug="all"):
+        raise RuntimeError("consolidation exploded")
+
+    monkeypatch.setattr("jobagg.scheduler.consolidate_bundle_databases", fail_consolidation)
+
+    exit_code = main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--output-dir",
+            str(output),
+            "--no-archive",
+            "--skip-classify",
+        ]
+    )
+
+    assert exit_code == 1
+    report = json.loads((output / "sync_bundles_health.json").read_text(encoding="utf-8"))
+    assert report["publish_result"] == "failed"
+    assert report["fatal_errors_count"] == 1
+    assert report["exit_code"] == 1
+    assert report["source_health_exit_code"] == 1
+    assert report["current_jobs_count"] is None
+    assert report["total_jobs_count"] is None
+
+
+def test_source_health_report_dry_run_summarizes_local_policy_and_schema(tmp_path):
+    config = tmp_path / "organizations.yaml"
+    output = tmp_path / "output"
+    report_path = tmp_path / "source_health.json"
+    config.write_text(
+        """
+sources:
+  - id: org_static_bundle
+    name: Org
+    ats_family: static_bundle_test
+    base_url: https://example.org
+    enabled: true
+    extra:
+      output_slug: org
+""",
+        encoding="utf-8",
+    )
+    assert main(
+        [
+            "sync-bundles",
+            "--config",
+            str(config),
+            "--output-dir",
+            str(output),
+            "--no-archive",
+            "--skip-classify",
+        ]
+    ) == 0
+
+    exit_code = main(
+        [
+            "source-health-report",
+            "--dry-run",
+            "--config",
+            str(config),
+            "--sources",
+            "org_static_bundle",
+            "--output-dir",
+            str(output),
+            "--format",
+            "json",
+            "--output",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["dry_run"] is True
+    assert payload["live_fetch_attempted"] is False
+    assert payload["health_report_schema"]["ok"] is True
+    assert payload["sources"][0]["source_id"] == "org_static_bundle"
+    assert payload["sources"][0]["policy"]["list_fetch_interval_minutes"] == 180
+    assert payload["sources"][0]["missing_closed_gate_valid"] is True
 
 
 def _staged_result(tmp_path, *, source_id, slug, fetched):

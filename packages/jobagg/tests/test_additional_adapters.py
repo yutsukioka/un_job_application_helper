@@ -278,16 +278,7 @@ def test_oracle_hcm_classifies_dns_resolution_errors():
     assert classify_fetch_error(RuntimeError("GET failed with HTTP 401: no auth")) == "auth_or_forbidden"
 
 
-def test_oracle_hcm_invalid_json_raises_source_inconclusive_before_json_parse():
-    class NonJsonHTTP:
-        def get(self, url, *, headers=None, timeout_seconds=None):
-            return FakeResponse(
-                text="<html>maintenance</html>",
-                headers={"Content-Type": "text/html; charset=utf-8"},
-                status_code=200,
-                url=url,
-            )
-
+def test_oracle_hcm_malformed_json_responses_raise_source_inconclusive_before_json_parse():
     org = OrganizationSource(
         id="iom_oracle_hcm",
         name="IOM",
@@ -295,17 +286,50 @@ def test_oracle_hcm_invalid_json_raises_source_inconclusive_before_json_parse():
         base_url="https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com",
         extra={"site_number": "CX_1001"},
     )
-    adapter = OracleHCMAdapter(AdapterContext(source=org, http=NonJsonHTTP()))
 
-    try:
-        adapter.fetch_jobs()
-    except SourceInconclusiveError as exc:
-        assert exc.source_id == "iom_oracle_hcm"
-        assert exc.reason == "non_json_response_before_json_parse"
-        assert exc.status_code == 200
-        assert "maintenance" in exc.body_snippet
-    else:
-        raise AssertionError("Expected SourceInconclusiveError")
+    cases = [
+        (
+            "",
+            {"Content-Type": "application/json"},
+            "empty_body_before_json_parse",
+            "",
+        ),
+        (
+            "<html>maintenance</html>",
+            {"Content-Type": "text/html; charset=utf-8"},
+            "non_json_response_before_json_parse",
+            "maintenance",
+        ),
+        (
+            "{not json",
+            {"Content-Type": "application/json; charset=utf-8"},
+            "invalid_json_response",
+            "{not json",
+        ),
+    ]
+    for text, response_headers, reason, expected_snippet in cases:
+        class MalformedHTTP:
+            def get(self, url, *, headers=None, timeout_seconds=None):
+                return FakeResponse(
+                    text=text,
+                    headers=response_headers,
+                    status_code=200,
+                    url=url,
+                )
+
+        adapter = OracleHCMAdapter(AdapterContext(source=org, http=MalformedHTTP()))
+        try:
+            adapter.fetch_jobs()
+        except SourceInconclusiveError as exc:
+            assert exc.source_id == "iom_oracle_hcm"
+            assert exc.reason == reason
+            assert exc.status_code == 200
+            assert exc.content_type == response_headers["Content-Type"]
+            assert exc.final_url.startswith("https://")
+            assert len(exc.body_snippet) <= 500
+            assert expected_snippet in exc.body_snippet
+        else:
+            raise AssertionError(f"Expected SourceInconclusiveError for {reason}")
 
 
 def test_oracle_hcm_validates_site_settings_and_paginates_to_total(monkeypatch):
