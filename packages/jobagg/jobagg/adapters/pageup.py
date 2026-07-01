@@ -200,6 +200,8 @@ class PageUpAdapter(JobAdapter):
             backoff_base_seconds=self.context.http.backoff_base_seconds,
             jitter_ratio=self.context.http.jitter_ratio,
             max_response_bytes=self.context.http.max_response_bytes,
+            tls_verify=self.context.http.tls_verify,
+            default_headers=self.context.http.default_headers,
         )
         return stateless_http.get(
             detail_url,

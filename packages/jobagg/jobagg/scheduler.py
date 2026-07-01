@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import getpass
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
+import webbrowser
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,6 +37,7 @@ from jobagg.models import OrganizationSource, SyncResult
 from jobagg.observability.logging import configure_logging, get_logger
 from jobagg.ops_check import collect_ops_check, ops_check_to_markdown
 from jobagg.pipelines.bundles import (
+    BundleResult,
     publish_canonical_results,
     source_output_paths,
     source_output_slug,
@@ -63,6 +68,16 @@ DEFAULT_DB_PATH = DEFAULT_OUTPUT_DIR / "jobagg.sqlite3"
 DEFAULT_SAVED_SEARCHES_PATH = Path(
     os.environ.get("JOBAGG_SAVED_SEARCHES", REPO_ROOT / "private" / "jobagg" / "saved_searches.json")
 )
+
+
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid integer value: {value}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be 0 or greater")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -198,6 +213,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="When using selective detail refresh, fetch every detail page this run.",
     )
     bundles.add_argument(
+        "--detail-page-limit",
+        type=_non_negative_int,
+        help=(
+            "One-off override for max detail pages per source in this sync-bundles run. "
+            "Use with --source-id and --refresh-all-details to deliberately drain a backlog."
+        ),
+    )
+    bundles.add_argument(
         "--keep-extra-output-files",
         action="store_true",
         help="Do not archive noncanonical files already in --output-dir.",
@@ -225,6 +248,48 @@ def build_parser() -> argparse.ArgumentParser:
     bundles.add_argument(
         "--health-report-output",
         help="Optional JSON health report path. Defaults to sync_bundles_health.json in --output-dir.",
+    )
+    bundles.add_argument(
+        "--browser-cookie-assist",
+        action="store_true",
+        help=(
+            "Interactive mode for WAF-challenged sources: open the source in a browser, "
+            "then inject a user-provided Cookie header into that source's HTTP client."
+        ),
+    )
+    bundles.add_argument(
+        "--browser-cookie-assist-on-block",
+        action="store_true",
+        help=(
+            "Reactive browser cookie assist: run normally first, then open the browser "
+            "and retry affected sources only when a browser-assist source hits a block."
+        ),
+    )
+    bundles.add_argument(
+        "--browser-cookie-source-id",
+        action="append",
+        default=[],
+        help=(
+            "Source ID to use with --browser-cookie-assist. Repeat for multiple sources. "
+            "Defaults to selected sources with extra.browser_cookie_assist=true."
+        ),
+    )
+    bundles.add_argument(
+        "--browser-cookie-file",
+        help=(
+            "Path containing a Cookie header for --browser-cookie-assist. "
+            "If omitted, JOBAGG_BROWSER_COOKIE_HEADER or an interactive hidden prompt is used."
+        ),
+    )
+    bundles.add_argument(
+        "--browser-cookie-env",
+        default="JOBAGG_BROWSER_COOKIE_HEADER",
+        help="Environment variable containing the Cookie header for --browser-cookie-assist.",
+    )
+    bundles.add_argument(
+        "--no-browser-open",
+        action="store_true",
+        help="With --browser-cookie-assist, do not open the browser before reading the Cookie header.",
     )
     bundles.set_defaults(handler=handle_sync_bundles)
 
@@ -591,6 +656,12 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     if not sources:
         LOGGER.error("No sources selected for sync-bundles")
         return 1
+    if args.browser_cookie_assist:
+        try:
+            _apply_browser_cookie_assist(args, sources)
+        except RuntimeError as exc:
+            LOGGER.error("Browser cookie assist failed: %s", exc)
+            return 1
 
     output_dir = Path(args.output_dir)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -600,18 +671,30 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="jobagg_bundles_", dir=output_dir.parent) as staging:
         staging_dir = Path(staging)
         for source in sources:
-            result = write_source_bundle(
+            result = _write_source_bundle_for_sync_bundles(
+                args,
                 source,
-                output_dir=staging_dir,
+                output_dir=output_dir,
+                staging_dir=staging_dir,
                 policy=policy,
-                file_slug=source.id,
-                seed_db_path=source_output_paths(output_dir, source_output_slug(source))["db"],
-                selective_details=not args.full_sync,
-                deadline_refresh_days=args.deadline_refresh_days,
-                refresh_all_details=args.refresh_all_details,
-                missing_run_threshold=args.missing_run_threshold,
-                classify=not args.skip_classify,
             )
+            if _should_retry_with_browser_cookie_assist(args, source, result):
+                LOGGER.warning(
+                    "%s appears blocked during detail fetch; opening browser cookie assist and retrying source",
+                    source.id,
+                )
+                try:
+                    _apply_browser_cookie_assist(args, [source])
+                except RuntimeError as exc:
+                    LOGGER.error("Browser cookie assist failed for %s: %s", source.id, exc)
+                else:
+                    result = _write_source_bundle_for_sync_bundles(
+                        args,
+                        source,
+                        output_dir=output_dir,
+                        staging_dir=staging_dir,
+                        policy=policy,
+                    )
             all_results.append(result)
             sync = result.sync_result
             if sync.errors:
@@ -688,14 +771,20 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
             )
             return 1
         LOGGER.info(
-            "Refreshed consolidated database %s with %s current and %s history jobs",
+            "Refreshed consolidated database %s with %s current, %s current detail-complete, "
+            "%s current weak-detail, %s expired moved to history, and %s history jobs",
             consolidated.db_path,
             consolidated.current_count,
+            consolidated.current_detail_complete_count,
+            consolidated.current_detail_weak_count,
+            consolidated.expired_moved_to_history_count,
             consolidated.history_count,
         )
     LOGGER.info("Published %s canonical organization bundles to %s", len(selected), output_dir)
-    source_warnings = _source_warning_results(selected)
-    source_health_exit_code = 2 if source_warnings else 0
+    source_warning_ids = {result.sync_result.source_id for result in _source_warning_results(selected)}
+    if consolidated is not None:
+        source_warning_ids.update(_consolidated_warning_source_ids(consolidated.db_path))
+    source_health_exit_code = 2 if source_warning_ids else 0
     exit_code = source_health_exit_code
     if source_health_exit_code == 2 and args.allow_source_degraded:
         exit_code = 0
@@ -709,7 +798,7 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
         source_health_exit_code=source_health_exit_code,
         allow_source_degraded=bool(args.allow_source_degraded),
     )
-    if source_warnings:
+    if source_warning_ids:
         LOGGER.warning(
             "Published with source warnings: %s",
             ", ".join(item["source_id"] for item in health_report["sources"] if item["warning"]),
@@ -717,11 +806,176 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _write_source_bundle_for_sync_bundles(
+    args: argparse.Namespace,
+    source: OrganizationSource,
+    *,
+    output_dir: Path,
+    staging_dir: Path,
+    policy: RobotsPolicy,
+) -> BundleResult:
+    if args.detail_page_limit is not None:
+        source = replace(
+            source,
+            extra={**source.extra, "max_detail_pages_per_run": args.detail_page_limit},
+        )
+    return write_source_bundle(
+        source,
+        output_dir=staging_dir,
+        policy=policy,
+        file_slug=source.id,
+        seed_db_path=source_output_paths(output_dir, source_output_slug(source))["db"],
+        selective_details=not args.full_sync,
+        deadline_refresh_days=args.deadline_refresh_days,
+        refresh_all_details=args.refresh_all_details,
+        missing_run_threshold=args.missing_run_threshold,
+        classify=not args.skip_classify,
+    )
+
+
+def _should_retry_with_browser_cookie_assist(
+    args: argparse.Namespace,
+    source: OrganizationSource,
+    result: BundleResult,
+) -> bool:
+    if not getattr(args, "browser_cookie_assist_on_block", False):
+        return False
+    explicit_target_ids = set(getattr(args, "browser_cookie_source_id", []) or [])
+    if source.id not in explicit_target_ids and not _truthy(source.extra.get("browser_cookie_assist")):
+        return False
+    if _truthy(source.extra.get("browser_cookie_assist_active")):
+        return False
+    sync = result.sync_result
+    diagnostics = sync.diagnostics
+    if diagnostics is not None and diagnostics.detail_failed <= 0:
+        return False
+    if diagnostics is None and not sync.errors:
+        return False
+    error_text = " ".join(sync.errors).casefold()
+    return any(
+        marker in error_text
+        for marker in (
+            "detail refresh returned no detail",
+            "awswaf",
+            "waf",
+            "captcha",
+            "verify that you're not a robot",
+            "no_detail_response",
+            "blocked",
+        )
+    )
+
+
+def _apply_browser_cookie_assist(args: argparse.Namespace, sources: list[OrganizationSource]) -> None:
+    if not (
+        getattr(args, "browser_cookie_assist", False)
+        or getattr(args, "browser_cookie_assist_on_block", False)
+    ):
+        return
+    selected_by_id = {source.id: source for source in sources}
+    target_ids = set(getattr(args, "browser_cookie_source_id", []) or [])
+    if not target_ids:
+        target_ids = {
+            source.id
+            for source in sources
+            if _truthy(source.extra.get("browser_cookie_assist"))
+        }
+    if not target_ids:
+        raise RuntimeError(
+            "no selected sources have browser_cookie_assist=true; pass --browser-cookie-source-id"
+        )
+    missing = sorted(target_ids - set(selected_by_id))
+    if missing:
+        raise RuntimeError(f"browser cookie assist source not selected: {', '.join(missing)}")
+
+    for source_id in sorted(target_ids):
+        source = selected_by_id[source_id]
+        cookie_url = _browser_cookie_url(source)
+        if not getattr(args, "no_browser_open", False):
+            LOGGER.warning(
+                "Opening %s for browser cookie assist. Complete any human check, then provide the Cookie header.",
+                cookie_url,
+            )
+            webbrowser.open(cookie_url)
+        cookie_header = _read_browser_cookie_header(args, source)
+        source.extra = {
+            **source.extra,
+            "cookie_header": cookie_header,
+            "browser_cookie_assist_active": True,
+        }
+        LOGGER.info("Browser cookie assist enabled for %s", source.id)
+
+
+def _browser_cookie_url(source: OrganizationSource) -> str:
+    return str(
+        source.extra.get("browser_cookie_url")
+        or source.extra.get("listing_url")
+        or source.base_url
+    )
+
+
+def _read_browser_cookie_header(args: argparse.Namespace, source: OrganizationSource) -> str:
+    file_path = getattr(args, "browser_cookie_file", None)
+    if file_path:
+        return _normalize_cookie_header(Path(file_path).read_text(encoding="utf-8"))
+
+    env_name = str(getattr(args, "browser_cookie_env", None) or "JOBAGG_BROWSER_COOKIE_HEADER")
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return _normalize_cookie_header(env_value)
+
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "interactive Cookie prompt is unavailable; pass --browser-cookie-file "
+            f"or set {env_name}"
+        )
+    prompt = (
+        f"Paste Cookie header for {source.id} after completing the browser challenge "
+        "(input hidden): "
+    )
+    return _normalize_cookie_header(getpass.getpass(prompt))
+
+
+def _normalize_cookie_header(value: str) -> str:
+    text = value.strip()
+    if not text:
+        raise RuntimeError("Cookie header is empty")
+
+    header_match = re.search(r"(?im)^\s*cookie\s*:\s*(?P<value>.+?)\s*$", text)
+    if header_match:
+        text = header_match.group("value").strip()
+    else:
+        curl_match = re.search(
+            r"""(?is)(?:^|\s)-H\s+(['"])Cookie:\s*(?P<value>.*?)\1""",
+            text,
+        )
+        if curl_match:
+            text = curl_match.group("value").strip()
+
+    text = text.replace("\r", "").strip()
+    if "\n" in text:
+        raise RuntimeError("Cookie header must be a single header line")
+    if text.lower().startswith("cookie:"):
+        text = text.split(":", 1)[1].strip()
+    if "=" not in text:
+        raise RuntimeError("Cookie header does not look like name=value cookies")
+    return text
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    return str(value).strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
 def handle_consolidate_bundles(args: argparse.Namespace) -> int:
     result = consolidate_bundle_databases(
         output_dir=args.output_dir,
         slug=args.slug,
     )
+    _refresh_existing_health_report_after_consolidation(result)
     if args.summary_output:
         write_organization_summary(result, args.summary_output)
         LOGGER.info("Wrote organization summary to %s", args.summary_output)
@@ -731,12 +985,70 @@ def handle_consolidate_bundles(args: argparse.Namespace) -> int:
         result.db_path,
     )
     LOGGER.info("Current open jobs: %s", result.current_count)
+    LOGGER.info("Current detail-complete jobs: %s", result.current_detail_complete_count)
+    LOGGER.info("Current weak-detail jobs: %s", result.current_detail_weak_count)
+    LOGGER.info("Expired jobs moved to history: %s", result.expired_moved_to_history_count)
     LOGGER.info("History jobs: %s", result.history_count)
+    LOGGER.info("Total jobs: %s", result.total_count)
     LOGGER.info("Current JSON: %s", result.current_json_path)
     LOGGER.info("Current CSV: %s", result.current_csv_path)
     LOGGER.info("History JSON: %s", result.history_json_path)
     LOGGER.info("History CSV: %s", result.history_csv_path)
     return 0
+
+
+def _refresh_existing_health_report_after_consolidation(result) -> None:
+    path = result.output_dir / "sync_bundles_health.json"
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    payload["current_jobs_count"] = result.current_count
+    payload["trusted_current_jobs_count"] = result.trusted_current_count
+    payload["application_ready_jobs_count"] = result.application_ready_count
+    payload["current_detail_complete_count"] = result.current_detail_complete_count
+    payload["current_detail_weak_count"] = result.current_detail_weak_count
+    payload["expired_moved_to_history_count"] = result.expired_moved_to_history_count
+    payload["history_jobs_count"] = result.history_count
+    payload["total_jobs_count"] = result.total_count
+    detail_backlog_counts = _detail_backlog_counts_from_db(result.db_path)
+    payload["detail_backlog_counts"] = detail_backlog_counts
+    payload["detail_pending_count"] = int(detail_backlog_counts.get("pending") or 0)
+    payload["consolidation_refreshed_at"] = datetime.now(tz=UTC).isoformat()
+    payload["consolidation_source_db_count"] = len(result.source_db_paths)
+    payload["consolidation_status_counts"] = result.status_counts
+    sources = payload.get("sources")
+    if isinstance(sources, list):
+        for row in sources:
+            slug = str(row.get("slug") or row.get("source_id") or "")
+            if not slug:
+                continue
+            sidecar = _bundle_health_sidecar(result.output_dir, slug)
+            if sidecar["detail_backlog_counts"]:
+                row["detail_backlog_counts"] = sidecar["detail_backlog_counts"]
+                row["detail_pending"] = sidecar["detail_backlog_counts"].get("pending", 0)
+            else:
+                row["detail_backlog_counts"] = {}
+                row["detail_pending"] = 0
+            if sidecar["circuit_breakers"]:
+                row["circuit_breakers"] = sidecar["circuit_breakers"]
+            row["cooldown_until"] = sidecar["cooldown_until"]
+            errors = row.get("errors") if isinstance(row.get("errors"), list) else []
+            row["last_error_summary"] = _last_error_summary(errors, sidecar["last_backlog_error"])
+        detail_quality_warning_sources = _merge_consolidated_status_into_health_rows(
+            sources,
+            result.db_path,
+        )
+        payload["detail_quality_warning_sources"] = detail_quality_warning_sources
+        payload["detail_quality_warning_count"] = len(detail_quality_warning_sources)
+        warning_sources = [row.get("source_id") for row in sources if row.get("warning")]
+        if warning_sources and payload.get("publish_result") == "success":
+            payload["publish_result"] = "success_with_source_warnings"
+        if warning_sources and int(payload.get("source_health_exit_code") or 0) == 0:
+            payload["source_health_exit_code"] = 2
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
 def _source_safety_gate_violations(results) -> list[str]:
@@ -761,6 +1073,36 @@ def _source_warning_results(results) -> list:
         if _publishability_for_sync_result(result.sync_result)
         not in {"ok", "ok_empty"}
     ]
+
+
+def _consolidated_warning_source_ids(db_path: Path) -> set[str]:
+    if not db_path.exists():
+        return set()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT source_id, source_freshness_status, open_jobs,
+                       stale_current_jobs, weak_detail_jobs
+                FROM consolidated_source_status
+                WHERE open_jobs > 0
+                   OR stale_current_jobs > 0
+                   OR weak_detail_jobs > 0
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return set()
+    warnings = set()
+    for row in rows:
+        freshness = str(row["source_freshness_status"] or "")
+        if (
+            freshness not in {"", "fresh"}
+            or int(row["stale_current_jobs"] or 0) > 0
+            or int(row["weak_detail_jobs"] or 0) > 0
+        ):
+            warnings.add(str(row["source_id"]))
+    return warnings
 
 
 def _publishability_for_sync_result(sync: SyncResult) -> str:
@@ -885,11 +1227,19 @@ def _validate_sync_bundles_health_schema(path: Path) -> dict:
         "exit_code",
         "fatal_errors_count",
         "current_jobs_count",
+        "trusted_current_jobs_count",
+        "application_ready_jobs_count",
+        "current_detail_complete_count",
+        "current_detail_weak_count",
+        "expired_moved_to_history_count",
+        "history_jobs_count",
         "total_jobs_count",
         "bundles_published_count",
         "degraded_source_count",
         "inconclusive_source_count",
         "source_adapter_broken_count",
+        "detail_backlog_counts",
+        "detail_pending_count",
         "sources",
     }
     source_level = {
@@ -899,7 +1249,12 @@ def _validate_sync_bundles_health_schema(path: Path) -> dict:
         "fetched_count",
         "pagination_complete",
         "verified_empty",
+        "blocked",
+        "transient_error",
+        "scope_validation_status",
+        "scope_passed",
         "missing_transition_allowed",
+        "missing_closed_safety_gate_passed",
         "detail_attempted",
         "detail_succeeded",
         "detail_failed",
@@ -908,6 +1263,12 @@ def _validate_sync_bundles_health_schema(path: Path) -> dict:
         "circuit_breakers",
         "last_error_summary",
         "cooldown_until",
+        "consolidated_open_jobs",
+        "consolidated_trusted_current_jobs",
+        "consolidated_application_ready_jobs",
+        "consolidated_stale_current_jobs",
+        "consolidated_expired_current_jobs",
+        "consolidated_weak_detail_jobs",
     }
     if not path.exists():
         return {
@@ -931,7 +1292,12 @@ def _validate_sync_bundles_health_schema(path: Path) -> dict:
     source_missing: list[str] = []
     sources = report.get("sources")
     if isinstance(sources, list) and sources:
-        source_missing = sorted(source_level.difference(sources[0]))
+        missing_by_source: set[str] = set()
+        for source in sources:
+            missing_fields = sorted(source_level.difference(source))
+            source_id = source.get("source_id", "<unknown>")
+            missing_by_source.update(f"{source_id}:{field}" for field in missing_fields)
+        source_missing = sorted(missing_by_source)
     elif "sources" not in missing:
         source_missing = sorted(source_level)
     return {
@@ -991,7 +1357,18 @@ def _write_sync_bundles_health_report(
                 "detail_backlog_counts": sidecar["detail_backlog_counts"],
                 "pagination_complete": diagnostics.pagination_complete if diagnostics else None,
                 "verified_empty": _diagnostics_verified_empty(diagnostics),
+                "blocked": diagnostics.blocked if diagnostics else False,
+                "transient_error": diagnostics.transient_error if diagnostics else False,
+                "scope_validation_status": (
+                    diagnostics.scope_validation_status if diagnostics else None
+                ),
+                "scope_passed": _scope_passed(
+                    diagnostics.scope_validation_status if diagnostics else None
+                ),
                 "missing_transition_allowed": (
+                    diagnostics.missing_transition_allowed if diagnostics else False
+                ),
+                "missing_closed_safety_gate_passed": (
                     diagnostics.missing_transition_allowed if diagnostics else False
                 ),
                 "circuit_breakers": sidecar["circuit_breakers"],
@@ -999,7 +1376,21 @@ def _write_sync_bundles_health_report(
                 "last_error_summary": _last_error_summary(errors, sidecar["last_backlog_error"]),
                 "errors": errors,
                 "warning": publishability not in {"ok", "ok_empty"},
+                "consolidated_only": False,
+                "source_freshness_status": None,
+                "consolidated_open_jobs": 0,
+                "consolidated_stale_current_jobs": 0,
+                "consolidated_trusted_current_jobs": 0,
+                "consolidated_application_ready_jobs": 0,
+                "consolidated_expired_current_jobs": 0,
+                "consolidated_weak_detail_jobs": 0,
             }
+        )
+    detail_quality_warning_sources: list[str] = []
+    if consolidated is not None:
+        detail_quality_warning_sources = _merge_consolidated_status_into_health_rows(
+            source_rows,
+            consolidated.db_path,
         )
     publishable_degraded = [
         row["source_id"]
@@ -1022,6 +1413,11 @@ def _write_sync_bundles_health_report(
     ]
     warning_sources = [row["source_id"] for row in source_rows if row["warning"]]
     source_health_exit_code = source_health_exit_code if source_health_exit_code is not None else exit_code
+    detail_backlog_counts = (
+        _detail_backlog_counts_from_db(consolidated.db_path)
+        if consolidated is not None
+        else {}
+    )
     report = {
         "publish_result": (
             "failed"
@@ -1034,11 +1430,31 @@ def _write_sync_bundles_health_report(
         "publishable_degraded_sources": publishable_degraded,
         "source_inconclusive_sources": source_inconclusive,
         "detail_adapter_broken_sources": adapter_broken,
+        "detail_quality_warning_sources": detail_quality_warning_sources,
         "degraded_source_count": len(publishable_degraded),
         "inconclusive_source_count": len(source_inconclusive),
         "source_adapter_broken_count": len(adapter_broken),
+        "detail_quality_warning_count": len(detail_quality_warning_sources),
+        "detail_backlog_counts": detail_backlog_counts,
+        "detail_pending_count": int(detail_backlog_counts.get("pending") or 0),
         "current_jobs_count": consolidated.current_count if consolidated is not None else None,
-        "total_jobs_count": consolidated.history_count if consolidated is not None else None,
+        "trusted_current_jobs_count": (
+            consolidated.trusted_current_count if consolidated is not None else None
+        ),
+        "application_ready_jobs_count": (
+            consolidated.application_ready_count if consolidated is not None else None
+        ),
+        "current_detail_complete_count": (
+            consolidated.current_detail_complete_count if consolidated is not None else None
+        ),
+        "current_detail_weak_count": (
+            consolidated.current_detail_weak_count if consolidated is not None else None
+        ),
+        "expired_moved_to_history_count": (
+            consolidated.expired_moved_to_history_count if consolidated is not None else None
+        ),
+        "history_jobs_count": consolidated.history_count if consolidated is not None else None,
+        "total_jobs_count": consolidated.total_count if consolidated is not None else None,
         "bundles_published_count": len(results),
         "exit_code": exit_code,
         "source_health_exit_code": source_health_exit_code,
@@ -1076,6 +1492,182 @@ def _last_error_summary(errors: list[str], backlog_error: str | None) -> str | N
     return None
 
 
+def _merge_consolidated_status_into_health_rows(source_rows: list[dict], db_path: Path) -> list[str]:
+    statuses = _read_consolidated_source_status(db_path)
+    for row in source_rows:
+        _ensure_consolidated_health_defaults(row)
+    if not statuses:
+        return []
+    rows_by_source = {str(row["source_id"]): row for row in source_rows}
+    detail_quality_warning_sources: list[str] = []
+    for source_id, status in statuses.items():
+        weak_detail_jobs = int(status.get("weak_detail_jobs") or 0)
+        stale_current_jobs = int(status.get("stale_current_jobs") or 0)
+        expired_current_jobs = int(status.get("expired_current_jobs") or 0)
+        source_freshness_status = status.get("source_freshness_status")
+        consolidated_warning = (
+            source_freshness_status not in {None, "", "fresh"}
+            or stale_current_jobs > 0
+            or weak_detail_jobs > 0
+        )
+        if weak_detail_jobs > 0:
+            detail_quality_warning_sources.append(source_id)
+        if source_id in rows_by_source:
+            row = rows_by_source[source_id]
+            row.update(
+                {
+                    "source_freshness_status": source_freshness_status,
+                    "consolidated_only": False,
+                    "consolidated_open_jobs": int(status.get("open_jobs") or 0),
+                    "consolidated_stale_current_jobs": stale_current_jobs,
+                    "consolidated_trusted_current_jobs": int(
+                        status.get("trusted_current_jobs") or 0
+                    ),
+                    "consolidated_application_ready_jobs": int(
+                        status.get("application_ready_jobs") or 0
+                    ),
+                    "consolidated_expired_current_jobs": expired_current_jobs,
+                    "consolidated_weak_detail_jobs": weak_detail_jobs,
+                }
+            )
+            row["warning"] = bool(row.get("warning")) or consolidated_warning
+            continue
+
+        publishability = (
+            status.get("publishability_classification")
+            or ("source_inconclusive" if consolidated_warning else "ok")
+        )
+        source_rows.append(
+            {
+                "source_id": source_id,
+                "slug": source_id,
+                "publishability_classification": publishability,
+                "run_classification": status.get("run_classification"),
+                "health_status": status.get("health_status") or ("issue" if consolidated_warning else "ok"),
+                "source_freshness_status": source_freshness_status,
+                "list_breaker_state": None,
+                "detail_breaker_state": None,
+                "fetched": status.get("fetched"),
+                "fetched_count": status.get("fetched"),
+                "inserted": None,
+                "updated": None,
+                "unchanged": None,
+                "missing": None,
+                "closed": None,
+                "detail_attempted": 0,
+                "detail_succeeded": 0,
+                "detail_failed": 0,
+                "detail_skipped": 0,
+                "detail_pending": 0,
+                "detail_backlog_counts": {},
+                "pagination_complete": _sqlite_bool(status.get("pagination_complete")),
+                "verified_empty": _sqlite_bool(status.get("verified_empty")),
+                "blocked": _sqlite_bool(status.get("blocked")) or False,
+                "transient_error": _sqlite_bool(status.get("transient_error")) or False,
+                "scope_validation_status": status.get("scope_validation_status"),
+                "scope_passed": _scope_passed(status.get("scope_validation_status")),
+                "missing_transition_allowed": bool(status.get("missing_transition_allowed")),
+                "missing_closed_safety_gate_passed": bool(
+                    status.get("missing_transition_allowed")
+                ),
+                "circuit_breakers": {},
+                "cooldown_until": None,
+                "last_error_summary": (
+                    "source contributes consolidated current rows but was not present in latest health run"
+                ),
+                "errors": [],
+                "warning": consolidated_warning,
+                "consolidated_only": True,
+                "consolidated_open_jobs": int(status.get("open_jobs") or 0),
+                "consolidated_stale_current_jobs": stale_current_jobs,
+                "consolidated_trusted_current_jobs": int(status.get("trusted_current_jobs") or 0),
+                "consolidated_application_ready_jobs": int(
+                    status.get("application_ready_jobs") or 0
+                ),
+                "consolidated_expired_current_jobs": expired_current_jobs,
+                "consolidated_weak_detail_jobs": weak_detail_jobs,
+            }
+        )
+    return sorted(detail_quality_warning_sources)
+
+
+def _ensure_consolidated_health_defaults(row: dict) -> None:
+    row.setdefault("blocked", False)
+    row.setdefault("transient_error", False)
+    row.setdefault("scope_validation_status", None)
+    row.setdefault("scope_passed", _scope_passed(row.get("scope_validation_status")))
+    row.setdefault(
+        "missing_closed_safety_gate_passed",
+        bool(row.get("missing_transition_allowed")),
+    )
+    row.setdefault("consolidated_open_jobs", 0)
+    row.setdefault("consolidated_stale_current_jobs", 0)
+    row.setdefault("consolidated_trusted_current_jobs", 0)
+    row.setdefault("consolidated_application_ready_jobs", 0)
+    row.setdefault("consolidated_expired_current_jobs", 0)
+    row.setdefault("consolidated_weak_detail_jobs", 0)
+
+
+def _read_consolidated_source_status(db_path: Path) -> dict[str, dict]:
+    if not db_path.exists():
+        return {}
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'consolidated_source_status'
+                """
+            ).fetchone()
+            if row is None:
+                return {}
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM consolidated_source_status
+                ORDER BY source_id
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
+    return {str(row["source_id"]): dict(row) for row in rows}
+
+
+def _scope_passed(value: object) -> bool:
+    return value in {None, "passed", "not_applicable"}
+
+
+def _detail_backlog_counts_from_db(db_path: Path) -> dict[str, int]:
+    if not db_path.exists():
+        return {}
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+                ).fetchall()
+            }
+            if "detail_backlog" not in tables or "jobs" not in tables:
+                return {}
+            rows = conn.execute(
+                """
+                SELECT b.detail_status, COUNT(*) AS items
+                FROM detail_backlog b
+                JOIN jobs j ON j.job_key = b.job_key
+                WHERE j.status = 'open'
+                GROUP BY b.detail_status
+                ORDER BY b.detail_status
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return {}
+    return {str(row["detail_status"]): int(row["items"] or 0) for row in rows}
+
+
 def _bundle_health_sidecar(output_dir: Path, slug: str) -> dict:
     db_path = source_output_paths(output_dir, slug)["db"]
     sidecar = {
@@ -1096,28 +1688,55 @@ def _bundle_health_sidecar(output_dir: Path, slug: str) -> dict:
                 ).fetchall()
             }
             if "detail_backlog" in tables:
-                sidecar["detail_backlog_counts"] = {
-                    row["detail_status"]: int(row["items"])
-                    for row in conn.execute(
+                if "jobs" in tables:
+                    sidecar["detail_backlog_counts"] = {
+                        row["detail_status"]: int(row["items"])
+                        for row in conn.execute(
+                            """
+                            SELECT b.detail_status, COUNT(*) AS items
+                            FROM detail_backlog b
+                            JOIN jobs j ON j.job_key = b.job_key
+                            WHERE j.status = 'open'
+                            GROUP BY b.detail_status
+                            """
+                        ).fetchall()
+                    }
+                    error_row = conn.execute(
                         """
-                        SELECT detail_status, COUNT(*) AS items
+                        SELECT b.last_error
+                        FROM detail_backlog b
+                        JOIN jobs j ON j.job_key = b.job_key
+                        WHERE j.status = 'open'
+                            AND b.last_error IS NOT NULL
+                            AND b.last_error <> ''
+                        ORDER BY b.updated_at DESC
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                else:
+                    sidecar["detail_backlog_counts"] = {
+                        row["detail_status"]: int(row["items"])
+                        for row in conn.execute(
+                            """
+                            SELECT detail_status, COUNT(*) AS items
+                            FROM detail_backlog
+                            GROUP BY detail_status
+                            """
+                        ).fetchall()
+                    }
+                    error_row = conn.execute(
+                        """
+                        SELECT last_error
                         FROM detail_backlog
-                        GROUP BY detail_status
+                        WHERE last_error IS NOT NULL AND last_error <> ''
+                        ORDER BY updated_at DESC
+                        LIMIT 1
                         """
-                    ).fetchall()
-                }
-                error_row = conn.execute(
-                    """
-                    SELECT last_error
-                    FROM detail_backlog
-                    WHERE last_error IS NOT NULL AND last_error <> ''
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
+                    ).fetchone()
                 if error_row is not None:
                     sidecar["last_backlog_error"] = str(error_row["last_error"])
             if "source_circuit_breakers" in tables:
+                _normalize_expired_breakers_for_health_sidecar(conn)
                 cooldowns = []
                 breakers = {}
                 for row in conn.execute(
@@ -1143,6 +1762,42 @@ def _bundle_health_sidecar(output_dir: Path, slug: str) -> dict:
     except sqlite3.DatabaseError as exc:
         sidecar["last_backlog_error"] = f"health sidecar read failed: {exc}"
     return sidecar
+
+
+def _normalize_expired_breakers_for_health_sidecar(conn: sqlite3.Connection) -> None:
+    now = datetime.now(tz=UTC)
+    rows = conn.execute(
+        """
+        SELECT source_id, breaker_type, cooldown_until, last_reason
+        FROM source_circuit_breakers
+        WHERE state = 'open'
+            AND cooldown_until IS NOT NULL
+            AND TRIM(cooldown_until) <> ''
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            cooldown = datetime.fromisoformat(str(row["cooldown_until"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if cooldown.tzinfo is None:
+            cooldown = cooldown.replace(tzinfo=UTC)
+        if cooldown > now:
+            continue
+        reason = str(row["last_reason"] or "cooldown expired")
+        if "cooldown expired" not in reason.casefold():
+            reason = f"{reason}; cooldown expired"
+        conn.execute(
+            """
+            UPDATE source_circuit_breakers
+            SET state = 'half_open',
+                cooldown_until = NULL,
+                last_reason = ?,
+                updated_at = ?
+            WHERE source_id = ? AND breaker_type = ?
+            """,
+            (reason, now.isoformat(), row["source_id"], row["breaker_type"]),
+        )
 
 
 def handle_export(args: argparse.Namespace) -> int:

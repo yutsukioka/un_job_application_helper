@@ -497,6 +497,11 @@ def test_old_schema_upgrade_adds_publishability_and_breaker_support(tmp_path):
             row[1]
             for row in conn.execute("PRAGMA table_info(source_run_diagnostics)")
         }
+        job_columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+        consolidated_source_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(consolidated_source_status)")
+        }
         detail_sql = conn.execute(
             """
             SELECT sql
@@ -507,6 +512,15 @@ def test_old_schema_upgrade_adds_publishability_and_breaker_support(tmp_path):
         assert "publishability_classification" in diagnostic_columns
         assert "list_breaker_state" in diagnostic_columns
         assert "detail_breaker_state" in diagnostic_columns
+        assert "detail_quality_status" in job_columns
+        assert "deadline_state" in job_columns
+        assert "source_listed_current" in job_columns
+        assert "trusted_current" in job_columns
+        assert "application_ready" in job_columns
+        assert "trusted_current_jobs" in consolidated_source_columns
+        assert "application_ready_jobs" in consolidated_source_columns
+        assert "expired_current_jobs" in consolidated_source_columns
+        assert "weak_detail_jobs" in consolidated_source_columns
         assert "blocked_by_circuit_breaker" in detail_sql
         assert conn.execute(
             """

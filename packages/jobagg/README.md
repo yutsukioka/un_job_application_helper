@@ -34,8 +34,9 @@ jobagg --db private/jobagg/output/wfp_jobs.sqlite3 refresh-deadlines \
 `refresh-deadlines` first refreshes the listing, then fetches detail pages only
 for new postings, postings missing a stored deadline, and postings closing within
 the configured deadline window. Use `--refresh-all-details` only for occasional
-full audits. Current exports include only `status = open`; history exports include
-all jobs ever seen in the database, including jobs later marked `closed`.
+full audits. Source-local current exports include only `status = open`; source-local
+history exports are the audit/history view for that source bundle. Consolidated
+all-source exports apply the stricter current/history lifecycle described below.
 
 For all enabled Workday sources, write one stable database and export bundle per
 agency:
@@ -73,6 +74,105 @@ validates that each SQLite database has no duplicate `external_id` or
 existing canonical `{slug}_jobs.sqlite3` before each sync, so change history is
 preserved across regular bundle runs.
 
+### Routine Update Command
+
+For normal operation, run:
+
+```bash
+cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+uv run python -m jobagg.scheduler --verbose sync-bundles \
+  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --keep-extra-output-files \
+  --allow-source-degraded
+```
+
+This is the command to keep current and history bundles updated:
+
+- Closed postings: when a source list run is complete and safety gates pass, jobs
+  no longer present move out of `{slug}_jobs_current.*` / `all_jobs_current.*`
+  and remain in `{slug}_jobs_history.*` / `all_jobs_history.*` with status
+  `missing` or `closed`.
+- Changed postings: changed list-level fields are updated in SQLite and exports.
+  Detail refresh is queued when a posting is new, the listing hash changed,
+  required detail fields are missing, a previous transient detail failed, the
+  detail record is stale by source policy, or the deadline is close enough to
+  require rechecking. Closing-date extensions or shortening are therefore
+  captured from list fields immediately, and from detail fields when the detail
+  refresh rule selects that posting.
+- New postings: new IDs are inserted into the source bundle and consolidated
+  into `all_jobs_current.*`.
+
+The command intentionally does not refetch every unchanged complete detail page
+on every run. That protects degraded sources from unnecessary load and prevents
+detail failures from creating false closures. For an occasional detail audit,
+add `--refresh-all-details`; source-specific caps, cooldowns, and circuit
+breakers still apply, so remaining detail work stays queued for later safe runs.
+
+For consolidated all-source outputs, `all_jobs_current.*` means current
+searchable postings in the consolidated view. Consolidation excludes stale
+source rows and moves postings whose deadline has been expired beyond the
+24-hour grace window to `all_jobs_history.*` with status `expired`. Weak-detail
+open rows remain in `all_jobs_current.*` so real open postings are not hidden,
+but they are visibly flagged with `detail_quality_status` (`placeholder_only`,
+`list_only`, `too_short`, or `empty`) and remain queued for detail refresh.
+
+`trusted_current` and `application_ready` remain internal SQLite/health-report
+fields for diagnostics and backward compatibility. They are no longer published
+as canonical sidecar files; the canonical lifecycle exports are current,
+history, and the consolidated SQLite database.
+
+### Interactive Browser Cookie Assist
+
+Some detail pages, especially UNICEF/PageUp, can return an AWS WAF human-check
+page while the listing endpoint remains healthy. Do not use this mode from cron.
+Use it only in an interactive terminal when detail backlogs are blocked by a
+human verification page.
+
+1. Run the command with reactive browser assist. It runs normally first and only
+   opens the browser if the source hits a WAF/no-detail style block.
+
+```bash
+cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+uv run python -m jobagg.scheduler --verbose sync-bundles \
+  --source-id unicef_pageup \
+  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --keep-extra-output-files \
+  --allow-source-degraded \
+  --refresh-all-details \
+  --browser-cookie-assist-on-block
+```
+
+2. If the browser opens, complete the human check. Open the browser developer
+   tools, inspect a successful request to `jobs.unicef.org`, and copy only the
+   `Cookie:` request header value. Paste it into the hidden terminal prompt.
+
+To avoid pasting a cookie into shell history, store it in a temporary private
+file and pass the file instead. With `--browser-cookie-assist-on-block`, this
+file is read only if a block is detected:
+
+```bash
+umask 077
+pbpaste > /tmp/jobagg-unicef-cookie.txt
+
+cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+uv run python -m jobagg.scheduler --verbose sync-bundles \
+  --source-id unicef_pageup \
+  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --keep-extra-output-files \
+  --allow-source-degraded \
+  --refresh-all-details \
+  --browser-cookie-assist-on-block \
+  --browser-cookie-file /tmp/jobagg-unicef-cookie.txt
+```
+
+The Cookie header is injected only into the selected source for that run. The
+aggregator does not read browser profile databases and does not persist the
+cookie into `organizations.yaml`.
+
+Use `--browser-cookie-assist` instead of `--browser-cookie-assist-on-block` only
+when you intentionally want to open the browser and provide a Cookie header
+before the first fetch attempt.
+
 ### Degraded Sources And Exit Codes
 
 `sync-bundles` separates publish success from source health:
@@ -92,10 +192,13 @@ publish-with-warnings as shell success. The health report still records
 Every run writes `sync_bundles_health.json` in the output directory unless
 `--health-report-output` is provided. Automation should read this file instead of
 inferring health from the shell code alone. Key fields include `publish_result`,
-`fatal_errors_count`, current/history counts, degraded/inconclusive/adapter-broken
-source counts, and per-source fetched count, pagination/verified-empty flags,
-missing-transition gate state, detail attempt counts, detail backlog counts,
-circuit-breaker state, cooldowns, and last error summary.
+`fatal_errors_count`, current/history/total counts, current detail-complete and
+weak-detail counts, expired-moved-to-history counts,
+degraded/inconclusive/adapter-broken/detail-quality source counts, and
+per-source fetched count, pagination/verified-empty flags, missing-transition
+gate state, detail attempt counts, detail backlog counts, consolidated open /
+trusted / stale / expired / weak-detail counts, circuit-breaker state,
+cooldowns, and last error summary.
 
 Detail enrichment is intentionally non-fatal when listing discovery is healthy.
 List discovery controls open/missing/closed transitions, and those transitions
@@ -104,18 +207,70 @@ explicitly verified empty. Detail failures leave work in the persistent backlog
 and may classify the source as `publishable_detail_degraded` or
 `publishable_list_only`; they must not close jobs.
 
+### Consolidated All-Jobs Quality Rules
+
+`all_jobs.sqlite3` is stricter than the per-source bundles. Source bundles keep
+the source-local fetch history as observed, while consolidation builds a
+canonical current view:
+
+- `detail_backlog`, `source_circuit_breakers`, latest source diagnostics, and
+  consolidation source status are copied into `all_jobs.sqlite3` so automation
+  can audit detail completeness from the consolidated database.
+- Open rows from stale split-Inspira view sources such as
+  `isa_inspira_split` and `itc_inspira_split` are quarantined with
+  `status = stale_current` instead of being exported as current. These sources
+  are agency-filter views of `un_inspira` until a reliable source-specific
+  filter is confirmed.
+- Duplicate current rows are demoted to `status = duplicate` when they share
+  the same `(ats_family, external_id)` or normalized `apply_url`. The chosen
+  canonical row stays `open`; duplicate relationships are recorded in
+  `consolidated_job_aliases`.
+- Current rows from stale, unknown, or inconclusive sources keep an explicit
+  `stale_current` flag and source-health columns. This prevents old source data
+  from silently looking equivalent to a freshly verified current posting.
+- Consolidation writes `detail_quality_status` as content quality, independently
+  from the queue's
+  `detail_status`. Values include `complete`, `empty`, `placeholder_only`,
+  `too_short`, `list_only`, and `detail_missing`. Rows whose queue status was
+  `complete` but whose stored detail is only a placeholder such as
+  `Duties and Responsibilities`, `.`, title-only text, or `Apply by: ...` are
+  requeued as pending for later detail refresh.
+- Consolidation writes `deadline_state` (`future`, `today`, `expired`,
+  `unknown`), `trusted_current`, and `application_ready`. `trusted_current` is
+  true only for open rows from non-stale sources whose deadline is not expired.
+  `application_ready` additionally requires `detail_quality_status = complete`.
+  These fields are internal quality flags, not separate canonical output files.
+- `sync_bundles_health.json` includes sources that contribute consolidated
+  current rows even if they were not part of the latest selected live run. This
+  keeps consolidated-only stale sources visible to automation.
+
+Canonical current exports (`all_jobs_current.*`) include consolidated
+`status = open` rows. History exports (`all_jobs_history.*`) include rows moved
+out of current (`closed`, `missing`, `expired`, `stale_current`, `duplicate`,
+and other non-open statuses) with `consolidation_status` for auditability.
+`sync_bundles_health.json` reports `current_detail_complete_count`,
+`current_detail_weak_count`, and `expired_moved_to_history_count` so app search
+quality can be monitored without introducing extra canonical datasets.
+
 List circuit breakers open after repeated list failures or unsafe zero-fetched
 incomplete runs, then cool down before a half-open probe. Detail breakers open
 when detail failures are systemic, so the sync stops draining the full backlog
 and performs small periodic probes instead. Transient detail host breakers cool
-down after repeated timeout/429/503/504/remote-closed failures. After fixing a
-source adapter or waiting through cooldown, run a dry-run diagnostic first:
+down after repeated timeout/429/503/504/remote-closed failures. Expired open
+breaker cooldowns are normalized to half-open during diagnostics and
+consolidation. After fixing a source adapter or waiting through cooldown, run a
+dry-run diagnostic first:
 
 ```bash
 jobagg source-health-report --dry-run \
   --sources undp_oracle_hcm,unicef_pageup,icc_successfactors_legacy,ctbto_successfactors_legacy,iom_oracle_hcm \
   --output-dir private/jobagg/output
 ```
+
+Some sources have explicit source-specific fallbacks. `ipu_static_html` uses a
+reader-proxy markdown view because direct static HTTP requests to the official
+IPU vacancies page are Cloudflare-blocked from the sync environment; the parser
+preserves the official IPU vacancy URLs as `apply_url` and `source_url`.
 
 ## Change Detection
 

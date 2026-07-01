@@ -1840,6 +1840,7 @@ class JobDatabase:
         status: str | None = None,
         trusted_current_only: bool = False,
         application_ready_only: bool = False,
+        history_only: bool = False,
     ) -> Iterable[dict[str, Any]]:
         query = "SELECT * FROM jobs"
         clauses = []
@@ -1850,6 +1851,8 @@ class JobDatabase:
         if status:
             clauses.append("status = ?")
             params.append(status)
+        if history_only:
+            clauses.append("status <> 'open'")
         if trusted_current_only:
             clauses.append("trusted_current = 1")
         if application_ready_only:
@@ -1871,6 +1874,7 @@ class JobDatabase:
         status: str | None = None,
         trusted_current_only: bool = False,
         application_ready_only: bool = False,
+        history_only: bool = False,
     ) -> Iterable[dict[str, Any]]:
         query = """
             SELECT
@@ -1972,6 +1976,8 @@ class JobDatabase:
         if status:
             clauses.append("j.status = ?")
             params.append(status)
+        if history_only:
+            clauses.append("j.status <> 'open'")
         if trusted_current_only:
             clauses.append("j.trusted_current = 1")
         if application_ready_only:
@@ -1988,6 +1994,7 @@ class JobDatabase:
                 status=status,
                 trusted_current_only=trusted_current_only,
                 application_ready_only=application_ready_only,
+                history_only=history_only,
             )
             return
         for row in rows:

@@ -64,7 +64,10 @@ class SelectiveDetailFailureTestAdapter(JobAdapter):
             external_id="A2",
             location="Rome",
             closes_at="2099-06-15",
-            description="Detailed responsibilities.",
+            description=(
+                "Detailed responsibilities, qualifications, and application context "
+                "for the vacancy are available from the detail page."
+            ),
             apply_url="https://example.org/jobs/A2",
             raw={"id": "A2", "detail": True},
         )
@@ -91,6 +94,46 @@ class SelectiveDetailNoneTestAdapter(JobAdapter):
 
 
 @register_adapter
+class SelectiveDetailNoneManyTestAdapter(JobAdapter):
+    family = "selective_detail_none_many_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title=f"Listing Role {index}",
+                external_id=f"A{index}",
+                location="Geneva",
+                apply_url=f"https://example.org/jobs/A{index}",
+                raw={"id": f"A{index}"},
+            )
+            for index in range(1, 4)
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        return None
+
+
+@register_adapter
+class IncompleteExclusionTestAdapter(JobAdapter):
+    family = "incomplete_exclusion_test"
+
+    def fetch_jobs(self):
+        self.run_diagnostics.pagination_complete = False
+        self.run_diagnostics.health_status = "issue"
+        self.run_diagnostics.run_classification = "inconclusive"
+        self.run_diagnostics.scope_validation_status = "passed"
+        return [
+            build_job(
+                self.source,
+                title="Fetched Role",
+                external_id="A1",
+                apply_url="https://example.org/jobs/A1",
+            )
+        ]
+
+
+@register_adapter
 class SelectiveDetailBudgetTestAdapter(JobAdapter):
     family = "selective_detail_budget_test"
 
@@ -112,8 +155,45 @@ class SelectiveDetailBudgetTestAdapter(JobAdapter):
             title=f"Detailed Role {item['id']}",
             external_id=item["id"],
             closes_at="2099-06-15",
+            description=(
+                f"Detailed responsibilities for {item['id']} include planning, "
+                "coordination, reporting, stakeholder engagement, and delivery oversight."
+            ),
             apply_url=f"https://example.org/jobs/{item['id']}",
             raw={"id": item["id"], "detail": True},
+        )
+
+
+@register_adapter
+class SelectiveDetailPlaceholderTestAdapter(JobAdapter):
+    family = "selective_detail_placeholder_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="Listing Role",
+                external_id="A1",
+                closes_at="2099-06-15",
+                apply_url="https://example.org/jobs/A1",
+                raw={"id": "A1"},
+            )
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        return build_job(
+            self.source,
+            title="Listing Role",
+            external_id=item["id"],
+            closes_at="2099-06-15",
+            description="Duties and Responsibilities",
+            apply_url=f"https://example.org/jobs/{item['id']}",
+            raw={
+                "id": item["id"],
+                "ShortDescriptionStr": "Duties and Responsibilities",
+                "ExternalResponsibilitiesStr": "",
+                "ExternalQualificationsStr": "",
+            },
         )
 
 
@@ -161,7 +241,10 @@ class SelectiveDetailTransientRecoverTestAdapter(JobAdapter):
             title=f"Detailed Role {item['id']}",
             external_id=item["id"],
             closes_at="2099-06-15",
-            description=f"Detailed responsibilities for {item['id']}.",
+            description=(
+                f"Detailed responsibilities for {item['id']} include planning, "
+                "coordination, reporting, stakeholder engagement, and delivery oversight."
+            ),
             apply_url=f"https://example.org/jobs/{item['id']}",
             raw={"id": item["id"], "detail": True},
         )
@@ -190,7 +273,10 @@ class SelectiveDetailIsolatedPermanentFailureTestAdapter(JobAdapter):
             self.source,
             title=f"Detailed Role {item['id']}",
             external_id=item["id"],
-            description=f"Detailed responsibilities for {item['id']}.",
+            description=(
+                f"Detailed responsibilities for {item['id']} include planning, "
+                "coordination, reporting, stakeholder engagement, and delivery oversight."
+            ),
             apply_url=f"https://example.org/jobs/{item['id']}",
             raw={"id": item["id"], "detail": True},
         )
@@ -239,7 +325,10 @@ class SelectiveDetailPriorityTestAdapter(JobAdapter):
             title=f"Detailed Role {item['id']}",
             external_id=item["id"],
             closes_at="2099-12-31",
-            description=f"Detailed responsibilities for {item['id']}.",
+            description=(
+                f"Detailed responsibilities for {item['id']} include planning, "
+                "coordination, reporting, stakeholder engagement, and delivery oversight."
+            ),
             apply_url=f"https://example.org/jobs/{item['id']}",
             raw={"id": item["id"], "detail_html": "<article>detail</article>"},
         )
@@ -269,10 +358,38 @@ class SelectiveDetailCountingTestAdapter(JobAdapter):
             title="Detailed Role A1",
             external_id="A1",
             closes_at="2099-12-31",
-            description="Detailed responsibilities for A1.",
+            description=(
+                "Detailed responsibilities for A1 include planning, coordination, "
+                "reporting, stakeholder engagement, and delivery oversight."
+            ),
             apply_url="https://example.org/jobs/A1",
             raw={"id": "A1", "detail": True},
         )
+
+
+@register_adapter
+class ListingPayloadCompleteTestAdapter(JobAdapter):
+    family = "listing_payload_complete_test"
+
+    def fetch_jobs(self):
+        return [
+            build_job(
+                self.source,
+                title="Listing Complete Role",
+                external_id="A1",
+                closes_at="2099-12-31",
+                description=(
+                    "Complete listing detail text includes responsibilities, qualifications, "
+                    "selection criteria, organizational context, reporting lines, and "
+                    "application information for this vacancy."
+                ),
+                apply_url="https://example.org/jobs/A1",
+                raw={"id": "A1", "externalDescription": "complete listing payload"},
+            )
+        ]
+
+    def fetch_detail_for_listing_item(self, item):
+        raise AssertionError("detail fetch should not be called")
 
 
 @register_adapter
@@ -331,6 +448,8 @@ class HTTPConfigTestAdapter(JobAdapter):
                     "timeout_seconds": self.context.http.timeout_seconds,
                     "max_retries": self.context.http.max_retries,
                     "backoff_base_seconds": self.context.http.backoff_base_seconds,
+                    "tls_verify": self.context.http.tls_verify,
+                    "default_headers": self.context.http.default_headers,
                 },
             )
         ]
@@ -535,7 +654,7 @@ def test_selective_detail_failure_keeps_listing_job_and_records_error(tmp_path):
     detailed = db.get_job("selective_detail:A2")
     assert listing_only["title"] == "Listing Role 1"
     assert detailed["title"] == "Detailed Role 2"
-    assert detailed["description"] == "Detailed responsibilities."
+    assert "Detailed responsibilities, qualifications" in detailed["description"]
     diagnostics = list(db.iter_source_run_diagnostics(source.id))
     assert diagnostics[0]["detail_attempted"] == 2
     assert diagnostics[0]["detail_succeeded"] == 1
@@ -591,6 +710,66 @@ def test_selective_detail_none_counts_as_failure(tmp_path):
     assert diagnostics[0]["detail_attempted"] == 1
     assert diagnostics[0]["detail_succeeded"] == 0
     assert diagnostics[0]["detail_failed"] == 1
+
+
+def test_placeholder_detail_is_not_marked_complete_and_stays_pending(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("selective_detail_placeholder", "selective_detail_placeholder_test")
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 1
+    assert any("detail content quality is placeholder_only" in error for error in result.errors)
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 1
+    assert diagnostics[0]["detail_succeeded"] == 0
+    assert diagnostics[0]["detail_failed"] == 1
+    backlog = db.get_detail_backlog("selective_detail_placeholder:A1")
+    assert backlog is not None
+    assert backlog["detail_status"] == "pending"
+    assert backlog["queued_reason"] == "detail_quality_placeholder_only"
+    stored = db.get_job("selective_detail_placeholder:A1")
+    assert stored["description"] is None
+
+
+def test_selective_detail_none_can_be_transient_with_cooldown(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "unicef_pageup",
+        "selective_detail_none_many_test",
+        detail_none_is_transient=True,
+        stop_after_transient_failures=2,
+        host_cooldown_seconds=900,
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 3
+    assert any("2 transient failures reached limit 2" in error for error in result.errors)
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 2
+    assert diagnostics[0]["detail_failed"] == 2
+    assert diagnostics[0]["detail_skipped"] == 1
+    backlog = list(db.iter_detail_backlog(source.id))
+    statuses = [row["detail_status"] for row in backlog]
+    assert statuses.count("transient_failed") == 2
+    assert statuses.count("pending") == 1
+    assert "permanent_failed" not in statuses
+    breaker = db.get_source_breaker(source.id, "transient_detail")
+    assert breaker is not None
+    assert breaker["state"] == "open"
 
 
 def test_selective_detail_budget_skips_remaining_jobs_without_error(tmp_path):
@@ -821,6 +1000,130 @@ def test_complete_unchanged_details_are_skipped_from_backlog(tmp_path):
     assert backlog[0]["detail_status"] == "complete"
 
 
+def test_listing_payload_can_satisfy_detail_without_detail_fetch(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "listing_payload_complete",
+        "listing_payload_complete_test",
+        listing_payload_is_detail_complete=True,
+    )
+    existing = build_job(
+        source,
+        title="Listing Complete Role",
+        external_id="A1",
+        closes_at="2099-12-31",
+        description=(
+            "Complete listing detail text includes responsibilities, qualifications, "
+            "selection criteria, organizational context, reporting lines, and "
+            "application information for this vacancy."
+        ),
+        apply_url="https://example.org/jobs/A1",
+        raw={"id": "A1", "externalDescription": "complete listing payload"},
+    )
+    db.upsert_job(existing)
+    db.update_detail_backlog_status(
+        job_key=existing.identity_key(),
+        source_id=source.id,
+        status="blocked_by_circuit_breaker",
+        listing_hash=existing.normalized_hash or "listing-hash",
+        reason="blocked_by_circuit_breaker",
+        error="old detail endpoint failure",
+    )
+    db.set_source_breaker(
+        source_id=source.id,
+        breaker_type="detail",
+        state="open",
+        failure_count=3,
+        reason="old detail endpoint failure",
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.errors == []
+    assert result.fetched == 1
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 0
+    assert diagnostics[0]["detail_failed"] == 0
+    backlog = db.get_detail_backlog("listing_payload_complete:A1")
+    assert backlog is not None
+    assert backlog["detail_status"] == "complete"
+    breaker = db.get_source_breaker(source.id, "detail")
+    assert breaker is not None
+    assert breaker["state"] == "closed"
+    assert breaker["last_reason"] == "listing payload satisfies detail"
+    stored = db.get_job("listing_payload_complete:A1")
+    assert stored["description"].startswith("Complete listing detail text")
+
+
+def test_configured_excluded_external_id_closes_existing_row_immediately(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "who_taleo",
+        "cap_test",
+        exclude_external_ids=["A2"],
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Fetched Role 2",
+            external_id="A2",
+            apply_url="https://example.org/jobs/A2",
+        )
+    )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        missing_run_threshold=3,
+    )
+
+    assert result.fetched == 1
+    assert result.closed == 1
+    assert db.get_job("who_taleo:A2")["status"] == "closed"
+    assert db.get_job("who_taleo:A1")["status"] == "open"
+
+
+def test_configured_exclusions_do_not_close_when_list_run_is_incomplete(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "incomplete_exclusion",
+        "incomplete_exclusion_test",
+        exclude_external_ids=["A2"],
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Excluded Existing Role",
+            external_id="A2",
+            apply_url="https://example.org/jobs/A2",
+        )
+    )
+
+    result = sync_source(
+        source,
+        db=db,
+        policy=_policy(),
+        missing_run_threshold=1,
+    )
+
+    assert result.closed == 0
+    assert result.missing == 0
+    assert db.get_job("incomplete_exclusion:A1")["status"] == "open"
+    assert db.get_job("incomplete_exclusion:A2")["status"] == "open"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))[0]
+    assert diagnostics["pagination_complete"] is False
+    assert diagnostics["missing_transition_allowed"] is False
+
+
 def test_selective_detail_budget_prioritizes_null_classification_rows(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()
@@ -868,7 +1171,57 @@ def test_selective_detail_budget_prioritizes_null_classification_rows(tmp_path):
     assert db.get_job("unicef_pageup:A3")["title"] == "Listing Role 3"
     diagnostics = list(db.iter_source_run_diagnostics(source.id))
     assert diagnostics[0]["detail_attempted"] == 1
-    assert diagnostics[0]["detail_skipped"] == 0
+    assert diagnostics[0]["detail_skipped"] == 2
+
+
+def test_selective_detail_budget_prioritizes_weak_detail_quality_rows(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source(
+        "quality_priority",
+        "selective_detail_priority_test",
+        max_detail_pages_per_run=1,
+    )
+    db.upsert_job(
+        build_job(
+            source,
+            title="Existing Empty Role",
+            external_id="A1",
+            closes_at="2099-12-31",
+            apply_url="https://example.org/jobs/A1",
+            raw={"id": "A1", "listing_html": "<li>listing</li>"},
+        )
+    )
+    for external_id in ("A2", "A3"):
+        db.upsert_job(
+            build_job(
+                source,
+                title=f"Existing Complete Role {external_id}",
+                external_id=external_id,
+                closes_at="2099-12-31",
+                description=(
+                    f"Existing complete detail text for {external_id} includes "
+                    "responsibilities, qualifications, and application context."
+                ),
+                apply_url=f"https://example.org/jobs/{external_id}",
+                raw={"id": external_id, "detail_html": "<article>detail</article>"},
+            )
+        )
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.errors == []
+    assert db.get_job("quality_priority:A1")["title"] == "Detailed Role A1"
+    assert db.get_job("quality_priority:A2")["title"] == "Listing Role 2"
+    assert db.get_job("quality_priority:A3")["title"] == "Listing Role 3"
+    diagnostics = list(db.iter_source_run_diagnostics(source.id))
+    assert diagnostics[0]["detail_attempted"] == 1
+    assert diagnostics[0]["detail_skipped"] == 2
 
 
 def test_capped_sync_blocks_missing_transition(tmp_path):
@@ -928,6 +1281,8 @@ def test_source_http_retry_and_timeout_overrides_reach_adapter(tmp_path):
         request_timeout_seconds=60,
         max_retries=4,
         backoff_base_seconds=2,
+        tls_verify=False,
+        cookie_header="aws-waf-token=abc; session=def",
     )
 
     sync_source(source, db=db, policy=_policy(request_timeout_seconds=15))
@@ -937,6 +1292,8 @@ def test_source_http_retry_and_timeout_overrides_reach_adapter(tmp_path):
         "timeout_seconds": 60,
         "max_retries": 4,
         "backoff_base_seconds": 2,
+        "tls_verify": False,
+        "default_headers": {"Cookie": "aws-waf-token=abc; session=def"},
     }
 
 

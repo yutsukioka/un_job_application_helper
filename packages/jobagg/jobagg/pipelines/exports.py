@@ -20,6 +20,20 @@ EXPORT_FIELDS = [
     "posted_at",
     "closes_at",
     "status",
+    "stale_current",
+    "canonical_job_key",
+    "duplicate_of_job_key",
+    "consolidation_status",
+    "source_latest_observed_at",
+    "source_freshness_status",
+    "source_health_status",
+    "source_run_classification",
+    "source_publishability_classification",
+    "detail_quality_status",
+    "deadline_state",
+    "source_listed_current",
+    "trusted_current",
+    "application_ready",
     "apply_url",
     "source_url",
     "last_seen_at",
@@ -112,8 +126,19 @@ def export_jobs(
     output_format: str = "json",
     source_id: str | None = None,
     status: str | None = None,
+    trusted_current_only: bool = False,
+    application_ready_only: bool = False,
+    history_only: bool = False,
 ) -> None:
-    rows = list(db.iter_jobs_with_classification(source_id=source_id, status=status))
+    rows = list(
+        db.iter_jobs_with_classification(
+            source_id=source_id,
+            status=status,
+            trusted_current_only=trusted_current_only,
+            application_ready_only=application_ready_only,
+            history_only=history_only,
+        )
+    )
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if output_format == "json":

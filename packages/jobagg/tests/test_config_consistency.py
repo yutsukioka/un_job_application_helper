@@ -52,10 +52,11 @@ def test_detail_fetch_schedule_defaults_for_degraded_sources():
 
     unicef_policy = fetch_schedule_policy(sources["unicef_pageup"])
     assert unicef_policy["detail_concurrency"] == 1
-    assert unicef_policy["detail_min_delay_seconds"] == 15
-    assert unicef_policy["detail_jitter_seconds"] == 5
-    assert unicef_policy["detail_batch_size"] == 5
-    assert unicef_policy["detail_batch_pause_seconds"] == 120
+    assert unicef_policy["detail_none_is_transient"] is True
+    assert unicef_policy["detail_min_delay_seconds"] == 30
+    assert unicef_policy["detail_jitter_seconds"] == 15
+    assert unicef_policy["detail_batch_size"] == 3
+    assert unicef_policy["detail_batch_pause_seconds"] == 300
     assert unicef_policy["max_detail_pages_per_run"] == 10
     assert unicef_policy["stop_after_transient_failures"] == 2
     assert unicef_policy["host_cooldown_seconds"] == 1800

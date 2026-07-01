@@ -167,6 +167,8 @@ sources:
         - department
       max_pages: 25
       fetch_details: false
+      exclude_external_ids:
+        - "1700001"
       search_payload:
         multilineEnabled: true
         sortingSelection:
@@ -410,12 +412,15 @@ sources:
       max_pages: 25
       fetch_details: true
       unstable_detail_source: true
+      detail_none_is_transient: true
+      browser_cookie_assist: true
+      browser_cookie_url: https://jobs.unicef.org/en-us/listing/
       detail_concurrency: 1
       max_detail_pages_per_run: 10
-      detail_min_delay_seconds: 15
-      detail_jitter_seconds: 5
-      detail_batch_size: 5
-      detail_batch_pause_seconds: 120
+      detail_min_delay_seconds: 30
+      detail_jitter_seconds: 15
+      detail_batch_size: 3
+      detail_batch_pause_seconds: 300
       detail_permanent_failure_quarantine_days: 7
       stop_after_transient_failures: 2
       host_cooldown_seconds: 1800
@@ -467,9 +472,16 @@ sources:
       page_size: 25
       max_pages: 10
       fetch_details: false
+      listing_payload_is_detail_complete: true
       detail_fetch_mode: legacy_api_first
-      max_detail_pages_per_run: 0
-      detail_min_delay_seconds: 1
+      max_detail_pages_per_run: 20
+      detail_concurrency: 1
+      detail_min_delay_seconds: 8
+      detail_jitter_seconds: 3
+      detail_batch_size: 10
+      detail_batch_pause_seconds: 120
+      stop_after_transient_failures: 3
+      host_cooldown_seconds: 900
       detail_jitter_seconds: 1
       date_locale: US
       request_timeout_seconds: 60
@@ -682,6 +694,7 @@ sources:
       legacy_keyword_detail_url_template: https://fa-evlj-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs?keyword={job_id}
       fallback_listing_url: https://www.iom.int/work-with-us
       fallback_parser: generic_official
+      site_settings_required: false
       oracle_dns_preflight: true
       page_size: 100
       max_pages: 12
@@ -752,6 +765,7 @@ sources:
       output_slug: unido
       search_url: https://careers.unido.org/search/?q=
       max_pages: 1
+      tls_verify: false
 
   - id: unesco_successfactors
     name: UNESCO
@@ -955,9 +969,12 @@ sources:
     enabled: true
     extra:
       output_slug: ipu
-      listing_url: https://www.ipu.org/about-ipu/work-with-us/vacancies
-      parser: public_links
-      job_link_selector_hint: /work-with-us/vacancies/
+      listing_url: https://r.jina.ai/http://r.jina.ai/http://https://www.ipu.org/about-ipu/work-with-us/vacancies
+      parser: markdown_public_links
+      job_link_hints:
+        - /work-with-ipu/vacancies/
+        - /about-ipu/work-with-us/vacancies/
+      reader_proxy_url_template: https://r.jina.ai/http://r.jina.ai/http://{url}
       fetch_details: true
       empty_policy:
         mode: verified_structural_empty
@@ -1023,6 +1040,8 @@ sources:
       parser: public_links
       job_link_selector_hint: /job/job-
       fetch_details: true
+      date_locale: EU
+      tls_verify: false
 
   - id: unssc_drupal_custom
     name: United Nations System Staff College
@@ -1035,6 +1054,8 @@ sources:
       listing_url: https://www.unssc.org/about/employment-opportunities
       parser: unssc_drupal
       fetch_details: false
+      empty_policy: verified_empty_required
+      allow_empty_source: false
 
   - id: unu_recruitee
     name: United Nations University
@@ -1094,6 +1115,7 @@ sources:
       empty_policy: verified_empty_required
       max_pages: 2
       fetch_details: false
+      listing_payload_is_detail_complete: true
       allow_empty_source: false
       coverage_note: AfDB careers point to current vacancies and the public SuccessFactors company identifier is africandev. Accept empty results only when the feed provides verified zero-job evidence because AfDB can have no open staff vacancies at a given check.
 
