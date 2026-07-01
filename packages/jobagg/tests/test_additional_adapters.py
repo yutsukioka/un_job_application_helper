@@ -273,6 +273,39 @@ def test_oracle_hcm_parses_nested_requisition_list():
     assert jobs[0].description == "Human Resources"
 
 
+def test_iom_oracle_hcm_keeps_listing_summary_out_of_canonical_description():
+    org = OrganizationSource(
+        id="iom_oracle_hcm",
+        name="IOM",
+        ats_family="oracle_hcm",
+        base_url="https://example.org",
+        extra={"site_number": "CX_1001"},
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=JobAggHTTPClient()))
+
+    jobs = adapter.parse_jobs(
+        {
+            "items": [
+                {
+                    "TotalJobsCount": 1,
+                    "requisitionList": [
+                        {
+                            "Id": "19400",
+                            "Title": "Project Associate",
+                            "PrimaryLocation": "Sofia, Bulgaria",
+                            "ShortDescriptionStr": "IOM Bulgaria is recruiting two Project Associates.",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].description is None
+    assert jobs[0].raw["ShortDescriptionStr"] == "IOM Bulgaria is recruiting two Project Associates."
+
+
 def test_oracle_hcm_classifies_dns_resolution_errors():
     assert classify_fetch_error(OSError("getaddrinfo failed")) == "dns_resolution_failed"
     assert classify_fetch_error(RuntimeError("GET failed with HTTP 401: no auth")) == "auth_or_forbidden"
@@ -376,6 +409,54 @@ def test_oracle_hcm_validates_site_settings_and_paginates_to_total(monkeypatch):
     assert adapter.run_diagnostics.scope_validation_status == "passed"
     assert adapter.run_diagnostics.total_reported_by_source == 3
     assert adapter.run_diagnostics.pages_fetched == 2
+    assert adapter.run_diagnostics.pagination_complete is True
+
+
+def test_oracle_hcm_can_skip_empty_site_settings_when_source_opts_out(monkeypatch):
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: True)
+    org = source(
+        "oracle_hcm",
+        site_number="CX_1001",
+        expected_site_name="IOM",
+        site_settings_required=False,
+        page_size=25,
+        max_pages=1,
+    )
+
+    class EmptySiteSettingsHTTP(FakeOracleCEHTTP):
+        def get(self, url, *, headers=None, timeout_seconds=None):
+            if "/siteSettings/" in url:
+                self.get_calls.append((url, headers or {}))
+                return FakeResponse(
+                    text="",
+                    headers={"Content-Type": "application/json"},
+                    status_code=200,
+                    url=url,
+                )
+            return super().get(url, headers=headers, timeout_seconds=timeout_seconds)
+
+    http = EmptySiteSettingsHTTP(
+        {
+            0: {
+                "items": [
+                    {
+                        "TotalJobsCount": 1,
+                        "SiteNumber": "CX_1001",
+                        "requisitionList": [
+                            {"Id": "100", "Title": "IOM Role"},
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    jobs = adapter.fetch_jobs()
+
+    assert [job.external_id for job in jobs] == ["100"]
+    assert any("/siteSettings/CX_1001" in call[0] for call in http.get_calls)
+    assert adapter.run_diagnostics.scope_validation_status == "not_applicable"
     assert adapter.run_diagnostics.pagination_complete is True
 
 
@@ -488,6 +569,34 @@ def test_oracle_hcm_empty_detail_by_id_marks_listing_job_closed():
     assert job.description == "Listing teaser."
     assert job.raw["oracle_detail_status"] == "not_available"
     assert job.raw["oracle_detail_empty_by_id"] is True
+
+
+def test_oracle_hcm_heading_only_detail_is_not_successful_detail():
+    org = source("oracle_hcm", site_number="CX_1")
+    http = FakeOracleCEHTTP(
+        {},
+        detail_pages={
+            "33605": {
+                "items": [
+                    {
+                        "Id": "33605",
+                        "Title": "Programme Analyst",
+                        "PrimaryLocation": "Brasilia, Brazil",
+                        "ShortDescriptionStr": "Duties and Responsibilities",
+                        "ExternalResponsibilitiesStr": "",
+                        "ExternalQualificationsStr": "",
+                    }
+                ],
+                "count": 1,
+                "hasMore": False,
+            }
+        },
+    )
+    adapter = OracleHCMAdapter(AdapterContext(source=org, http=http))
+
+    job = adapter.fetch_detail_for_listing_item({"Id": "33605"})
+
+    assert job is None
 
 
 def test_oracle_hcm_reuses_candidate_experience_user_id_within_adapter_run():
@@ -619,7 +728,7 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
                   National Consultant: RMNCAH Monitoring and Evaluation (M&E) Consultant
                 </a>
                 <div>Closing date</div>
-                <div>16 Jun 2026 20:56(America/New_York)</div>
+                <div>26 Jul 2026 20:56(America/New_York)</div>
                 <div>Location</div>
                 <div>Suva</div>
                 <div>Staff grade/level</div>
@@ -648,7 +757,7 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
     assert jobs[0].external_id == "34001"
     assert jobs[0].location == "Suva"
     assert jobs[0].employment_type == "Consultancy"
-    assert jobs[0].closes_at.isoformat() == "2026-06-16T00:00:00+00:00"
+    assert jobs[0].closes_at.isoformat() == "2026-07-26T00:00:00+00:00"
     assert jobs[0].source_url == (
         "https://www.unfpa.org/jobs/"
         "national-consultant-rmncah-monitoring-and-evaluation-me-consultant"
@@ -1199,6 +1308,102 @@ def test_ipu_static_html_parses_synthetic_positive_fixture():
     )
 
 
+def test_ipu_reader_markdown_parser_extracts_current_vacancy_links():
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=source(
+                "static_html",
+                parser="markdown_public_links",
+                job_link_hints=["/work-with-ipu/vacancies/"],
+                reader_proxy_url_template="https://r.jina.ai/http://r.jina.ai/http://{url}",
+                date_locale="EU",
+            ),
+            http=FakeTextHTTP(
+                """
+                Title: Vacancies
+
+                Markdown Content:
+                Vacancies list
+
+                Staff
+
+                ### [Political Affairs and Conference Services Associate Officer (P2)](http://www.ipu.org/work-with-ipu/vacancies/2026-06/political-affairs-and-conference-services-associate-officer-p2)
+
+                Deadline:
+
+                02 Jul 2026
+
+                Division of Member Parliaments and External Relations summary.
+
+                Geneva
+
+                Switzerland
+
+                [Read more](http://www.ipu.org/work-with-ipu/vacancies/2026-06/political-affairs-and-conference-services-associate-officer-p2)
+
+                IPU job application
+                """
+            ),
+        )
+    )
+
+    jobs = adapter.fetch_jobs()
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Political Affairs and Conference Services Associate Officer (P2)"
+    assert jobs[0].employment_type == "P2"
+    assert jobs[0].location == "Geneva, Switzerland"
+    assert jobs[0].closes_at.isoformat() == "2026-07-02T00:00:00+00:00"
+    assert jobs[0].apply_url.startswith("http://www.ipu.org/work-with-ipu/vacancies/")
+    assert jobs[0].raw["detail_fetch_url"].startswith("https://r.jina.ai/")
+
+
+def test_ipu_reader_markdown_detail_preserves_listing_deadline():
+    org = source(
+        "static_html",
+        parser="markdown_public_links",
+        date_locale="EU",
+    )
+    item = {
+        "href": "http://www.ipu.org/work-with-ipu/vacancies/2026-06/political-affairs-and-conference-services-associate-officer-p2",
+        "detail_fetch_url": "https://r.jina.ai/http://r.jina.ai/http://http://www.ipu.org/work-with-ipu/vacancies/2026-06/political-affairs-and-conference-services-associate-officer-p2",
+        "external_id": "political-affairs-and-conference-services-associate-officer-p2",
+        "closes_at": "02 Jul 2026",
+        "location": "Geneva, Switzerland",
+        "employment_type": "P2",
+        "parser": "markdown_public_links",
+    }
+    adapter = StaticHTMLAdapter(
+        AdapterContext(
+            source=org,
+            http=FakeRouteTextHTTP(
+                {
+                    item["detail_fetch_url"]: """
+                    Title: Political Affairs and Conference Services Associate Officer (P2)
+
+                    URL Source: http://www.ipu.org/work-with-ipu/vacancies/2026-06/political-affairs-and-conference-services-associate-officer-p2
+
+                    Markdown Content:
+                    **Main duties and responsibilities:**
+
+                    The Political Affairs and Conference Services Associate Officer will provide substantive,
+                    organizational and administrative support.
+                    """
+                }
+            ),
+        )
+    )
+
+    job = adapter.fetch_detail_for_listing_item(item)
+
+    assert job is not None
+    assert job.title == "Political Affairs and Conference Services Associate Officer (P2)"
+    assert job.apply_url == item["href"]
+    assert job.closes_at.isoformat() == "2026-07-02T00:00:00+00:00"
+    assert job.location == "Geneva, Switzerland"
+    assert "administrative support" in (job.description or "")
+
+
 def test_ipu_static_html_rejects_missing_structural_empty_markers():
     adapter = StaticHTMLAdapter(
         AdapterContext(
@@ -1242,6 +1447,47 @@ def test_static_detail_parser_extracts_common_labels():
     assert job.location == "Vienna"
     assert job.employment_type == "P3"
     assert job.closes_at.isoformat() == "2026-05-20T00:00:00+00:00"
+
+
+def test_static_detail_parser_prefers_candidatespace_offer_content():
+    org = source("static_html", date_locale="EU")
+
+    job = parse_detail_page(
+        org,
+        """
+        <html>
+          <head><title>Organisation for the Prohibition of Chemical Weapons - Senior Investigator (P-4)</title></head>
+          <body>
+            <label><span>Contract Type</span>
+              <select>
+                <option>Please select a value</option>
+                <option>Fixed-term Professional (5)</option>
+              </select>
+            </label>
+            <h1 class="ts-offer-page__title"><span>Senior Investigator (P-4)</span></h1>
+            <div id="detail_offre">
+              <div id="contenu-ficheoffre">
+                <h2>General Information</h2>
+                <ul>
+                  <li><strong>Contract Type</strong><br>Fixed-term Professional</li>
+                  <li><strong>Grade</strong><br>P4</li>
+                  <li><strong>Closing Date</strong><br>04/07/2026</li>
+                </ul>
+                <h2>Responsibilities</h2>
+                <p>Lead complex investigations for the Office of Special Missions.</p>
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        "https://jobs.opcw.org/job/job-senior-investigator-p-4-_566.aspx",
+    )
+
+    assert job.external_id == "566"
+    assert job.title == "Senior Investigator (P-4)"
+    assert job.employment_type == "P4 / Fixed-term Professional"
+    assert job.closes_at.isoformat() == "2026-07-04T00:00:00+00:00"
+    assert "Please select a value" not in (job.description or "")
 
 
 def test_successfactors_legacy_parses_query_job_links():
@@ -1436,6 +1682,54 @@ def test_aiib_current_jobs_feed_parses_static_listing_and_detail():
     assert detail_job.raw["parser"] == "aiib_official_detail"
     assert "At least 10 years of experience in compensation and benefits" in detail_job.description
     assert "Requirements:" in detail_job.description
+
+
+def test_aiib_detail_prefers_full_page_body_over_single_experience_snippet():
+    detail_url = "https://www.aiib.org/en/opportunities/career/job-vacancies/staff/job-details/senior-hr-officer-performance-reward45.html"
+    detail_html = """
+    <html><head><title>Senior HR Officer, Performance &amp; Reward</title></head><body>
+      <div class="font-copy-18-black">Minimum 10 years of relevant professional experience</div>
+      <main>
+        <h2>About the role</h2>
+        <p>The Senior HR Officer will support performance, rewards, and human resources operations across the Bank.</p>
+        <h2>Responsibilities</h2>
+        <p>Lead compensation analysis, performance management support, reporting, and advisory work for management.</p>
+        <h2>Requirements</h2>
+        <p>At least 10 years of experience in compensation and benefits, with a strong background in performance management.</p>
+        <p>Experience with job evaluation, grading, analytics, and international organization HR policy is required.</p>
+      </main>
+      <div class="job-card">
+        <div class="item"><div class="col-title">Ref. Number</div><div class="col-con">25245</div></div>
+        <div class="item"><div class="col-title">Location</div><div class="col-con">Beijing</div></div>
+      </div>
+      <a href="https://career5.successfactors.eu/sfcareer/jobreqcareer?jobId=6414&company=AIIB">APPLY NOW</a>
+    </body></html>
+    """
+    org = OrganizationSource(
+        id="aiib_successfactors_legacy",
+        name="Asian Infrastructure Investment Bank",
+        ats_family="successfactors_legacy",
+        base_url="https://career5.successfactors.eu/career?company=AIIB",
+        extra={"listing_feed_type": "aiib_current_jobs_js"},
+    )
+    adapter = SuccessFactorsLegacyAdapter(
+        AdapterContext(source=org, http=FakeRouteTextHTTP({detail_url: detail_html}))
+    )
+
+    detail_job = adapter.fetch_detail_for_listing_item(
+        {
+            "parser": "aiib_current_jobs_js",
+            "detail_url": detail_url,
+            "number": "25245",
+            "title": "Senior HR Officer, Performance & Reward",
+        }
+    )
+
+    assert detail_job is not None
+    assert detail_job.description is not None
+    assert "About the role" in detail_job.description
+    assert "Responsibilities" in detail_job.description
+    assert "Minimum 10 years of relevant professional experience" not in detail_job.description
 
 
 def test_successfactors_legacy_xml_feed_rejects_unverified_zero():

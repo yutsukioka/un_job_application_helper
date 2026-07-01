@@ -195,12 +195,12 @@ public struct JobDetailView: View {
 
     @MainActor
     private func loadDetail() async {
-        if let cached = AtlasLocalCache.loadDetail(jobKey: job.jobKey) {
+        let cached = AtlasLocalCache.loadDetail(jobKey: job.jobKey)
+        if let cached {
             applyDetail(cached)
-            return
         }
 
-        isLoadingDetail = true
+        isLoadingDetail = cached == nil
         detailError = nil
         defer { isLoadingDetail = false }
         do {
@@ -208,11 +208,16 @@ public struct JobDetailView: View {
             applyDetail(loaded)
             AtlasLocalCache.saveDetail(loaded, jobKey: job.jobKey)
         } catch {
-            detailError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            formattedDetail = ATSDetailFormatter.format(
-                sections: [],
-                fallbackDescription: job.description
-            )
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if cached == nil {
+                detailError = message
+                formattedDetail = ATSDetailFormatter.format(
+                    sections: [],
+                    fallbackDescription: job.description
+                )
+            } else {
+                detailError = "Showing cached details. Server refresh failed: \(message)"
+            }
         }
     }
 
