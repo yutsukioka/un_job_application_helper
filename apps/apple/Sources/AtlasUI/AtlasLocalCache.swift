@@ -84,9 +84,6 @@ public enum AtlasLocalCache {
         do {
             try fileManager.moveItem(at: stagedDetailDirectory, to: currentDetails)
             try saveSnapshot(snapshot)
-            if fileManager.fileExists(atPath: backupDetails.path) {
-                try fileManager.removeItem(at: backupDetails)
-            }
         } catch {
             if fileManager.fileExists(atPath: currentDetails.path) {
                 try? fileManager.removeItem(at: currentDetails)
@@ -95,6 +92,9 @@ public enum AtlasLocalCache {
                 try? fileManager.moveItem(at: backupDetails, to: currentDetails)
             }
             throw error
+        }
+        if fileManager.fileExists(atPath: backupDetails.path) {
+            try? fileManager.removeItem(at: backupDetails)
         }
     }
 

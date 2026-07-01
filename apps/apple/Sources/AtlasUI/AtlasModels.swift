@@ -155,7 +155,7 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
             scoreReasons: try container.decodeIfPresent([String].self, forKey: .scoreReasons) ?? [],
             matchSummary: try container.decodeIfPresent(String.self, forKey: .matchSummary) ?? "Matched the current search filters.",
             description: try container.decodeIfPresent(String.self, forKey: .description) ?? "",
-            status: try container.decodeIfPresent(String.self, forKey: .status) ?? "unknown",
+            status: try container.decodeIfPresent(String.self, forKey: .status) ?? "open",
             postedDate: try container.decodeIfPresent(Date.self, forKey: .postedDate),
             applyURL: try container.decodeIfPresent(URL.self, forKey: .applyURL),
             sourceURL: try container.decodeIfPresent(URL.self, forKey: .sourceURL)

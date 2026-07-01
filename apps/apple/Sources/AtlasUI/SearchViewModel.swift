@@ -73,7 +73,7 @@ public final class AtlasSearchViewModel: ObservableObject {
     private var hasLoaded = false
     private var scheduledSearchTask: Task<Void, Never>?
     private var detailWarmupTask: Task<Void, Never>?
-    private static let resultPageSize = 200
+    private static let resultPageIncrement = 200
 
     public init(
         client: AtlasAPIClient = AtlasAPIClient(),
@@ -137,6 +137,10 @@ public final class AtlasSearchViewModel: ObservableObject {
 
     public var remainingResultCount: Int {
         max(total - results.count, 0)
+    }
+
+    public var resultPageSize: Int {
+        Self.resultPageIncrement
     }
 
     public func displayTitle(for chip: AtlasActiveFilterChip) -> String {
@@ -231,7 +235,7 @@ public final class AtlasSearchViewModel: ObservableObject {
 
     public func scheduleSearch(resetLimit: Bool = true) {
         if resetLimit {
-            displayedResultLimit = Self.resultPageSize
+            displayedResultLimit = Self.resultPageIncrement
         }
         scheduledSearchTask?.cancel()
         scheduledSearchTask = Task { @MainActor [weak self] in
@@ -276,12 +280,12 @@ public final class AtlasSearchViewModel: ObservableObject {
     public func resetFilters() {
         filters.reset()
         sortOrder = .closingSoon
-        displayedResultLimit = Self.resultPageSize
+        displayedResultLimit = Self.resultPageIncrement
         scheduleSearch()
     }
 
     public func loadMoreResults() async {
-        displayedResultLimit += Self.resultPageSize
+        displayedResultLimit += Self.resultPageIncrement
         await search(setsLoading: false)
     }
 
@@ -445,7 +449,7 @@ public final class AtlasSearchViewModel: ObservableObject {
 
     public func runSavedSearch(_ savedSearch: AtlasSavedSearch) async {
         apply(savedSearch.request)
-        displayedResultLimit = Self.resultPageSize
+        displayedResultLimit = Self.resultPageIncrement
         await search()
     }
 
@@ -477,7 +481,7 @@ public final class AtlasSearchViewModel: ObservableObject {
     public func filterBySource(_ source: AtlasSourceSummary) async {
         filters.sourceIDs = [source.sourceID]
         query = ""
-        displayedResultLimit = Self.resultPageSize
+        displayedResultLimit = Self.resultPageIncrement
         await search()
     }
 
@@ -641,15 +645,6 @@ public final class AtlasSearchViewModel: ObservableObject {
         return output
     }
 
-    private func currentJobKeys(for snapshot: AtlasLocalSnapshot) -> [String] {
-        var seen = Set<String>()
-        var output: [String] = []
-        for job in snapshot.searchResponse.results where seen.insert(job.jobKey).inserted {
-            output.append(job.jobKey)
-        }
-        return output
-    }
-
     private func startDetailCacheWarmupIfNeeded(_ snapshot: AtlasLocalSnapshot, force: Bool = false) {
         let allJobKeys = detailJobKeys(for: snapshot)
         refreshDetailCacheCounts(snapshot)
@@ -669,7 +664,7 @@ public final class AtlasSearchViewModel: ObservableObject {
     }
 
     private func replaceLocalSaveWhenComplete(_ snapshot: AtlasLocalSnapshot) async throws -> AtlasLocalSaveUpdateSummary {
-        let jobKeys = currentJobKeys(for: snapshot)
+        let jobKeys = detailJobKeys(for: snapshot)
         guard !jobKeys.isEmpty else {
             try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil)
             return AtlasLocalSaveUpdateSummary(total: 0, failed: 0, reused: 0)
@@ -703,9 +698,9 @@ public final class AtlasSearchViewModel: ObservableObject {
             cachedDetailCount = max(jobKeys.count - missing, 0)
             detailCacheFailed = stagingResult.failed
             if stagingResult.failed > 0 {
-                detailCacheMessage = "Offline cache updated with \(cachedDetailCount.formatted())/\(jobKeys.count.formatted()) current job details; \(missing.formatted()) will retry later"
+                detailCacheMessage = "Offline cache updated with \(cachedDetailCount.formatted())/\(jobKeys.count.formatted()) job details; \(missing.formatted()) will retry later"
             } else {
-                detailCacheMessage = "Offline cache updated with \(jobKeys.count.formatted()) current job details"
+                detailCacheMessage = "Offline cache updated with \(jobKeys.count.formatted()) job details"
             }
             return AtlasLocalSaveUpdateSummary(
                 total: jobKeys.count,
@@ -728,6 +723,8 @@ public final class AtlasSearchViewModel: ObservableObject {
         var iterator = jobKeys.makeIterator()
         var completed = 0
         var failedJobKeys: [String] = []
+        var completedJobKeys = Set<String>()
+        var reportedFailedJobKeys = Set<String>()
         var lastProgressUpdate = Date.distantPast
 
         await withTaskGroup(of: (String, Bool, String?).self) { group in
@@ -749,8 +746,10 @@ public final class AtlasSearchViewModel: ObservableObject {
                 }
 
                 completed += 1
+                completedJobKeys.insert(result.0)
                 if !result.1 {
                     failedJobKeys.append(result.0)
+                    reportedFailedJobKeys.insert(result.0)
                 }
 
                 let shouldPublishProgress = completed == jobKeys.count
@@ -780,10 +779,10 @@ public final class AtlasSearchViewModel: ObservableObject {
         }
 
         if Task.isCancelled {
-            let remaining = max(jobKeys.count - completed, 0)
-            if remaining > 0 {
-                failedJobKeys.append(contentsOf: Array(jobKeys.suffix(remaining)))
+            let unresolved = jobKeys.filter {
+                !completedJobKeys.contains($0) && !reportedFailedJobKeys.contains($0)
             }
+            failedJobKeys.append(contentsOf: unresolved)
         }
         return AtlasDetailStagingResult(completed: completed, failedJobKeys: failedJobKeys)
     }

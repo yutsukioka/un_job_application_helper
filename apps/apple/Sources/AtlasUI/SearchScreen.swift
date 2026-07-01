@@ -544,7 +544,8 @@ public struct AtlasSearchScreen: View {
                     LoadMoreResultsRow(
                         shown: viewModel.results.count,
                         total: viewModel.total,
-                        remaining: viewModel.remainingResultCount
+                        remaining: viewModel.remainingResultCount,
+                        pageSize: viewModel.resultPageSize
                     ) {
                         Task { await viewModel.loadMoreResults() }
                     }
@@ -588,7 +589,8 @@ public struct AtlasSearchScreen: View {
                         LoadMoreResultsRow(
                             shown: viewModel.results.count,
                             total: viewModel.total,
-                            remaining: viewModel.remainingResultCount
+                            remaining: viewModel.remainingResultCount,
+                            pageSize: viewModel.resultPageSize
                         ) {
                             Task { await viewModel.loadMoreResults() }
                         }
@@ -725,6 +727,7 @@ struct LoadMoreResultsRow: View {
     let shown: Int
     let total: Int
     let remaining: Int
+    let pageSize: Int
     let onLoadMore: () -> Void
 
     var body: some View {
@@ -735,7 +738,7 @@ struct LoadMoreResultsRow: View {
                 Image(systemName: "chevron.down.circle")
                     .imageScale(.medium)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Show next \(min(200, remaining).formatted()) vacancies")
+                    Text("Show next \(min(pageSize, remaining).formatted()) vacancies")
                         .font(.subheadline.weight(.semibold))
                     Text("\(shown.formatted()) of \(total.formatted()) currently displayed")
                         .font(.caption)
