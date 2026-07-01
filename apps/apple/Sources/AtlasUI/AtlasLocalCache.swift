@@ -44,6 +44,60 @@ public enum AtlasLocalCache {
         try data.write(to: snapshotURL(), options: [.atomic])
     }
 
+    public static func prepareDetailStagingDirectory() throws -> URL {
+        try ensureCacheDirectory()
+        let directory = try detailStagingDirectory()
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: directory.path) {
+            try fileManager.removeItem(at: directory)
+        }
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    public static func discardDetailStagingDirectory() {
+        guard let directory = try? detailStagingDirectory() else { return }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    public static func commitSnapshot(
+        _ snapshot: AtlasLocalSnapshot,
+        replacingDetailsWith stagedDetailDirectory: URL?
+    ) throws {
+        guard let stagedDetailDirectory else {
+            try saveSnapshot(snapshot)
+            return
+        }
+
+        try ensureCacheDirectory()
+        let fileManager = FileManager.default
+        let currentDetails = try detailDirectory()
+        let backupDetails = try detailBackupDirectory()
+
+        if fileManager.fileExists(atPath: backupDetails.path) {
+            try fileManager.removeItem(at: backupDetails)
+        }
+        if fileManager.fileExists(atPath: currentDetails.path) {
+            try fileManager.moveItem(at: currentDetails, to: backupDetails)
+        }
+
+        do {
+            try fileManager.moveItem(at: stagedDetailDirectory, to: currentDetails)
+            try saveSnapshot(snapshot)
+            if fileManager.fileExists(atPath: backupDetails.path) {
+                try fileManager.removeItem(at: backupDetails)
+            }
+        } catch {
+            if fileManager.fileExists(atPath: currentDetails.path) {
+                try? fileManager.removeItem(at: currentDetails)
+            }
+            if fileManager.fileExists(atPath: backupDetails.path) {
+                try? fileManager.moveItem(at: backupDetails, to: currentDetails)
+            }
+            throw error
+        }
+    }
+
     public static func isStale(_ snapshot: AtlasLocalSnapshot, now: Date = .now) -> Bool {
         now.timeIntervalSince(snapshot.savedAt) >= refreshIntervalHours * 3600
     }
@@ -83,11 +137,32 @@ public enum AtlasLocalCache {
         do {
             try ensureCacheDirectory()
             try ensureDetailDirectory()
-            let data = try encoder.encode(detail)
-            try data.write(to: detailURL(jobKey: jobKey), options: [.atomic])
+            try saveDetail(detail, jobKey: jobKey, to: try detailDirectory())
         } catch {
             // Detail caching is opportunistic; the UI should still work when a
             // single cached detail write fails.
+        }
+    }
+
+    public static func saveDetail(_ detail: AtlasJobDetail, jobKey: String, to directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try encoder.encode(detail)
+        try data.write(to: detailURL(jobKey: jobKey, in: directory), options: [.atomic])
+    }
+
+    public static func copyExistingDetail(jobKey: String, to directory: URL) -> Bool {
+        do {
+            let source = try detailURL(jobKey: jobKey)
+            guard FileManager.default.fileExists(atPath: source.path) else { return false }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = try detailURL(jobKey: jobKey, in: directory)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: source, to: destination)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -114,7 +189,11 @@ public enum AtlasLocalCache {
     }
 
     private static func detailURL(jobKey: String) throws -> URL {
-        try detailDirectory().appendingPathComponent("\(safeFileName(jobKey)).json")
+        try detailURL(jobKey: jobKey, in: detailDirectory())
+    }
+
+    private static func detailURL(jobKey: String, in directory: URL) throws -> URL {
+        directory.appendingPathComponent("\(safeFileName(jobKey)).json")
     }
 
     private static func ensureCacheDirectory() throws {
@@ -143,6 +222,14 @@ public enum AtlasLocalCache {
 
     private static func detailDirectory() throws -> URL {
         try cacheDirectory().appendingPathComponent("JobDetails", isDirectory: true)
+    }
+
+    private static func detailStagingDirectory() throws -> URL {
+        try cacheDirectory().appendingPathComponent("JobDetails.staging", isDirectory: true)
+    }
+
+    private static func detailBackupDirectory() throws -> URL {
+        try cacheDirectory().appendingPathComponent("JobDetails.previous", isDirectory: true)
     }
 
     private static func safeFileName(_ value: String) -> String {

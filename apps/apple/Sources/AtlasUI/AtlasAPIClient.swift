@@ -545,7 +545,12 @@ private func transportErrorMessage(_ error: Error, url: URL?) -> String {
        isLocalNetworkHost(host) {
         return "iOS is blocking local network access to \(host ?? "the Mac API"). Enable Local Network for AtlasIOSHost in iPhone Settings, then reopen the app."
     }
-    return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    guard let url else { return message }
+    if isLocalNetworkHost(host) {
+        return "Cannot reach \(url.absoluteString). Make sure job-api is running with --host 0.0.0.0, the iPhone is on the same Wi-Fi as the Mac, and the app Settings URL uses the Mac's current LAN IP."
+    }
+    return message
 }
 
 private func isLocalNetworkHost(_ host: String?) -> Bool {

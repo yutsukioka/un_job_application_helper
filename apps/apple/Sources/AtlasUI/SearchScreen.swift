@@ -9,6 +9,7 @@ enum AtlasSidebarSelection: Hashable {
     case search
     case updates
     case savedJobs
+    case settings
     case savedSearch(String)
     case source(String)
 }
@@ -63,6 +64,9 @@ public struct AtlasRootView: View {
                     onSelectJob: selectJob
                 )
                     .navigationSplitViewColumnWidth(min: 340, ideal: 420, max: 560)
+            case .settings:
+                AtlasSettingsPanel(viewModel: searchViewModel)
+                    .navigationSplitViewColumnWidth(min: 360, ideal: 460, max: 620)
             case .source(_):
                 AtlasSearchScreen(
                     selection: $selectedJob,
@@ -126,6 +130,9 @@ public struct AtlasRootView: View {
             }
             Task { await applySidebarSelection(newValue) }
         }
+        .task {
+            await searchViewModel.loadIfNeeded()
+        }
         #else
         TabView(selection: $selectedMobileTab) {
             NavigationStack {
@@ -155,6 +162,9 @@ public struct AtlasRootView: View {
                 .tag(AtlasMobileTab.settings)
         }
         .tint(AtlasTheme.accent)
+        .task {
+            await searchViewModel.loadIfNeeded()
+        }
         #endif
     }
 
@@ -169,7 +179,7 @@ public struct AtlasRootView: View {
             guard let source = searchViewModel.sources.first(where: { $0.sourceID == sourceID }) else { return }
             selectedJob = nil
             await searchViewModel.filterBySource(source)
-        case .updates, .savedJobs, .none:
+        case .updates, .savedJobs, .settings, .none:
             selectedJob = nil
         case .search:
             break
@@ -259,6 +269,12 @@ public struct AtlasRootView: View {
                 systemImage: "tray.full",
                 description: Text("Choose a saved job post to load its historical local detail.")
             )
+        case .settings:
+            ContentUnavailableView(
+                "Settings",
+                systemImage: "gearshape",
+                description: Text("Configure the API server and local save options in the middle pane.")
+            )
         case .source:
             ContentUnavailableView(
                 "Select a posting",
@@ -307,6 +323,15 @@ public struct AtlasSearchScreen: View {
                 UserStatusBanner(message: userMessage) {
                     viewModel.clearUserMessage()
                 }
+                .padding(.horizontal)
+                .padding(.bottom, 10)
+            }
+            if viewModel.isCachingDetails, viewModel.detailCacheWorkTotal > 0 {
+                DetailCacheProgressBanner(
+                    completed: viewModel.detailCacheCompleted,
+                    total: viewModel.detailCacheWorkTotal,
+                    message: viewModel.detailCacheMessage ?? "Caching job details for offline use"
+                )
                 .padding(.horizontal)
                 .padding(.bottom, 10)
             }
@@ -502,9 +527,9 @@ public struct AtlasSearchScreen: View {
         #if os(macOS)
         if viewModel.results.isEmpty {
             ContentUnavailableView(
-                "No matching vacancies",
+                emptyResultsTitle,
                 systemImage: "doc.text.magnifyingglass",
-                description: Text("Adjust filters or search terms.")
+                description: Text(emptyResultsDescription)
             )
         } else {
             List {
@@ -515,6 +540,15 @@ public struct AtlasSearchScreen: View {
                             select(job)
                         }
                 }
+                if viewModel.hasMoreResults {
+                    LoadMoreResultsRow(
+                        shown: viewModel.results.count,
+                        total: viewModel.total,
+                        remaining: viewModel.remainingResultCount
+                    ) {
+                        Task { await viewModel.loadMoreResults() }
+                    }
+                }
             }
             .listStyle(.plain)
         }
@@ -522,9 +556,9 @@ public struct AtlasSearchScreen: View {
         Group {
             if viewModel.results.isEmpty {
                 ContentUnavailableView(
-                    "No matching vacancies",
+                    emptyResultsTitle,
                     systemImage: "doc.text.magnifyingglass",
-                    description: Text("Adjust filters or search terms.")
+                    description: Text(emptyResultsDescription)
                 )
             } else {
                 List {
@@ -550,6 +584,15 @@ public struct AtlasSearchScreen: View {
                             }
                         }
                     }
+                    if viewModel.hasMoreResults {
+                        LoadMoreResultsRow(
+                            shown: viewModel.results.count,
+                            total: viewModel.total,
+                            remaining: viewModel.remainingResultCount
+                        ) {
+                            Task { await viewModel.loadMoreResults() }
+                        }
+                    }
                 }
                 .listStyle(.plain)
             }
@@ -561,6 +604,20 @@ public struct AtlasSearchScreen: View {
             await viewModel.refresh()
         }
         #endif
+    }
+
+    private var emptyResultsTitle: String {
+        if viewModel.serverState.isOffline, viewModel.cachedJobCount == 0 {
+            return "No local save available"
+        }
+        return "No matching vacancies"
+    }
+
+    private var emptyResultsDescription: String {
+        if viewModel.serverState.isOffline, viewModel.cachedJobCount == 0 {
+            return "Connect to the local server once and refresh the local save to enable offline search."
+        }
+        return "Adjust filters or search terms."
     }
 
     private func syncSelection(with results: [JobSearchResult]) {
@@ -628,6 +685,68 @@ struct UserStatusBanner: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(AtlasTheme.success.opacity(0.10))
         )
+    }
+}
+
+struct DetailCacheProgressBanner: View {
+    let completed: Int
+    let total: Int
+    let message: String
+
+    private var progressValue: Double {
+        guard total > 0 else { return 0 }
+        return min(Double(completed), Double(total))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(AtlasTheme.accent)
+                Text(message)
+                    .lineLimit(2)
+                Spacer()
+            }
+            ProgressView(value: progressValue, total: max(Double(total), 1))
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AtlasTheme.accent.opacity(0.10))
+        )
+    }
+}
+
+struct LoadMoreResultsRow: View {
+    let shown: Int
+    let total: Int
+    let remaining: Int
+    let onLoadMore: () -> Void
+
+    var body: some View {
+        Button {
+            onLoadMore()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chevron.down.circle")
+                    .imageScale(.medium)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show next \(min(200, remaining).formatted()) vacancies")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(shown.formatted()) of \(total.formatted()) currently displayed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(AtlasTheme.accent)
     }
 }
 
@@ -1306,6 +1425,8 @@ struct AtlasSidebarView: View {
                     .tag(AtlasSidebarSelection.savedJobs)
                 Label("Updates", systemImage: "clock.arrow.circlepath")
                     .tag(AtlasSidebarSelection.updates)
+                Label("Settings", systemImage: "gearshape")
+                    .tag(AtlasSidebarSelection.settings)
             }
             Section("Saved Searches") {
                 if viewModel.savedSearches.isEmpty {
@@ -1677,11 +1798,24 @@ struct AtlasSettingsPanel: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         #endif
+                        .onChange(of: apiBaseURLText) {
+                            connectionMessage = nil
+                            viewModel.clearErrorMessage()
+                        }
 
-                    Text("Current: \(viewModel.apiBaseURL.absoluteString)")
+                    Text("Saved server: \(viewModel.apiBaseURL.absoluteString)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    if let draftBaseURL, draftBaseURL != viewModel.apiBaseURL {
+                        Text("Editing: \(draftBaseURL.absoluteString)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("The saved server changes only after Save and Reload connects successfully.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     HStack {
                         Button {
@@ -1707,8 +1841,8 @@ struct AtlasSettingsPanel: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                    }
-                    if let errorMessage = viewModel.errorMessage {
+                    } else if let errorMessage = viewModel.errorMessage,
+                              draftBaseURL == nil || draftBaseURL == viewModel.apiBaseURL {
                         Text(errorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
@@ -1724,10 +1858,24 @@ struct AtlasSettingsPanel: View {
                         value: "\(viewModel.cachedDetailCount.formatted()) / \(viewModel.detailCacheTotal.formatted())"
                     )
                     if let detailCacheMessage = viewModel.detailCacheMessage {
-                        Label(
-                            detailCacheMessage,
-                            systemImage: viewModel.isCachingDetails ? "arrow.down.circle" : "externaldrive.badge.checkmark"
-                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(
+                                detailCacheMessage,
+                                systemImage: viewModel.isCachingDetails ? "arrow.down.circle" : "externaldrive.badge.checkmark"
+                            )
+                            if viewModel.isCachingDetails, viewModel.detailCacheWorkTotal > 0 {
+                                ProgressView(
+                                    value: min(
+                                        Double(viewModel.detailCacheCompleted),
+                                        Double(viewModel.detailCacheWorkTotal)
+                                    ),
+                                    total: max(Double(viewModel.detailCacheWorkTotal), 1)
+                                )
+                                Text("\(viewModel.detailCacheCompleted.formatted()) of \(viewModel.detailCacheWorkTotal.formatted()) detail requests completed")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -1757,7 +1905,7 @@ struct AtlasSettingsPanel: View {
                 }
 
                 Section("iPhone Setup") {
-                    Text("Use the Mac LAN URL, for example http://192.168.50.208:8765. Keep the Mac API server running while using the app.")
+                    Text("Use the Mac LAN URL, for example http://<current-mac-ip>:8765. On the Mac, run ipconfig getifaddr en0 or ipconfig getifaddr en1 to find the current Wi-Fi IP. Keep job-api running while using the app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("If the connection is blocked, enable Local Network for AtlasIOSHost in iPhone Settings.")
@@ -1798,6 +1946,8 @@ struct AtlasSettingsPanel: View {
     @MainActor
     private func testConnection() async {
         isTesting = true
+        connectionMessage = nil
+        viewModel.clearErrorMessage()
         defer { isTesting = false }
         connectionMessage = await viewModel.healthSummary(forBaseURL: apiBaseURLText)
     }
@@ -1805,6 +1955,8 @@ struct AtlasSettingsPanel: View {
     @MainActor
     private func saveAndReload() async {
         isSaving = true
+        connectionMessage = nil
+        viewModel.clearErrorMessage()
         defer { isSaving = false }
         if let error = await viewModel.updateAPIBaseURL(apiBaseURLText) {
             connectionMessage = error
@@ -1820,6 +1972,10 @@ struct AtlasSettingsPanel: View {
         defer { isRefreshingLocalSave = false }
         await viewModel.refresh()
         connectionMessage = "Local save updated at \(AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt)). Detail caching continues in the background until all cached jobs are available offline."
+    }
+
+    private var draftBaseURL: URL? {
+        AtlasAPIClient.normalizedBaseURL(from: apiBaseURLText)
     }
 }
 
