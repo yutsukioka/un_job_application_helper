@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from jobagg.adapters.base import JobAdapter, register_adapter
 from jobagg.models import JobRecord, OrganizationSource
-from jobagg.normalize import build_job, canonical_url, clean_text
+from jobagg.normalize import build_job, canonical_url, clean_text, parse_datetime
 from jobagg.utils import as_bool as _as_bool
 from jobagg.utils import as_int as _as_int
 from jobagg.utils import clean_html as _clean_html
@@ -35,33 +35,50 @@ class StaticHTMLAdapter(JobAdapter):
             return parse_eu_careers_jobs(self.source, html_text, listing_url)
         if parser_name == "unssc_drupal":
             return parse_unssc_jobs(self.source, html_text, listing_url)
+        if parser_name in {"markdown_public_links", "jina_markdown_public_links"}:
+            return self._parse_markdown_links(html_text, listing_url)
         if parser_name in {"generic", "public_links"}:
             return self._parse_generic_links(html_text, listing_url)
         return self._parse_generic_links(html_text, listing_url)
 
     def fetch_detail_for_listing_item(self, item: dict[str, Any]) -> JobRecord | None:
-        detail_url = (
+        public_url = (
             item.get("href")
             or item.get("document_url")
             or item.get("source_url")
             or item.get("url")
             or item.get("apply_url")
         )
-        if not detail_url:
+        if not public_url:
             return None
-        detail_url = str(detail_url)
-        self.ensure_allowed(detail_url)
-        detail_job = parse_detail_page(self.source, self.fetch_text(detail_url), detail_url)
+        public_url = str(public_url)
+        detail_fetch_url = str(item.get("detail_fetch_url") or public_url)
+        self.ensure_allowed(detail_fetch_url)
+        detail_text = self.fetch_text(detail_fetch_url)
+        parser_name = str(item.get("parser") or self.source.extra.get("parser") or self.source.ats_family)
+        if parser_name in {"markdown_public_links", "jina_markdown_public_links"}:
+            detail_job = parse_markdown_detail_page(self.source, detail_text, public_url)
+        else:
+            detail_job = parse_detail_page(self.source, detail_text, public_url)
         listing_external_id = item.get("external_id") or item.get("code")
         if listing_external_id in (None, ""):
             return detail_job
+        closes_at = detail_job.closes_at or _listing_datetime(self.source, item, "closes_at")
+        posted_at = detail_job.posted_at or _listing_datetime(self.source, item, "posted_at")
         return replace(
             detail_job,
             external_id=str(listing_external_id),
+            location=detail_job.location or clean_text(item.get("location")),
+            employment_type=detail_job.employment_type or clean_text(item.get("employment_type")),
+            posted_at=posted_at,
+            closes_at=closes_at,
+            apply_url=public_url,
+            source_url=public_url,
             raw={
                 **detail_job.raw,
                 "listing_raw": item,
-                "detail_url": detail_url,
+                "detail_url": public_url,
+                "detail_fetch_url": detail_fetch_url if detail_fetch_url != public_url else None,
             },
         )
 
@@ -129,6 +146,45 @@ class StaticHTMLAdapter(JobAdapter):
                 )
             )
         return _dedupe(detail_jobs)
+
+    def _parse_markdown_links(self, markdown_text: str, listing_url: str) -> list[JobRecord]:
+        links = _job_links_from_markdown(self.source, markdown_text)
+        if not links:
+            structural_evidence = _verified_structural_empty_evidence(self.source, markdown_text)
+            if structural_evidence.get("verified"):
+                self.run_diagnostics.health_status = "ok_empty"
+                self.run_diagnostics.empty_reason = "verified_structural_empty"
+                self.run_diagnostics.zero_fetched_evidence = structural_evidence
+                self.run_diagnostics.pagination_complete = True
+                return []
+            raise RuntimeError(f"{self.source.id}: no markdown job links found")
+        jobs = []
+        for link in links:
+            jobs.append(
+                build_job(
+                    self.source,
+                    title=link["title"],
+                    external_id=_external_id_from_url(link["href"]),
+                    location=link.get("location"),
+                    employment_type=link.get("employment_type"),
+                    closes_at=link.get("closes_at"),
+                    apply_url=link["href"],
+                    source_url=link["href"],
+                    description=link.get("summary"),
+                    raw={
+                        "href": link["href"],
+                        "detail_fetch_url": link.get("detail_fetch_url"),
+                        "external_id": _external_id_from_url(link["href"]),
+                        "title": link["title"],
+                        "closes_at": link.get("closes_at"),
+                        "location": link.get("location"),
+                        "employment_type": link.get("employment_type"),
+                        "parser": "markdown_public_links",
+                        "listing_url": listing_url,
+                    },
+                )
+            )
+        return _dedupe(jobs)
 
 
 def parse_unssc_jobs(
@@ -250,13 +306,15 @@ def parse_detail_page(
     if json_ld_jobs:
         return json_ld_jobs[0]
 
+    content_html = _mainish_html(html_text)
     parsed = _TokenParser.parse(html_text)
-    tokens = [token["text"] for token in parsed.tokens if token["type"] == "text"]
+    content_parsed = _TokenParser.parse(content_html)
+    tokens = [token["text"] for token in content_parsed.tokens if token["type"] == "text"]
     title = (
         parsed.meta.get("og:title")
         or parsed.meta.get("twitter:title")
-        or parsed.title
         or _title_from_html(html_text)
+        or parsed.title
     )
     title = _strip_site_suffix(title)
     closes_at = _field_after(tokens, ("closing date", "deadline", "deadline for application", "application deadline"))
@@ -264,7 +322,7 @@ def parse_detail_page(
     grade = _normalize_grade_field(_field_after(tokens, ("grade range", "grade", "post level")))
     contract_type = _field_after(tokens, ("contract type", "contract", "type"))
     posted_at = _field_after(tokens, ("posted date", "date posted", "publication date", "posted on"))
-    description = _clean_html(_mainish_html(html_text))
+    description = _clean_html(content_html)
     return build_job(
         source,
         title=title,
@@ -283,6 +341,76 @@ def parse_detail_page(
             "href": page_url,
         },
     )
+
+
+def parse_markdown_detail_page(
+    source: OrganizationSource,
+    markdown_text: str,
+    page_url: str,
+) -> JobRecord:
+    title = _markdown_title(markdown_text) or _external_id_from_url(page_url) or page_url
+    content = _markdown_content(markdown_text)
+    description = _markdown_to_text(content)
+    employment_type = _grade_from_title(title)
+    return build_job(
+        source,
+        title=title,
+        external_id=_external_id_from_url(page_url),
+        employment_type=employment_type,
+        closes_at=_deadline_from_text(description),
+        apply_url=page_url,
+        source_url=page_url,
+        description=description,
+        raw={
+            "grade": employment_type,
+            "parser": "markdown_detail",
+            "href": page_url,
+        },
+    )
+
+
+def _job_links_from_markdown(
+    source: OrganizationSource,
+    markdown_text: str,
+) -> list[dict[str, str]]:
+    content = _markdown_content(markdown_text)
+    lines = [line.strip() for line in content.splitlines()]
+    heading_pattern = re.compile(r"^#{1,4}\s+\[(?P<title>[^\]]+)\]\((?P<href>[^)]+)\)")
+    jobs: list[dict[str, str]] = []
+    for index, line in enumerate(lines):
+        match = heading_pattern.match(line)
+        if not match:
+            continue
+        title = clean_text(match.group("title"))
+        href = html.unescape(match.group("href"))
+        if not title or not _markdown_href_allowed(source, href):
+            continue
+        block_end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            if heading_pattern.match(lines[next_index]):
+                block_end = next_index
+                break
+            if lines[next_index].casefold() == "ipu job application":
+                block_end = next_index
+                break
+        block = [line for line in lines[index + 1 : block_end] if line]
+        category = _markdown_previous_category(lines, index)
+        closes_at = _markdown_deadline(block)
+        location = _markdown_location(block)
+        summary = _markdown_summary(block)
+        employment_type = _grade_from_title(title) or category
+        jobs.append(
+            {
+                "title": title,
+                "href": href,
+                "detail_fetch_url": _reader_detail_url(source, href),
+                "closes_at": closes_at or "",
+                "location": location or "",
+                "employment_type": employment_type or "",
+                "summary": summary or "",
+            }
+        )
+    return jobs
 
 
 def _job_links_from_html(
@@ -485,6 +613,130 @@ def _organization_name(value: object) -> str | None:
     return clean_text(value)
 
 
+def _markdown_content(markdown_text: str) -> str:
+    marker = "Markdown Content:"
+    if marker in markdown_text:
+        return markdown_text.split(marker, 1)[1].strip()
+    return markdown_text.strip()
+
+
+def _markdown_title(markdown_text: str) -> str | None:
+    for line in markdown_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Title:"):
+            return clean_text(stripped.split(":", 1)[1])
+    for line in _markdown_content(markdown_text).splitlines():
+        match = re.match(r"^#\s+(?P<title>.+)$", line.strip())
+        if match:
+            return clean_text(match.group("title"))
+    return None
+
+
+def _markdown_href_allowed(source: OrganizationSource, href: str) -> bool:
+    hints = source.extra.get("job_link_hints") or source.extra.get("job_link_selector_hint") or []
+    if isinstance(hints, str):
+        hints = [hints]
+    hints = [str(hint).casefold() for hint in hints]
+    return not hints or any(hint in href.casefold() for hint in hints)
+
+
+def _markdown_previous_category(lines: list[str], index: int) -> str | None:
+    ignored = {"", "vacancies list", "deadline:"}
+    for previous in reversed(lines[:index]):
+        text = clean_text(previous)
+        if not text or text.casefold() in ignored:
+            continue
+        if text.startswith("[") or text.startswith("*") or text.startswith("#"):
+            continue
+        if len(text) <= 60:
+            return text
+        return None
+    return None
+
+
+def _markdown_deadline(block: list[str]) -> str | None:
+    for index, line in enumerate(block):
+        if line.rstrip(":").casefold() != "deadline":
+            continue
+        for next_line in block[index + 1 : index + 5]:
+            value = clean_text(next_line)
+            if value:
+                return value
+    return None
+
+
+def _markdown_location(block: list[str]) -> str | None:
+    for index, line in enumerate(block):
+        if line.casefold().startswith("[read more]"):
+            candidates = [clean_text(value) for value in block[max(0, index - 4) : index]]
+            candidates = [
+                value
+                for value in candidates
+                if value and len(value) <= 80 and not value.endswith(".") and value.casefold() != "deadline:"
+            ]
+            if len(candidates) >= 2:
+                return ", ".join(candidates[-2:])
+            if candidates:
+                return candidates[-1]
+    return None
+
+
+def _markdown_summary(block: list[str]) -> str | None:
+    summary_lines = []
+    skipping_deadline = False
+    for line in block:
+        lowered = line.casefold()
+        if lowered == "deadline:":
+            skipping_deadline = True
+            continue
+        if skipping_deadline:
+            skipping_deadline = False
+            continue
+        if lowered.startswith("[read more]"):
+            break
+        if len(line) <= 80 and not line.endswith("."):
+            continue
+        summary_lines.append(line)
+    return _markdown_to_text("\n".join(summary_lines)) or None
+
+
+def _markdown_to_text(value: str) -> str:
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", value)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", " ", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[*-]\s+", " ", text, flags=re.MULTILINE)
+    text = text.replace("**", " ").replace("__", " ").replace("`", " ")
+    return clean_text(text) or ""
+
+
+def _grade_from_title(value: object | None) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    match = re.search(r"\((?P<grade>(?:[PD]-?\d|G-?\d|NO[A-D]?))\)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group("grade").replace("-", "").upper()
+
+
+def _reader_detail_url(source: OrganizationSource, href: str) -> str | None:
+    template = source.extra.get("detail_fetch_url_template") or source.extra.get("reader_proxy_url_template")
+    if not template:
+        return None
+    return str(template).format(url=href)
+
+
+def _listing_datetime(
+    source: OrganizationSource,
+    item: dict[str, Any],
+    key: str,
+) -> Any:
+    value = item.get(key)
+    if not value:
+        return None
+    return parse_datetime(value, date_locale=source.extra.get("date_locale"))
+
+
 def _field_after(tokens: list[str], labels: tuple[str, ...]) -> str | None:
     label_set = {label.casefold() for label in labels}
     all_labels = label_set | {
@@ -567,6 +819,8 @@ def _strip_site_suffix(value: object | None) -> str | None:
 
 def _mainish_html(html_text: str) -> str:
     detail_patterns = (
+        r"<div\b(?=[^>]*id=[\"']contenu-ficheoffre[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
+        r"<div\b(?=[^>]*id=[\"']detail_offre[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
         r"<div\b(?=[^>]*class=[\"'][^\"']*\bjob_description\b)[^>]*>(?P<body>.*?)</div>\s*</div>",
         r"<div\b(?=[^>]*id=[\"']description_box[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
         r"<div\b(?=[^>]*id=[\"']job_details_content[\"'])[^>]*>(?P<body>.*?)</div>\s*</div>",
