@@ -79,9 +79,9 @@ preserved across regular bundle runs.
 For normal operation, run:
 
 ```bash
-cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+cd packages/jobagg
 uv run python -m jobagg.scheduler --verbose sync-bundles \
-  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --output-dir ../../private/jobagg/output \
   --keep-extra-output-files \
   --allow-source-degraded
 ```
@@ -132,10 +132,10 @@ human verification page.
    opens the browser if the source hits a WAF/no-detail style block.
 
 ```bash
-cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+cd packages/jobagg
 uv run python -m jobagg.scheduler --verbose sync-bundles \
   --source-id unicef_pageup \
-  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --output-dir ../../private/jobagg/output \
   --keep-extra-output-files \
   --allow-source-degraded \
   --refresh-all-details \
@@ -154,10 +154,10 @@ file is read only if a block is detected:
 umask 077
 pbpaste > /tmp/jobagg-unicef-cookie.txt
 
-cd /Users/yutsukioka2/git/un_job_application_helper/packages/jobagg
+cd packages/jobagg
 uv run python -m jobagg.scheduler --verbose sync-bundles \
   --source-id unicef_pageup \
-  --output-dir /Users/yutsukioka2/git/un_job_application_helper/private/jobagg/output \
+  --output-dir ../../private/jobagg/output \
   --keep-extra-output-files \
   --allow-source-degraded \
   --refresh-all-details \

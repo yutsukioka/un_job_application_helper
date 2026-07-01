@@ -771,6 +771,19 @@ def test_selective_detail_none_can_be_transient_with_cooldown(tmp_path):
     assert breaker is not None
     assert breaker["state"] == "open"
 
+    second = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert second.fetched == 3
+    second_diagnostics = list(db.iter_source_run_diagnostics(source.id))[-1]
+    assert second_diagnostics["detail_attempted"] == 0
+    assert second_diagnostics["detail_skipped"] == 3
+    assert second_diagnostics["detail_breaker_state"] == "open"
+
 
 def test_selective_detail_budget_skips_remaining_jobs_without_error(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")

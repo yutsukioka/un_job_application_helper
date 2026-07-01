@@ -1368,8 +1368,14 @@ def _write_sync_bundles_health_report(
                 "missing_transition_allowed": (
                     diagnostics.missing_transition_allowed if diagnostics else False
                 ),
-                "missing_closed_safety_gate_passed": (
-                    diagnostics.missing_transition_allowed if diagnostics else False
+                "missing_closed_safety_gate_passed": _missing_closed_gate_valid(
+                    {
+                        "missing": sync.missing,
+                        "closed": sync.closed,
+                        "missing_transition_allowed": (
+                            diagnostics.missing_transition_allowed if diagnostics else False
+                        ),
+                    }
                 ),
                 "circuit_breakers": sidecar["circuit_breakers"],
                 "cooldown_until": sidecar["cooldown_until"],
@@ -1567,9 +1573,7 @@ def _merge_consolidated_status_into_health_rows(source_rows: list[dict], db_path
                 "scope_validation_status": status.get("scope_validation_status"),
                 "scope_passed": _scope_passed(status.get("scope_validation_status")),
                 "missing_transition_allowed": bool(status.get("missing_transition_allowed")),
-                "missing_closed_safety_gate_passed": bool(
-                    status.get("missing_transition_allowed")
-                ),
+                "missing_closed_safety_gate_passed": _missing_closed_gate_valid(status),
                 "circuit_breakers": {},
                 "cooldown_until": None,
                 "last_error_summary": (

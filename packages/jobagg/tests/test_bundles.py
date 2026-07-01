@@ -752,6 +752,68 @@ def test_consolidate_bundle_databases_keeps_inconclusive_source_rows_open_withou
     assert open_stale == 0
 
 
+def test_consolidate_bundle_databases_ages_stale_sources_against_wall_clock(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    source = OrganizationSource(
+        id="old_workday",
+        name="Old Workday",
+        ats_family="workday",
+        base_url="https://example.org",
+        extra={"output_slug": "old"},
+    )
+    db = JobDatabase(output / "old_jobs.sqlite3")
+    db.initialize()
+    db.upsert_job(
+        build_job(
+            source,
+            title="Old Role",
+            external_id="OLD1",
+            closes_at="2099-07-30",
+            description=(
+                "Detailed old role text with responsibilities and qualifications "
+                "that would otherwise appear complete."
+            ),
+            apply_url="https://example.org/jobs/OLD1",
+        )
+    )
+    old_observed_at = datetime(2000, 1, 1, tzinfo=UTC)
+    db.add_source_run(
+        SyncResult(
+            source_id=source.id,
+            fetched=1,
+            inserted=1,
+            diagnostics=SourceRunDiagnostics(
+                source_id=source.id,
+                pagination_complete=True,
+                health_status="ok",
+                run_classification="ok",
+                publishability_classification="ok",
+                missing_transition_allowed=True,
+                observed_at=old_observed_at,
+            ),
+        ),
+        observed_at=old_observed_at,
+    )
+
+    result = consolidate_bundle_databases(output_dir=output)
+
+    assert result.current_count == 0
+    with sqlite3.connect(output / "all_jobs.sqlite3") as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT status, stale_current, source_freshness_status, consolidation_status
+            FROM jobs
+            WHERE source_id = 'old_workday'
+            """
+        ).fetchone()
+    assert row["status"] == "stale_current"
+    assert row["stale_current"] == 1
+    assert row["source_freshness_status"] == "stale"
+    assert row["consolidation_status"] == "stale_source_flagged"
+
+
 def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_aliases(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
@@ -832,7 +894,71 @@ def test_consolidate_bundle_databases_deduplicates_current_rows_and_records_alia
     assert duplicate["consolidation_status"] == "duplicate_quarantined"
     assert alias["duplicate_job_key"] == "mirror_inspira:279100"
     assert alias["canonical_job_key"] == "un_inspira:279100"
-    assert alias["reason"] == "same_ats_external_id"
+    assert alias["reason"] == "same_apply_url"
+
+
+def test_consolidate_bundle_databases_keeps_cross_source_external_id_collisions(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    sources = [
+        OrganizationSource(
+            id="org_a_oracle",
+            name="Org A",
+            ats_family="oracle_hcm",
+            base_url="https://oracle.example.org",
+            extra={"output_slug": "org_a"},
+        ),
+        OrganizationSource(
+            id="org_b_oracle",
+            name="Org B",
+            ats_family="oracle_hcm",
+            base_url="https://oracle.example.org",
+            extra={"output_slug": "org_b"},
+        ),
+    ]
+    for index, source in enumerate(sources, start=1):
+        db = JobDatabase(output / f"{source.extra['output_slug']}_jobs.sqlite3")
+        db.initialize()
+        job = build_job(
+            source,
+            title=f"Tenant Role {index}",
+            external_id="34126",
+            apply_url=f"https://oracle.example.org/sites/CX_{index}/job/34126",
+            closes_at="2099-07-30",
+            description=(
+                f"Detailed tenant {index} role text with responsibilities, "
+                "qualifications, and enough context to remain complete."
+            ),
+        )
+        db.upsert_job(job)
+        db.add_source_run(
+            SyncResult(
+                source_id=source.id,
+                fetched=1,
+                inserted=1,
+                diagnostics=SourceRunDiagnostics(
+                    source_id=source.id,
+                    pagination_complete=True,
+                    health_status="ok",
+                    run_classification="ok",
+                    publishability_classification="ok",
+                    missing_transition_allowed=True,
+                    observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+                ),
+            ),
+            observed_at=datetime(2026, 6, 29, tzinfo=UTC),
+        )
+
+    result = consolidate_bundle_databases(output_dir=output)
+
+    assert result.current_count == 2
+    current_rows = json.loads((output / "all_jobs_current.json").read_text(encoding="utf-8"))
+    assert sorted(row["source_id"] for row in current_rows) == ["org_a_oracle", "org_b_oracle"]
+    with sqlite3.connect(output / "all_jobs.sqlite3") as conn:
+        duplicate_count = conn.execute("SELECT COUNT(*) FROM consolidated_job_aliases").fetchone()[0]
+        non_open = conn.execute("SELECT COUNT(*) FROM jobs WHERE status <> 'open'").fetchone()[0]
+    assert duplicate_count == 0
+    assert non_open == 0
 
 
 def test_consolidate_bundle_databases_marks_detail_quality_deadlines_and_trusted_exports(tmp_path):

@@ -765,7 +765,6 @@ sources:
       output_slug: unido
       search_url: https://careers.unido.org/search/?q=
       max_pages: 1
-      tls_verify: false
 
   - id: unesco_successfactors
     name: UNESCO
@@ -1041,7 +1040,6 @@ sources:
       job_link_selector_hint: /job/job-
       fetch_details: true
       date_locale: EU
-      tls_verify: false
 
   - id: unssc_drupal_custom
     name: United Nations System Staff College

@@ -306,7 +306,11 @@ def _apply_consolidation_quality_rules(
     _create_consolidation_tables(conn)
     now = datetime.now(tz=UTC).isoformat()
     _normalize_expired_circuit_breakers(conn, now=now)
-    source_status = _latest_source_status(conn, stale_current_max_age_days=stale_current_max_age_days)
+    source_status = _latest_source_status(
+        conn,
+        stale_current_max_age_days=stale_current_max_age_days,
+        observed_at=now,
+    )
     _annotate_jobs_with_source_status(conn, source_status)
     _quarantine_stale_split_inspira_views(conn)
     _quarantine_stale_source_current_rows(conn)
@@ -379,6 +383,7 @@ def _latest_source_status(
     conn: sqlite3.Connection,
     *,
     stale_current_max_age_days: int,
+    observed_at: str | datetime | None = None,
 ) -> dict[str, dict[str, object]]:
     rows = conn.execute(
         """
@@ -389,7 +394,6 @@ def _latest_source_status(
     ).fetchall()
     source_ids = [str(row["source_id"]) for row in rows]
     latest_rows: dict[str, dict[str, object]] = {}
-    observed_values: list[datetime] = []
     for source_id in source_ids:
         row = conn.execute(
             """
@@ -425,9 +429,6 @@ def _latest_source_status(
             }
             continue
         latest_observed_at = row["diagnostics_observed_at"] or row["run_observed_at"]
-        parsed = _parse_dt(latest_observed_at)
-        if parsed is not None:
-            observed_values.append(parsed)
         latest_rows[source_id] = {
             "source_id": source_id,
             "latest_observed_at": latest_observed_at,
@@ -440,10 +441,12 @@ def _latest_source_status(
             "source_freshness_status": "unknown",
         }
 
-    latest_global = max(observed_values) if observed_values else None
+    comparison_time = _parse_dt(observed_at) if isinstance(observed_at, str) else observed_at
+    if comparison_time is None:
+        comparison_time = datetime.now(tz=UTC)
     cutoff = (
-        latest_global - timedelta(days=max(stale_current_max_age_days, 0))
-        if latest_global is not None
+        comparison_time - timedelta(days=max(stale_current_max_age_days, 0))
+        if stale_current_max_age_days >= 0
         else None
     )
     for source_id, status in latest_rows.items():
@@ -723,12 +726,12 @@ def _deduplicate_open_jobs(conn: sqlite3.Connection, *, created_at: str) -> int:
     duplicate_count += _deduplicate_open_groups(
         conn,
         group_sql="""
-            SELECT ats_family || ':' || external_id AS group_key
+            SELECT source_id || ':' || ats_family || ':' || external_id AS group_key
             FROM jobs
             WHERE status = 'open'
                 AND external_id IS NOT NULL
                 AND TRIM(external_id) <> ''
-            GROUP BY ats_family, external_id
+            GROUP BY source_id, ats_family, external_id
             HAVING COUNT(*) > 1
         """,
         rows_sql="""
@@ -736,7 +739,7 @@ def _deduplicate_open_jobs(conn: sqlite3.Connection, *, created_at: str) -> int:
             FROM jobs j
             LEFT JOIN detail_backlog b ON b.job_key = j.job_key
             WHERE j.status = 'open'
-                AND j.ats_family || ':' || j.external_id = ?
+                AND j.source_id || ':' || j.ats_family || ':' || j.external_id = ?
             ORDER BY j.source_id, j.job_key
         """,
         reason="same_ats_external_id",

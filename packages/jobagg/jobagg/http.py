@@ -80,7 +80,10 @@ class JobAggHTTPClient:
         self._cookie_jar = CookieJar()
         handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
         if not self.tls_verify:
-            handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=context))
         self._opener = urllib.request.build_opener(*handlers)
 
     def _request(

@@ -736,7 +736,10 @@ def sync_source_with_selective_details(
             success_count=1,
             reason="listing payload satisfies detail",
         )
-    latest_detail_breaker = db.get_source_breaker(source.id, "detail")
+    latest_detail_breaker_type = str(detail_breaker.get("breaker_type") or "detail")
+    latest_detail_breaker = db.get_source_breaker(source.id, latest_detail_breaker_type)
+    if latest_detail_breaker is None and latest_detail_breaker_type != "detail":
+        latest_detail_breaker = db.get_source_breaker(source.id, "detail")
     if result.diagnostics is not None and latest_detail_breaker is not None:
         result.diagnostics.detail_breaker_state = str(latest_detail_breaker.get("state") or "closed")
     counts = db.upsert_jobs(jobs)
@@ -1124,24 +1127,47 @@ def _list_failure_cooldown_minutes(source: OrganizationSource, *, repeated: bool
 
 
 def _prepare_detail_breaker_for_run(db: JobDatabase, source: OrganizationSource) -> dict[str, object]:
-    breaker = db.get_source_breaker(source.id, "detail") or {}
+    for breaker_type in ("detail", "transient_detail"):
+        breaker = db.get_source_breaker(source.id, breaker_type) or {}
+        state = str(breaker.get("state") or "closed")
+        if state in {"open", "half_open"}:
+            return _prepare_detail_breaker_state(db, source, breaker_type, breaker)
+    return {"state": "closed", "cooldown_until": None, "max_attempts": None, "breaker_type": "detail"}
+
+
+def _prepare_detail_breaker_state(
+    db: JobDatabase,
+    source: OrganizationSource,
+    breaker_type: str,
+    breaker: dict[str, object],
+) -> dict[str, object]:
     state = str(breaker.get("state") or "closed")
     cooldown_until = _parse_backlog_time(breaker.get("cooldown_until"))
     if state == "open" and _cooldown_active(cooldown_until):
-        return {"state": "open", "cooldown_until": cooldown_until, "max_attempts": 0}
+        return {
+            "state": "open",
+            "cooldown_until": cooldown_until,
+            "max_attempts": 0,
+            "breaker_type": breaker_type,
+        }
     if state == "open":
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="half_open",
             failure_count=int(breaker.get("failure_count") or 0),
             success_count=int(breaker.get("success_count") or 0),
-            reason="detail breaker probe",
+            reason=f"{breaker_type} breaker probe",
         )
-        return {"state": "half_open", "cooldown_until": None, "max_attempts": 1}
+        return {"state": "half_open", "cooldown_until": None, "max_attempts": 1, "breaker_type": breaker_type}
     if state == "half_open":
-        return {"state": "half_open", "cooldown_until": cooldown_until, "max_attempts": _DETAIL_BREAKER_HALF_OPEN_LIMIT}
-    return {"state": "closed", "cooldown_until": None, "max_attempts": None}
+        return {
+            "state": "half_open",
+            "cooldown_until": cooldown_until,
+            "max_attempts": _DETAIL_BREAKER_HALF_OPEN_LIMIT,
+            "breaker_type": breaker_type,
+        }
+    return {"state": "closed", "cooldown_until": None, "max_attempts": None, "breaker_type": breaker_type}
 
 
 def _should_open_detail_adapter_breaker(detail_attempts: int, detail_failures: int) -> bool:
@@ -1194,12 +1220,13 @@ def _record_detail_breaker_after_run(
     state = str(breaker.get("state") or "closed")
     if opened:
         return
+    breaker_type = str(breaker.get("breaker_type") or "detail")
     if detail_attempts <= 0:
         return
     if state == "closed":
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed",
             failure_count=0 if detail_failures == 0 else detail_failures,
             success_count=1 if detail_failures == 0 else 0,
@@ -1208,12 +1235,12 @@ def _record_detail_breaker_after_run(
         return
     ratio = detail_failures / detail_attempts
     if detail_failures == 0:
-        previous = db.get_source_breaker(source.id, "detail") or {}
+        previous = db.get_source_breaker(source.id, breaker_type) or {}
         success_count = int(previous.get("success_count") or 0) + 1
         should_close = state == "half_open" and success_count >= 2
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed" if should_close else "half_open",
             failure_count=0,
             success_count=success_count,
@@ -1223,7 +1250,7 @@ def _record_detail_breaker_after_run(
     if ratio < 0.20:
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed",
             failure_count=0,
             success_count=1,
@@ -1233,7 +1260,7 @@ def _record_detail_breaker_after_run(
     cooldown_until = datetime.now(tz=UTC) + timedelta(seconds=_detail_breaker_cooldown_seconds(source))
     db.set_source_breaker(
         source_id=source.id,
-        breaker_type="detail",
+        breaker_type=breaker_type,
         state="open",
         failure_count=detail_failures,
         success_count=0,
