@@ -58,6 +58,16 @@ _AIIB_FONT_COPY_RE = re.compile(
     r"<div\b(?=[^>]*class=[\"'][^\"']*\bfont-copy-18-black\b[^\"']*[\"'])[^>]*>(?P<body>.*?)</div>",
     re.IGNORECASE | re.DOTALL,
 )
+_AIIB_CONTENT_CONTAINER_RES = (
+    re.compile(r"<(?P<tag>main)\b[^>]*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<(?P<tag>article)\b[^>]*>", re.IGNORECASE | re.DOTALL),
+    re.compile(
+        r"<(?P<tag>div)\b(?=[^>]*class=[\"'][^\"']*"
+        r"(?:\barticle-detail\b|\bdetail-content\b|\bjob-detail\b|\bmain-content\b|\bgeneric-content\b)"
+        r"[^\"']*[\"'])[^>]*>",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
 
 
 @register_adapter
@@ -595,18 +605,8 @@ def _aiib_json_ld_description(html_text: str) -> str | None:
 
 
 def _aiib_content_container_description(html_text: str) -> str | None:
-    patterns = (
-        re.compile(r"<(?P<tag>main)\b[^>]*>", re.IGNORECASE | re.DOTALL),
-        re.compile(r"<(?P<tag>article)\b[^>]*>", re.IGNORECASE | re.DOTALL),
-        re.compile(
-            r"<(?P<tag>div)\b(?=[^>]*class=[\"'][^\"']*"
-            r"(?:\\barticle-detail\\b|\\bdetail-content\\b|\\bjob-detail\\b|\\bmain-content\\b|\\bgeneric-content\\b)"
-            r"[^\"']*[\"'])[^>]*>",
-            re.IGNORECASE | re.DOTALL,
-        ),
-    )
     candidates: list[str] = []
-    for pattern in patterns:
+    for pattern in _AIIB_CONTENT_CONTAINER_RES:
         candidates.extend(_description_candidates(html_text, pattern))
     meaningful = [candidate for candidate in candidates if _is_meaningful_description(candidate)]
     return max(meaningful, key=len) if meaningful else None

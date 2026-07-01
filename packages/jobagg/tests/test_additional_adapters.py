@@ -1689,7 +1689,7 @@ def test_aiib_detail_prefers_full_page_body_over_single_experience_snippet():
     detail_html = """
     <html><head><title>Senior HR Officer, Performance &amp; Reward</title></head><body>
       <div class="font-copy-18-black">Minimum 10 years of relevant professional experience</div>
-      <main>
+      <div class="job-detail">
         <h2>About the role</h2>
         <p>The Senior HR Officer will support performance, rewards, and human resources operations across the Bank.</p>
         <h2>Responsibilities</h2>
@@ -1697,7 +1697,7 @@ def test_aiib_detail_prefers_full_page_body_over_single_experience_snippet():
         <h2>Requirements</h2>
         <p>At least 10 years of experience in compensation and benefits, with a strong background in performance management.</p>
         <p>Experience with job evaluation, grading, analytics, and international organization HR policy is required.</p>
-      </main>
+      </div>
       <div class="job-card">
         <div class="item"><div class="col-title">Ref. Number</div><div class="col-con">25245</div></div>
         <div class="item"><div class="col-title">Location</div><div class="col-con">Beijing</div></div>

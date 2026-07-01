@@ -95,6 +95,73 @@ public struct JobSearchResult: Identifiable, Hashable, Codable, Sendable {
         self.sourceURL = sourceURL
     }
 
+    enum CodingKeys: String, CodingKey {
+        case jobKey
+        case title
+        case organization
+        case sourceID
+        case dutyStation
+        case gradeCode
+        case nationalInternational
+        case contractCategory
+        case contractGroup
+        case seniorityGroup
+        case contractLabel
+        case workModality
+        case ccogFamilyCode
+        case ccogFamilyLabel
+        case ccogPrimaryCode
+        case ccogPrimaryLabel
+        case capabilityTags
+        case closingDate
+        case needsReview
+        case locationConfidence
+        case gradeConfidence
+        case score
+        case scoreReasons
+        case matchSummary
+        case description
+        case status
+        case postedDate
+        case applyURL
+        case sourceURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            jobKey: try container.decode(String.self, forKey: .jobKey),
+            title: try container.decode(String.self, forKey: .title),
+            organization: try container.decode(String.self, forKey: .organization),
+            sourceID: try container.decode(String.self, forKey: .sourceID),
+            dutyStation: try container.decode(String.self, forKey: .dutyStation),
+            gradeCode: try container.decode(String.self, forKey: .gradeCode),
+            nationalInternational: try container.decodeIfPresent(String.self, forKey: .nationalInternational),
+            contractCategory: try container.decodeIfPresent(String.self, forKey: .contractCategory),
+            contractGroup: try container.decodeIfPresent(String.self, forKey: .contractGroup),
+            seniorityGroup: try container.decodeIfPresent(String.self, forKey: .seniorityGroup),
+            contractLabel: try container.decode(String.self, forKey: .contractLabel),
+            workModality: try container.decode(String.self, forKey: .workModality),
+            ccogFamilyCode: try container.decodeIfPresent(String.self, forKey: .ccogFamilyCode),
+            ccogFamilyLabel: try container.decodeIfPresent(String.self, forKey: .ccogFamilyLabel),
+            ccogPrimaryCode: try container.decodeIfPresent(String.self, forKey: .ccogPrimaryCode),
+            ccogPrimaryLabel: try container.decodeIfPresent(String.self, forKey: .ccogPrimaryLabel),
+            capabilityTags: try container.decodeIfPresent([String].self, forKey: .capabilityTags) ?? [],
+            closingDate: try container.decodeIfPresent(Date.self, forKey: .closingDate),
+            needsReview: try container.decode(Bool.self, forKey: .needsReview),
+            locationConfidence: try container.decodeIfPresent(Double.self, forKey: .locationConfidence),
+            gradeConfidence: try container.decodeIfPresent(Double.self, forKey: .gradeConfidence),
+            score: try container.decodeIfPresent(Double.self, forKey: .score),
+            scoreReasons: try container.decodeIfPresent([String].self, forKey: .scoreReasons) ?? [],
+            matchSummary: try container.decodeIfPresent(String.self, forKey: .matchSummary) ?? "",
+            description: try container.decodeIfPresent(String.self, forKey: .description) ?? "",
+            status: try container.decodeIfPresent(String.self, forKey: .status) ?? "open",
+            postedDate: try container.decodeIfPresent(Date.self, forKey: .postedDate),
+            applyURL: try container.decodeIfPresent(URL.self, forKey: .applyURL),
+            sourceURL: try container.decodeIfPresent(URL.self, forKey: .sourceURL)
+        )
+    }
+
     public var sourceInitials: String {
         let preferred = organizationDisplay
             .split(separator: " ")

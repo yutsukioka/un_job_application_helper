@@ -168,8 +168,11 @@ public struct AtlasSearchResponse: Codable, Sendable {
         total = try container.decode(Int.self, forKey: .total)
         limit = try container.decode(Int.self, forKey: .limit)
         offset = try container.decode(Int.self, forKey: .offset)
-        let rawResults = try container.decode([AtlasJobResultDTO].self, forKey: .results)
-        results = rawResults.map(\.jobSearchResult)
+        if let rawResults = try? container.decode([AtlasJobResultDTO].self, forKey: .results) {
+            results = rawResults.map(\.jobSearchResult)
+        } else {
+            results = try container.decodeIfPresent([JobSearchResult].self, forKey: .results) ?? []
+        }
         facets = try container.decodeIfPresent([String: [String: Int]].self, forKey: .facets) ?? [:]
         facetLabels = try container.decodeIfPresent([String: [String: String]].self, forKey: .facetLabels) ?? [:]
         unclassifiedCount = try container.decodeIfPresent(Int.self, forKey: .unclassifiedCount) ?? 0
@@ -412,13 +415,17 @@ public struct AtlasAPIClient: Sendable {
         let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         let prefixed = value.contains("://") ? value : "http://\(value)"
-        guard let url = URL(string: prefixed),
-              let scheme = url.scheme?.lowercased(),
+        guard var components = URLComponents(string: prefixed),
+              let scheme = components.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
-              url.host != nil else {
+              components.host != nil else {
             return nil
         }
-        return url
+        components.scheme = scheme
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 
     public func health() async throws -> AtlasHealthSummary {

@@ -588,14 +588,20 @@ public final class AtlasSearchViewModel: ObservableObject {
         client: AtlasAPIClient
     ) async {
         guard !jobKeysToFetch.isEmpty else { return }
+        let initiallyMissing = await Task.detached(priority: .utility) {
+            Set(AtlasLocalCache.missingDetailJobKeys(jobKeys: allJobKeys))
+        }.value
+        let initiallyCached = max(0, allJobKeys.count - initiallyMissing.count)
+        cachedDetailCount = initiallyCached
         isCachingDetails = true
-        detailCacheMessage = "Caching details for offline use..."
+        detailCacheMessage = "Caching details 0/\(jobKeysToFetch.count.formatted()); \(initiallyCached.formatted())/\(allJobKeys.count.formatted()) available offline"
         defer { isCachingDetails = false }
 
         let maxConcurrentRequests = min(6, jobKeysToFetch.count)
         var iterator = jobKeysToFetch.makeIterator()
         var completed = 0
         var failed = 0
+        var newlyCached = 0
 
         await withTaskGroup(of: (String, Bool, String?).self) { group in
             for _ in 0..<maxConcurrentRequests {
@@ -613,12 +619,14 @@ public final class AtlasSearchViewModel: ObservableObject {
 
                 completed += 1
                 if result.1 {
-                    cachedDetailCount += 1
+                    if initiallyMissing.contains(result.0) {
+                        newlyCached += 1
+                    }
                 } else {
                     failed += 1
                 }
 
-                let cached = min(AtlasLocalCache.cachedDetailCount(jobKeys: allJobKeys), allJobKeys.count)
+                let cached = min(initiallyCached + newlyCached, allJobKeys.count)
                 cachedDetailCount = cached
                 detailCacheMessage = "Caching details \(completed.formatted())/\(jobKeysToFetch.count.formatted()); \(cached.formatted())/\(allJobKeys.count.formatted()) available offline"
 
@@ -630,6 +638,9 @@ public final class AtlasSearchViewModel: ObservableObject {
             }
         }
 
+        cachedDetailCount = await Task.detached(priority: .utility) {
+            AtlasLocalCache.cachedDetailCount(jobKeys: allJobKeys)
+        }.value
         if Task.isCancelled {
             detailCacheMessage = "Detail cache paused; it will resume next launch"
         } else if failed > 0 {
