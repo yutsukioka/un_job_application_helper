@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jobagg.detail_quality import DETAIL_QUALITY_COMPLETE, detail_quality_status
 from jobagg.hashing import ensure_job_hash, posting_fingerprint
 from jobagg.models import ChangeEvent, JobRecord, SourceRunDiagnostics, SyncResult
 
@@ -132,7 +133,21 @@ class JobDatabase:
                     raw_json TEXT NOT NULL,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
-                    missing_run_count INTEGER NOT NULL DEFAULT 0
+                    missing_run_count INTEGER NOT NULL DEFAULT 0,
+                    stale_current INTEGER NOT NULL DEFAULT 0,
+                    canonical_job_key TEXT,
+                    duplicate_of_job_key TEXT,
+                    consolidation_status TEXT,
+                    source_latest_observed_at TEXT,
+                    source_freshness_status TEXT,
+                    source_health_status TEXT,
+                    source_run_classification TEXT,
+                    source_publishability_classification TEXT,
+                    detail_quality_status TEXT,
+                    deadline_state TEXT,
+                    source_listed_current INTEGER NOT NULL DEFAULT 0,
+                    trusted_current INTEGER NOT NULL DEFAULT 0,
+                    application_ready INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_jobs_source_status
@@ -260,6 +275,37 @@ class JobDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_source_breakers_state
                     ON source_circuit_breakers (breaker_type, state, cooldown_until);
+
+                CREATE TABLE IF NOT EXISTS consolidated_source_status (
+                    source_id TEXT PRIMARY KEY,
+                    latest_observed_at TEXT,
+                    health_status TEXT,
+                    run_classification TEXT,
+                    publishability_classification TEXT,
+                    fetched INTEGER,
+                    pagination_complete INTEGER,
+                    missing_transition_allowed INTEGER,
+                    source_freshness_status TEXT NOT NULL,
+                    open_jobs INTEGER NOT NULL DEFAULT 0,
+                    stale_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    duplicate_jobs INTEGER NOT NULL DEFAULT 0,
+                    trusted_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    application_ready_jobs INTEGER NOT NULL DEFAULT 0,
+                    expired_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    weak_detail_jobs INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS consolidated_job_aliases (
+                    duplicate_job_key TEXT PRIMARY KEY,
+                    canonical_job_key TEXT NOT NULL,
+                    duplicate_source_id TEXT NOT NULL,
+                    canonical_source_id TEXT NOT NULL,
+                    duplicate_external_id TEXT,
+                    duplicate_apply_url TEXT,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS vacancy_source_features (
                     vacancy_id TEXT PRIMARY KEY REFERENCES jobs(job_key),
@@ -572,6 +618,30 @@ class JobDatabase:
                 "posting_fingerprint",
                 "TEXT",
             )
+            for column, column_type in (
+                ("stale_current", "INTEGER NOT NULL DEFAULT 0"),
+                ("canonical_job_key", "TEXT"),
+                ("duplicate_of_job_key", "TEXT"),
+                ("consolidation_status", "TEXT"),
+                ("source_latest_observed_at", "TEXT"),
+                ("source_freshness_status", "TEXT"),
+                ("source_health_status", "TEXT"),
+                ("source_run_classification", "TEXT"),
+                ("source_publishability_classification", "TEXT"),
+                ("detail_quality_status", "TEXT"),
+                ("deadline_state", "TEXT"),
+                ("source_listed_current", "INTEGER NOT NULL DEFAULT 0"),
+                ("trusted_current", "INTEGER NOT NULL DEFAULT 0"),
+                ("application_ready", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                self._ensure_column(conn, "jobs", column, column_type)
+            for column, column_type in (
+                ("trusted_current_jobs", "INTEGER NOT NULL DEFAULT 0"),
+                ("application_ready_jobs", "INTEGER NOT NULL DEFAULT 0"),
+                ("expired_current_jobs", "INTEGER NOT NULL DEFAULT 0"),
+                ("weak_detail_jobs", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                self._ensure_column(conn, "consolidated_source_status", column, column_type)
             self._ensure_column(
                 conn,
                 "source_run_diagnostics",
@@ -643,6 +713,37 @@ class JobDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_source_breakers_state
                     ON source_circuit_breakers (breaker_type, state, cooldown_until);
+
+                CREATE TABLE IF NOT EXISTS consolidated_source_status (
+                    source_id TEXT PRIMARY KEY,
+                    latest_observed_at TEXT,
+                    health_status TEXT,
+                    run_classification TEXT,
+                    publishability_classification TEXT,
+                    fetched INTEGER,
+                    pagination_complete INTEGER,
+                    missing_transition_allowed INTEGER,
+                    source_freshness_status TEXT NOT NULL,
+                    open_jobs INTEGER NOT NULL DEFAULT 0,
+                    stale_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    duplicate_jobs INTEGER NOT NULL DEFAULT 0,
+                    trusted_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    application_ready_jobs INTEGER NOT NULL DEFAULT 0,
+                    expired_current_jobs INTEGER NOT NULL DEFAULT 0,
+                    weak_detail_jobs INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS consolidated_job_aliases (
+                    duplicate_job_key TEXT PRIMARY KEY,
+                    canonical_job_key TEXT NOT NULL,
+                    duplicate_source_id TEXT NOT NULL,
+                    canonical_source_id TEXT NOT NULL,
+                    duplicate_external_id TEXT,
+                    duplicate_apply_url TEXT,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_detail_backlog_status_schema(conn)
@@ -948,6 +1049,17 @@ class JobDatabase:
         """Preserve detail-only fields when a listing-only sync omits them."""
 
         new_row_is_listing_only = self._new_row_is_listing_only(job.raw)
+        current_raw = self._load_raw_json(current["raw_json"])
+        new_quality = detail_quality_status(
+            title=job.title,
+            description=job.description,
+            raw=job.raw,
+        )
+        current_quality = detail_quality_status(
+            title=current["title"],
+            description=current["description"],
+            raw=current_raw,
+        )
         job.raw = self._merge_existing_raw_detail_fields(job.raw, current["raw_json"])
         if job.department is None:
             job.department = current["department"]
@@ -963,20 +1075,29 @@ class JobDatabase:
             job.closes_tz = current["closes_tz"]
         if job.description is None:
             job.description = current["description"]
+        elif (
+            current["description"]
+            and current_quality == DETAIL_QUALITY_COMPLETE
+            and new_quality != DETAIL_QUALITY_COMPLETE
+        ):
+            job.description = current["description"]
         elif new_row_is_listing_only and self._current_row_has_detail(current["raw_json"]):
             job.description = current["description"]
+
+    @staticmethod
+    def _load_raw_json(current_raw_json: str | None) -> dict[str, Any]:
+        try:
+            current_raw = json.loads(current_raw_json or "{}")
+        except json.JSONDecodeError:
+            current_raw = {}
+        return current_raw if isinstance(current_raw, dict) else {}
 
     @staticmethod
     def _merge_existing_raw_detail_fields(
         new_raw: dict[str, Any],
         current_raw_json: str | None,
     ) -> dict[str, Any]:
-        try:
-            current_raw = json.loads(current_raw_json or "{}")
-        except json.JSONDecodeError:
-            current_raw = {}
-        if not isinstance(current_raw, dict):
-            current_raw = {}
+        current_raw = JobDatabase._load_raw_json(current_raw_json)
 
         merged = dict(new_raw or {})
 
@@ -994,13 +1115,33 @@ class JobDatabase:
             "secondaryLocations",
             "jobPostingInfo",
             "detail_html",
+            "ExternalDescriptionStr",
+            "ExternalResponsibilitiesStr",
+            "ExternalQualificationsStr",
+            "Description",
         ):
             if not JobDatabase._raw_has_value(merged.get(key)) and JobDatabase._raw_has_value(
                 current_raw.get(key)
             ):
                 merged[key] = current_raw[key]
 
+        for key in ("ShortDescription", "ShortDescriptionStr"):
+            current_value = current_raw.get(key)
+            new_value = merged.get(key)
+            if JobDatabase._raw_text_value_is_better(current_value, new_value):
+                merged[key] = current_value
+
         return merged
+
+    @staticmethod
+    def _raw_text_value_is_better(current_value: Any, new_value: Any) -> bool:
+        if not JobDatabase._raw_has_value(current_value):
+            return False
+        if not JobDatabase._raw_has_value(new_value):
+            return True
+        if not isinstance(current_value, str) or not isinstance(new_value, str):
+            return False
+        return len(current_value.strip()) >= 500 and len(current_value.strip()) > len(new_value.strip())
 
     @staticmethod
     def _new_row_is_listing_only(raw: dict[str, Any]) -> bool:
@@ -1359,6 +1500,7 @@ class JobDatabase:
                 current is not None
                 and current["detail_status"] == "complete"
                 and current["listing_hash_at_detail_fetch"] == listing_hash
+                and not reason.startswith("detail_quality_")
             ):
                 return dict(current)
             if current is None:
@@ -1696,6 +1838,8 @@ class JobDatabase:
         source_id: str | None = None,
         *,
         status: str | None = None,
+        trusted_current_only: bool = False,
+        application_ready_only: bool = False,
     ) -> Iterable[dict[str, Any]]:
         query = "SELECT * FROM jobs"
         clauses = []
@@ -1706,6 +1850,10 @@ class JobDatabase:
         if status:
             clauses.append("status = ?")
             params.append(status)
+        if trusted_current_only:
+            clauses.append("trusted_current = 1")
+        if application_ready_only:
+            clauses.append("application_ready = 1")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY source_id, title"
@@ -1721,6 +1869,8 @@ class JobDatabase:
         source_id: str | None = None,
         *,
         status: str | None = None,
+        trusted_current_only: bool = False,
+        application_ready_only: bool = False,
     ) -> Iterable[dict[str, Any]]:
         query = """
             SELECT
@@ -1822,6 +1972,10 @@ class JobDatabase:
         if status:
             clauses.append("j.status = ?")
             params.append(status)
+        if trusted_current_only:
+            clauses.append("j.trusted_current = 1")
+        if application_ready_only:
+            clauses.append("j.application_ready = 1")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY j.source_id, j.title"
@@ -1829,7 +1983,12 @@ class JobDatabase:
             with self.connect() as conn:
                 rows = conn.execute(query, tuple(params)).fetchall()
         except sqlite3.OperationalError:
-            yield from self.iter_jobs(source_id=source_id, status=status)
+            yield from self.iter_jobs(
+                source_id=source_id,
+                status=status,
+                trusted_current_only=trusted_current_only,
+                application_ready_only=application_ready_only,
+            )
             return
         for row in rows:
             data = dict(row)

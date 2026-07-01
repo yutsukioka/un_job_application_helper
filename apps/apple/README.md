@@ -104,8 +104,13 @@ Users can change the interval and force an update from:
 Settings -> Local Save
 ```
 
-Job details are cached opportunistically after opening a vacancy, so previously
-opened details remain fast even when the local API is not reachable.
+After the list snapshot is saved, the app also backfills full job-detail payloads
+for every cached vacancy and saved job. Manual and scheduled local-save refreshes
+rewrite those detail files from the current local server. Detail caching is
+resumable: if the app is closed or suspended partway through, the next launch
+keeps the files already written and fetches only missing detail records. Settings
+shows both cached job rows and cached detail rows so it is clear when the local
+offline bundle is complete.
 
 ## Local Build Check
 

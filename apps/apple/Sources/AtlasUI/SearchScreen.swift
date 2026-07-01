@@ -1719,6 +1719,18 @@ struct AtlasSettingsPanel: View {
                 Section("Local Save") {
                     LabeledContent("Last updated", value: AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt))
                     LabeledContent("Cached jobs", value: viewModel.cachedJobCount.formatted())
+                    LabeledContent(
+                        "Cached details",
+                        value: "\(viewModel.cachedDetailCount.formatted()) / \(viewModel.detailCacheTotal.formatted())"
+                    )
+                    if let detailCacheMessage = viewModel.detailCacheMessage {
+                        Label(
+                            detailCacheMessage,
+                            systemImage: viewModel.isCachingDetails ? "arrow.down.circle" : "externaldrive.badge.checkmark"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
 
                     Picker("Auto refresh", selection: Binding(
                         get: { viewModel.refreshIntervalHours },
@@ -1737,6 +1749,9 @@ struct AtlasSettingsPanel: View {
                     .disabled(isRefreshingLocalSave)
 
                     Text("The app uses the local save immediately and refreshes from the Mac only when this interval has passed or when you refresh manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Full vacancy details are also stored locally. If the app closes during detail caching, the next launch resumes the missing detail files.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1804,7 +1819,7 @@ struct AtlasSettingsPanel: View {
         isRefreshingLocalSave = true
         defer { isRefreshingLocalSave = false }
         await viewModel.refresh()
-        connectionMessage = "Local save updated at \(AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt))."
+        connectionMessage = "Local save updated at \(AtlasLocalCache.formattedSavedAt(viewModel.cacheSavedAt)). Detail caching continues in the background until all cached jobs are available offline."
     }
 }
 

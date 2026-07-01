@@ -35,6 +35,10 @@ public final class AtlasSearchViewModel: ObservableObject {
     @Published public private(set) var userMessage: String?
     @Published public private(set) var cacheSavedAt: Date?
     @Published public private(set) var cachedJobCount: Int = 0
+    @Published public private(set) var cachedDetailCount: Int = 0
+    @Published public private(set) var detailCacheTotal: Int = 0
+    @Published public private(set) var isCachingDetails = false
+    @Published public private(set) var detailCacheMessage: String?
     @Published public var refreshIntervalHours: Double
     @Published public var filters = AtlasSearchFilters()
     @Published public var sortOrder: SortOrder = .closingSoon
@@ -45,6 +49,7 @@ public final class AtlasSearchViewModel: ObservableObject {
     private var cachedAllJobs: [JobSearchResult] = []
     private var hasLoaded = false
     private var scheduledSearchTask: Task<Void, Never>?
+    private var detailWarmupTask: Task<Void, Never>?
 
     public init(
         client: AtlasAPIClient = AtlasAPIClient(),
@@ -144,6 +149,7 @@ public final class AtlasSearchViewModel: ObservableObject {
         if let snapshot = cachedSnapshot ?? AtlasLocalCache.loadSnapshot() {
             applyCachedSnapshot(snapshot)
             if !AtlasLocalCache.isStale(snapshot) {
+                startDetailCacheWarmupIfNeeded(snapshot)
                 return
             }
         }
@@ -166,6 +172,7 @@ public final class AtlasSearchViewModel: ObservableObject {
             applyCachedSnapshot(snapshot)
             try AtlasLocalCache.saveSnapshot(snapshot)
             userMessage = "Local save refreshed"
+            startDetailCacheWarmupIfNeeded(snapshot, force: true)
         } catch {
             applyOfflineFallback(error)
         }
@@ -497,6 +504,10 @@ public final class AtlasSearchViewModel: ObservableObject {
             savedJobs = []
             sources = []
             recentRuns = []
+            cachedJobCount = 0
+            cachedDetailCount = 0
+            detailCacheTotal = 0
+            detailCacheMessage = nil
             return
         }
         applyPreviewResults()
@@ -513,6 +524,7 @@ public final class AtlasSearchViewModel: ObservableObject {
         cachedAllJobs = snapshot.searchResponse.results
         cacheSavedAt = snapshot.savedAt
         cachedJobCount = snapshot.jobCount
+        refreshDetailCacheCounts(snapshot)
         serverState = .cached(snapshot.savedAt)
         applySidebarData(snapshot)
         applyLocalSearch()
@@ -525,6 +537,131 @@ public final class AtlasSearchViewModel: ObservableObject {
         }
         sources = snapshot.sources
         recentRuns = snapshot.recentRuns
+    }
+
+    private func refreshDetailCacheCounts(_ snapshot: AtlasLocalSnapshot) {
+        let jobKeys = detailJobKeys(for: snapshot)
+        detailCacheTotal = jobKeys.count
+        cachedDetailCount = AtlasLocalCache.cachedDetailCount(jobKeys: jobKeys)
+        if jobKeys.isEmpty {
+            detailCacheMessage = "No jobs in local save"
+        } else if cachedDetailCount >= jobKeys.count {
+            detailCacheMessage = "All cached job details are available offline"
+        } else {
+            detailCacheMessage = "\(cachedDetailCount.formatted()) of \(jobKeys.count.formatted()) job details available offline"
+        }
+    }
+
+    private func detailJobKeys(for snapshot: AtlasLocalSnapshot) -> [String] {
+        var seen = Set<String>()
+        var output: [String] = []
+        for job in snapshot.searchResponse.results where seen.insert(job.jobKey).inserted {
+            output.append(job.jobKey)
+        }
+        for record in snapshot.savedJobs where seen.insert(record.jobKey).inserted {
+            output.append(record.jobKey)
+        }
+        return output
+    }
+
+    private func startDetailCacheWarmupIfNeeded(_ snapshot: AtlasLocalSnapshot, force: Bool = false) {
+        let allJobKeys = detailJobKeys(for: snapshot)
+        refreshDetailCacheCounts(snapshot)
+        let jobKeysToFetch = force ? allJobKeys : AtlasLocalCache.missingDetailJobKeys(jobKeys: allJobKeys)
+        guard !jobKeysToFetch.isEmpty else { return }
+        guard force || !isCachingDetails else { return }
+
+        detailWarmupTask?.cancel()
+        let client = self.client
+        detailWarmupTask = Task { [weak self] in
+            await self?.warmDetailCache(
+                jobKeysToFetch: jobKeysToFetch,
+                allJobKeys: allJobKeys,
+                client: client
+            )
+        }
+    }
+
+    private func warmDetailCache(
+        jobKeysToFetch: [String],
+        allJobKeys: [String],
+        client: AtlasAPIClient
+    ) async {
+        guard !jobKeysToFetch.isEmpty else { return }
+        let initiallyMissing = await Task.detached(priority: .utility) {
+            Set(AtlasLocalCache.missingDetailJobKeys(jobKeys: allJobKeys))
+        }.value
+        let initiallyCached = max(0, allJobKeys.count - initiallyMissing.count)
+        cachedDetailCount = initiallyCached
+        isCachingDetails = true
+        detailCacheMessage = "Caching details 0/\(jobKeysToFetch.count.formatted()); \(initiallyCached.formatted())/\(allJobKeys.count.formatted()) available offline"
+        defer { isCachingDetails = false }
+
+        let maxConcurrentRequests = min(6, jobKeysToFetch.count)
+        var iterator = jobKeysToFetch.makeIterator()
+        var completed = 0
+        var failed = 0
+        var newlyCached = 0
+
+        await withTaskGroup(of: (String, Bool, String?).self) { group in
+            for _ in 0..<maxConcurrentRequests {
+                guard let jobKey = iterator.next() else { break }
+                group.addTask {
+                    await Self.fetchAndCacheDetail(client: client, jobKey: jobKey)
+                }
+            }
+
+            while let result = await group.next() {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+
+                completed += 1
+                if result.1 {
+                    if initiallyMissing.contains(result.0) {
+                        newlyCached += 1
+                    }
+                } else {
+                    failed += 1
+                }
+
+                let cached = min(initiallyCached + newlyCached, allJobKeys.count)
+                cachedDetailCount = cached
+                detailCacheMessage = "Caching details \(completed.formatted())/\(jobKeysToFetch.count.formatted()); \(cached.formatted())/\(allJobKeys.count.formatted()) available offline"
+
+                if let jobKey = iterator.next() {
+                    group.addTask {
+                        await Self.fetchAndCacheDetail(client: client, jobKey: jobKey)
+                    }
+                }
+            }
+        }
+
+        cachedDetailCount = await Task.detached(priority: .utility) {
+            AtlasLocalCache.cachedDetailCount(jobKeys: allJobKeys)
+        }.value
+        if Task.isCancelled {
+            detailCacheMessage = "Detail cache paused; it will resume next launch"
+        } else if failed > 0 {
+            detailCacheMessage = "\(cachedDetailCount.formatted())/\(allJobKeys.count.formatted()) job details cached; \(failed.formatted()) detail requests failed"
+        } else {
+            detailCacheMessage = "All cached job details are available offline"
+        }
+    }
+
+    nonisolated private static func fetchAndCacheDetail(
+        client: AtlasAPIClient,
+        jobKey: String
+    ) async -> (String, Bool, String?) {
+        do {
+            let detail = try await client.jobDetail(jobKey)
+            AtlasLocalCache.saveDetail(detail, jobKey: jobKey)
+            return (jobKey, true, nil)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return (jobKey, false, message)
+        }
     }
 
     private func fetchSnapshot(health: AtlasHealthSummary) async throws -> AtlasLocalSnapshot {
@@ -816,6 +953,9 @@ public final class AtlasSearchViewModel: ObservableObject {
         filterAvailabilityFacets = [:]
         filterAvailabilityLabels = [:]
         unclassifiedCount = 0
+        cachedDetailCount = 0
+        detailCacheTotal = 0
+        detailCacheMessage = nil
         applyPreviewSidebarData()
         lastUpdated = .now
     }

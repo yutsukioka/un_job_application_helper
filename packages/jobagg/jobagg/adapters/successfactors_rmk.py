@@ -58,6 +58,16 @@ _AIIB_FONT_COPY_RE = re.compile(
     r"<div\b(?=[^>]*class=[\"'][^\"']*\bfont-copy-18-black\b[^\"']*[\"'])[^>]*>(?P<body>.*?)</div>",
     re.IGNORECASE | re.DOTALL,
 )
+_AIIB_CONTENT_CONTAINER_RES = (
+    re.compile(r"<(?P<tag>main)\b[^>]*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<(?P<tag>article)\b[^>]*>", re.IGNORECASE | re.DOTALL),
+    re.compile(
+        r"<(?P<tag>div)\b(?=[^>]*class=[\"'][^\"']*"
+        r"(?:\barticle-detail\b|\bdetail-content\b|\bjob-detail\b|\bmain-content\b|\bgeneric-content\b)"
+        r"[^\"']*[\"'])[^>]*>",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
 
 
 @register_adapter
@@ -539,6 +549,14 @@ def _detail_description(html_text: str) -> str | None:
 
 
 def _aiib_detail_description(html_text: str) -> str | None:
+    json_ld_description = _aiib_json_ld_description(html_text)
+    if _is_aiib_full_detail_description(json_ld_description):
+        return json_ld_description
+
+    container_description = _aiib_content_container_description(html_text)
+    if _is_aiib_full_detail_description(container_description):
+        return container_description
+
     sections: list[str] = []
     for match in _AIIB_FONT_COPY_RE.finditer(html_text):
         body = match.group("body")
@@ -548,7 +566,9 @@ def _aiib_detail_description(html_text: str) -> str | None:
         heading = _aiib_preceding_heading(html_text[: match.start()])
         sections.append(f"{heading}\n{cleaned}" if heading else cleaned)
     if sections:
-        return "\n\n".join(sections)
+        description = "\n\n".join(sections)
+        if _is_aiib_full_detail_description(description):
+            return description
 
     fallback = _description_candidates(
         html_text,
@@ -559,8 +579,59 @@ def _aiib_detail_description(html_text: str) -> str | None:
     )
     meaningful = [candidate for candidate in fallback if _is_meaningful_description(candidate)]
     if meaningful:
-        return max(meaningful, key=len)
+        candidate = max(meaningful, key=len)
+        if _is_aiib_full_detail_description(candidate):
+            return candidate
+    if sections:
+        return "\n\n".join(sections)
     return None
+
+
+def _aiib_json_ld_description(html_text: str) -> str | None:
+    candidates: list[str] = []
+    for match in _JSON_LD_RE.finditer(html_text):
+        try:
+            payload = json.loads(match.group("body"))
+        except json.JSONDecodeError:
+            continue
+        rows = payload if isinstance(payload, list) else [payload]
+        for item in rows:
+            if not isinstance(item, dict) or item.get("@type") != "JobPosting":
+                continue
+            description = _clean_html(str(item.get("description") or ""))
+            if description:
+                candidates.append(description)
+    return max(candidates, key=len) if candidates else None
+
+
+def _aiib_content_container_description(html_text: str) -> str | None:
+    candidates: list[str] = []
+    for pattern in _AIIB_CONTENT_CONTAINER_RES:
+        candidates.extend(_description_candidates(html_text, pattern))
+    meaningful = [candidate for candidate in candidates if _is_meaningful_description(candidate)]
+    return max(meaningful, key=len) if meaningful else None
+
+
+def _is_aiib_full_detail_description(value: str | None) -> bool:
+    text = (value or "").strip()
+    if len(text) < 300:
+        return False
+    lowered = text.casefold()
+    markers = sum(
+        1
+        for marker in (
+            "responsibilities",
+            "requirements",
+            "qualifications",
+            "selection criteria",
+            "specific responsibilities",
+            "experience",
+            "education",
+            "competencies",
+        )
+        if marker in lowered
+    )
+    return len(text) >= 800 or markers >= 2
 
 
 def _aiib_preceding_heading(prefix: str) -> str | None:

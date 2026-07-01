@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from jobagg.adapters.base import AdapterContext, JobAdapter, register_adapter
+from jobagg.detail_quality import oracle_detail_payload_has_substantive_content
 from jobagg.models import JobRecord
 from jobagg.normalize import build_job, parse_datetime
 from jobagg.utils import as_bool as _as_bool
@@ -153,7 +154,7 @@ class OracleHCMAdapter(JobAdapter):
                     posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
                     closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
                     apply_url=str(apply_url),
-                    description=_description(item),
+                    description=_description(item, source_id=self.source.id),
                     raw=self._raw_with_source_notice(item, source_priority="oracle_hcm_ce"),
                 )
             )
@@ -176,6 +177,8 @@ class OracleHCMAdapter(JobAdapter):
         )
         detail_jobs = self.parse_jobs(payload)
         if detail_jobs:
+            if not oracle_detail_payload_has_substantive_content(detail_jobs[0].raw):
+                return None
             return detail_jobs[0]
         if _oracle_detail_not_available(payload):
             return self._closed_job_from_listing_item(
@@ -217,7 +220,7 @@ class OracleHCMAdapter(JobAdapter):
             posted_at=item.get("PostedDate") or item.get("ExternalPostedStartDate"),
             closes_at=item.get("ExternalPostedEndDate") or item.get("PostingEndDate"),
             apply_url=str(apply_url),
-            description=_description(item),
+            description=_description(item, source_id=self.source.id),
             status="closed",
             raw=raw,
         )
@@ -238,7 +241,15 @@ class OracleHCMAdapter(JobAdapter):
             raise ValueError(f"{self.source.id} requires extra.site_number for Oracle CE site validation")
         url = self._site_settings_url(str(site_number))
         self.ensure_allowed(url)
-        payload = self._json_response(self.context.http.get(url, headers=self._oracle_headers()))
+        try:
+            payload = self._json_response(self.context.http.get(url, headers=self._oracle_headers()))
+        except SourceInconclusiveError:
+            if self._site_settings_required():
+                raise
+            self.run_diagnostics.site_number = str(site_number)
+            self.run_diagnostics.expected_site_name = str(expected_site_name) if expected_site_name else None
+            self.run_diagnostics.scope_validation_status = "not_applicable"
+            return
         observed_site_number = _find_first_value(payload, ("siteNumber", "SiteNumber", "siteCode"))
         observed_site_name = _find_first_value(payload, ("siteName", "SiteName", "name", "Name"))
         self.run_diagnostics.site_number = str(site_number)
@@ -406,6 +417,9 @@ class OracleHCMAdapter(JobAdapter):
 
     def _preflight_dns_enabled(self) -> bool:
         return _as_bool(self.source.extra.get("oracle_dns_preflight"), default=True)
+
+    def _site_settings_required(self) -> bool:
+        return _as_bool(self.source.extra.get("site_settings_required"), default=True)
 
     def _fetch_fallback_jobs(self, reason: str) -> list[JobRecord]:
         fallback_url = self._fallback_listing_url()
@@ -664,12 +678,17 @@ def _location(item: dict[str, Any]) -> str | None:
     return "; ".join(dict.fromkeys(locations)) or None
 
 
-def _description(item: dict[str, Any]) -> str | None:
-    parts = [
-        item.get("ShortDescription") or item.get("ShortDescriptionStr"),
+def _description(item: dict[str, Any], *, source_id: str | None = None) -> str | None:
+    full_detail_parts = [
         item.get("ExternalDescriptionStr") or item.get("Description"),
         item.get("ExternalResponsibilitiesStr"),
         item.get("ExternalQualificationsStr"),
+    ]
+    if source_id == "iom_oracle_hcm" and not any(full_detail_parts):
+        return None
+    parts = [
+        item.get("ShortDescription") or item.get("ShortDescriptionStr"),
+        *full_detail_parts,
     ]
     return "\n\n".join(str(part) for part in parts if part)
 

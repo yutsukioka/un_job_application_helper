@@ -57,6 +57,28 @@ public enum AtlasLocalCache {
         }
     }
 
+    public static func hasDetail(jobKey: String) -> Bool {
+        (try? detailURL(jobKey: jobKey).checkResourceIsReachable()) ?? false
+    }
+
+    public static func cachedDetailCount(jobKeys: [String]) -> Int {
+        var seen = Set<String>()
+        var count = 0
+        for jobKey in jobKeys where seen.insert(jobKey).inserted {
+            if hasDetail(jobKey: jobKey) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    public static func missingDetailJobKeys(jobKeys: [String]) -> [String] {
+        var seen = Set<String>()
+        return jobKeys.filter { jobKey in
+            seen.insert(jobKey).inserted && !hasDetail(jobKey: jobKey)
+        }
+    }
+
     public static func saveDetail(_ detail: AtlasJobDetail, jobKey: String) {
         do {
             try ensureCacheDirectory()
