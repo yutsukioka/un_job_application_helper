@@ -908,9 +908,7 @@ class AtlasAppController extends ChangeNotifier {
     cacheSavedAt = snapshot.savedAt;
     operationalDataLoadedAt = snapshot.operationalDataLoadedAt;
     connectionStatus = 'Offline (cached)';
-    connectionMessage = snapshot.isStale()
-        ? 'Loaded stale local save from this device.'
-        : 'Loaded local save from this device.';
+    connectionMessage = null;
     _syncSavedSearchSequence();
   }
 

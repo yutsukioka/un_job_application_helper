@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `33b937d`
+Latest branch head before this report update: `8f139d3`
 
 ## Summary
 
@@ -27,6 +27,8 @@ not available as local files in this worktree.
 - Persistent file-backed local cache loads before network refresh and supports offline cached Search.
 - Fetched Job Detail payloads are persisted in the same local cache and can be reopened offline after
   restart.
+- Search startup from cache no longer shows a large normal-state local-save banner; status is compact
+  under the result count.
 - Settings exposes server URL, cache status, refresh, and clear-cache controls.
 - Filter sheet implements Status, Location, Scope, Contract, UN Volunteer Category, Seniority,
   Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
@@ -70,6 +72,8 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/ios_android_search_top_side_by_side.png`
 - Offline cached startup:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/offline_restart_cached.png`
+- Current no-banner/cache refresh evidence:
+  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703-current/`
 - Filter, cascade, detail, settings, saved, updates, and sources screenshots:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
 - Physical Pixel lock-screen evidence:
@@ -85,6 +89,8 @@ Latest app-code verification:
 - `flutter build apk --debug` passed.
 - `flutter build apk --release` passed.
 - `flutter build appbundle --release` passed.
+- `flutter test integration_test -d emulator-5554` passed after simplifying the device smoke test to
+  launch plus primary tab navigation. Filter/sort/modal behavior remains covered by widget tests.
 - `flutter test integration_test -d 38281FDJG001DJ` built and installed the debug test APK, but the
   device-driven test did not complete after launch and was interrupted after `1:46`; the connected
   Pixel still reports keyguard/doze state.
@@ -100,7 +106,7 @@ Latest physical install evidence:
 
 - Device: Pixel 8 Pro `38281FDJG001DJ`
 - Package: `com.yutsukioka.jobagg.atlas`
-- Last installed release APK timestamp: `2026-07-03 02:46:54`
+- Last installed release APK timestamp: `2026-07-03 03:18:02`
 
 ## Remaining Gaps
 

@@ -143,7 +143,7 @@ void main() {
         home: Scaffold(body: AtlasSearchSkeleton(controller: controller)),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byIcon(AtlasIcons.info), findsOneWidget);
     expect(find.text('Connection failed: test server offline'), findsOneWidget);

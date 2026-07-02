@@ -221,6 +221,7 @@ void main() {
       expect(controller.isJobSaved('undp_oracle_hcm:34063'), isTrue);
       expect(controller.connectionStatus, 'Offline (cached)');
       expect(controller.statusSubtitle, startsWith('Local save · updated '));
+      expect(controller.connectionMessage, isNull);
 
       await controller.refreshLocalSave();
 
