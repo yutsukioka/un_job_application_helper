@@ -22,9 +22,12 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   channel.
 - Cache snapshot now stores the active Search response and the broad default open Search dataset
   separately, so offline filters can be recomputed from cached rows.
+- Cache snapshot now also stores fetched Job Detail payloads, so previously opened details can be
+  reopened after app restart or while offline.
 - Startup cache hydration loads cached Search data before any network refresh.
 - Offline refresh failure keeps cached rows visible and marks the app `Offline (cached)`.
-- Settings shows cache freshness/status and includes Clear Local Cache.
+- Settings shows cache freshness/status, Clear Local Cache, and the real cached-detail count instead
+  of a hardcoded placeholder.
 - Local offline filtering mirrors Swift semantics: OR within a group, AND across groups.
 - Dark filter modal with drag handle, `Filters` title, `Done`, sticky `Reset` / `Apply filters`,
   compact two-column pills, counts, dimmed unavailable values, and explanatory text.
@@ -46,14 +49,14 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,271` |
-| `android_displayed_total` | `2,271 searchable results` |
+| `search_api_total` | `2,269` |
+| `android_displayed_total` | `2,269 searchable results` after a current refresh; older screenshots show `2,271` from the prior cache timestamp. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
 | `local_cache_timestamp` | `2026-07-03 01:16` on the emulator screenshot pass; offline restart reused the cache at `2026-07-03 01:34`. |
 | `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `149` |
+| `excluded_count` | `151` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,271` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
+| `final_decision` | `2,269` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
 
 ## Verification
 
@@ -62,11 +65,11 @@ Commands run from `apps/atlas_flutter`:
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed with no issues.
 - Focused tests passed: `flutter test test/atlas_api_client_test.dart test/atlas_filters_test.dart test/atlas_local_cache_test.dart test/atlas_search_controller_test.dart test/widget_test.dart`.
-- Full tests passed: `flutter test`, 43 tests.
-- Coverage passed: `flutter test --coverage`, 43 tests, `2683/2961` lines, `90.61%`.
+- Full tests passed: `flutter test --coverage`, 44 tests.
+- Coverage passed: `2727/3011` lines, `90.57%`.
 - `flutter build apk --debug` passed.
-- `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`49.7MB`).
 - `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
+- `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`49.8MB`).
 - `flutter test integration_test -d emulator-5554` passed against the Android emulator after updating
   the smoke test for the new `Done` filter-sheet control.
 - Release APK installed on USB Pixel 8 Pro: `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success`.
@@ -82,13 +85,24 @@ Commands run from `apps/atlas_flutter`:
   --coverage` passed with 43 tests and `2683/2961` lines (`90.61%`). The new widget test covers
   populated core fields, responsibilities/qualifications sections, apply/source links, diagnostics
   hidden until expansion, and detail save persistence.
+- Persistent Job Detail cache verification: `flutter test test/atlas_local_cache_test.dart
+  test/atlas_search_controller_test.dart` passed, then full `dart format --set-exit-if-changed .`,
+  `dart analyze`, `flutter test --coverage`, `flutter build apk --debug`, `flutter build apk
+  --release`, and `flutter build appbundle --release` all passed. The new tests cover detail-cache
+  serialization, persistence after fetch, offline restart hydration, and serving a cached detail when
+  the transport is unavailable.
+- Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
+  installed the debug test APK, but the device-driven test did not complete after launch and was
+  interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
+  automation blocker, not an app assertion failure.
 
 Installed package evidence:
 
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 02:13:38` after the multi-location release APK install.
+- Package `lastUpdateTime`: `2026-07-03 02:46:54` after the persistent-detail-cache release APK
+  install.
 
 ## PR Review Feedback
 
@@ -170,8 +184,7 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
   close enough to iOS or should become a dedicated selected-chip editor.
 - Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
   those facets locally from cached Search rows.
-- Coverage remains strong but lower than the previous cache-slice number because this slice added a
-  large amount of UI code.
+- Coverage remains strong at `90.57%` after adding persistent Job Detail cache coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
@@ -190,9 +203,9 @@ and user-provided iOS filter/detail side-by-side review are still not complete.
 | Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
-| Existing Search/data/detail/tabs | 12 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact; live count moved to 2,271 due deadline timing. |
-| Tests/builds | 14 / 15 | Format, analyze, 43 Flutter tests, coverage, debug APK, release APK, release AAB, and prior emulator integration test pass; integration was not rerun after the latest test-only slice because no emulator is attached. |
-| Evidence/human readiness | 2 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
+| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, and persistent cached details remain intact; live Search count moved to 2,269 due deadline timing. |
+| Tests/builds | 14 / 15 | Format, analyze, 44 Flutter tests, coverage, debug APK, release APK, release AAB, and prior emulator integration test pass; current Pixel integration was attempted but blocked by device state. |
+| Evidence/human readiness | 1 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action
 

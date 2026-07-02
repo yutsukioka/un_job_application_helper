@@ -394,6 +394,59 @@ void main() {
     },
   );
 
+  test('controller persists and serves cached job details offline', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'atlas_controller_detail_cache_test_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+    final store = AtlasLocalCacheStore(
+      file: File('${tempDir.path}/atlas-local-cache.json'),
+    );
+    final transport = _RecordingTransport();
+    final controller = AtlasAppController(
+      localCacheStore: store,
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+    expect(controller.cachedDetailCount, 0);
+
+    final detail = await controller.loadJobDetail('undp_oracle_hcm:34063');
+
+    expect(detail.title, 'Programme Analyst');
+    expect(controller.cachedDetailCount, 1);
+    expect(transport.detailRequests, ['undp_oracle_hcm:34063']);
+    final persisted = await store.read();
+    expect(persisted?.cachedJobDetails, hasLength(1));
+    expect(
+      persisted?.cachedJobDetails['undp_oracle_hcm:34063']?.description,
+      contains('Full role description'),
+    );
+
+    final offlineController = AtlasAppController(
+      localCacheStore: store,
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+    );
+    addTearDown(offlineController.dispose);
+
+    await offlineController.loadPersistedCache();
+    expect(offlineController.cachedDetailCount, 1);
+
+    final offlineDetail = await offlineController.loadJobDetail(
+      'undp_oracle_hcm:34063',
+    );
+
+    expect(offlineDetail.title, 'Programme Analyst');
+    expect(offlineDetail.displaySections.first.title, 'Responsibilities');
+  });
+
   test(
     'controller debounces query changes and reports save failures',
     () async {
@@ -619,6 +672,7 @@ final class _RecordingTransport implements AtlasTransport {
   final searchBodies = <Map<String, Object?>>[];
   final savedSearchNames = <String>[];
   final savedJobKeys = <String>[];
+  final detailRequests = <String>[];
   final savedSearchStore = <Map<String, Object?>>[];
 
   @override
@@ -663,6 +717,7 @@ final class _RecordingTransport implements AtlasTransport {
         expect(request.method, 'GET');
         return savedSearchStore;
       case 'api/job-detail':
+        detailRequests.add(request.queryParameters['job_key'] ?? '');
         return {
           'job_key': request.queryParameters['job_key'],
           'title': 'Programme Analyst',

@@ -69,6 +69,8 @@ class AtlasAppController extends ChangeNotifier {
   List<AtlasSourceSummary> sources = const [];
   List<AtlasApplicationRecord> trackerRecords = const [];
   List<JobSearchResult> _cachedAllJobs = const [];
+  Map<String, AtlasJobDetail> _cachedJobDetails =
+      const <String, AtlasJobDetail>{};
   AtlasHealthSummary? healthSummary;
   Map<String, Map<String, int>> facets = const {};
   Map<String, Map<String, String>> facetLabels = const {};
@@ -151,6 +153,8 @@ class AtlasAppController extends ChangeNotifier {
         filters.trimmedCapabilityQuery.isEmpty;
   }
 
+  int get cachedDetailCount => _cachedJobDetails.length;
+
   int? get hiddenDeadlinePastOpenJobs {
     final openJobs = healthSummary?.openJobs;
     if (openJobs == null || !canReconcileDefaultOpenCount) {
@@ -202,6 +206,7 @@ class AtlasAppController extends ChangeNotifier {
     sources = const [];
     trackerRecords = const [];
     _cachedAllJobs = const [];
+    _cachedJobDetails = const <String, AtlasJobDetail>{};
     healthSummary = null;
     facets = const {};
     facetLabels = const {};
@@ -406,9 +411,28 @@ class AtlasAppController extends ChangeNotifier {
     }
   }
 
-  Future<AtlasJobDetail> loadJobDetail(String jobKey) {
+  Future<AtlasJobDetail> loadJobDetail(String jobKey) async {
+    final cached = _cachedJobDetails[jobKey];
+    if (cached != null) {
+      return cached;
+    }
     final client = _clientFactory(baseURL);
-    return client.jobDetail(jobKey);
+    try {
+      final detail = await client.jobDetail(jobKey);
+      _cachedJobDetails = Map.unmodifiable({
+        ..._cachedJobDetails,
+        jobKey: detail,
+      });
+      await _writePersistedCache();
+      notifyListeners();
+      return detail;
+    } catch (_) {
+      final fallback = _cachedJobDetails[jobKey];
+      if (fallback != null) {
+        return fallback;
+      }
+      rethrow;
+    }
   }
 
   Future<void> setSourceFilter(String sourceID) async {
@@ -876,6 +900,7 @@ class AtlasAppController extends ChangeNotifier {
     }
     savedSearches = List.unmodifiable(snapshot.savedSearches);
     trackerRecords = List.unmodifiable(snapshot.trackerRecords);
+    _cachedJobDetails = Map.unmodifiable(snapshot.cachedJobDetails);
     updateRuns = List.unmodifiable(snapshot.updateRuns);
     sources = List.unmodifiable(snapshot.sources);
     healthSummary = snapshot.healthSummary;
@@ -925,6 +950,7 @@ class AtlasAppController extends ChangeNotifier {
       healthSummary: healthSummary,
       savedSearches: savedSearches,
       trackerRecords: trackerRecords,
+      cachedJobDetails: _cachedJobDetails,
       updateRuns: updateRuns,
       sources: sources,
       operationalDataLoadedAt: operationalDataLoadedAt,
@@ -4662,7 +4688,10 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 ),
               ],
               const SizedBox(height: 6),
-              const _SettingsValueRow(label: 'Cached details', value: '0 / 0'),
+              _SettingsValueRow(
+                label: 'Cached details',
+                value: _formatCount(controller.cachedDetailCount),
+              ),
               const SizedBox(height: 12),
               DropdownButtonFormField<double>(
                 initialValue: _refreshIntervalHours,

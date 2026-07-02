@@ -985,9 +985,13 @@ final class AtlasLocalCacheSnapshot {
     this.trackerRecords = const <AtlasApplicationRecord>[],
     this.updateRuns = const <AtlasSourceRun>[],
     this.sources = const <AtlasSourceSummary>[],
+    Map<String, AtlasJobDetail>? cachedJobDetails,
     this.operationalDataLoadedAt,
   }) : cachedAllJobs = List.unmodifiable(
          cachedAllJobs ?? searchResponse.results,
+       ),
+       cachedJobDetails = Map.unmodifiable(
+         cachedJobDetails ?? const <String, AtlasJobDetail>{},
        );
 
   factory AtlasLocalCacheSnapshot.fromJson(Map<String, Object?> json) {
@@ -1021,6 +1025,7 @@ final class AtlasLocalCacheSnapshot {
       trackerRecords: _list(
         json['tracker_records'],
       ).map(_map).nonNulls.map(AtlasApplicationRecord.fromJson).toList(),
+      cachedJobDetails: _cachedJobDetailsFromJson(json['cached_job_details']),
       updateRuns: _list(
         json['update_runs'],
       ).map(_map).nonNulls.map(AtlasSourceRun.fromJson).toList(),
@@ -1044,6 +1049,7 @@ final class AtlasLocalCacheSnapshot {
   final AtlasHealthSummary? healthSummary;
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
+  final Map<String, AtlasJobDetail> cachedJobDetails;
   final List<AtlasSourceRun> updateRuns;
   final List<AtlasSourceSummary> sources;
   final DateTime? operationalDataLoadedAt;
@@ -1069,11 +1075,26 @@ final class AtlasLocalCacheSnapshot {
       'tracker_records': trackerRecords
           .map((record) => record.toJson())
           .toList(),
+      'cached_job_details': cachedJobDetails.map(
+        (key, detail) => MapEntry(key, detail.toJson()),
+      ),
       'update_runs': updateRuns.map((run) => run.toJson()).toList(),
       'sources': sources.map((source) => source.toJson()).toList(),
       'operational_data_loaded_at': operationalDataLoadedAt?.toIso8601String(),
     };
   }
+}
+
+Map<String, AtlasJobDetail> _cachedJobDetailsFromJson(Object? json) {
+  final details = _map(json);
+  if (details == null) {
+    return const <String, AtlasJobDetail>{};
+  }
+  return {
+    for (final entry in details.entries)
+      if (_map(entry.value) != null)
+        entry.key: AtlasJobDetail.fromJson(_map(entry.value)!),
+  };
 }
 
 final class AtlasLocalCacheStore {
@@ -1392,6 +1413,24 @@ final class AtlasJobDetail {
   final Uri? sourceURL;
   final AtlasDeadlineInfo? deadlineInfo;
   final List<AtlasDetailSection> displaySections;
+
+  Map<String, Object?> toJson() {
+    return {
+      'job_key': jobKey,
+      'title': title,
+      'description': description,
+      'status': status,
+      'closes_at': closingDate,
+      'closes_at_local': closesAtLocal,
+      'closes_tz': closesTimezone,
+      'apply_url': applyURL?.toString(),
+      'source_url': sourceURL?.toString(),
+      'deadline_info': deadlineInfo?.toJson(),
+      'display_sections': displaySections
+          .map((section) => section.toJson())
+          .toList(),
+    };
+  }
 }
 
 final class AtlasDeadlineInfo {
@@ -1415,6 +1454,15 @@ final class AtlasDeadlineInfo {
   final String? sourceLocal;
   final String? sourceTimezone;
   final String? sourceText;
+
+  Map<String, Object?> toJson() {
+    return {
+      'stored_utc': storedUTC,
+      'source_local': sourceLocal,
+      'source_timezone': sourceTimezone,
+      'source_text': sourceText,
+    };
+  }
 }
 
 final class AtlasDetailSection {
@@ -1437,6 +1485,14 @@ final class AtlasDetailSection {
   final String title;
   final String? body;
   final List<AtlasDetailRow> rows;
+
+  Map<String, Object?> toJson() {
+    return {
+      'title': title,
+      'body': body,
+      'rows': rows.map((row) => row.toJson()).toList(),
+    };
+  }
 }
 
 final class AtlasDetailRow {
@@ -1451,6 +1507,10 @@ final class AtlasDetailRow {
 
   final String label;
   final String value;
+
+  Map<String, Object?> toJson() {
+    return {'label': label, 'value': value};
+  }
 }
 
 final class AtlasRequest {

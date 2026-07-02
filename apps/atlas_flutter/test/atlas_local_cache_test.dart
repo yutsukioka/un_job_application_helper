@@ -38,6 +38,11 @@ void main() {
       expect(restored.trackerRecords.single.jobKey, 'undp_oracle_hcm:34063');
       expect(restored.updateRuns.single.inserted, 1);
       expect(restored.sources.single.openJobs, 1);
+      expect(restored.cachedJobDetails, hasLength(1));
+      expect(
+        restored.cachedJobDetails['undp_oracle_hcm:34063']?.title,
+        'Cached Analyst Detail',
+      );
       expect(restored.isStale(now: DateTime.utc(2026, 7, 3, 13)), isTrue);
       expect(restored.isExpired(now: DateTime.utc(2026, 7, 9, 12, 1)), isTrue);
     });
@@ -144,5 +149,24 @@ AtlasLocalCacheSnapshot _snapshot({required DateTime savedAt}) {
         healthStatus: 'ok',
       ),
     ],
+    cachedJobDetails: {
+      'undp_oracle_hcm:34063': AtlasJobDetail(
+        jobKey: 'undp_oracle_hcm:34063',
+        title: 'Cached Analyst Detail',
+        description: 'Cached full detail',
+        status: 'open',
+        applyURL: Uri.parse('https://example.org/apply'),
+        sourceURL: Uri.parse('https://example.org/source'),
+        displaySections: [
+          AtlasDetailSection(
+            title: 'Responsibilities',
+            body: 'Cached responsibilities',
+            rows: [
+              AtlasDetailRow(label: 'Duty', value: 'Coordinate delivery.'),
+            ],
+          ),
+        ],
+      ),
+    },
   );
 }
