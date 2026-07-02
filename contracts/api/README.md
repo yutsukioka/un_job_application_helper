@@ -3,6 +3,12 @@
 The Mac/iOS app talks to `services/job-api`; it must not scrape ATS sites or
 read SQLite bundles directly.
 
+This contract describes the current local plaintext API. It is not an encrypted
+cloud sync contract. The saved-search and tracker endpoints below remain
+local-only unless they are redesigned with authentication and ciphertext-only
+storage semantics. See `contracts/api/encrypted_sync.md` and
+`contracts/sync/encrypted_vault.md` for the future zero-knowledge sync boundary.
+
 ## Core Endpoints
 
 - `GET /api/health`
@@ -41,3 +47,6 @@ are mirrored here for app/client planning:
 The service owns persistence. Native clients may cache summaries for display,
 but the server remains the source of truth for jobs, saved searches, tracker
 records, strategy scores, and assistant run artifacts.
+
+For future multi-device sync, user-saved state must move through AtlasVault
+encrypted records rather than plaintext saved-search or tracker payloads.
