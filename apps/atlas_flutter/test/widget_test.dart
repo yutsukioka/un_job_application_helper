@@ -40,18 +40,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Filters'), findsOneWidget);
     expect(find.text('Open only'), findsWidgets);
-    expect(find.text('Remote'), findsWidgets);
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Scope'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Remote'));
-    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(SwitchListTile, 'Closing soon'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Best fit'));
+    await tester.drag(find.byType(ListView).last, const Offset(0, -520));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Open only'));
+    expect(find.text('Contract'), findsOneWidget);
+    expect(find.text('Seniority'), findsOneWidget);
+    expect(find.text('Grade'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -760));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Close filters'));
+    expect(find.text('Capability Tags'), findsOneWidget);
+    await tester.tap(find.text('Apply filters'));
     await tester.pumpAndSettle();
+    expect(controller.filters.closingSoon, isTrue);
+
     await tester.tap(find.byTooltip('Save search'));
     await tester.pumpAndSettle();
     expect(transport.savedSearchNames, ['Search 1']);
@@ -139,7 +145,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.info_outline), findsOneWidget);
+    expect(find.byIcon(AtlasIcons.info), findsOneWidget);
     expect(find.text('Connection failed: test server offline'), findsOneWidget);
   });
 

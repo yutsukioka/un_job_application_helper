@@ -30,6 +30,9 @@ void main() {
       expect(restored!.baseURL.toString(), 'http://atlas.test:8765');
       expect(restored.searchResponse.total, 1);
       expect(restored.searchResponse.results.single.title, 'Cached Analyst');
+      expect(restored.cachedAllJobs, hasLength(1));
+      expect(restored.cachedAllJobs.single.city, 'Tokyo');
+      expect(restored.cachedAllJobs.single.countryISO3, 'JPN');
       expect(restored.healthSummary?.openJobs, 128);
       expect(restored.savedSearches.single.name, 'Search 1');
       expect(restored.trackerRecords.single.jobKey, 'undp_oracle_hcm:34063');
@@ -86,7 +89,10 @@ AtlasLocalCacheSnapshot _snapshot({required DateTime savedAt}) {
           organization: 'UNDP',
           sourceID: 'undp_oracle_hcm',
           dutyStation: 'Tokyo, Japan',
+          city: 'Tokyo',
+          countryISO3: 'JPN',
           gradeCode: 'P-2',
+          standardSeniorityTier: 'T2_JUNIOR_PROFESSIONAL',
           contractLabel: 'Fixed term',
           workModality: 'Onsite',
           closingDate: DateTime.utc(2026, 7, 30, 23, 59),

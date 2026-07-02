@@ -168,7 +168,7 @@ void main() {
           schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
           baseURL: Uri.parse('http://atlas.cached:8765'),
           savedAt: DateTime.utc(2026, 7, 2, 12),
-          searchRequest: const AtlasSearchRequest(text: 'cached analyst'),
+          searchRequest: const AtlasSearchRequest(text: 'Programme'),
           searchResponse: AtlasSearchResponse(
             total: 1,
             limit: 50,
@@ -192,7 +192,7 @@ void main() {
             AtlasSavedSearch(
               name: 'Search 1',
               description: 'Cached search',
-              request: const AtlasSearchRequest(text: 'cached analyst'),
+              request: const AtlasSearchRequest(text: 'Programme'),
             ),
           ],
           trackerRecords: [
@@ -214,7 +214,7 @@ void main() {
       await controller.loadPersistedCache();
 
       expect(controller.baseURL.toString(), 'http://atlas.cached:8765');
-      expect(controller.query, 'cached analyst');
+      expect(controller.query, 'Programme');
       expect(controller.total, 1);
       expect(controller.results.single.title, 'Programme Analyst');
       expect(controller.savedSearches.single.name, 'Search 1');
@@ -237,6 +237,136 @@ void main() {
       expect(controller.results, isEmpty);
       expect(controller.total, 0);
       expect(controller.connectionMessage, 'Local cache cleared.');
+    },
+  );
+
+  test(
+    'controller filters cached rows offline and cascades location and grade facets',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_controller_cascade_cache_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+      );
+      final cachedJobs = [
+        _facetJob(
+          jobKey: 'job:tokyo-p1',
+          title: 'Tokyo Programme Officer',
+          city: 'Tokyo',
+          countryISO3: 'JPN',
+          gradeCode: 'P-1',
+          standardSeniorityTier: 'T1_ENTRY_SUPPORT',
+        ),
+        _facetJob(
+          jobKey: 'job:osaka-g5',
+          title: 'Osaka Admin Assistant',
+          city: 'Osaka',
+          countryISO3: 'JPN',
+          gradeCode: 'G-5',
+          standardSeniorityTier: 'T2_JUNIOR_PROFESSIONAL',
+        ),
+        _facetJob(
+          jobKey: 'job:nairobi-p4',
+          title: 'Nairobi Senior Specialist',
+          city: 'Nairobi',
+          countryISO3: 'KEN',
+          gradeCode: 'P-4',
+          standardSeniorityTier: 'T4_SENIOR_PROFESSIONAL',
+        ),
+      ];
+      await store.write(
+        AtlasLocalCacheSnapshot(
+          schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+          baseURL: Uri.parse('http://atlas.cached:8765'),
+          savedAt: DateTime.utc(2026, 7, 2, 12),
+          searchRequest: const AtlasSearchRequest(),
+          searchResponse: AtlasSearchResponse(
+            total: cachedJobs.length,
+            limit: cachedJobs.length,
+            offset: 0,
+            results: cachedJobs,
+            facets: const {},
+            facetLabels: const {},
+            unclassifiedCount: 0,
+          ),
+          cachedAllJobs: cachedJobs,
+        ),
+      );
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.loadPersistedCache();
+      expect(controller.total, 3);
+
+      await controller.applyFilters(
+        controller.filters.copyWith(countryISO3: 'JPN'),
+      );
+      expect(controller.connectionStatus, 'Offline (cached)');
+      expect(controller.total, 2);
+      expect(
+        controller.results.map((job) => job.city),
+        containsAll(['Tokyo', 'Osaka']),
+      );
+      expect(
+        controller
+            .availabilityFacetOptions('cities')
+            .map((option) => option.id),
+        containsAll(['Tokyo', 'Osaka']),
+      );
+      expect(
+        controller
+            .availabilityFacetOptions('cities')
+            .map((option) => option.id),
+        isNot(contains('Nairobi')),
+      );
+
+      await controller.applyFilters(
+        controller.filters.copyWith(city: 'Tokyo', countryISO3: ''),
+      );
+      expect(controller.total, 1);
+      expect(controller.results.single.title, contains('Tokyo'));
+      expect(
+        controller
+            .availabilityFacetOptions('countries')
+            .map((option) => option.id),
+        ['JPN'],
+      );
+
+      await controller.applyFilters(
+        AtlasSearchFilters(seniorityGroups: {'entry_junior'}),
+      );
+      expect(controller.total, 2);
+      expect(
+        controller
+            .availabilityFacetOptions('grades')
+            .map((option) => option.id),
+        containsAll(['P1', 'G5']),
+      );
+      expect(
+        controller
+            .availabilityFacetOptions('grades')
+            .map((option) => option.id),
+        isNot(contains('P4')),
+      );
+
+      await controller.applyFilters(AtlasSearchFilters(gradeCodes: {'P1'}));
+      expect(controller.total, 1);
+      expect(
+        controller
+            .availabilityFacetOptions('seniority_groups')
+            .map((option) => option.id),
+        ['entry_junior'],
+      );
     },
   );
 
@@ -399,7 +529,7 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
 
-    expect(transport.searchTexts.single, 'analyst');
+    expect(transport.searchTexts.last, 'analyst');
     expect(find.text('1 searchable result'), findsOneWidget);
     expect(find.textContaining('Local save · updated'), findsOneWidget);
     expect(find.text('Programme Analyst'), findsOneWidget);
@@ -415,7 +545,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.filters.isRemoteOnly, isTrue);
 
-    await tester.tap(find.byIcon(Icons.close).first);
+    await tester.tap(find.byIcon(AtlasIcons.close).first);
     await tester.pumpAndSettle();
     expect(controller.filters.openOnly, isFalse);
 
@@ -433,7 +563,7 @@ void main() {
     expect(find.text('Responsibilities'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Apply URL'), 300);
     expect(find.text('Apply URL'), findsOneWidget);
-    await tester.tap(find.widgetWithIcon(IconButton, Icons.copy).first);
+    await tester.tap(find.widgetWithIcon(IconButton, AtlasIcons.copy).first);
     await tester.pump();
     expect(find.text('Apply URL copied'), findsOneWidget);
 
@@ -443,7 +573,10 @@ void main() {
 
     await tester.tap(find.text('Match diagnostics'));
     await tester.pumpAndSettle();
-    expect(find.text('Matched the current search filters.'), findsOneWidget);
+    expect(
+      find.textContaining('Location matched Nairobi, Kenya'),
+      findsOneWidget,
+    );
     expect(find.text('Reason'), findsOneWidget);
     expect(find.text('Term in title'), findsOneWidget);
     expect(find.text('Classification'), findsOneWidget);
@@ -584,12 +717,43 @@ final class _FailingTransport implements AtlasTransport {
   }
 }
 
+JobSearchResult _facetJob({
+  required String jobKey,
+  required String title,
+  required String city,
+  required String countryISO3,
+  required String gradeCode,
+  required String standardSeniorityTier,
+}) {
+  return JobSearchResult(
+    jobKey: jobKey,
+    title: title,
+    organization: 'UNDP Oracle HCM',
+    sourceID: 'undp_oracle_hcm',
+    dutyStation: '$city, $countryISO3',
+    city: city,
+    countryISO3: countryISO3,
+    gradeCode: gradeCode,
+    standardSeniorityTier: standardSeniorityTier,
+    contractGroup: 'staff',
+    contractLabel: 'Staff',
+    workModality: 'Onsite',
+    closingDate: DateTime.utc(2026, 8, 30, 23, 59),
+    needsReview: false,
+    scoreReasons: const [],
+    matchSummary: 'Cached facet row',
+    description: 'Cached description',
+    status: 'open',
+  );
+}
+
 const _jobJson = {
   'job_key': 'undp_oracle_hcm:34063',
   'title': 'Programme Analyst',
   'organization': 'UNDP Oracle HCM',
   'source_id': 'undp_oracle_hcm',
   'duty_station': 'Nairobi, Kenya',
+  'standard_seniority_tier': 'T2_JUNIOR_PROFESSIONAL',
   'grade_code': 'P-3',
   'contract_group': 'Fixed term',
   'work_modality': 'Onsite',
@@ -599,4 +763,12 @@ const _jobJson = {
   'match_summary': 'Matched current filters',
   'description': 'Role summary',
   'status': 'open',
+  'match_evidence': {
+    'location': {
+      'matched_city': 'Nairobi',
+      'matched_country_iso3': 'KEN',
+      'source_field': 'fixture',
+      'confidence': 0.9,
+    },
+  },
 };

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -67,6 +68,7 @@ class AtlasAppController extends ChangeNotifier {
   List<AtlasSourceRun> updateRuns = const [];
   List<AtlasSourceSummary> sources = const [];
   List<AtlasApplicationRecord> trackerRecords = const [];
+  List<JobSearchResult> _cachedAllJobs = const [];
   AtlasHealthSummary? healthSummary;
   Map<String, Map<String, int>> facets = const {};
   Map<String, Map<String, String>> facetLabels = const {};
@@ -199,6 +201,7 @@ class AtlasAppController extends ChangeNotifier {
     updateRuns = const [];
     sources = const [];
     trackerRecords = const [];
+    _cachedAllJobs = const [];
     healthSummary = null;
     facets = const {};
     facetLabels = const {};
@@ -290,6 +293,9 @@ class AtlasAppController extends ChangeNotifier {
       connectionMessage =
           'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached on this device.';
     } catch (error) {
+      if (_cachedAllJobs.isNotEmpty) {
+        _applyLocalSearch();
+      }
       connectionStatus = cacheSavedAt == null
           ? 'Not connected'
           : 'Offline (cached)';
@@ -340,6 +346,19 @@ class AtlasAppController extends ChangeNotifier {
 
   Future<void> setOpenOnly(bool value) async {
     filters = filters.copyWith(openOnly: value);
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
+  Future<void> applyFilters(AtlasSearchFilters nextFilters) async {
+    filters = nextFilters;
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
+  Future<void> resetFilters() async {
+    filters = AtlasSearchFilters();
+    sortOrder = SortOrder.closingSoon;
     notifyListeners();
     await _refreshIfReady();
   }
@@ -410,14 +429,90 @@ class AtlasAppController extends ChangeNotifier {
     isSearching = true;
     notifyListeners();
     try {
-      final response = await client.search(_currentSearchRequest());
+      final activeRequest = _currentSearchRequest();
+      final cacheRequest = _cacheSearchRequest();
+      AtlasSearchResponse? cacheResponse;
+      if (!_searchRequestsEquivalent(activeRequest, cacheRequest)) {
+        cacheResponse = await _fetchCachedAllJobs(client, cacheRequest);
+      }
+      final response = await client.search(activeRequest);
       _applySearchResponse(response);
-      cachedJobCount = response.results.length;
+      if (_searchRequestsEquivalent(activeRequest, cacheRequest)) {
+        _cachedAllJobs = List.unmodifiable(response.results);
+      } else if (cacheResponse != null) {
+        _cachedAllJobs = List.unmodifiable(cacheResponse.results);
+        facetLabels = _mergeFacetLabels(facetLabels, cacheResponse.facetLabels);
+      } else if (_cachedAllJobs.isEmpty) {
+        _cachedAllJobs = List.unmodifiable(response.results);
+      }
+      cachedJobCount = _cachedAllJobs.isEmpty
+          ? response.results.length
+          : _cachedAllJobs.length;
       cacheSavedAt = DateTime.now();
-      return response.results.length;
+      return cachedJobCount;
     } finally {
       isSearching = false;
     }
+  }
+
+  Future<AtlasSearchResponse?> _fetchCachedAllJobs(
+    AtlasAPIClient client,
+    AtlasSearchRequest cacheRequest,
+  ) async {
+    try {
+      return await client.search(cacheRequest);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<AtlasFacetOption> facetOptions(String key, {int limit = 8}) {
+    return _facetOptions(
+      facets[key] ?? const <String, int>{},
+      facetLabels[key] ?? const <String, String>{},
+      limit: limit,
+    );
+  }
+
+  List<AtlasFacetOption> availabilityFacetOptions(
+    String key, {
+    AtlasSearchFilters? filters,
+    int limit = 8,
+    Set<String> selected = const <String>{},
+  }) {
+    final activeFilters = filters ?? this.filters;
+    final availability = _filterAvailabilityFacets(activeFilters);
+    final values = availability[key] ?? facets[key] ?? const <String, int>{};
+    final labels = _localFacetLabels()[key] ?? facetLabels[key] ?? const {};
+    final options = _facetOptions(values, labels, limit: limit).toList();
+    final existingIDs = options.map((option) => option.id).toSet();
+    final sortedSelected = selected.toList()..sort();
+    for (final value in sortedSelected) {
+      if (existingIDs.contains(value)) {
+        continue;
+      }
+      options.add(
+        AtlasFacetOption(
+          id: value,
+          title: labels[value] ?? displayAtlasFilterValue(value),
+          count: values[value] ?? 0,
+        ),
+      );
+    }
+    return options;
+  }
+
+  bool isFilterOptionEnabled({
+    required String key,
+    required String value,
+    AtlasSearchFilters? filters,
+  }) {
+    final availability = _filterAvailabilityFacets(filters ?? this.filters);
+    final values = availability[key];
+    if (values == null) {
+      return true;
+    }
+    return (values[value] ?? 0) > 0;
   }
 
   Future<void> _loadSavedSearches(AtlasAPIClient client) async {
@@ -456,12 +551,21 @@ class AtlasAppController extends ChangeNotifier {
     }
   }
 
-  AtlasSearchRequest _currentSearchRequest() {
+  AtlasSearchRequest _currentSearchRequest({int limit = 10000}) {
     return AtlasSearchRequest.fromFilters(
       filters: filters,
       query: query,
       sortOrder: sortOrder,
-      limit: 50,
+      limit: limit,
+    );
+  }
+
+  AtlasSearchRequest _cacheSearchRequest({int limit = 10000}) {
+    return AtlasSearchRequest.fromFilters(
+      filters: AtlasSearchFilters(),
+      query: '',
+      sortOrder: SortOrder.closingSoon,
+      limit: limit,
     );
   }
 
@@ -519,18 +623,259 @@ class AtlasAppController extends ChangeNotifier {
     unclassifiedCount = response.unclassifiedCount;
   }
 
+  void _applyLocalSearch() {
+    final rows = _sortedLocalRows(
+      _filteredLocalRows(filters: filters, query: query, rows: _cachedAllJobs),
+    );
+    results = List.unmodifiable(rows);
+    total = rows.length;
+    facets = Map.unmodifiable(_localFacets(rows));
+    facetLabels = Map.unmodifiable(_localFacetLabels());
+    unclassifiedCount = rows
+        .where((job) => _isUnknownGrade(job.gradeCode))
+        .length;
+  }
+
+  List<JobSearchResult> _filteredLocalRows({
+    required AtlasSearchFilters filters,
+    required String query,
+    required List<JobSearchResult> rows,
+  }) {
+    final textTerms = query
+        .trim()
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final city = filters.trimmedCity.toLowerCase();
+    final country = filters.trimmedCountryISO3.toUpperCase();
+    final scopeValues = filters.scope.apiValues.map(_normalizedToken).toSet();
+    final gradeValues = filters.sortedGradeCodes.map(_normalizedGrade).toSet();
+    final workModes = filters.workModalities.map(_normalizedToken).toSet();
+    final contractGroups = filters.contractGroups.map(_normalizedToken).toSet();
+    final seniorityGroups = filters.seniorityGroups
+        .map(_normalizedToken)
+        .toSet();
+    final volunteerKinds = filters.volunteerKinds.map(_normalizedToken).toSet();
+    final capabilityTerms = filters.capabilityTerms
+        .map((value) => value.toLowerCase())
+        .toList();
+
+    return rows
+        .where((job) {
+          if (filters.openOnly && job.status.toLowerCase() != 'open') {
+            return false;
+          }
+          if (filters.closingSoon && !_isClosingSoon(job)) {
+            return false;
+          }
+          if (city.isNotEmpty && !_jobMatchesCity(job, city)) {
+            return false;
+          }
+          if (country.isNotEmpty && !_jobMatchesCountry(job, country)) {
+            return false;
+          }
+          if (filters.sourceIDs.isNotEmpty &&
+              !filters.sourceIDs.contains(job.sourceID)) {
+            return false;
+          }
+          if (filters.organizations.isNotEmpty &&
+              !filters.organizations.contains(job.organization) &&
+              !filters.organizations.contains(job.organizationDisplay)) {
+            return false;
+          }
+          if (scopeValues.isNotEmpty &&
+              !scopeValues.contains(_localScopeValue(job))) {
+            return false;
+          }
+          if (gradeValues.isNotEmpty &&
+              !gradeValues.contains(_normalizedGrade(job.gradeCode))) {
+            return false;
+          }
+          if (filters.ccogFamilies.isNotEmpty &&
+              !filters.ccogFamilies.contains(job.ccogFamilyCode ?? '')) {
+            return false;
+          }
+          if (workModes.isNotEmpty &&
+              !workModes.contains(_normalizedToken(job.workModality))) {
+            return false;
+          }
+          if (contractGroups.isNotEmpty &&
+              !_localContractTokens(job).any(contractGroups.contains)) {
+            return false;
+          }
+          if (seniorityGroups.isNotEmpty &&
+              !seniorityGroups.contains(_localSeniorityValue(job))) {
+            return false;
+          }
+          if (filters.volunteerKinds.isNotEmpty &&
+              !_localVolunteerTokens(job).any(volunteerKinds.contains)) {
+            return false;
+          }
+          if (capabilityTerms.isNotEmpty &&
+              !capabilityTerms.any(
+                (term) => _localSearchText(job).contains(term),
+              )) {
+            return false;
+          }
+          if (textTerms.isNotEmpty &&
+              !textTerms.every(
+                (term) => _localSearchText(job).contains(term),
+              )) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
+  }
+
+  Map<String, Map<String, int>> _filterAvailabilityFacets(
+    AtlasSearchFilters filters,
+  ) {
+    final sourceRows = _cachedAllJobs.isNotEmpty ? _cachedAllJobs : results;
+    if (sourceRows.isEmpty) {
+      return const <String, Map<String, int>>{};
+    }
+    final output = <String, Map<String, int>>{};
+    for (final scope in _FilterAvailabilityScope.values) {
+      final scopedRows = _filteredLocalRows(
+        filters: _clearedFilters(filters, scope),
+        query: query,
+        rows: sourceRows,
+      );
+      final scopedFacets = _localFacets(scopedRows);
+      for (final key in scope.facetKeys) {
+        output[key] = scopedFacets[key] ?? const <String, int>{};
+      }
+    }
+    return output;
+  }
+
+  Map<String, Map<String, int>> _localFacets(List<JobSearchResult> rows) {
+    final output = <String, Map<String, int>>{};
+    for (final job in rows) {
+      _incrementFacet(output, key: 'organizations', value: job.organization);
+      _incrementFacet(output, key: 'source_ids', value: job.sourceID);
+      _incrementFacet(output, key: 'cities', value: job.city);
+      _incrementFacet(output, key: 'countries', value: job.countryISO3);
+      _incrementFacet(
+        output,
+        key: 'grades',
+        value: _normalizedGrade(job.gradeCode),
+        skip: _isUnknownGrade(job.gradeCode),
+      );
+      _incrementFacet(output, key: 'ccog_families', value: job.ccogFamilyCode);
+      _incrementFacet(output, key: 'contract_groups', value: job.contractGroup);
+      _incrementFacet(
+        output,
+        key: 'seniority_groups',
+        value: _localSeniorityValue(job),
+      );
+      _incrementFacet(
+        output,
+        key: 'work_modalities',
+        value: _normalizedToken(job.workModality),
+      );
+      for (final tag in job.capabilityTags) {
+        _incrementFacet(output, key: 'capability_tags', value: tag);
+      }
+      for (final value in _localVolunteerTokens(job)) {
+        _incrementFacet(output, key: 'volunteer_kinds', value: value);
+      }
+    }
+    return output;
+  }
+
+  Map<String, Map<String, String>> _localFacetLabels() {
+    final labels = _mergeFacetLabels(facetLabels, const {});
+    final organizationLabels = Map<String, String>.of(
+      labels['organizations'] ?? const <String, String>{},
+    );
+    for (final job in _cachedAllJobs) {
+      organizationLabels[job.organization] =
+          organizationLabels[job.organization] ?? job.organizationDisplay;
+    }
+    labels['organizations'] = organizationLabels;
+
+    final sourceLabels = Map<String, String>.of(
+      labels['source_ids'] ?? const <String, String>{},
+    );
+    for (final source in sources) {
+      sourceLabels[source.sourceID] =
+          sourceLabels[source.sourceID] ?? source.organization;
+    }
+    labels['source_ids'] = sourceLabels;
+
+    final gradeLabels = Map<String, String>.of(
+      labels['grades'] ?? const <String, String>{},
+    );
+    for (final job in _cachedAllJobs) {
+      final grade = _normalizedGrade(job.gradeCode);
+      if (grade.isNotEmpty) {
+        gradeLabels[grade] = gradeLabels[grade] ?? job.gradeCode;
+      }
+    }
+    labels['grades'] = gradeLabels;
+
+    labels['volunteer_kinds'] = {
+      ...(labels['volunteer_kinds'] ?? const <String, String>{}),
+      AtlasVolunteerKind.unVolunteer.value:
+          AtlasVolunteerKind.unVolunteer.title,
+      AtlasVolunteerKind.volunteer.value: AtlasVolunteerKind.volunteer.title,
+    };
+    labels['seniority_groups'] = {
+      ...(labels['seniority_groups'] ?? const <String, String>{}),
+      ...atlasSeniorityLabels,
+    };
+    return labels;
+  }
+
+  List<JobSearchResult> _sortedLocalRows(List<JobSearchResult> rows) {
+    final sorted = rows.toList();
+    sorted.sort((left, right) {
+      return switch (sortOrder) {
+        SortOrder.bestFit => ((right.score ?? -1).compareTo(left.score ?? -1)),
+        SortOrder.deadlineLatest => _compareNullableDates(
+          right.closingDate,
+          left.closingDate,
+          left.title,
+          right.title,
+        ),
+        SortOrder.newestPosted => _compareNullableDates(
+          right.postedDate,
+          left.postedDate,
+          left.title,
+          right.title,
+        ),
+        SortOrder.closingSoon => _compareNullableDates(
+          left.closingDate,
+          right.closingDate,
+          left.title,
+          right.title,
+        ),
+      };
+    });
+    return sorted;
+  }
+
   void _applyCacheSnapshot(AtlasLocalCacheSnapshot snapshot) {
     baseURL = snapshot.baseURL;
     query = snapshot.searchRequest.text ?? '';
     filters = _filtersFromRequest(snapshot.searchRequest);
     sortOrder = SortOrder.fromAPIValue(snapshot.searchRequest.sort);
-    _applySearchResponse(snapshot.searchResponse);
+    _cachedAllJobs = List.unmodifiable(snapshot.cachedAllJobs);
+    if (_cachedAllJobs.isEmpty) {
+      _applySearchResponse(snapshot.searchResponse);
+      _cachedAllJobs = List.unmodifiable(snapshot.searchResponse.results);
+    } else {
+      _applyLocalSearch();
+    }
     savedSearches = List.unmodifiable(snapshot.savedSearches);
     trackerRecords = List.unmodifiable(snapshot.trackerRecords);
     updateRuns = List.unmodifiable(snapshot.updateRuns);
     sources = List.unmodifiable(snapshot.sources);
     healthSummary = snapshot.healthSummary;
-    cachedJobCount = snapshot.searchResponse.results.length;
+    cachedJobCount = _cachedAllJobs.length;
     cacheSavedAt = snapshot.savedAt;
     operationalDataLoadedAt = snapshot.operationalDataLoadedAt;
     connectionStatus = 'Offline (cached)';
@@ -565,13 +910,14 @@ class AtlasAppController extends ChangeNotifier {
       searchRequest: _currentSearchRequest(),
       searchResponse: AtlasSearchResponse(
         total: total,
-        limit: 50,
+        limit: results.length,
         offset: 0,
         results: results,
         facets: facets,
         facetLabels: facetLabels,
         unclassifiedCount: unclassifiedCount,
       ),
+      cachedAllJobs: _cachedAllJobs.isEmpty ? results : _cachedAllJobs,
       healthSummary: healthSummary,
       savedSearches: savedSearches,
       trackerRecords: trackerRecords,
@@ -596,6 +942,316 @@ class AtlasAppController extends ChangeNotifier {
         .toList(growable: false);
     trackerRecords = List.unmodifiable([record, ...remaining]);
   }
+}
+
+enum _FilterAvailabilityScope {
+  city,
+  country,
+  contract,
+  seniority,
+  grade,
+  ccog,
+  organization,
+  workMode,
+  capability,
+  unv;
+
+  List<String> get facetKeys {
+    return switch (this) {
+      _FilterAvailabilityScope.city => const <String>['cities'],
+      _FilterAvailabilityScope.country => const <String>['countries'],
+      _FilterAvailabilityScope.contract => const <String>[
+        'contract_groups',
+        'volunteer_kinds',
+      ],
+      _FilterAvailabilityScope.seniority => const <String>['seniority_groups'],
+      _FilterAvailabilityScope.grade => const <String>['grades'],
+      _FilterAvailabilityScope.ccog => const <String>['ccog_families'],
+      _FilterAvailabilityScope.organization => const <String>['organizations'],
+      _FilterAvailabilityScope.workMode => const <String>['work_modalities'],
+      _FilterAvailabilityScope.capability => const <String>['capability_tags'],
+      _FilterAvailabilityScope.unv => const <String>[
+        'unv_categories',
+        'unv_volunteer_types',
+      ],
+    };
+  }
+}
+
+AtlasSearchFilters _clearedFilters(
+  AtlasSearchFilters filters,
+  _FilterAvailabilityScope scope,
+) {
+  return switch (scope) {
+    _FilterAvailabilityScope.city => filters.copyWith(city: ''),
+    _FilterAvailabilityScope.country => filters.copyWith(countryISO3: ''),
+    _FilterAvailabilityScope.contract => filters.copyWith(
+      contractGroups: <String>{},
+      volunteerKinds: <String>{},
+      unvCategories: <String>{},
+      unvVolunteerTypes: <String>{},
+    ),
+    _FilterAvailabilityScope.seniority => filters.copyWith(
+      seniorityGroups: <String>{},
+    ),
+    _FilterAvailabilityScope.grade => filters.copyWith(gradeCodes: <String>{}),
+    _FilterAvailabilityScope.ccog => filters.copyWith(ccogFamilies: <String>{}),
+    _FilterAvailabilityScope.organization => filters.copyWith(
+      organizations: <String>{},
+    ),
+    _FilterAvailabilityScope.workMode => filters.copyWith(
+      workModalities: <String>{},
+    ),
+    _FilterAvailabilityScope.capability => filters.copyWith(
+      capabilityTags: <String>{},
+      capabilityQuery: '',
+    ),
+    _FilterAvailabilityScope.unv => filters.copyWith(
+      unvCategories: <String>{},
+      unvVolunteerTypes: <String>{},
+    ),
+  };
+}
+
+List<AtlasFacetOption> _facetOptions(
+  Map<String, int> values,
+  Map<String, String> labels, {
+  required int limit,
+}) {
+  final entries = values.entries.toList()
+    ..sort((left, right) {
+      if (left.value == right.value) {
+        return left.key.compareTo(right.key);
+      }
+      return right.value.compareTo(left.value);
+    });
+  return entries
+      .take(limit)
+      .map(
+        (entry) => AtlasFacetOption(
+          id: entry.key,
+          title: labels[entry.key] ?? displayAtlasFilterValue(entry.key),
+          count: entry.value,
+        ),
+      )
+      .toList(growable: false);
+}
+
+void _incrementFacet(
+  Map<String, Map<String, int>> output, {
+  required String key,
+  required String? value,
+  bool skip = false,
+}) {
+  final clean = value?.trim();
+  if (skip || clean == null || clean.isEmpty) {
+    return;
+  }
+  output.putIfAbsent(key, () => <String, int>{});
+  output[key]![clean] = (output[key]![clean] ?? 0) + 1;
+}
+
+Map<String, Map<String, String>> _mergeFacetLabels(
+  Map<String, Map<String, String>> first,
+  Map<String, Map<String, String>> second,
+) {
+  final merged = <String, Map<String, String>>{};
+  for (final source in [first, second]) {
+    for (final entry in source.entries) {
+      merged.putIfAbsent(entry.key, () => <String, String>{});
+      merged[entry.key]!.addAll(entry.value);
+    }
+  }
+  return merged;
+}
+
+bool _searchRequestsEquivalent(
+  AtlasSearchRequest left,
+  AtlasSearchRequest right,
+) {
+  return left.text == right.text &&
+      _listEquals(left.status, right.status) &&
+      _listEquals(left.organizations, right.organizations) &&
+      _listEquals(left.sourceIDs, right.sourceIDs) &&
+      _listEquals(left.cities, right.cities) &&
+      _listEquals(left.countriesISO3, right.countriesISO3) &&
+      _listEquals(left.nationalInternational, right.nationalInternational) &&
+      _listEquals(left.gradeCodes, right.gradeCodes) &&
+      _listEquals(left.ccogFamilies, right.ccogFamilies) &&
+      _listEquals(left.capabilityTags, right.capabilityTags) &&
+      _listEquals(left.contractGroups, right.contractGroups) &&
+      _listEquals(left.seniorityGroups, right.seniorityGroups) &&
+      _listEquals(left.workModalities, right.workModalities) &&
+      _listEquals(left.volunteerKinds, right.volunteerKinds) &&
+      _listEquals(left.unvCategories, right.unvCategories) &&
+      _listEquals(left.unvVolunteerTypes, right.unvVolunteerTypes) &&
+      left.closingDateTo == right.closingDateTo &&
+      left.includeLowConfidence == right.includeLowConfidence &&
+      left.sort == right.sort;
+}
+
+bool _listEquals(List<String> left, List<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _jobMatchesCity(JobSearchResult job, String city) {
+  final jobCity = job.city?.toLowerCase();
+  return jobCity == city || job.dutyStation.toLowerCase().contains(city);
+}
+
+bool _jobMatchesCountry(JobSearchResult job, String country) {
+  final jobCountry = job.countryISO3?.toUpperCase();
+  return jobCountry == country ||
+      job.dutyStation.toUpperCase().contains(country);
+}
+
+String _localScopeValue(JobSearchResult job) {
+  final explicit = job.nationalInternational;
+  if (explicit != null && explicit.trim().isNotEmpty) {
+    return _normalizedToken(explicit);
+  }
+  final grade = _normalizedGrade(job.gradeCode);
+  if (grade.startsWith('P') ||
+      grade.startsWith('D') ||
+      grade.startsWith('IPSA')) {
+    return 'international';
+  }
+  if (grade.startsWith('NO') ||
+      grade.startsWith('NPSA') ||
+      grade.startsWith('G')) {
+    return 'national';
+  }
+  return 'unknown';
+}
+
+Set<String> _localContractTokens(JobSearchResult job) {
+  return <String?>{
+    job.contractGroup,
+    job.contractCategory,
+    job.contractLabel,
+  }.nonNulls.map(_normalizedToken).where((value) => value.isNotEmpty).toSet();
+}
+
+Set<String> _localVolunteerTokens(JobSearchResult job) {
+  final text = _localSearchText(job);
+  if (text.contains('un volunteer') || job.sourceID == 'unv_uvp') {
+    return const <String>{'un_volunteer'};
+  }
+  if (text.contains('volunteer')) {
+    return const <String>{'volunteer'};
+  }
+  return const <String>{};
+}
+
+String _localSeniorityValue(JobSearchResult job) {
+  final fallback = _normalizedToken(job.seniorityGroup ?? '');
+  final standard = _standardTierToSeniority(job.standardSeniorityTier);
+  if (standard == null) {
+    return fallback;
+  }
+  if (standard == 'ungraded_nonstaff_or_pathway' &&
+      (fallback == 'volunteer' ||
+          fallback == 'generic_volunteer' ||
+          fallback == 'internship_trainee')) {
+    return fallback;
+  }
+  return standard;
+}
+
+String? _standardTierToSeniority(String? value) {
+  final tier = value?.trim().toUpperCase();
+  if (tier == null || tier.isEmpty) {
+    return null;
+  }
+  if (tier.contains('T1_ENTRY') || tier.contains('T2_JUNIOR')) {
+    return 'entry_junior';
+  }
+  if (tier.contains('T3_MID')) {
+    return 'mid';
+  }
+  if (tier.contains('T4_SENIOR') || tier.contains('T5_PRINCIPAL')) {
+    return 'senior';
+  }
+  if (tier.contains('T6') || tier.contains('T7') || tier.contains('DIRECTOR')) {
+    return 'director_executive';
+  }
+  if (tier.contains('UNGRADED') || tier.contains('PATHWAY')) {
+    return 'ungraded_nonstaff_or_pathway';
+  }
+  return 'unknown';
+}
+
+bool _isClosingSoon(JobSearchResult job) {
+  final closing = job.closingDate;
+  if (closing == null) {
+    return false;
+  }
+  final now = DateTime.now();
+  final soon = now.add(const Duration(days: 7));
+  return !closing.isBefore(now) && !closing.isAfter(soon);
+}
+
+bool _isUnknownGrade(String value) {
+  final normalized = _normalizedGrade(value);
+  return normalized.isEmpty || normalized.contains('UNKNOWN');
+}
+
+String _normalizedGrade(String value) {
+  return value.trim().replaceAll('-', '').replaceAll(' ', '').toUpperCase();
+}
+
+String _normalizedToken(String value) {
+  return value.trim().toLowerCase().replaceAll(' ', '_');
+}
+
+String _localSearchText(JobSearchResult job) {
+  return <String?>[
+    job.title,
+    job.organization,
+    job.sourceID,
+    job.dutyStation,
+    job.city,
+    job.countryISO3,
+    job.gradeCode,
+    job.contractLabel,
+    job.contractCategory,
+    job.contractGroup,
+    job.seniorityGroup,
+    job.standardSeniorityTier,
+    job.workModality,
+    job.ccogFamilyCode,
+    job.ccogFamilyLabel,
+    job.ccogPrimaryCode,
+    job.ccogPrimaryLabel,
+    job.capabilityTags.join(' '),
+    job.description,
+  ].nonNulls.join(' ').toLowerCase();
+}
+
+int _compareNullableDates(
+  DateTime? left,
+  DateTime? right,
+  String leftTitle,
+  String rightTitle,
+) {
+  if (left != null && right != null) {
+    return left.compareTo(right);
+  }
+  if (left == null && right != null) {
+    return 1;
+  }
+  if (left != null && right == null) {
+    return -1;
+  }
+  return leftTitle.compareTo(rightTitle);
 }
 
 AtlasSearchFilters _filtersFromRequest(AtlasSearchRequest request) {
@@ -957,28 +1613,28 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
         },
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.search),
-            selectedIcon: Icon(Icons.search),
+            icon: Icon(AtlasIcons.search),
+            selectedIcon: Icon(AtlasIcons.search),
             label: 'Search',
           ),
           NavigationDestination(
-            icon: Icon(Icons.bookmark_border),
-            selectedIcon: Icon(Icons.bookmark),
+            icon: Icon(AtlasIcons.bookmark),
+            selectedIcon: Icon(AtlasIcons.bookmarkFilled),
             label: 'Saved',
           ),
           NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history),
+            icon: Icon(AtlasIcons.updates),
+            selectedIcon: Icon(AtlasIcons.updates),
             label: 'Updates',
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_input_antenna),
-            selectedIcon: Icon(Icons.settings_input_antenna),
+            icon: Icon(AtlasIcons.sources),
+            selectedIcon: Icon(AtlasIcons.sources),
             label: 'Sources',
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
+            icon: Icon(AtlasIcons.settings),
+            selectedIcon: Icon(AtlasIcons.settingsFilled),
             label: 'Settings',
           ),
         ],
@@ -989,7 +1645,8 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   void _showFilterSheet() {
     showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (context) => AtlasFilterSheet(controller: _controller),
     );
   }
@@ -1001,9 +1658,9 @@ class AtlasSearchSkeleton extends StatelessWidget {
   final AtlasAppController controller;
 
   static const _quickFilters = [
-    _QuickFilter('Closing soon', Icons.schedule),
-    _QuickFilter('Remote', Icons.home_work_outlined),
-    _QuickFilter('Best fit', Icons.track_changes),
+    _QuickFilter('Closing soon', AtlasIcons.deadline),
+    _QuickFilter('Remote', AtlasIcons.remote),
+    _QuickFilter('Best fit', AtlasIcons.target),
   ];
 
   @override
@@ -1017,7 +1674,7 @@ class AtlasSearchSkeleton extends StatelessWidget {
             TextField(
               textInputAction: TextInputAction.search,
               decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
+                prefixIcon: Icon(AtlasIcons.search),
                 labelText: 'Title, keyword, skill, or organization',
               ),
               onChanged: (value) {
@@ -1042,7 +1699,7 @@ class AtlasSearchSkeleton extends StatelessWidget {
                     final chip = activeChips[index];
                     return AtlasFilterChip(
                       label: chip.title,
-                      icon: Icons.check_circle_outline,
+                      icon: AtlasIcons.check,
                       selected: true,
                       onDeleted: () {
                         controller.removeActiveFilter(chip.id);
@@ -1169,8 +1826,8 @@ class AtlasJobResultTile extends StatelessWidget {
                   builder: (context, _) {
                     return Icon(
                       controller.isJobSaved(job.jobKey)
-                          ? Icons.bookmark
-                          : Icons.chevron_right,
+                          ? AtlasIcons.bookmarkFilled
+                          : AtlasIcons.chevron,
                       size: 18,
                       color: controller.isJobSaved(job.jobKey)
                           ? AtlasPalette.accent
@@ -1313,7 +1970,7 @@ class AtlasStatusBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline, color: AtlasPalette.accent, size: 18),
+          const Icon(AtlasIcons.info, color: AtlasPalette.accent, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -1346,8 +2003,8 @@ class AtlasSearchStatusBar extends StatelessWidget {
               ? const CircularProgressIndicator(strokeWidth: 2)
               : Icon(
                   controller.connectionStatus == 'Connected'
-                      ? Icons.wifi
-                      : Icons.wifi_off,
+                      ? CupertinoIcons.wifi
+                      : CupertinoIcons.wifi_slash,
                   size: 18,
                   color: controller.connectionStatus == 'Connected'
                       ? AtlasPalette.success
@@ -1380,7 +2037,7 @@ class AtlasSearchStatusBar extends StatelessWidget {
           builder: (context, menuController, child) {
             return TextButton.icon(
               onPressed: menuController.open,
-              icon: const Icon(Icons.swap_vert, size: 18),
+              icon: const Icon(AtlasIcons.sort, size: 18),
               label: Text('Sort: ${controller.sortOrder.label}'),
             );
           },
@@ -1391,7 +2048,7 @@ class AtlasSearchStatusBar extends StatelessWidget {
                   controller.setSortOrder(order);
                 },
                 leadingIcon: order == controller.sortOrder
-                    ? const Icon(Icons.check, size: 18)
+                    ? const Icon(AtlasIcons.check, size: 18)
                     : null,
                 child: Text(order.label),
               ),
@@ -1413,7 +2070,7 @@ class AtlasEmptySearchState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.manage_search, size: 48, color: AtlasPalette.accent),
+            Icon(AtlasIcons.search, size: 48, color: AtlasPalette.accent),
             SizedBox(height: 14),
             Text(
               'No local save available',
@@ -1467,8 +2124,8 @@ class AtlasSearchActionGroup extends StatelessWidget {
                   onPressed: onShowFilters,
                   icon: Icon(
                     controller.filters.activeChips.length > 1
-                        ? Icons.tune
-                        : Icons.tune_outlined,
+                        ? AtlasIcons.filter
+                        : AtlasIcons.filter,
                     color: controller.filters.activeChips.length > 1
                         ? AtlasPalette.accent
                         : AtlasPalette.ink,
@@ -1485,10 +2142,10 @@ class AtlasSearchActionGroup extends StatelessWidget {
                       : () => unawaited(controller.saveCurrentSearch()),
                   icon: Icon(
                     controller.isSavingSearch
-                        ? Icons.hourglass_empty
+                        ? AtlasIcons.deadline
                         : controller.savedSearches.isEmpty
-                        ? Icons.bookmark_border
-                        : Icons.bookmark,
+                        ? AtlasIcons.bookmark
+                        : AtlasIcons.bookmarkFilled,
                     color: controller.savedSearches.isEmpty
                         ? AtlasPalette.ink
                         : AtlasPalette.accent,
@@ -1504,83 +2161,1183 @@ class AtlasSearchActionGroup extends StatelessWidget {
   }
 }
 
-class AtlasFilterSheet extends StatelessWidget {
+class AtlasFilterSheet extends StatefulWidget {
   const AtlasFilterSheet({required this.controller, super.key});
 
   final AtlasAppController controller;
 
   @override
+  State<AtlasFilterSheet> createState() => _AtlasFilterSheetState();
+}
+
+class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
+  late AtlasSearchFilters _draftFilters;
+  late TextEditingController _cityController;
+  late TextEditingController _countryController;
+  late TextEditingController _capabilityController;
+
+  static const _workModeOptions = <String>[
+    'onsite',
+    'home_based',
+    'online_remote',
+    'hybrid',
+    'multiple_locations',
+  ];
+
+  static const _contractFallbacks = <String>[
+    'staff',
+    'consultant_contractor',
+    'un_volunteer',
+    'volunteer',
+    'internship',
+    'roster_pipeline',
+    'unknown',
+    'fellowship_ypp_similar',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _draftFilters = widget.controller.filters;
+    _cityController = TextEditingController(text: _draftFilters.city);
+    _countryController = TextEditingController(
+      text: _draftFilters.countryISO3.toUpperCase(),
+    );
+    _capabilityController = TextEditingController(
+      text: _draftFilters.capabilityQuery,
+    );
+  }
+
+  @override
+  void dispose() {
+    _cityController.dispose();
+    _countryController.dispose();
+    _capabilityController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
         return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-            children: [
-              Row(
+          child: FractionallySizedBox(
+            heightFactor: 0.92,
+            child: Material(
+              color: _FilterPalette.background,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(18),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Filters',
-                      style: TextStyle(
-                        color: AtlasPalette.ink,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 10, 10, 8),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: _FilterPalette.border,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Filters',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: _applyAndClose,
+                              child: const Text('Done'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  Tooltip(
-                    message: 'Close filters',
-                    child: IconButton(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
-                      icon: const Icon(Icons.close),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+                      children: [
+                        _FilterGroup(
+                          title: 'Status',
+                          summary: _statusSummary,
+                          child: Column(
+                            children: [
+                              _DarkSwitchRow(
+                                title: 'Open only',
+                                subtitle: 'Hide closed and history rows',
+                                value: _draftFilters.openOnly,
+                                onChanged: (value) {
+                                  _setDraft(
+                                    _draftFilters.copyWith(openOnly: value),
+                                  );
+                                },
+                              ),
+                              _DarkSwitchRow(
+                                title: 'Closing soon',
+                                value: _draftFilters.closingSoon,
+                                onChanged: (value) {
+                                  _setDraft(
+                                    _draftFilters.copyWith(closingSoon: value),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        _FilterGroup(
+                          title: 'Location',
+                          summary: _locationSummary,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _DarkTextField(
+                                      controller: _cityController,
+                                      label: 'City',
+                                      hint: 'Any city',
+                                      icon: AtlasIcons.location,
+                                      onChanged: (value) {
+                                        _draftFilters = _draftFilters.copyWith(
+                                          city: value,
+                                        );
+                                        setState(() {});
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  SizedBox(
+                                    width: 118,
+                                    child: _DarkTextField(
+                                      controller: _countryController,
+                                      label: 'Country',
+                                      hint: 'ISO3',
+                                      icon: AtlasIcons.country,
+                                      textCapitalization:
+                                          TextCapitalization.characters,
+                                      onChanged: (value) {
+                                        _draftFilters = _draftFilters.copyWith(
+                                          countryISO3: value.toUpperCase(),
+                                        );
+                                        setState(() {});
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              _FilterOptionGrid(
+                                options: _cityOptions,
+                                selectedIDs: _draftFilters.trimmedCity.isEmpty
+                                    ? const <String>{}
+                                    : <String>{_draftFilters.trimmedCity},
+                                enabled: (id) =>
+                                    widget.controller.isFilterOptionEnabled(
+                                      key: 'cities',
+                                      value: id,
+                                      filters: _draftFilters,
+                                    ),
+                                onToggle: (id) {
+                                  final next = _draftFilters.trimmedCity == id
+                                      ? ''
+                                      : id;
+                                  _cityController.text = next;
+                                  _setDraft(_draftFilters.copyWith(city: next));
+                                },
+                              ),
+                              const SizedBox(height: 8),
+                              _FilterOptionGrid(
+                                options: _countryOptions,
+                                selectedIDs:
+                                    _draftFilters.trimmedCountryISO3.isEmpty
+                                    ? const <String>{}
+                                    : <String>{
+                                        _draftFilters.trimmedCountryISO3
+                                            .toUpperCase(),
+                                      },
+                                enabled: (id) =>
+                                    widget.controller.isFilterOptionEnabled(
+                                      key: 'countries',
+                                      value: id,
+                                      filters: _draftFilters,
+                                    ),
+                                onToggle: (id) {
+                                  final current = _draftFilters
+                                      .trimmedCountryISO3
+                                      .toUpperCase();
+                                  final next = current == id ? '' : id;
+                                  _countryController.text = next;
+                                  _setDraft(
+                                    _draftFilters.copyWith(countryISO3: next),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 6),
+                              _DarkSwitchRow(
+                                title: 'Include uncertain matches',
+                                value: _draftFilters.includeLowConfidence,
+                                onChanged: (value) {
+                                  _setDraft(
+                                    _draftFilters.copyWith(
+                                      includeLowConfidence: value,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                        _FilterGroup(
+                          title: 'Scope',
+                          summary: _draftFilters.scope.title,
+                          child: _FilterOptionGrid(
+                            options: AtlasScopeFilter.values
+                                .map(
+                                  (scope) => AtlasFacetOption(
+                                    id: scope.name,
+                                    title: scope.title,
+                                    count: 0,
+                                  ),
+                                )
+                                .toList(growable: false),
+                            selectedIDs: <String>{_draftFilters.scope.name},
+                            showCounts: false,
+                            enabled: (_) => true,
+                            onToggle: (id) {
+                              final scope = AtlasScopeFilter.values.firstWhere(
+                                (scope) => scope.name == id,
+                              );
+                              _setDraft(_draftFilters.copyWith(scope: scope));
+                            },
+                          ),
+                        ),
+                        _FilterFacetGroup(
+                          title: 'Contract',
+                          emptySummary: 'Any contract',
+                          options: _contractOptions,
+                          selectedIDs: {
+                            ..._draftFilters.contractGroups,
+                            ..._draftFilters.volunteerKinds,
+                          },
+                          enabled: (id) => _contractOptionEnabled(id),
+                          onToggle: _toggleContract,
+                        ),
+                        if (_draftFilters.volunteerKinds.contains(
+                          AtlasVolunteerKind.unVolunteer.value,
+                        ))
+                          _FilterFacetGroup(
+                            title: 'UN Volunteer Category',
+                            emptySummary: 'Any UNV category',
+                            options: _unvCategoryOptions,
+                            selectedIDs: _draftFilters.unvCategories,
+                            enabled: (id) =>
+                                widget.controller.isFilterOptionEnabled(
+                                  key: 'unv_categories',
+                                  value: id,
+                                  filters: _draftFilters,
+                                ),
+                            onToggle: (id) {
+                              _setDraft(
+                                _draftFilters.copyWith(
+                                  unvCategories: _toggled(
+                                    _draftFilters.unvCategories,
+                                    id,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        _FilterFacetGroup(
+                          title: 'Seniority',
+                          emptySummary: 'Any seniority',
+                          options: _seniorityOptions,
+                          selectedIDs: _draftFilters.seniorityGroups,
+                          enabled: (id) =>
+                              widget.controller.isFilterOptionEnabled(
+                                key: 'seniority_groups',
+                                value: id,
+                                filters: _draftFilters,
+                              ),
+                          onToggle: (id) {
+                            _setDraft(
+                              _draftFilters.copyWith(
+                                seniorityGroups: _toggled(
+                                  _draftFilters.seniorityGroups,
+                                  id,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        _FilterFacetGroup(
+                          title: 'Grade',
+                          emptySummary: 'Any grade',
+                          options: _gradeOptions,
+                          selectedIDs: _draftFilters.gradeCodes,
+                          enabled: (id) =>
+                              widget.controller.isFilterOptionEnabled(
+                                key: 'grades',
+                                value: id,
+                                filters: _draftFilters,
+                              ),
+                          onToggle: (id) {
+                            _setDraft(
+                              _draftFilters.copyWith(
+                                gradeCodes: _toggled(
+                                  _draftFilters.gradeCodes,
+                                  id,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        _FilterFacetGroup(
+                          title: 'CCOG Family',
+                          emptySummary: 'Any CCOG family',
+                          options: widget.controller.availabilityFacetOptions(
+                            'ccog_families',
+                            filters: _draftFilters,
+                            limit: 20,
+                            selected: _draftFilters.ccogFamilies,
+                          ),
+                          selectedIDs: _draftFilters.ccogFamilies,
+                          enabled: (id) =>
+                              widget.controller.isFilterOptionEnabled(
+                                key: 'ccog_families',
+                                value: id,
+                                filters: _draftFilters,
+                              ),
+                          onToggle: (id) {
+                            _setDraft(
+                              _draftFilters.copyWith(
+                                ccogFamilies: _toggled(
+                                  _draftFilters.ccogFamilies,
+                                  id,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        _FilterFacetGroup(
+                          title: 'Organizations',
+                          emptySummary: 'Any organization',
+                          options: widget.controller.availabilityFacetOptions(
+                            'organizations',
+                            filters: _draftFilters,
+                            limit: 12,
+                            selected: _draftFilters.organizations,
+                          ),
+                          selectedIDs: _draftFilters.organizations,
+                          enabled: (id) =>
+                              widget.controller.isFilterOptionEnabled(
+                                key: 'organizations',
+                                value: id,
+                                filters: _draftFilters,
+                              ),
+                          onToggle: (id) {
+                            _setDraft(
+                              _draftFilters.copyWith(
+                                organizations: _toggled(
+                                  _draftFilters.organizations,
+                                  id,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        _FilterFacetGroup(
+                          title: 'Work Mode',
+                          emptySummary: 'Any mode',
+                          options: _workModeOptionsForDisplay,
+                          selectedIDs: _draftFilters.workModalities,
+                          enabled: (id) =>
+                              widget.controller.isFilterOptionEnabled(
+                                key: 'work_modalities',
+                                value: id,
+                                filters: _draftFilters,
+                              ),
+                          onToggle: (id) {
+                            _setDraft(
+                              _draftFilters.copyWith(
+                                workModalities: _toggled(
+                                  _draftFilters.workModalities,
+                                  id,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        _FilterGroup(
+                          title: 'Capability Tags',
+                          summary: _draftFilters.trimmedCapabilityQuery.isEmpty
+                              ? 'Any capability'
+                              : _draftFilters.trimmedCapabilityQuery,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _DarkTextField(
+                                controller: _capabilityController,
+                                label: 'Keyword',
+                                hint: 'data, programme, reporting',
+                                icon: AtlasIcons.target,
+                                onChanged: (value) {
+                                  _draftFilters = _draftFilters.copyWith(
+                                    capabilityQuery: value,
+                                  );
+                                  setState(() {});
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              _FilterOptionGrid(
+                                options: widget.controller
+                                    .availabilityFacetOptions(
+                                      'capability_tags',
+                                      filters: _draftFilters,
+                                      limit: 18,
+                                      selected: _draftFilters.capabilityTags,
+                                    ),
+                                selectedIDs: _draftFilters.capabilityTags,
+                                enabled: (id) =>
+                                    widget.controller.isFilterOptionEnabled(
+                                      key: 'capability_tags',
+                                      value: id,
+                                      filters: _draftFilters,
+                                    ),
+                                onToggle: (id) {
+                                  _setDraft(
+                                    _draftFilters.copyWith(
+                                      capabilityTags: _toggled(
+                                        _draftFilters.capabilityTags,
+                                        id,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 6),
+                              const _FilterHelpText(
+                                'Type comma-separated keywords, or select capability tags. Multiple values in this group match any selected value.',
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                    decoration: const BoxDecoration(
+                      color: _FilterPalette.footer,
+                      border: Border(
+                        top: BorderSide(color: _FilterPalette.border),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _resetFilters,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(
+                                color: _FilterPalette.border,
+                              ),
+                            ),
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _applyAndClose,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AtlasPalette.accent,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('Apply filters'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Open only'),
-                subtitle: const Text('Hide closed and history rows'),
-                value: controller.filters.openOnly,
-                onChanged: (value) {
-                  controller.setOpenOnly(value);
-                },
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Closing soon'),
-                value: controller.filters.closingSoon,
-                onChanged: (_) {
-                  controller.toggleQuickFilter('Closing soon');
-                },
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Remote'),
-                value: controller.filters.isRemoteOnly,
-                onChanged: (_) {
-                  controller.toggleQuickFilter('Remote');
-                },
-              ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Best fit'),
-                value: controller.sortOrder == SortOrder.bestFit,
-                onChanged: (_) {
-                  controller.toggleQuickFilter('Best fit');
-                },
-              ),
-            ],
+            ),
           ),
         );
       },
     );
   }
+
+  String get _statusSummary {
+    if (_draftFilters.openOnly && _draftFilters.closingSoon) {
+      return 'Open, closing soon';
+    }
+    if (_draftFilters.openOnly) {
+      return 'Open only';
+    }
+    if (_draftFilters.closingSoon) {
+      return 'Closing soon';
+    }
+    return 'All statuses';
+  }
+
+  String get _locationSummary {
+    final city = _draftFilters.trimmedCity;
+    final country = _draftFilters.trimmedCountryISO3.toUpperCase();
+    final parts = <String>[
+      if (city.isNotEmpty) city,
+      if (country.isNotEmpty) country,
+    ];
+    if (parts.isEmpty) {
+      return 'Any location';
+    }
+    return parts.join(', ');
+  }
+
+  List<AtlasFacetOption> get _cityOptions {
+    return widget.controller.availabilityFacetOptions(
+      'cities',
+      filters: _draftFilters,
+      limit: 10,
+      selected: _draftFilters.trimmedCity.isEmpty
+          ? const <String>{}
+          : <String>{_draftFilters.trimmedCity},
+    );
+  }
+
+  List<AtlasFacetOption> get _countryOptions {
+    return widget.controller.availabilityFacetOptions(
+      'countries',
+      filters: _draftFilters,
+      limit: 10,
+      selected: _draftFilters.trimmedCountryISO3.isEmpty
+          ? const <String>{}
+          : <String>{_draftFilters.trimmedCountryISO3.toUpperCase()},
+    );
+  }
+
+  List<AtlasFacetOption> get _contractOptions {
+    final options = widget.controller.availabilityFacetOptions(
+      'contract_groups',
+      filters: _draftFilters,
+      selected: _draftFilters.contractGroups,
+    );
+    final byID = {for (final option in options) option.id: option};
+    for (final id in _contractFallbacks) {
+      byID.putIfAbsent(
+        id,
+        () => AtlasFacetOption(
+          id: id,
+          title: id == AtlasVolunteerKind.unVolunteer.value
+              ? AtlasVolunteerKind.unVolunteer.title
+              : id == AtlasVolunteerKind.volunteer.value
+              ? AtlasVolunteerKind.volunteer.title
+              : displayAtlasFilterValue(id),
+          count: 0,
+        ),
+      );
+    }
+    final volunteerFacets = widget.controller.availabilityFacetOptions(
+      'volunteer_kinds',
+      filters: _draftFilters,
+      limit: 2,
+      selected: _draftFilters.volunteerKinds,
+    );
+    for (final option in volunteerFacets) {
+      byID[option.id] = option;
+    }
+    final sorted = byID.values.toList()
+      ..sort(
+        (left, right) =>
+            _contractSortKey(left.id).compareTo(_contractSortKey(right.id)),
+      );
+    return sorted;
+  }
+
+  List<AtlasFacetOption> get _seniorityOptions {
+    final options = widget.controller.availabilityFacetOptions(
+      'seniority_groups',
+      filters: _draftFilters,
+      limit: 20,
+      selected: _draftFilters.seniorityGroups,
+    );
+    final byID = {for (final option in options) option.id: option};
+    final ordered = <AtlasFacetOption>[];
+    for (final id in atlasSeniorityOrder) {
+      final option = byID.remove(id);
+      if (option != null || _draftFilters.seniorityGroups.contains(id)) {
+        ordered.add(
+          AtlasFacetOption(
+            id: id,
+            title: atlasSeniorityLabels[id] ?? displayAtlasFilterValue(id),
+            count: option?.count ?? 0,
+          ),
+        );
+      }
+    }
+    ordered.addAll(
+      byID.values.map(
+        (option) => AtlasFacetOption(
+          id: option.id,
+          title: atlasSeniorityLabels[option.id] ?? option.title,
+          count: option.count,
+        ),
+      ),
+    );
+    return ordered;
+  }
+
+  List<AtlasFacetOption> get _gradeOptions {
+    final options =
+        widget.controller
+            .availabilityFacetOptions(
+              'grades',
+              filters: _draftFilters,
+              limit: 40,
+              selected: _draftFilters.gradeCodes,
+            )
+            .toList()
+          ..sort(
+            (left, right) => _gradeOptionSortKey(
+              left.id,
+            ).compareTo(_gradeOptionSortKey(right.id)),
+          );
+    return options
+        .map(
+          (option) => AtlasFacetOption(
+            id: option.id,
+            title: _displayGradeOption(option.id),
+            count: option.count,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<AtlasFacetOption> get _unvCategoryOptions {
+    final facets = widget.controller.availabilityFacetOptions(
+      'unv_categories',
+      filters: _draftFilters,
+      limit: 12,
+      selected: _draftFilters.unvCategories,
+    );
+    final counts = {for (final option in facets) option.id: option.count};
+    return atlasUNVCategoryInfo
+        .map(
+          (category) => AtlasFacetOption(
+            id: category.id,
+            title: category.title,
+            count: counts[category.id] ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<AtlasFacetOption> get _workModeOptionsForDisplay {
+    final available = {
+      for (final option in widget.controller.availabilityFacetOptions(
+        'work_modalities',
+        filters: _draftFilters,
+        limit: 20,
+        selected: _draftFilters.workModalities,
+      ))
+        option.id: option,
+    };
+    return _workModeOptions
+        .map(
+          (mode) =>
+              available[mode] ??
+              AtlasFacetOption(
+                id: mode,
+                title: displayAtlasFilterValue(mode),
+                count: 0,
+              ),
+        )
+        .toList(growable: false);
+  }
+
+  void _setDraft(AtlasSearchFilters filters) {
+    setState(() {
+      _draftFilters = filters;
+      if (_cityController.text != _draftFilters.city) {
+        _cityController.text = _draftFilters.city;
+      }
+      final country = _draftFilters.countryISO3.toUpperCase();
+      if (_countryController.text != country) {
+        _countryController.text = country;
+      }
+      if (_capabilityController.text != _draftFilters.capabilityQuery) {
+        _capabilityController.text = _draftFilters.capabilityQuery;
+      }
+    });
+  }
+
+  bool _contractOptionEnabled(String id) {
+    final key =
+        id == AtlasVolunteerKind.unVolunteer.value ||
+            id == AtlasVolunteerKind.volunteer.value
+        ? 'volunteer_kinds'
+        : 'contract_groups';
+    return widget.controller.isFilterOptionEnabled(
+      key: key,
+      value: id,
+      filters: _draftFilters,
+    );
+  }
+
+  void _toggleContract(String id) {
+    if (id == AtlasVolunteerKind.unVolunteer.value ||
+        id == AtlasVolunteerKind.volunteer.value) {
+      final nextVolunteerKinds = _toggled(_draftFilters.volunteerKinds, id);
+      var nextSeniority = _draftFilters.seniorityGroups;
+      var nextUNVCategories = _draftFilters.unvCategories;
+      var nextUNVTypes = _draftFilters.unvVolunteerTypes;
+      if (nextVolunteerKinds.contains(AtlasVolunteerKind.unVolunteer.value)) {
+        nextSeniority = {...nextSeniority, 'volunteer'};
+      } else {
+        nextSeniority = {...nextSeniority}..remove('volunteer');
+        nextUNVCategories = const <String>{};
+        nextUNVTypes = const <String>{};
+      }
+      if (nextVolunteerKinds.contains(AtlasVolunteerKind.volunteer.value)) {
+        nextSeniority = {...nextSeniority, 'generic_volunteer'};
+      } else {
+        nextSeniority = {...nextSeniority}..remove('generic_volunteer');
+      }
+      _setDraft(
+        _draftFilters.copyWith(
+          volunteerKinds: nextVolunteerKinds,
+          seniorityGroups: nextSeniority,
+          unvCategories: nextUNVCategories,
+          unvVolunteerTypes: nextUNVTypes,
+        ),
+      );
+      return;
+    }
+    _setDraft(
+      _draftFilters.copyWith(
+        contractGroups: _toggled(_draftFilters.contractGroups, id),
+      ),
+    );
+  }
+
+  Future<void> _resetFilters() async {
+    _setDraft(AtlasSearchFilters());
+    await widget.controller.resetFilters();
+  }
+
+  Future<void> _applyAndClose() async {
+    await widget.controller.applyFilters(_draftFilters);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+}
+
+class _FilterGroup extends StatelessWidget {
+  const _FilterGroup({
+    required this.title,
+    required this.summary,
+    required this.child,
+  });
+
+  final String title;
+  final String summary;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Text(
+                  summary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                    color: _FilterPalette.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterFacetGroup extends StatelessWidget {
+  const _FilterFacetGroup({
+    required this.title,
+    required this.emptySummary,
+    required this.options,
+    required this.selectedIDs,
+    required this.enabled,
+    required this.onToggle,
+  });
+
+  final String title;
+  final String emptySummary;
+  final List<AtlasFacetOption> options;
+  final Set<String> selectedIDs;
+  final bool Function(String id) enabled;
+  final ValueChanged<String> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedOptions = options
+        .where((option) => selectedIDs.contains(option.id))
+        .toList(growable: false);
+    final summary = selectedOptions.isEmpty
+        ? emptySummary
+        : selectedOptions.length == 1
+        ? selectedOptions.single.title
+        : '${selectedOptions.first.title} +${selectedOptions.length - 1}';
+    return _FilterGroup(
+      title: title,
+      summary: summary,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (options.isEmpty)
+            const _FilterHelpText(
+              'No compatible values with the current filters',
+            )
+          else
+            _FilterOptionGrid(
+              options: options,
+              selectedIDs: selectedIDs,
+              enabled: enabled,
+              onToggle: onToggle,
+            ),
+          const SizedBox(height: 6),
+          const _FilterHelpText(
+            'Dimmed values would return no jobs with the other active filters. Values in this group match any selected value.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterOptionGrid extends StatelessWidget {
+  const _FilterOptionGrid({
+    required this.options,
+    required this.selectedIDs,
+    required this.enabled,
+    required this.onToggle,
+    this.showCounts = true,
+  });
+
+  final List<AtlasFacetOption> options;
+  final Set<String> selectedIDs;
+  final bool Function(String id) enabled;
+  final ValueChanged<String> onToggle;
+  final bool showCounts;
+
+  @override
+  Widget build(BuildContext context) {
+    if (options.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tileWidth = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in options)
+              SizedBox(
+                width: tileWidth.clamp(128, constraints.maxWidth).toDouble(),
+                child: _FilterChoicePill(
+                  option: option,
+                  selected: selectedIDs.contains(option.id),
+                  enabled:
+                      enabled(option.id) || selectedIDs.contains(option.id),
+                  showCount: showCounts,
+                  onTap: () {
+                    onToggle(option.id);
+                  },
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _FilterChoicePill extends StatelessWidget {
+  const _FilterChoicePill({
+    required this.option,
+    required this.selected,
+    required this.enabled,
+    required this.showCount,
+    required this.onTap,
+  });
+
+  final AtlasFacetOption option;
+  final bool selected;
+  final bool enabled;
+  final bool showCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = selected ? Colors.white : _FilterPalette.text;
+    final border = selected ? AtlasPalette.accent : _FilterPalette.border;
+    return Opacity(
+      opacity: enabled ? 1 : 0.38,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: BoxDecoration(
+              color: selected ? AtlasPalette.accent : _FilterPalette.pill,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: border),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  selected ? AtlasIcons.check : AtlasIcons.circle,
+                  color: foreground,
+                  size: 15,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    option.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: foreground,
+                      fontSize: 12,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (showCount) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    _formatCount(option.count),
+                    style: TextStyle(
+                      color: selected ? Colors.white70 : _FilterPalette.muted,
+                      fontSize: 11,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DarkSwitchRow extends StatelessWidget {
+  const _DarkSwitchRow({
+    required this.title,
+    required this.value,
+    required this.onChanged,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: _FilterPalette.text,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Text(
+              subtitle!,
+              style: const TextStyle(color: _FilterPalette.muted, fontSize: 11),
+            ),
+      value: value,
+      activeThumbColor: Colors.white,
+      activeTrackColor: AtlasPalette.accent,
+      inactiveThumbColor: _FilterPalette.muted,
+      inactiveTrackColor: _FilterPalette.border,
+      onChanged: onChanged,
+    );
+  }
+}
+
+class _DarkTextField extends StatelessWidget {
+  const _DarkTextField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.icon,
+    required this.onChanged,
+    this.textCapitalization = TextCapitalization.none,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final IconData icon;
+  final ValueChanged<String> onChanged;
+  final TextCapitalization textCapitalization;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      textCapitalization: textCapitalization,
+      onChanged: onChanged,
+      style: const TextStyle(color: Colors.white, fontSize: 13),
+      decoration: InputDecoration(
+        isDense: true,
+        labelText: label,
+        hintText: hint,
+        prefixIcon: Icon(icon, size: 18),
+        labelStyle: const TextStyle(color: _FilterPalette.muted),
+        hintStyle: const TextStyle(color: _FilterPalette.muted),
+        prefixIconColor: _FilterPalette.muted,
+        filled: true,
+        fillColor: _FilterPalette.pill,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: _FilterPalette.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: AtlasPalette.accent),
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterHelpText extends StatelessWidget {
+  const _FilterHelpText(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: _FilterPalette.muted,
+        fontSize: 11,
+        height: 1.25,
+      ),
+    );
+  }
+}
+
+Set<String> _toggled(Set<String> values, String id) {
+  final next = values.toSet();
+  if (!next.add(id)) {
+    next.remove(id);
+  }
+  return next;
+}
+
+String _contractSortKey(String value) {
+  const order = <String>[
+    'staff',
+    'consultant_contractor',
+    'un_volunteer',
+    'volunteer',
+    'internship',
+    'roster_pipeline',
+    'other',
+    'unknown',
+    'fellowship_ypp_similar',
+  ];
+  final index = order.indexOf(value);
+  return '${(index < 0 ? order.length : index).toString().padLeft(3, '0')}-$value';
+}
+
+String _displayGradeOption(String value) {
+  final compact = value.replaceAll('-', '').toUpperCase();
+  final digitIndex = compact.indexOf(RegExp('[0-9]'));
+  if (compact.length >= 2 && digitIndex > 0) {
+    return '${compact.substring(0, digitIndex)}-${compact.substring(digitIndex)}';
+  }
+  return compact;
+}
+
+String _gradeOptionSortKey(String value) {
+  final compact = value.replaceAll('-', '').toUpperCase();
+  final digitIndex = compact.indexOf(RegExp('[0-9]'));
+  if (digitIndex < 0) {
+    return compact;
+  }
+  final letters = compact.substring(0, digitIndex);
+  final numbers = compact.substring(digitIndex);
+  final padded = (int.tryParse(numbers) ?? 0).toString().padLeft(3, '0');
+  return '$letters$padded';
+}
+
+abstract final class _FilterPalette {
+  static const background = Color(0xFF101820);
+  static const footer = Color(0xFF0C131A);
+  static const pill = Color(0xFF17222C);
+  static const border = Color(0xFF344450);
+  static const text = Color(0xFFEAF1F7);
+  static const muted = Color(0xFF9EAAB5);
 }
 
 class AtlasUpdatesPanel extends StatelessWidget {
@@ -1600,7 +3357,7 @@ class AtlasUpdatesPanel extends StatelessWidget {
           children: [
             const AtlasPanelHeader(
               title: 'Source Updates',
-              icon: Icons.history,
+              icon: AtlasIcons.updates,
               subtitle: 'Refresh status, local save state, and count health.',
             ),
             const SizedBox(height: 14),
@@ -1634,7 +3391,7 @@ class AtlasUpdatesPanel extends StatelessWidget {
             if (hidden != null) ...[
               const SizedBox(height: 10),
               AtlasInfoStrip(
-                icon: Icons.rule_folder_outlined,
+                icon: AtlasIcons.info,
                 title: 'Count reconciliation',
                 body:
                     '${_formatCount(hidden)} rows are still marked open in health, but have passed deadlines and are hidden from Search.',
@@ -1642,7 +3399,7 @@ class AtlasUpdatesPanel extends StatelessWidget {
             ],
             const SizedBox(height: 10),
             AtlasInfoStrip(
-              icon: Icons.save_outlined,
+              icon: AtlasIcons.saveOffline,
               title: 'Local save',
               body: controller.cacheSavedAt == null
                   ? 'No local save refreshed in this app session.'
@@ -1651,7 +3408,7 @@ class AtlasUpdatesPanel extends StatelessWidget {
             if (health?.lastSyncAt != null) ...[
               const SizedBox(height: 10),
               AtlasInfoStrip(
-                icon: Icons.cloud_done_outlined,
+                icon: AtlasIcons.refresh,
                 title: 'Backend snapshot',
                 body:
                     'Last sync ${_compactTimestamp(health!.lastSyncAt!)} from ${_formatBaseURL(controller.baseURL)}.',
@@ -1669,7 +3426,7 @@ class AtlasUpdatesPanel extends StatelessWidget {
             const SizedBox(height: 6),
             if (controller.updateRuns.isEmpty)
               const AtlasDataEmptyState(
-                icon: Icons.history_toggle_off,
+                icon: AtlasIcons.updates,
                 title: 'No refresh runs available',
                 body:
                     'The server did not return recent source-run data for this session.',
@@ -1710,7 +3467,7 @@ class AtlasSourcesPanel extends StatelessWidget {
           children: [
             const AtlasPanelHeader(
               title: 'Source Health',
-              icon: Icons.settings_input_antenna,
+              icon: AtlasIcons.sources,
               subtitle: 'Organizations, source status, and open job coverage.',
             ),
             const SizedBox(height: 14),
@@ -1738,7 +3495,7 @@ class AtlasSourcesPanel extends StatelessWidget {
             const SizedBox(height: 12),
             if (controller.sources.isEmpty)
               const AtlasDataEmptyState(
-                icon: Icons.travel_explore,
+                icon: AtlasIcons.search,
                 title: 'No source health returned',
                 body:
                     'Connect and refresh local save to load source status from the API.',
@@ -1986,7 +3743,11 @@ class AtlasUpdateRunTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
-      leading: const Icon(Icons.sync, color: AtlasPalette.accent, size: 22),
+      leading: const Icon(
+        AtlasIcons.refresh,
+        color: AtlasPalette.accent,
+        size: 22,
+      ),
       title: Text(
         _humanSourceName(run.sourceID),
         maxLines: 1,
@@ -2025,7 +3786,7 @@ class AtlasSourceHealthTile extends StatelessWidget {
       dense: true,
       onTap: onTap,
       leading: Icon(
-        warning ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+        warning ? AtlasIcons.warning : AtlasIcons.check,
         color: warning ? AtlasPalette.deadlineAmber : AtlasPalette.success,
         size: 22,
       ),
@@ -2081,7 +3842,7 @@ class AtlasSavedPanel extends StatelessWidget {
             controller.trackerRecords.isEmpty) {
           return const AtlasPlaceholderPanel(
             title: 'Saved Searches',
-            icon: Icons.bookmark_border,
+            icon: AtlasIcons.bookmark,
             summary:
                 'Saved searches and tracked applications will appear here.',
           );
@@ -2127,10 +3888,13 @@ class AtlasSavedPanel extends StatelessWidget {
             for (final search in controller.savedSearches)
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.bookmark, color: AtlasPalette.accent),
+                leading: const Icon(
+                  AtlasIcons.bookmarkFilled,
+                  color: AtlasPalette.accent,
+                ),
                 title: Text(search.name),
                 subtitle: Text(search.description ?? 'Saved search'),
-                trailing: const Icon(Icons.chevron_right),
+                trailing: const Icon(AtlasIcons.chevron),
                 onTap: () {
                   controller.runSavedSearch(search);
                 },
@@ -2157,14 +3921,17 @@ class AtlasSavedJobTile extends StatelessWidget {
     final job = _jobFromSavedRecord(record);
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.bookmark, color: AtlasPalette.accent),
+      leading: const Icon(
+        AtlasIcons.bookmarkFilled,
+        color: AtlasPalette.accent,
+      ),
       title: Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
         '${job.organizationDisplay} · ${_humanSourceName(record.status)}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: const Icon(AtlasIcons.chevron),
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -2238,7 +4005,7 @@ class _AtlasJobDetailScreenState extends State<AtlasJobDetailScreen> {
                 child: IconButton(
                   onPressed: _isSaving || saved ? null : _saveJob,
                   icon: Icon(
-                    saved ? Icons.bookmark : Icons.bookmark_border,
+                    saved ? AtlasIcons.bookmarkFilled : AtlasIcons.bookmark,
                     color: saved ? AtlasPalette.accent : AtlasPalette.ink,
                   ),
                 ),
@@ -2331,26 +4098,26 @@ class _AtlasJobDetailBody extends StatelessWidget {
           children: [
             AtlasDeadlinePill(job: job),
             AtlasMetadataPill(
-              icon: Icons.badge_outlined,
+              icon: AtlasIcons.organization,
               label: job.gradeCode.isEmpty ? 'Grade unknown' : job.gradeCode,
             ),
             AtlasMetadataPill(
-              icon: Icons.work_outline,
+              icon: AtlasIcons.contract,
               label: job.contractLabel.isEmpty
                   ? 'Contract unknown'
                   : job.contractLabel,
             ),
             AtlasMetadataPill(
-              icon: Icons.place_outlined,
+              icon: AtlasIcons.location,
               label: job.workModality.isEmpty ? 'Unknown' : job.workModality,
             ),
             AtlasMetadataPill(
-              icon: Icons.public,
+              icon: AtlasIcons.country,
               label: _displayScope(job.nationalInternational),
             ),
             if (detail?.status != null || job.status.isNotEmpty)
               AtlasMetadataPill(
-                icon: Icons.flag_outlined,
+                icon: AtlasIcons.info,
                 label: _firstNonEmpty([detail?.status, job.status]),
               ),
           ],
@@ -2362,7 +4129,7 @@ class _AtlasJobDetailBody extends StatelessWidget {
         if (error != null) ...[
           const SizedBox(height: 14),
           AtlasInfoStrip(
-            icon: Icons.error_outline,
+            icon: AtlasIcons.warning,
             title: 'Detail load failed',
             body: '$error',
           ),
@@ -2370,7 +4137,7 @@ class _AtlasJobDetailBody extends StatelessWidget {
         if (weakDetail) ...[
           const SizedBox(height: 14),
           const AtlasInfoStrip(
-            icon: Icons.fact_check_outlined,
+            icon: AtlasIcons.check,
             title: 'Weak detail state',
             body:
                 'This posting has limited structured detail. Use the source or apply link for the authoritative vacancy text.',
@@ -2444,7 +4211,7 @@ class _AtlasJobDetailBody extends StatelessWidget {
         if (contentSections.isEmpty && !isLoading) ...[
           const SizedBox(height: 16),
           const AtlasInfoStrip(
-            icon: Icons.notes_outlined,
+            icon: AtlasIcons.info,
             title: 'Structured sections unavailable',
             body:
                 'Responsibilities, qualifications, and other sections were not returned separately for this source.',
@@ -2597,7 +4364,7 @@ class _CopyLinkTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
-      leading: const Icon(Icons.link, color: AtlasPalette.accent),
+      leading: const Icon(AtlasIcons.link, color: AtlasPalette.accent),
       title: Text(label),
       subtitle: Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: Tooltip(
@@ -2609,7 +4376,7 @@ class _CopyLinkTile extends StatelessWidget {
               context,
             ).showSnackBar(SnackBar(content: Text('$label copied')));
           },
-          icon: const Icon(Icons.copy, size: 18),
+          icon: const Icon(AtlasIcons.copy, size: 18),
         ),
       ),
     );
@@ -2770,7 +4537,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 autocorrect: false,
                 decoration: const InputDecoration(
                   labelText: 'API base URL',
-                  prefixIcon: Icon(Icons.link),
+                  prefixIcon: Icon(AtlasIcons.link),
                 ),
                 onChanged: (_) {
                   controller.clearConnectionMessage();
@@ -2806,7 +4573,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                             dimension: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.hub_outlined),
+                        : const Icon(AtlasIcons.sources),
                     label: const Text('Test'),
                   ),
                   OutlinedButton.icon(
@@ -2816,7 +4583,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                             dimension: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.refresh),
+                        : const Icon(AtlasIcons.refresh),
                     label: const Text('Save and Reload'),
                   ),
                 ],
@@ -2891,7 +4658,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 initialValue: _refreshIntervalHours,
                 decoration: const InputDecoration(
                   labelText: 'Auto refresh',
-                  prefixIcon: Icon(Icons.schedule),
+                  prefixIcon: Icon(AtlasIcons.deadline),
                 ),
                 items: [
                   for (final option in _refreshOptions)
@@ -2916,7 +4683,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                         dimension: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.download_for_offline_outlined),
+                    : const Icon(AtlasIcons.saveOffline),
                 label: const Text('Refresh Local Save Now'),
               ),
               const SizedBox(height: 8),
@@ -2924,7 +4691,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 onPressed: controller.cacheSavedAt == null
                     ? null
                     : _clearLocalCache,
-                icon: const Icon(Icons.delete_outline),
+                icon: const Icon(AtlasIcons.delete),
                 label: const Text('Clear Local Cache'),
               ),
               const SizedBox(height: 8),
@@ -2949,7 +4716,7 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Icon(
-                          Icons.work_outline,
+                          AtlasIcons.contract,
                           size: 16,
                           color: AtlasPalette.accent,
                         ),
@@ -3042,7 +4809,7 @@ class _SettingsHeader extends StatelessWidget {
     return const Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SettingsIcon(Icons.settings_outlined),
+        _SettingsIcon(AtlasIcons.settings),
         SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -3207,7 +4974,7 @@ class AtlasFilterChip extends StatelessWidget {
                 const SizedBox(width: 3),
                 GestureDetector(
                   onTap: onDeleted,
-                  child: Icon(Icons.close, size: 14, color: foreground),
+                  child: Icon(AtlasIcons.close, size: 14, color: foreground),
                 ),
               ],
             ],
@@ -3237,6 +5004,36 @@ final class _QuickFilter {
 
   final String label;
   final IconData icon;
+}
+
+abstract final class AtlasIcons {
+  static const search = CupertinoIcons.search;
+  static const filter = CupertinoIcons.slider_horizontal_3;
+  static const bookmark = CupertinoIcons.bookmark;
+  static const bookmarkFilled = CupertinoIcons.bookmark_fill;
+  static const deadline = CupertinoIcons.clock;
+  static const location = CupertinoIcons.location;
+  static const country = CupertinoIcons.globe;
+  static const organization = CupertinoIcons.building_2_fill;
+  static const contract = CupertinoIcons.briefcase;
+  static const remote = CupertinoIcons.house;
+  static const target = CupertinoIcons.scope;
+  static const updates = CupertinoIcons.time;
+  static const sources = CupertinoIcons.square_stack_3d_up;
+  static const settings = CupertinoIcons.settings;
+  static const settingsFilled = CupertinoIcons.settings_solid;
+  static const chevron = CupertinoIcons.chevron_right;
+  static const info = CupertinoIcons.info_circle;
+  static const warning = CupertinoIcons.exclamationmark_triangle;
+  static const refresh = CupertinoIcons.arrow_clockwise;
+  static const close = CupertinoIcons.xmark;
+  static const check = CupertinoIcons.check_mark_circled_solid;
+  static const circle = CupertinoIcons.circle;
+  static const sort = CupertinoIcons.arrow_up_arrow_down;
+  static const saveOffline = CupertinoIcons.arrow_down_doc;
+  static const copy = CupertinoIcons.doc_on_doc;
+  static const link = CupertinoIcons.link;
+  static const delete = CupertinoIcons.trash;
 }
 
 abstract final class AtlasPalette {

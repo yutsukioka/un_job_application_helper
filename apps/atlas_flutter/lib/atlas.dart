@@ -75,6 +75,70 @@ final class AtlasFacetOption {
   final int count;
 }
 
+final class AtlasUNVCategoryInfo {
+  const AtlasUNVCategoryInfo({
+    required this.id,
+    required this.title,
+    required this.detail,
+  });
+
+  final String id;
+  final String title;
+  final String detail;
+}
+
+const atlasSeniorityOrder = <String>[
+  'entry_junior',
+  'mid',
+  'senior',
+  'director_executive',
+  'volunteer',
+  'internship_trainee',
+  'generic_volunteer',
+  'ungraded_nonstaff_or_pathway',
+  'unknown',
+];
+
+const atlasSeniorityLabels = <String, String>{
+  'entry_junior': 'Entry Junior',
+  'mid': 'MID',
+  'senior': 'Senior',
+  'director_executive': 'Director Executive',
+  'volunteer': 'UN Volunteer',
+  'internship_trainee': 'Internship Trainee',
+  'generic_volunteer': 'Volunteer',
+  'ungraded_nonstaff_or_pathway': 'Ungraded Nonstaff Or Pathway',
+  'unknown': 'Unknown',
+};
+
+const atlasUNVCategoryInfo = <AtlasUNVCategoryInfo>[
+  AtlasUNVCategoryInfo(
+    id: 'un_community_volunteer',
+    title: 'UN Community Volunteer',
+    detail: 'Age 18-80; Experience 0+ months; Serving period 3-48 months',
+  ),
+  AtlasUNVCategoryInfo(
+    id: 'un_university_volunteer',
+    title: 'UN University Volunteer',
+    detail: 'Age 18-80; Experience 1+ month; Serving period 3-48 months',
+  ),
+  AtlasUNVCategoryInfo(
+    id: 'un_youth_volunteer',
+    title: 'UN Youth Volunteer',
+    detail: 'Age 18-80; Experience 1+ month; Serving period 3-48 months',
+  ),
+  AtlasUNVCategoryInfo(
+    id: 'un_volunteer_specialist',
+    title: 'UN Volunteer Specialist',
+    detail: 'Age 18-80; Experience 3+ years; Serving period 3-48 months',
+  ),
+  AtlasUNVCategoryInfo(
+    id: 'un_volunteer_expert',
+    title: 'UN Volunteer Expert',
+    detail: 'Age 18-80; Experience 7+ years; Serving period 3-48 months',
+  ),
+];
+
 final class JobSearchResult {
   JobSearchResult({
     required this.jobKey,
@@ -82,7 +146,10 @@ final class JobSearchResult {
     required this.organization,
     required this.sourceID,
     required this.dutyStation,
+    this.city,
+    this.countryISO3,
     required this.gradeCode,
+    this.standardSeniorityTier,
     this.nationalInternational,
     this.contractCategory,
     this.contractGroup,
@@ -118,7 +185,10 @@ final class JobSearchResult {
       organization: _string(json['organization']) ?? 'Unknown organization',
       sourceID: _string(json['sourceID']) ?? 'unknown',
       dutyStation: _string(json['dutyStation']) ?? 'Location not classified',
+      city: _string(json['city']),
+      countryISO3: _string(json['countryISO3']),
       gradeCode: _string(json['gradeCode']) ?? '',
+      standardSeniorityTier: _string(json['standardSeniorityTier']),
       nationalInternational: _string(json['nationalInternational']),
       contractCategory: _string(json['contractCategory']),
       contractGroup: _string(json['contractGroup']),
@@ -174,6 +244,10 @@ final class JobSearchResult {
     final location = _map(matchEvidence?['location']);
     final gradeEvidence = _map(matchEvidence?['grade']);
     final scope = _map(matchEvidence?['scope']);
+    final city = _string(json['city']) ?? _string(location?['matched_city']);
+    final countryISO3 =
+        _string(json['country_iso3']) ??
+        _string(location?['matched_country_iso3']);
     final summary = _matchSummary(
       location: location,
       grade: gradeEvidence,
@@ -191,7 +265,10 @@ final class JobSearchResult {
       organization: organizationLabel,
       sourceID: source,
       dutyStation: station,
+      city: city,
+      countryISO3: countryISO3,
       gradeCode: grade,
+      standardSeniorityTier: _string(json['standard_seniority_tier']),
       nationalInternational: _string(json['national_international']),
       contractCategory: _string(json['contract_category']),
       contractGroup: _string(json['contract_group']),
@@ -229,7 +306,10 @@ final class JobSearchResult {
   final String organization;
   final String sourceID;
   final String dutyStation;
+  final String? city;
+  final String? countryISO3;
   final String gradeCode;
+  final String? standardSeniorityTier;
   final String? nationalInternational;
   final String? contractCategory;
   final String? contractGroup;
@@ -261,7 +341,10 @@ final class JobSearchResult {
       'organization': organization,
       'sourceID': sourceID,
       'dutyStation': dutyStation,
+      'city': city,
+      'countryISO3': countryISO3,
       'gradeCode': gradeCode,
+      'standardSeniorityTier': standardSeniorityTier,
       'nationalInternational': nationalInternational,
       'contractCategory': contractCategory,
       'contractGroup': contractGroup,
@@ -881,13 +964,16 @@ final class AtlasLocalCacheSnapshot {
     required this.savedAt,
     required this.searchRequest,
     required this.searchResponse,
+    List<JobSearchResult>? cachedAllJobs,
     this.healthSummary,
     this.savedSearches = const <AtlasSavedSearch>[],
     this.trackerRecords = const <AtlasApplicationRecord>[],
     this.updateRuns = const <AtlasSourceRun>[],
     this.sources = const <AtlasSourceSummary>[],
     this.operationalDataLoadedAt,
-  });
+  }) : cachedAllJobs = List.unmodifiable(
+         cachedAllJobs ?? searchResponse.results,
+       );
 
   factory AtlasLocalCacheSnapshot.fromJson(Map<String, Object?> json) {
     final baseURL =
@@ -895,6 +981,11 @@ final class AtlasLocalCacheSnapshot {
         AtlasAPIClient.defaultBaseURL();
     final savedAt =
         _date(json['saved_at']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final cachedAllJobs = json.containsKey('cached_all_jobs')
+        ? _list(
+            json['cached_all_jobs'],
+          ).map(_map).nonNulls.map(JobSearchResult.fromJson).toList()
+        : null;
     return AtlasLocalCacheSnapshot(
       schemaVersion: _int(json['schema_version']) ?? 0,
       baseURL: baseURL,
@@ -905,6 +996,7 @@ final class AtlasLocalCacheSnapshot {
       searchResponse: AtlasSearchResponse.fromJson(
         _map(json['search_response']) ?? const <String, Object?>{},
       ),
+      cachedAllJobs: cachedAllJobs,
       healthSummary: _map(json['health_summary']) == null
           ? null
           : AtlasHealthSummary.fromJson(_map(json['health_summary'])!),
@@ -933,6 +1025,7 @@ final class AtlasLocalCacheSnapshot {
   final DateTime savedAt;
   final AtlasSearchRequest searchRequest;
   final AtlasSearchResponse searchResponse;
+  final List<JobSearchResult> cachedAllJobs;
   final AtlasHealthSummary? healthSummary;
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
@@ -955,6 +1048,7 @@ final class AtlasLocalCacheSnapshot {
       'saved_at': savedAt.toIso8601String(),
       'search_request': searchRequest.toJson(),
       'search_response': searchResponse.toJson(),
+      'cached_all_jobs': cachedAllJobs.map((job) => job.toJson()).toList(),
       'health_summary': healthSummary?.toJson(),
       'saved_searches': savedSearches.map((search) => search.toJson()).toList(),
       'tracker_records': trackerRecords

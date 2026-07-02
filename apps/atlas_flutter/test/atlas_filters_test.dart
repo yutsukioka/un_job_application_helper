@@ -20,6 +20,16 @@ void main() {
     expect(displayAtlasFilterValue(''), 'Unknown');
   });
 
+  test('seniority taxonomy matches iOS filter labels', () {
+    expect(atlasSeniorityOrder.first, 'entry_junior');
+    expect(atlasSeniorityLabels['entry_junior'], 'Entry Junior');
+    expect(atlasSeniorityLabels['director_executive'], 'Director Executive');
+    expect(
+      atlasUNVCategoryInfo.map((info) => info.id),
+      contains('un_youth_volunteer'),
+    );
+  });
+
   test('job display helpers match Atlas row behavior', () {
     final job = JobSearchResult(
       jobKey: 'undp_oracle_hcm:34063',

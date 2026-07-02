@@ -38,7 +38,10 @@ void main() {
             'organization': 'UNDP Oracle HCM',
             'sourceID': 'undp_oracle_hcm',
             'dutyStation': 'Nairobi, Kenya',
+            'city': 'Nairobi',
+            'countryISO3': 'KEN',
             'gradeCode': 'IPSA-9',
+            'standardSeniorityTier': 'T3_MID_PROFESSIONAL',
             'contractLabel': 'Consultant',
             'workModality': 'Onsite',
             'closingDate': '2026-06-30T23:59:00Z',
@@ -53,7 +56,13 @@ void main() {
 
       expect(response.total, 1);
       expect(response.results.single.jobKey, 'undp_oracle_hcm:34063');
+      expect(response.results.single.city, 'Nairobi');
+      expect(response.results.single.countryISO3, 'KEN');
       expect(response.results.single.gradeCode, 'IPSA-9');
+      expect(
+        response.results.single.standardSeniorityTier,
+        'T3_MID_PROFESSIONAL',
+      );
       expect(response.results.single.matchSummary, 'Cached row');
     });
 
@@ -73,6 +82,7 @@ void main() {
             'source_id': 'unicef_pageup',
             'duty_station': 'Nairobi, Kenya',
             'grade_code': 'p3',
+            'standard_seniority_tier': 'T2_JUNIOR_PROFESSIONAL',
             'national_international': 'international',
             'contract_group': 'consultant_contractor',
             'work_modality': 'home_based',
@@ -109,7 +119,10 @@ void main() {
       expect(job.organization, 'UNICEF PageUp');
       expect(job.organizationDisplay, 'UNICEF');
       expect(job.sourceInitials, 'UNI');
+      expect(job.city, 'Nairobi');
+      expect(job.countryISO3, 'KEN');
       expect(job.gradeCode, 'P-3');
+      expect(job.standardSeniorityTier, 'T2_JUNIOR_PROFESSIONAL');
       expect(job.contractLabel, 'Consultant Contractor');
       expect(job.workModality, 'HOME Based');
       expect(job.score, 0.86);

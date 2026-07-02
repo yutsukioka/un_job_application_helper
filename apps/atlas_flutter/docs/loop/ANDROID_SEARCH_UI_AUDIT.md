@@ -2,65 +2,41 @@
 
 Date: 2026-07-03
 Branch: `codex/atlas-flutter-android-parity`
-Slice: final Android parity closure
+Slice: persistent cache, full filters/cascades, icon parity
 
 ## Executive Result
 
-The Flutter Android app now has a materially stronger Search parity slice plus implemented
-Updates, Sources, Saved, Settings, and Job Detail flows. The final Android screenshots were
-captured from the installed release APK on `emulator-5554` against the LAN backend
-`http://10.253.1.43:8765`.
+The Flutter Android app now has implemented Updates, Sources, Saved, Settings, Job Detail,
+persistent local cache, offline local filtering, an iOS-style filter sheet, City/Country and
+Seniority/Grade cascade tests, and a shared Cupertino-style `AtlasIcons` mapping for visible Atlas
+controls.
 
-This is not a final 80%+ or 90%+ completion claim. Human testing superseded the previous score:
-Android still lacks full iOS filter parity and icon parity. The persistent-cache blocker has a
-new code/test slice, but the cache still needs emulator offline-restart screenshot evidence and
-the filter/icon blockers remain open.
+This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
+Pixel 8 Pro, but post-fix in-app screenshots are blocked because the physical device remained on the
+lock screen. Human-visible review is therefore still incomplete and the score is capped by the
+evidence rule.
 
-## iOS Reference Availability
+## Implemented This Slice
 
-No checked-in iOS screenshot bundle was found under `apps/apple/PreviewHost` or the Flutter
-docs loop folders. To reduce the evidence gap, `AtlasIOSHost` was built for the booted iOS
-simulator and seeded with an `AtlasLocalCache` snapshot generated from the same local API.
-This produced a populated iOS Search reference screen:
-
-- `screenshots/ios-reference/iteration-7/ios_search_seeded_top.png`
-- `screenshots/iteration-7/search_top_ios_android_side_by_side.png`
-- `screenshots/ios-reference/iteration-8/ios_search_top.png`
-- `screenshots/iteration-8/search_top_ios_android_side_by_side.png`
-
-The seeded iOS snapshot intentionally contains the first 80 default Search rows so the visual
-layout can be compared without relying on simulator networking. It is not a count-reconciliation
-source; Android still uses the live Search total of `2,274 searchable results`.
-
-Iteration 8 refreshed the iOS Search top capture from `AtlasIOSHost` with the same local snapshot
-model and generated a new side-by-side comparison against the current Android release screenshot.
-Additional iOS filter, sort, detail, and tab screenshots were not captured in this session because
-the available `simctl` build exposes screenshot/status-bar/UI-setting commands but no direct tap
-or scroll input, `cliclick` is not installed, and AppleScript GUI scripting did not expose the
-Simulator process reliably enough to use as review evidence.
-
-The remaining iOS source contract is:
-
-- `apps/apple/Sources/AtlasUI/SearchScreen.swift`
-- `apps/apple/Sources/AtlasUI/SearchViewModel.swift`
-- `apps/apple/Sources/AtlasUI/JobResultRow.swift`
-- `apps/apple/Sources/AtlasUI/JobDetailView.swift`
-- `apps/apple/Sources/AtlasUI/AtlasSearchFilters.swift`
-
-## Side-By-Side Review Package
-
-| Screen | iOS reference | Previous Android evidence | Final Android evidence | Review checklist |
-| --- | --- | --- | --- | --- |
-| Search top | Source reference: `SearchScreen.swift`, `JobResultRow.swift` | Previous parity slice: `screenshots/iteration-5/search_top.png` | ![Search top](screenshots/iteration-6/search_top.png) | Centered `Search` title, grouped filter/save controls, search input, compact chips, `2,274 searchable results`, compact local-save text, right-aligned sort link, dense rows. |
-| Search top side-by-side | Generated iOS simulator reference: `screenshots/ios-reference/iteration-8/ios_search_top.png` | Previous side-by-side: `screenshots/iteration-7/search_top_ios_android_side_by_side.png` | ![Search top side-by-side](screenshots/iteration-8/search_top_ios_android_side_by_side.png) | Top hierarchy is close. Android is denser and hides match-summary diagnostics from rows; current iOS still shows a short match-summary line in each row. |
-| Search scrolled | Source reference: `JobResultRow.swift` | Previous parity slice: `screenshots/iteration-5/search_scrolled.png` | ![Search scrolled](screenshots/iteration-6/search_scrolled.png) | Rows remain compact after scrolling; no diagnostic paragraphs in the main list; title maxes visually to compact row density. |
-| Filter sheet | Source reference: `AtlasSearchFilters.swift` | Previous parity slice: `screenshots/iteration-5/filter_sheet.png` | ![Filter sheet](screenshots/iteration-6/filter_sheet.png) | Filter button opens real toggles for Open only, Closing soon, Remote, Best fit over live Search state. |
-| Sort UI | Source reference: `SearchScreen.swift` | Previous parity slice: `screenshots/iteration-5/sort_menu.png` | ![Sort menu](screenshots/iteration-6/sort_menu.png) | Sort link opens real menu; active `Closing soon` state is visible. |
-| Job detail | Source reference: `JobDetailView.swift` | Previous basic detail: `screenshots/iteration-5/job_detail.png` | ![Job detail](screenshots/iteration-6/job_detail.png) | Detail is populated with title, organization, location, deadline, grade, contract, modality/scope, saved state, and full description. Diagnostics stay hidden by default. |
-| Saved tab | Source reference: app shell/search saved behavior | Previous parity slice: `screenshots/iteration-5/saved_tab.png` | ![Saved tab](screenshots/iteration-6/saved_tab.png) | Saved Jobs and Saved Searches render real data; saved rows are tappable. |
-| Updates tab | Source reference: product tab requirement | Placeholder before this slice | ![Updates tab](screenshots/iteration-6/updates_tab.png) | Shows search count, health count, enabled sources, count reconciliation, local save, backend snapshot, and recent source runs. |
-| Sources tab | Source reference: product tab requirement | Placeholder before this slice | ![Sources tab](screenshots/iteration-6/sources_tab.png) | Lists real API sources, open counts, total counts, status, warnings, and last observed times. |
-| Settings tab | Source reference: product setup requirement | Earlier Settings: `screenshots/iteration-5/settings_tab.png` | ![Settings tab](screenshots/iteration-6/settings_tab.png) | Shows server URL, connection status, local save time, cached count, Search total, health open jobs, and deadline-past reconciliation. |
+- Persistent file-backed cache in Android app-private storage through the native `filesDir` method
+  channel.
+- Cache snapshot now stores the active Search response and the broad default open Search dataset
+  separately, so offline filters can be recomputed from cached rows.
+- Startup cache hydration loads cached Search data before any network refresh.
+- Offline refresh failure keeps cached rows visible and marks the app `Offline (cached)`.
+- Settings shows cache freshness/status and includes Clear Local Cache.
+- Local offline filtering mirrors Swift semantics: OR within a group, AND across groups.
+- Dark filter modal with drag handle, `Filters` title, `Done`, sticky `Reset` / `Apply filters`,
+  compact two-column pills, counts, dimmed unavailable values, and explanatory text.
+- Filter groups now render: Status, Location, Scope, Contract, UN Volunteer Category, Seniority,
+  Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
+- City/Country cascade test: selecting `JPN` restricts cities to Tokyo/Osaka; selecting `Tokyo`
+  restricts countries to `JPN`.
+- Seniority/Grade cascade test: `standard_seniority_tier` maps Entry Junior rows to junior grades;
+  selecting grade `P1` restricts seniority to Entry Junior.
+- Core app icons now route through shared `AtlasIcons` using Cupertino-style symbols for Search,
+  filters, bookmark, deadline, location, organization, contract, remote, updates, sources, settings,
+  chevron, info/warning, copy/link, refresh, and delete.
 
 ## Data Count Reconciliation
 
@@ -69,56 +45,10 @@ The remaining iOS source contract is:
 | `health_open_jobs` | `2,420` |
 | `search_api_total` | `2,274` |
 | `android_displayed_total` | `2,274 searchable results` |
-| `active_filters` | Default Android Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `local_cache_timestamp` | `2026-07-02 23:18` local app display |
-| `backend_snapshot_timestamp` | `2026-07-02T02:38:47.964722+00:00` from `/api/health` (`2026-07-02 11:38` local display) |
+| `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
 | `excluded_count` | `146` |
-| `excluded_reason_breakdown` | Open rows with `closes_at` earlier than current UTC time. They are still `status='open'` for health but are hidden by Search API `exclude_expired_open=true`. In SQLite they classify as `deadline_state='today'`, not history rows. |
-| `final_decision` | `2,274` is correct for Android default Search because it matches `/api/search`. `2,420` is correct for `/api/health` because health counts raw open rows. The app now names the displayed count as searchable results and exposes the 146-row reconciliation in Settings and Updates. |
-
-Deadline-past open source breakdown:
-
-| Source | Hidden rows |
-| --- | ---: |
-| `un_inspira` | 45 |
-| `unv_uvp` | 33 |
-| `undp_oracle_hcm` | 18 |
-| `iom_oracle_hcm` | 15 |
-| `paho_workday` | 9 |
-| `unwomen_oracle_hcm` | 5 |
-| `wfp_workday` | 4 |
-| `worldbank_csod` | 3 |
-| `adb_taleo` | 2 |
-| Other one-row sources | 12 |
-
-## Implemented This Slice
-
-- Android Search count label now distinguishes default searchable open rows from raw health open rows.
-- Settings and Updates expose the Search vs Health reconciliation and explain the 146 hidden deadline-past open rows.
-- Updates tab is no longer a placeholder; it shows live refresh status, local save state, backend snapshot, source counts, and recent source runs.
-- Sources tab is no longer a placeholder; it lists real source health/open counts and can drive source-filtered Search state.
-- Job Detail now loads `/api/job-detail`, shows core fields, full description, source/apply data when present, saved state, weak-detail handling, copy-link action, and expandable diagnostics hidden by default.
-- Saved tab shows saved tracker records and saved searches with tappable rows.
-- Persistent cache code/test slice: successful refreshes now write a schema-versioned local JSON
-  cache to Android app-private storage via a native `filesDir` method channel; app-owned startup
-  loads the cache before network refresh; offline refresh failures keep cached Search rows; Settings
-  shows cache status and provides Clear Local Cache.
-
-## New Phase 1 Gap Audit
-
-The stricter 2026-07-03 completion criteria are tracked in `NEXT_SLICE.md`. Current audited gaps:
-
-- Full iOS filter sheet parity is still pending. Android still needs the dark modal sheet, sticky
-  Reset/Apply actions, all iOS filter groups, counts, dimmed zero-result values, and draft/apply
-  semantics.
-- City/Country and Seniority/Grade cascades are still pending. Code inspection shows the API can
-  filter city/country and returns `standard_seniority_tier` in search rows, but current facets do
-  not expose country/city option counts or grade-to-seniority metadata.
-- Icon parity is still pending. The Android app still uses mostly Material icons rather than a
-  shared Cupertino/iOS-style Atlas icon mapping.
-- The running API at `http://10.253.1.43:8765` was not reachable during the latest audit attempt,
-  and no local `output/all_jobs.sqlite3` exists in this checkout, so live field-value inspection is
-  still required before final seniority/grade cascade implementation.
+| `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
+| `final_decision` | `2,274` is correct for Android default Search because it matches `/api/search`; `2,420` is the raw health open count. |
 
 ## Verification
 
@@ -126,66 +56,77 @@ Commands run from `apps/atlas_flutter`:
 
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed with no issues.
-- `flutter test --coverage` passed after the persistent-cache slice: 39 tests, `2078/2102` lines, `98.86%`.
+- Focused tests passed: `flutter test test/atlas_api_client_test.dart test/atlas_filters_test.dart test/atlas_local_cache_test.dart test/atlas_search_controller_test.dart test/widget_test.dart`.
+- Full tests passed: `flutter test`, 41 tests.
+- Coverage passed: `flutter test --coverage`, 41 tests, `2665/2941` lines, `90.62%`.
 - `flutter build apk --debug` passed.
-- `flutter build appbundle --release` passed.
-- `flutter build apk --release` passed.
-- `flutter test integration_test -d emulator-5554` passed.
-- Release APK installed with `adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-release.apk`.
-- Latest release APK rebuilt and installed on USB Pixel 8 Pro `38281FDJG001DJ` with `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk`.
+- `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`46.6MB`).
+- `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`49.2MB`). Gradle emitted an `llvm-strip` warning for `lib/armeabi-v7a/libapp.so`, but the APK was produced.
+- Release APK installed on USB Pixel 8 Pro: `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success`.
 
-Build artifacts:
+Installed package evidence:
 
-- Debug APK: `apps/atlas_flutter/build/app/outputs/flutter-apk/app-debug.apk`
-- Release AAB: `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`
-- Release APK: `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk`
-
-Physical Pixel install evidence:
-
-- Device: `38281FDJG001DJ` (`product:husky`, `model:Pixel_8_Pro`, USB)
 - Package: `com.yutsukioka.jobagg.atlas`
-- Installed version: `versionName=1.0.0`, `versionCode=1`
-- Android package `lastUpdateTime`: `2026-07-03 00:45:44`
-- Launch command returned successfully, but the phone was on the lock screen, so no physical in-app screenshot was committed.
+- Version: `versionCode=1`, `versionName=1.0.0`
+- Device: `38281FDJG001DJ`
+- Package `lastUpdateTime`: `2026-07-03 01:07:21`
 
-## Visual Parity Assessment
+## Screenshot Evidence
 
-Strengths:
+Post-fix in-app screenshots are blocked because the connected Pixel remained on the lock screen.
+Captured files show the lock state only:
 
-- The Android Search top area now follows the iOS product structure: centered title, compact grouped filter/save controls, search box, chip row, compact count/status, right sort link, and dense job rows.
-- Job rows no longer look like large verbose cards; diagnostic paragraphs are removed from the list.
-- Normal local-save state is compact text, not a large banner.
-- Bottom tabs are all navigable, and Updates/Sources are useful data screens rather than generic placeholders.
+- `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/search_top.png`
+- `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/lock_check.png`
 
-Remaining visual differences needing human review:
+Previously generated evidence remains available for Search top comparison:
 
-- Only the Search top screen has generated iOS-vs-Android side-by-side evidence so far; filter, sort, detail, Saved, Updates, Sources, and Settings still rely on Android screenshots plus Swift source references because reliable simulator UI interaction was unavailable in this session.
-- The generated iOS Search row still shows a short match-summary line. Android intentionally hides match diagnostics in Search rows per the Android parity goal, so row height is denser than the current iOS implementation.
-- Job Detail is useful but still text-heavy because full descriptions can dominate the first viewport.
-- Saved job rows currently use synthesized labels like `Saved vacancy 34992` until richer tracker metadata is available.
-- Local save is session-memory in the Flutter app; after app relaunch it must be refreshed again.
+- `apps/atlas_flutter/docs/loop/screenshots/ios-reference/iteration-8/ios_search_top.png`
+- `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
+
+The required post-fix screenshots still need to be captured after the device is unlocked:
+
+- Search top and scrolled
+- Filter sheet top, Location, Contract, Seniority, Grade, CCOG, Organizations, Work Mode, Capability Tags
+- Filter sheet with Japan/Tokyo and Entry Junior/P1 selected
+- Offline restart with cached data visible
+- Settings cache status
+- Job Detail, Saved, Updates, Sources
+
+## Current Remaining Gaps
+
+- Physical in-app screenshots for the new cache/filter/icon slice are missing due to lock-screen
+  blocker.
+- Filter sheet parity is implemented from Swift source and covered by tests, but still needs human
+  visual review against the user-provided iOS screenshots.
+- Flutter still models Location as single `city` and single `countryISO3`, matching the checked-in
+  Swift model. Multi-country/multi-city selection from the user note is not implemented in this
+  slice.
+- Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
+  those facets locally from cached Search rows.
+- Coverage remains strong but lower than the previous cache-slice number because this slice added a
+  large amount of UI code.
+- Integration test on `emulator-5554` was not rerun in this slice.
 
 ## Scorecard
 
-Strict score under the new user caps: **47/100**.
+Strict score under the new user caps: **60/100**.
 
-The previous 84/100 score is superseded. Persistent-cache code and focused tests now exist, but
-offline restart has not yet been screenshot-verified, the iOS filter groups/cascades are incomplete,
-and icon parity is incomplete. Because screenshots after these fixes are still missing, the current
-score remains capped at 60.
+The underlying implementation is materially higher than the previous 47/100 cache-only state, but
+the screenshot cap limits this slice to 60/100 until post-fix app screenshots are captured and
+human-visible parity is reviewed.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Persistent cache | 12 / 20 | File-backed cache, startup hydration, stale/clear UI, and focused tests exist; offline restart screenshot/manual evidence pending. |
-| Filter parity | 5 / 30 | Existing model supports many fields, but UI still lacks iOS-complete sheet, groups, counts, dimming, and cascades. |
-| Icon parity | 2 / 10 | Mostly Material icons remain. |
+| Persistent cache | 17 / 20 | Full-dataset file cache, startup hydration, stale/clear UI, and offline filter tests exist; physical offline-restart screenshot evidence pending. |
+| Filter parity | 24 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple city/country selection is not implemented. |
+| Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; screenshot comparison pending. |
 | Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact. |
-| Tests/builds | 10 / 15 | Format, analyze, full `flutter test --coverage`, debug APK, release APK, and release AAB pass; integration test not rerun for this slice. |
-| Evidence/human readiness | 5 / 10 | Search-top side-by-side exists; required post-cache/filter/icon screenshots are not produced yet. |
+| Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, and release AAB pass; integration test not rerun. |
+| Evidence/human readiness | 2 / 10 | Audit updated, but post-fix app screenshots are blocked by the locked Pixel. |
 
-## Remaining Gates
+## Next Required Human Action
 
-- Human must compare the Android screenshot package with the iOS app/reference screenshots.
-- Physical Pixel 8 Pro Android 17 verification is still required.
-- A future slice should persist the local save/offline cache across app restarts.
-- A future slice should enrich saved job rows with title/org metadata without waiting for detail open.
+Unlock the connected Pixel 8 Pro, then rerun screenshot capture and offline-restart verification.
+Do not claim 80%+ completion until those screenshots prove the Android UI/behavior is close to the
+iOS reference.

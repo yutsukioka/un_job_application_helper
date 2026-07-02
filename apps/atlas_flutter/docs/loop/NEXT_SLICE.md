@@ -1,38 +1,57 @@
 # Next Slice
 
-Gate state: PR #10 remains below completion. Human testing identified three hard blockers:
-persistent cache does not survive restart, filters are not iOS-complete, and icons still read as
-Material-first instead of Atlas/iOS parity.
+Gate state: implementation for persistent cache, full iOS-style filter groups, single-value
+City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
+PR #10 remains below completion because post-fix in-app screenshots and physical offline-restart
+verification are blocked by the locked Pixel.
 
-Intent: close the Android product-behavior gap for persistent offline startup, iOS-equivalent
-filters with nested/cascading option behavior, and Cupertino-style icon parity. Implementation
-must start from focused tests and avoid unrelated JobAgg lifecycle or fetching changes.
+## Intent
 
-## Phase 1 Audit
+Capture human-reviewable evidence on the unlocked Pixel 8 Pro and fix any visible regressions found
+from that evidence. Do not start broad backend or JobAgg lifecycle work.
 
-| iOS behavior | Current Android behavior | Required change | Files to modify | Test to add |
-| --- | --- | --- | --- | --- |
-| Local save survives app restart and appears immediately on offline launch. | `AtlasAppController` stores `results`, `total`, `cacheSavedAt`, saved searches, sources, updates, tracker records, and health only in memory. Settings text explicitly says rows are cached "for this session." | Add persistent file-backed cache with schema version, atomic write, 7-day retention, stale-after-24h state, corrupted-cache recovery, manual refresh write, clear-cache action, and startup load before network refresh. Use an Android method channel for app `filesDir` plus injectable paths in tests. | `apps/atlas_flutter/lib/atlas.dart`, `apps/atlas_flutter/lib/features/app_shell/atlas_app.dart`, `apps/atlas_flutter/android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/MainActivity.kt`, Settings UI. | Cache store read/write/corruption tests; controller startup loads cached data without transport; widget test for restart simulation; offline startup shows cached results and stale indicator; clear cache test. |
-| Search/filter/sort work from cached data while refresh is unavailable. | Controller refreshes every query/filter/sort through `/api/search`; if server fails it keeps only whatever memory state exists in the running process. A fresh process starts empty. | Persist the last complete default/list snapshot and enough operational state to render results, facets, count reconciliation, sources, updates, saved jobs/searches. On offline startup, hydrate controller from cache and mark stale/offline; if live refresh fails, keep cached state. | `AtlasAppController`, new `AtlasLocalCacheStore`/snapshot models. | Filter/search/sort against hydrated cache; failed refresh does not clear cached results; result count label from cache. |
-| Dark iOS filter modal with drag handle, `Filters` title, top-right `Done`, sticky `Reset`/`Apply filters`, compact two-column option pills, counts, dimmed zero-result values, and explanatory text. | `AtlasFilterSheet` is a light `ListView` with only four `SwitchListTile`s: Open only, Closing soon, Remote, Best fit. No draft/apply state, no sticky actions, no counts, no dimming. | Replace with iOS-style dark modal. Use draft filter state; Reset clears to default; Apply commits; Done closes consistently. Render compact pill grids with counts and dimmed availability. | `AtlasFilterSheet`, supporting pill/group widgets, controller filter-apply methods. | Widget tests for sheet structure, Done/Reset/Apply, counts visible, dimmed unavailable option, selected dimmed option remains visible. |
-| Full filter groups: Status, Location, Scope, Contract, Seniority, Grade, CCOG Family, Organizations, Work Mode, Capability Tags. | Data model already contains many fields (`contractGroups`, `seniorityGroups`, `gradeCodes`, `ccogFamilies`, `organizations`, `workModalities`, `capabilityTags`), but UI exposes only Open/Closing/Remote/Best fit. | Surface all iOS groups. Preserve existing request contract where possible. Decode/use facet labels. Add capability text input and selectable chips. | `AtlasSearchFilters`, `AtlasSearchRequest`, `AtlasFilterSheet`, tests. | Filter model request tests for every group; widget tests that each group renders and changes request state. |
-| City <=> Country cascade with country/city option counts and uncertain-match toggle. | Model has single `city` and `countryISO3`; active chips exist. Backend search supports `cities`, `countries_iso3`, `include_low_confidence`, but current facets do not expose countries/cities and UI has no city/country pickers. | Add location facet support, preferably via smallest API addition to return countries/cities from `vacancy_locations` with counts. UI should restrict city options by selected countries and country options by selected cities; selected values remain visible. | `packages/jobagg/jobagg/filters/query.py`, `services/job-api/job_api/app.py/models.py` only if needed for facet contract; Flutter filter model/UI. | Cascade tests for Japan -> Japanese cities, Tokyo -> Japan, multi-country/multi-city, uncertain toggle, no silent empty state. |
-| Seniority <=> Grade cascade based on `standard_seniority_tier` where possible. | Search results include `standard_seniority_tier` from backend, but Flutter `JobSearchResult` ignores it. Backend request filters use `seniority_groups` against `c.seniority_group`, not `standard_seniority_tier`; facets expose `grades` and `seniority_groups`, not grade-to-standard-seniority mapping. | Inspect live DB/API values before final mapping. Add smallest facet metadata contract for `grade_to_seniority` and, if product semantics require it, standard seniority facet/filter values. UI should restrict grade options from selected seniority and indicate seniority from selected grade. | Backend facet contract if current `seniority_group` is insufficient; `JobSearchResult`; Flutter cascade model/UI. | Data-derived grade/seniority mapping tests; seniority -> grade and grade -> seniority reverse tests, including unknown/ungraded. |
-| Icons visually match iOS product language: filter/sliders, bookmark, clock/deadline, location, building, briefcase, remote/home, target, updates, sources, settings, chevron, warning/info. | Most icons are Material defaults (`Icons.search`, `Icons.tune`, `Icons.bookmark`, `Icons.history`, `Icons.settings_input_antenna`, `Icons.work_outline`, etc.). `cupertino_icons` is available but not consistently used. | Create a shared icon mapping using Cupertino-style icons or local vector assets where Cupertino lacks a match. Replace core navigation/search/filter/detail icons with consistent stroke/size and test representative widgets. | `atlas_app.dart`; possibly a new `atlas_icons.dart`. | Widget tests verifying core controls use expected icon data/assets; screenshot review checklist for icons. |
-| Existing wins stay intact. | Search count reconciliation, Updates/Sources, Job Detail, compact rows, and hidden diagnostics currently pass previous tests. | Preserve behavior while adding cache/filter/icon work. | Existing Flutter files/tests. | Regression tests for `2,274 searchable results` semantics, compact rows, no diagnostic text in Search rows, Updates/Sources/Detail still render. |
+## Acceptance Tests
 
-## Implementation Acceptance
+- Unlock Pixel 8 Pro `38281FDJG001DJ`.
+- Launch installed release APK `com.yutsukioka.jobagg.atlas`.
+- With server available, refresh Search and confirm cached dataset is written.
+- Kill app, disable/stop server or make it unreachable, relaunch app, and confirm cached Search rows
+  appear immediately with `Offline (cached)`/stale state.
+- Verify Search, filter sheet, filter chips, sort, saved state, Job Detail, Updates, Sources, and
+  Settings still work from cached or live data as appropriate.
+- Capture screenshots:
+  - Search top and scrolled
+  - Filter sheet top
+  - Filter Location, Contract, Seniority, Grade, CCOG, Organizations, Work Mode, Capability Tags
+  - Filter sheet with Japan selected
+  - Filter sheet with Tokyo selected
+  - Filter sheet with Entry Junior selected
+  - Filter sheet with grade `P1` selected if present
+  - Offline restart with cached data visible
+  - Settings cache status
+  - Job Detail, Saved, Updates, Sources
+- Update `ANDROID_SEARCH_UI_AUDIT.md` with screenshot paths and human-visible differences.
+- Run `dart format --set-exit-if-changed .`, `dart analyze`, `flutter test --coverage`, and the
+  Android release build after any visual fixes.
 
-- Persistent cache loads before network and survives a simulated controller/app restart.
-- Offline startup with a valid cache renders Search rows, result count, filter state/facets, saved state, Settings cache status, Updates, and Sources.
-- Filter sheet contains every iOS group and uses dark modal/sticky actions/two-column count pills.
-- City/Country and Seniority/Grade cascades work in both directions from data-derived options.
-- Core icons use a shared iOS-style mapping and no obvious Material placeholder remains in Search, tabs, filter sheet, Job rows, Detail, Saved, Updates, Sources, or Settings.
-- Focused cache/filter/icon tests pass before full verification.
-- Full verification is deferred until implementation stabilizes: `dart format --set-exit-if-changed .`, `dart analyze`, `flutter test --coverage`, debug/release builds, integration test, screenshots, and USB Pixel install.
+## Known Remaining Technical Gaps
 
-## Audit Notes
+| Gap | Current state | Required next action |
+| --- | --- | --- |
+| Screenshot evidence | Latest capture shows Pixel lock screen only. | Unlock device and capture post-fix app screenshots. |
+| Physical offline restart | Covered by controller/cache tests, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
+| Multiple city/country selections | Flutter matches current Swift model with single `city` and `countryISO3`. | Decide whether product wants to extend both iOS and Android to multi-select. |
+| Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
+| Coverage | 90.62% after large filter UI addition. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
+| Integration test | Not rerun in the latest slice. | Run `flutter test integration_test -d emulator-5554` or document emulator blocker. |
 
-- The running API at `http://10.253.1.43:8765` was not reachable during this audit attempt, and no local `output/all_jobs.sqlite3` file is present in this checkout. Code inspection confirms the backend search row includes `standard_seniority_tier`, while current facet counts lack city/country and grade-to-seniority metadata.
-- Current `/api/search` facet counts are computed with all active filters applied, including the facet's own group. iOS dimmed-value behavior needs counts computed with other groups applied so unavailable values can remain visible but dimmed.
-- No new implementation code should be written until cache tests and filter/cascade tests are added for the first concrete slice.
+## Last Verification Snapshot
+
+- Format: pass.
+- Analyze: pass.
+- Full tests: pass, 41 tests.
+- Coverage: pass, `2665/2941` lines, `90.62%`.
+- Debug APK: pass.
+- Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
+- Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
+- USB Pixel install: pass, `lastUpdateTime=2026-07-03 01:07:21`.
