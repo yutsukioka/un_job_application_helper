@@ -3,6 +3,15 @@ import SwiftUI
 public enum AtlasReferenceCaptureMode: String, CaseIterable, Sendable {
     case search
     case filters
+    case filterLocation = "filter_location"
+    case filterContractSeniority = "filter_contract_seniority"
+    case filterGradeCcog = "filter_grade_ccog"
+    case filterOrganizationsWorkMode = "filter_organizations_work_mode"
+    case filterCapabilityTags = "filter_capability_tags"
+    case filterJapan = "filter_japan"
+    case filterTokyo = "filter_tokyo"
+    case filterEntryJunior = "filter_entry_junior"
+    case filterGradeSelected = "filter_grade_selected"
     case detail
     case saved
     case updates
@@ -22,6 +31,7 @@ public struct AtlasReferenceCaptureView: View {
         try? AtlasLocalCache.saveSnapshot(snapshot)
         AtlasReferenceCaptureData.seedDetails()
         let model = AtlasSearchViewModel()
+        model.filters = mode.referenceFilters
         self.mode = mode
         _viewModel = StateObject(wrappedValue: model)
         _selectedJob = State(initialValue: snapshot.searchResponse.results.first)
@@ -31,11 +41,11 @@ public struct AtlasReferenceCaptureView: View {
         content
             .task {
                 await viewModel.loadIfNeeded()
-                if mode == .filters {
+                if mode.isFilterReference {
                     await viewModel.refreshFilterAvailability()
                 }
             }
-            .preferredColorScheme(mode == .filters ? .dark : nil)
+            .preferredColorScheme(mode.isFilterReference ? .dark : nil)
     }
 
     @ViewBuilder
@@ -47,6 +57,13 @@ public struct AtlasReferenceCaptureView: View {
             }
         case .filters:
             FilterSheetView(viewModel: viewModel, isPresented: $isFilterSheetPresented)
+        case .filterLocation, .filterContractSeniority, .filterGradeCcog, .filterOrganizationsWorkMode,
+             .filterCapabilityTags, .filterJapan, .filterTokyo, .filterEntryJunior, .filterGradeSelected:
+            FilterSheetView(
+                viewModel: viewModel,
+                isPresented: $isFilterSheetPresented,
+                initialScrollTarget: mode.filterScrollTarget
+            )
         case .detail:
             NavigationStack {
                 if let selectedJob {
@@ -71,6 +88,58 @@ public struct AtlasReferenceCaptureView: View {
         case .settings:
             AtlasSettingsPanel(viewModel: viewModel)
         }
+    }
+}
+
+private extension AtlasReferenceCaptureMode {
+    var isFilterReference: Bool {
+        switch self {
+        case .filters, .filterLocation, .filterContractSeniority, .filterGradeCcog,
+             .filterOrganizationsWorkMode, .filterCapabilityTags, .filterJapan, .filterTokyo,
+             .filterEntryJunior, .filterGradeSelected:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var filterScrollTarget: FilterSheetScrollTarget? {
+        switch self {
+        case .filterLocation, .filterJapan, .filterTokyo:
+            return .location
+        case .filterContractSeniority:
+            return .contract
+        case .filterGradeCcog, .filterEntryJunior:
+            return .grade
+        case .filterOrganizationsWorkMode:
+            return .organizations
+        case .filterCapabilityTags:
+            return .capabilityTags
+        case .filterGradeSelected:
+            return .seniority
+        default:
+            return nil
+        }
+    }
+
+    var referenceFilters: AtlasSearchFilters {
+        var filters = AtlasSearchFilters()
+        switch self {
+        case .filterJapan:
+            filters.countryISO3 = "Japan"
+        case .filterTokyo:
+            filters.city = "Tokyo"
+        case .filterEntryJunior:
+            filters.seniorityGroups = ["entry_junior"]
+        case .filterGradeSelected:
+            filters.gradeCodes = ["P2"]
+        case .filterCapabilityTags:
+            filters.capabilityTags = ["programming", "procurement"]
+            filters.capabilityQuery = "data"
+        default:
+            break
+        }
+        return filters
     }
 }
 

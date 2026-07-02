@@ -753,9 +753,23 @@ struct LoadMoreResultsRow: View {
     }
 }
 
+enum FilterSheetScrollTarget: Hashable {
+    case status
+    case location
+    case scope
+    case contract
+    case seniority
+    case grade
+    case ccog
+    case organizations
+    case workMode
+    case capabilityTags
+}
+
 struct FilterSheetView: View {
     @ObservedObject var viewModel: AtlasSearchViewModel
     @Binding var isPresented: Bool
+    var initialScrollTarget: FilterSheetScrollTarget? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var availabilityTask: Task<Void, Never>?
 
@@ -775,144 +789,163 @@ struct FilterSheetView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        FilterGroupView(title: "Status", summary: statusSummary) {
-                            Toggle("Open only", isOn: boolBinding(\.openOnly))
-                            Toggle("Closing soon", isOn: boolBinding(\.closingSoon))
-                        }
-
-                        FilterGroupView(title: "Location", summary: locationSummary) {
-                            LabeledContent {
-                                TextField("Any city", text: textBinding(\.city))
-                                    .textFieldStyle(.roundedBorder)
-                            } label: {
-                                Label("City", systemImage: "mappin.and.ellipse")
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            FilterGroupView(title: "Status", summary: statusSummary) {
+                                Toggle("Open only", isOn: boolBinding(\.openOnly))
+                                Toggle("Closing soon", isOn: boolBinding(\.closingSoon))
                             }
-                            LabeledContent {
-                                TextField("ISO3", text: textBinding(\.countryISO3))
-                                    .textFieldStyle(.roundedBorder)
-                                    .textCase(.uppercase)
-                                    .frame(maxWidth: 120)
-                            } label: {
-                                Label("Country", systemImage: "globe.europe.africa")
-                            }
-                            Toggle("Include uncertain matches", isOn: boolBinding(\.includeLowConfidence))
-                        }
+                            .id(FilterSheetScrollTarget.status)
 
-                        FilterGroupView(title: "Scope", summary: viewModel.filters.scope.title) {
-                            Picker("Scope", selection: scopeBinding) {
-                                ForEach(AtlasScopeFilter.allCases) { scope in
-                                    Text(scope.title).tag(scope)
+                            FilterGroupView(title: "Location", summary: locationSummary) {
+                                LabeledContent {
+                                    TextField("Any city", text: textBinding(\.city))
+                                        .textFieldStyle(.roundedBorder)
+                                } label: {
+                                    Label("City", systemImage: "mappin.and.ellipse")
+                                }
+                                LabeledContent {
+                                    TextField("ISO3", text: textBinding(\.countryISO3))
+                                        .textFieldStyle(.roundedBorder)
+                                        .textCase(.uppercase)
+                                        .frame(maxWidth: 120)
+                                } label: {
+                                    Label("Country", systemImage: "globe.europe.africa")
+                                }
+                                Toggle("Include uncertain matches", isOn: boolBinding(\.includeLowConfidence))
+                            }
+                            .id(FilterSheetScrollTarget.location)
+
+                            FilterGroupView(title: "Scope", summary: viewModel.filters.scope.title) {
+                                Picker("Scope", selection: scopeBinding) {
+                                    ForEach(AtlasScopeFilter.allCases) { scope in
+                                        Text(scope.title).tag(scope)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            .id(FilterSheetScrollTarget.scope)
+
+                            FilterFacetGroupView(
+                                title: "Contract",
+                                emptySummary: "Any contract",
+                                options: contractOptions,
+                                isSelected: contractBinding,
+                                isEnabled: contractOptionEnabled
+                            )
+                            .id(FilterSheetScrollTarget.contract)
+
+                            if viewModel.filters.volunteerKinds.contains(AtlasVolunteerKind.unVolunteer.rawValue) {
+                                FilterGroupView(title: "UN Volunteer Category", summary: unvCategorySummary) {
+                                    FilterChoiceGrid {
+                                        ForEach(unvCategoryOptions) { option in
+                                            FilterChoiceButton(
+                                                title: option.title,
+                                                subtitle: option.count.formatted(),
+                                                isEnabled: optionEnabled("unv_categories", option.id, selected: viewModel.filters.unvCategories),
+                                                isSelected: setBinding(option.id, \.unvCategories)
+                                            )
+                                        }
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        ForEach(atlasUNVCategoryInfo) { category in
+                                            Text("\(category.title): \(category.detail)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                 }
                             }
-                            .pickerStyle(.segmented)
-                        }
 
-                        FilterFacetGroupView(
-                            title: "Contract",
-                            emptySummary: "Any contract",
-                            options: contractOptions,
-                            isSelected: contractBinding,
-                            isEnabled: contractOptionEnabled
-                        )
+                            FilterFacetGroupView(
+                                title: "Seniority",
+                                emptySummary: "Any seniority",
+                                options: seniorityOptions,
+                                isSelected: { setBinding($0, \.seniorityGroups) },
+                                isEnabled: { optionEnabled("seniority_groups", $0, selected: viewModel.filters.seniorityGroups) }
+                            )
+                            .id(FilterSheetScrollTarget.seniority)
 
-                        if viewModel.filters.volunteerKinds.contains(AtlasVolunteerKind.unVolunteer.rawValue) {
-                            FilterGroupView(title: "UN Volunteer Category", summary: unvCategorySummary) {
+                            FilterFacetGroupView(
+                                title: "Grade",
+                                emptySummary: "Any grade",
+                                options: gradeOptions,
+                                isSelected: { setBinding($0, \.gradeCodes) },
+                                isEnabled: { optionEnabled("grades", $0, selected: viewModel.filters.gradeCodes) }
+                            )
+                            .id(FilterSheetScrollTarget.grade)
+
+                            FilterFacetGroupView(
+                                title: "CCOG Family",
+                                emptySummary: "Any CCOG family",
+                                options: viewModel.availabilityFacetOptions(
+                                    "ccog_families",
+                                    limit: 20,
+                                    selected: viewModel.filters.ccogFamilies
+                                ),
+                                isSelected: { setBinding($0, \.ccogFamilies) },
+                                isEnabled: { optionEnabled("ccog_families", $0, selected: viewModel.filters.ccogFamilies) }
+                            )
+                            .id(FilterSheetScrollTarget.ccog)
+
+                            FilterFacetGroupView(
+                                title: "Organizations",
+                                emptySummary: "Any organization",
+                                options: viewModel.availabilityFacetOptions(
+                                    "organizations",
+                                    limit: 10,
+                                    selected: viewModel.filters.organizations
+                                ),
+                                isSelected: { setBinding($0, \.organizations) },
+                                isEnabled: { optionEnabled("organizations", $0, selected: viewModel.filters.organizations) }
+                            )
+                            .id(FilterSheetScrollTarget.organizations)
+
+                            FilterGroupView(title: "Work Mode", summary: viewModel.filters.workModalities.isEmpty ? "Any mode" : viewModel.filters.workModalitySummary) {
                                 FilterChoiceGrid {
-                                    ForEach(unvCategoryOptions) { option in
+                                    ForEach(workModeOptionsForDisplay) { option in
                                         FilterChoiceButton(
                                             title: option.title,
                                             subtitle: option.count.formatted(),
-                                            isEnabled: optionEnabled("unv_categories", option.id, selected: viewModel.filters.unvCategories),
-                                            isSelected: setBinding(option.id, \.unvCategories)
-                                        )
-                                    }
-                                }
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(atlasUNVCategoryInfo) { category in
-                                        Text("\(category.title): \(category.detail)")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-
-                        FilterFacetGroupView(
-                            title: "Seniority",
-                            emptySummary: "Any seniority",
-                            options: seniorityOptions,
-                            isSelected: { setBinding($0, \.seniorityGroups) },
-                            isEnabled: { optionEnabled("seniority_groups", $0, selected: viewModel.filters.seniorityGroups) }
-                        )
-
-                        FilterFacetGroupView(
-                            title: "Grade",
-                            emptySummary: "Any grade",
-                            options: gradeOptions,
-                            isSelected: { setBinding($0, \.gradeCodes) },
-                            isEnabled: { optionEnabled("grades", $0, selected: viewModel.filters.gradeCodes) }
-                        )
-
-                        FilterFacetGroupView(
-                            title: "CCOG Family",
-                            emptySummary: "Any CCOG family",
-                            options: viewModel.availabilityFacetOptions(
-                                "ccog_families",
-                                limit: 20,
-                                selected: viewModel.filters.ccogFamilies
-                            ),
-                            isSelected: { setBinding($0, \.ccogFamilies) },
-                            isEnabled: { optionEnabled("ccog_families", $0, selected: viewModel.filters.ccogFamilies) }
-                        )
-
-                        FilterFacetGroupView(
-                            title: "Organizations",
-                            emptySummary: "Any organization",
-                            options: viewModel.availabilityFacetOptions(
-                                "organizations",
-                                limit: 10,
-                                selected: viewModel.filters.organizations
-                            ),
-                            isSelected: { setBinding($0, \.organizations) },
-                            isEnabled: { optionEnabled("organizations", $0, selected: viewModel.filters.organizations) }
-                        )
-
-                        FilterGroupView(title: "Work Mode", summary: viewModel.filters.workModalities.isEmpty ? "Any mode" : viewModel.filters.workModalitySummary) {
-                            FilterChoiceGrid {
-                                ForEach(workModeOptionsForDisplay) { option in
-                                    FilterChoiceButton(
-                                        title: option.title,
-                                        subtitle: option.count.formatted(),
-                                        isEnabled: optionEnabled("work_modalities", option.id, selected: viewModel.filters.workModalities),
-                                        isSelected: setBinding(option.id, \.workModalities)
-                                    )
-                                }
-                            }
-                        }
-
-                        FilterGroupView(title: "Capability Tags", summary: viewModel.filters.trimmedCapabilityQuery.isEmpty ? "Any capability" : viewModel.filters.trimmedCapabilityQuery) {
-                            TextField("data, programme, reporting", text: textBinding(\.capabilityQuery))
-                                .textFieldStyle(.roundedBorder)
-                            if !capabilityOptions.isEmpty {
-                                FilterChoiceGrid {
-                                    ForEach(capabilityOptions) { option in
-                                        FilterChoiceButton(
-                                            title: option.title,
-                                            subtitle: option.count.formatted(),
-                                            isEnabled: optionEnabled("capability_tags", option.id, selected: viewModel.filters.capabilityTags),
-                                            isSelected: setBinding(option.id, \.capabilityTags)
+                                            isEnabled: optionEnabled("work_modalities", option.id, selected: viewModel.filters.workModalities),
+                                            isSelected: setBinding(option.id, \.workModalities)
                                         )
                                     }
                                 }
                             }
-                            Text("Type comma-separated keywords, or select capability tags. Multiple values in this group match any selected value.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            .id(FilterSheetScrollTarget.workMode)
+
+                            FilterGroupView(title: "Capability Tags", summary: viewModel.filters.trimmedCapabilityQuery.isEmpty ? "Any capability" : viewModel.filters.trimmedCapabilityQuery) {
+                                TextField("data, programme, reporting", text: textBinding(\.capabilityQuery))
+                                    .textFieldStyle(.roundedBorder)
+                                if !capabilityOptions.isEmpty {
+                                    FilterChoiceGrid {
+                                        ForEach(capabilityOptions) { option in
+                                            FilterChoiceButton(
+                                                title: option.title,
+                                                subtitle: option.count.formatted(),
+                                                isEnabled: optionEnabled("capability_tags", option.id, selected: viewModel.filters.capabilityTags),
+                                                isSelected: setBinding(option.id, \.capabilityTags)
+                                            )
+                                        }
+                                    }
+                                }
+                                Text("Type comma-separated keywords, or select capability tags. Multiple values in this group match any selected value.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .id(FilterSheetScrollTarget.capabilityTags)
+                        }
+                        .padding(20)
+                    }
+                    .task(id: initialScrollTarget) {
+                        guard let initialScrollTarget else { return }
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        withAnimation(.snappy(duration: 0.2)) {
+                            proxy.scrollTo(initialScrollTarget, anchor: .top)
                         }
                     }
-                    .padding(20)
                 }
 
                 HStack(spacing: 12) {

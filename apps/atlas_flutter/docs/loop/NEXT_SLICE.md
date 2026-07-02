@@ -2,10 +2,11 @@
 
 Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
-Emulator release-app screenshots, source-rendered iOS Simulator references, offline restart
-evidence, and Android Search/filter-sheet/Job Detail/tab golden baselines are captured. PR #10
-remains below completion because physical Pixel in-app screenshots, physical offline-restart
-verification, and exact user-provided iOS screenshot pairing are still pending.
+Emulator release-app screenshots, source-rendered iOS Simulator references, filter-section/cascade
+iOS Simulator references, offline restart evidence, and Android Search/filter-sheet/Job Detail/tab
+golden baselines are captured. PR #10 remains below completion because physical Pixel in-app
+screenshots, physical offline-restart verification, and exact user-provided iOS screenshot pairing
+are still pending.
 
 ## Intent
 
@@ -47,7 +48,7 @@ JobAgg lifecycle work.
 | Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
-| iOS side-by-side package | Source-rendered iOS Simulator references now exist for Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots, then build final side-by-side review package after physical Android captures. |
+| iOS side-by-side package | Source-rendered iOS Simulator references now exist for Search, Filter sheet, Filter section/cascade states, Job Detail, Saved, Updates, Sources, and Settings. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots, then build final side-by-side review package after physical Android captures. |
 | Android goldens | Search-top, filter-sheet top, populated Job Detail top, Saved, Updates, Sources, and Settings goldens exist under `test/goldens/android/`. | Use physical Pixel/iOS review to decide whether additional scrolled-state or component goldens are needed. |
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
@@ -79,6 +80,16 @@ JobAgg lifecycle work.
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`,
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`, and
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`.
+- Source-rendered iOS filter-section/cascade references:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_contract_seniority.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_ccog.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_organizations_work_mode.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_capability_tags.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`, and
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`.
 - Android golden baselines:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`,
   `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`, and

@@ -290,6 +290,20 @@ Expanded source-rendered iOS Simulator reference screenshots are available under
   `ios_settings_reference.png`: source-rendered iOS tab references for the implemented non-Search
   screens.
 
+Source-rendered iOS Filter-section and cascade reference screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/`:
+
+- `ios_filter_location.png`: Location section with City, Country, Include uncertain matches, and
+  Scope visible.
+- `ios_filter_contract_seniority.png`: Contract and Seniority sections with compact count pills.
+- `ios_filter_grade_ccog.png`: Grade and CCOG Family sections.
+- `ios_filter_organizations_work_mode.png`: Organizations and Work Mode sections.
+- `ios_filter_capability_tags.png`: Work Mode plus Capability Tags with query and selected chips.
+- `ios_filter_japan_selected.png`: Country-selected cascade state.
+- `ios_filter_tokyo_selected.png`: City-selected reverse cascade state.
+- `ios_filter_entry_junior_selected.png`: Seniority-selected cascade state.
+- `ios_filter_grade_selected.png`: Grade-selected reverse cascade state.
+
 Android golden baseline:
 
 - `apps/atlas_flutter/test/goldens/android/search_top_compact.png`: Flutter golden for Search-top
@@ -321,7 +335,7 @@ Previously generated evidence remains available for Search top comparison:
 
 The remaining screenshot gaps are physical Pixel in-app evidence after the device is unlocked and
 exact user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS
-references now exist for the main review screens.
+references now exist for the main review screens plus the major filter sections and cascade states.
 
 ## Manual Emulator Evidence
 
@@ -343,9 +357,10 @@ references now exist for the main review screens.
   blocker, though emulator screenshots are now captured.
 - Fresh Pixel check on 2026-07-03 still shows the lock screen while Atlas is resumed underneath
   keyguard.
-- Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings now have source-rendered
-  iOS Simulator reference screenshots. True pixel-paired human review still needs local copies of
-  the user-provided iOS screenshots and physical Android captures.
+- Search, Filter sheet, the major Filter sections/cascade states, Job Detail, Saved, Updates,
+  Sources, and Settings now have source-rendered iOS Simulator reference screenshots. True
+  pixel-paired human review still needs local copies of the user-provided iOS screenshots and
+  physical Android captures.
 - Search-top, filter-sheet top, populated Job Detail top, and implemented Saved/Updates/Sources/
   Settings tabs now have Android golden regression tests. Physical Pixel and iOS reference review
   are still required.
@@ -367,12 +382,12 @@ references now exist for the main review screens.
 
 ## Scorecard
 
-Strict score under the new user caps: **82/100**.
+Strict score under the new user caps: **83/100**.
 
 The local iOS evidence gap is reduced because source-rendered iOS references now exist for Search,
-Filter sheet, Job Detail, Saved, Updates, Sources, and Settings. The score remains below final
-completion because physical Pixel in-app screenshots/offline restart and exact user-provided iOS
-screenshot pairing are still not complete.
+Filter sheet sections/cascades, Job Detail, Saved, Updates, Sources, and Settings. The score remains
+below final completion because physical Pixel in-app screenshots/offline restart and exact
+user-provided iOS screenshot pairing are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
@@ -381,7 +396,7 @@ screenshot pairing are still not complete.
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
 | Tests/builds | 15 / 15 | Format, analyze, 55 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
-| Evidence/human readiness | 5 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens, and Search side-by-side are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
+| Evidence/human readiness | 6 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, and Search side-by-side are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
 
 ## Next Required Human Action
 

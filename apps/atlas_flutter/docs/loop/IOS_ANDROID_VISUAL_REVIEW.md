@@ -11,6 +11,8 @@ Fresh iOS Simulator reference set:
 `screenshots/ios-simulator-reference-20260703/`
 Expanded iOS Simulator reference set:
 `screenshots/ios-simulator-expanded-20260703/`
+Filter-section iOS Simulator reference set:
+`screenshots/ios-simulator-filter-sections-20260703/`
 Android golden baseline:
 
 - `../../test/goldens/android/search_top_compact.png`
@@ -42,6 +44,19 @@ Detail, Saved, Updates, Sources, and Settings from `AtlasIOSHost` launched with 
 - `screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`
 - `screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`
 - `screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`
+
+The latest evidence pass adds source-rendered iOS Filter-sheet section and cascade references. These
+are captured from the real Swift filter sheet using scroll-targeted reference modes:
+
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_contract_seniority.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_ccog.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_organizations_work_mode.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_capability_tags.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`
+- `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`
 
 These captures render the real Swift views with seeded review data. They are better than a hand-made
 mock and are now suitable for local human review. The user-provided iOS screenshots are still not
@@ -106,15 +121,16 @@ Single-image Android review contact sheet:
 | Search top, latest live count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Current release shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search scrolled | `screenshots/ios-simulator-expanded-20260703/ios_search_reference.png` for top reference; no scrolled iOS capture yet | `screenshots/filter-cache-icons-emulator-20260703/search_scrolled.png` | Android scrolled evidence captured; top paired iOS reference exists. |
 | Filter sheet top | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | Both show dark filter sheet structure, title, Done, sticky Reset/Apply, and compact count pills. |
-| Filter Contract/Seniority | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_contract_seniority.png` | iOS reference shows the top through Contract/Seniority; Android section evidence captured. |
-| Filter Grade/CCOG | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_ccog.png` | Android section evidence captured; iOS top reference confirms same group order. |
-| Filter Organizations/Work Mode | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_organizations_workmode.png` | Android section evidence captured; iOS top reference plus Swift source confirm group presence. |
-| Filter Capability Tags | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_capability_tags.png` | Android section evidence captured; iOS top reference plus Swift source confirm group presence. |
-| Country -> City cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png` | `JPN` selected; city options narrow to `TOKYO`. |
-| City -> Country cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png` | `TOKYO` selected; `JPN` remains visible as matching country option. |
-| Multi City/Country values | Swift source has string fields; product requirement asks Android multi-select | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png`, `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png`; tests in `test/atlas_filters_test.dart` and `test/atlas_search_controller_test.dart` | Android now accepts comma/semicolon-separated location text and multi-select pills; values serialize as Search API lists and filter cached rows as OR within Location. |
-| Seniority -> Grade cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_entry_junior_selected.png` | `Entry Junior` selected; Grade options narrow. |
-| Grade selected | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_selected.png` | Grade selected state captured. |
+| Filter Location | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | iOS and Android both expose City, Country, and uncertain-match controls before Scope. |
+| Filter Contract/Seniority | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_contract_seniority.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_contract_seniority.png` | Section-specific iOS and Android evidence now exists for compact Contract and Seniority count pills. |
+| Filter Grade/CCOG | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_ccog.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_ccog.png` | Section-specific iOS and Android evidence now exists for Grade and CCOG Family. |
+| Filter Organizations/Work Mode | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_organizations_work_mode.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_organizations_workmode.png` | Section-specific iOS and Android evidence now exists for Organizations and Work Mode. |
+| Filter Capability Tags | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_capability_tags.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_capability_tags.png` | Section-specific iOS and Android evidence now exists for capability query and selectable chips. |
+| Country -> City cascade | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png` | iOS `JAPAN`/Android `JPN` selected; downstream options narrow to Japan-compatible Contract, Seniority, and Grade values. |
+| City -> Country cascade | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png` | iOS `Tokyo`/Android `TOKYO` selected; Japan remains visible as the matching country option. |
+| Multi City/Country values | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png`; Swift source has string fields while product requirement asks Android multi-select | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png`, `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png`; tests in `test/atlas_filters_test.dart` and `test/atlas_search_controller_test.dart` | Android now accepts comma/semicolon-separated location text and multi-select pills; values serialize as Search API lists and filter cached rows as OR within Location. |
+| Seniority -> Grade cascade | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_entry_junior_selected.png` | Entry Junior selected; Grade options narrow in the reviewable cascade state. |
+| Grade selected | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_selected.png` | Grade selected state now has local iOS and Android evidence. |
 | Offline restart | Not applicable | `screenshots/filter-cache-icons-emulator-20260703-current/offline_restart_no_banner.png` | Cached rows visible immediately after offline relaunch with no large normal-state cache banner. |
 | Settings cache status | `screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png` | `screenshots/detail-formatter-20260703/settings_after_reload.png` | Shows cache timestamp, freshness, cached/search/health counts, refresh and clear controls with current `2,266` count. |
 | Job Detail | `screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png` | `screenshots/detail-formatter-20260703/job_detail_top_fixed.png` | Shows populated detail with ATS formatter output; raw source data is hidden from the main detail body and remains behind diagnostics. |
@@ -143,6 +159,9 @@ Single-image Android review contact sheet:
 - [x] Fresh iOS Simulator Search-top side-by-side is generated from a local `AtlasIOSHost` build.
 - [x] Source-rendered iOS references exist for Search, Filter sheet, Job Detail, Saved, Updates,
   Sources, and Settings.
+- [x] Source-rendered iOS Filter-sheet section and cascade references exist for Location,
+  Contract/Seniority, Grade/CCOG, Organizations/Work Mode, Capability Tags, Country -> City,
+  City -> Country, Seniority -> Grade, and Grade-selected states.
 - [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
@@ -163,6 +182,7 @@ Single-image Android review contact sheet:
 ## Score Impact
 
 This package now satisfies the local source-rendered iOS evidence requirement for Search, Filter
-sheet, Job Detail, Saved, Updates, Sources, and Settings. It still does not satisfy the final human
-gate because exact user-provided iOS screenshot files and physical Pixel screenshots are still
-blocked. The strict completion score remains below 85 until those two review gaps are closed.
+sheet, the major Filter subsections/cascade states, Job Detail, Saved, Updates, Sources, and
+Settings. It still does not satisfy the final human gate because exact user-provided iOS screenshot
+files and physical Pixel screenshots are still blocked. The strict completion score remains below
+85 until those two review gaps are closed.
