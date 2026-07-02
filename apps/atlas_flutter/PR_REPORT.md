@@ -110,6 +110,17 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`
+- Generated iOS-vs-Android filter side-by-side review package:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_location_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_contract_seniority_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_ccog_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_organizations_work_mode_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_capability_tags_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_japan_selected_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`
 - Android Search-top golden:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
 - Android filter-sheet top golden:
@@ -164,6 +175,9 @@ Latest app-code verification:
 - `xcrun simctl` launched `AtlasIOSHost` with the new `SIMCTL_CHILD_ATLAS_REFERENCE_CAPTURE`
   filter-section and cascade modes; nine 1206x2622 PNG screenshots were captured under
   `screenshots/ios-simulator-filter-sections-20260703/`.
+- `/Users/yutsukioka2/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
+  /private/tmp/make_filter_side_by_side.py` generated nine iOS-vs-Android Filter side-by-side
+  screenshots plus a contact sheet under `screenshots/ios-android-filter-side-by-side-20260703/`.
 - `flutter test test/search_golden_test.dart` passed after generating
   `test/goldens/android/search_top_compact.png`, `test/goldens/android/filter_sheet_top.png`, and
   `test/goldens/android/job_detail_top.png`.
@@ -190,13 +204,16 @@ Latest physical install evidence:
 - Physical offline restart with cached data visible is not yet human-verified.
 - Human G3 approval is pending.
 - Source-rendered iOS references now exist for primary screens and the major Filter
-  section/cascade states, but exact user-provided iOS screenshots are not available as local files
-  for final pixel-paired side-by-side review.
+  section/cascade states, and generated Filter side-by-side comparisons exist. Exact user-provided
+  iOS screenshots are not available as local files for final pixel-paired side-by-side review.
 - Additional Android scrolled-state or component goldens may still be useful after physical/iOS
   review, but primary Search, filter-sheet, Job Detail, Saved, Updates, Sources, and Settings
   baselines now exist.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
   should decide whether this is visually close enough to the iOS reference.
+- Existing Android Japan/Tokyo cascade screenshots show the software keyboard because the text
+  fields are focused. They prove cascade state, but physical recapture should include cleaner
+  non-keyboard states.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or
   Grade/Seniority; Android computes those facets locally from cached rows.
 
@@ -214,9 +231,10 @@ Latest physical install evidence:
 
 ## Honest Score
 
-Current strict score: `83/100`.
+Current strict score: `84/100`.
 
 The score improves because source-rendered iOS references now exist for the primary screens plus
-the major Filter section/cascade states. It is still capped below final parity because physical
-Pixel in-app evidence and exact user-provided iOS side-by-side review are still missing. Do not
-claim final Android parity completion until those gates are satisfied.
+the major Filter section/cascade states, and the Filter side-by-side package is generated. It is
+still capped below final parity because physical Pixel in-app evidence and exact user-provided iOS
+side-by-side review are still missing. Do not claim final Android parity completion until those
+gates are satisfied.

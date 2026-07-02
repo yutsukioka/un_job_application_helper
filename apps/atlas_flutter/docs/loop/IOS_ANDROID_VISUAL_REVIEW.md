@@ -13,6 +13,8 @@ Expanded iOS Simulator reference set:
 `screenshots/ios-simulator-expanded-20260703/`
 Filter-section iOS Simulator reference set:
 `screenshots/ios-simulator-filter-sections-20260703/`
+Filter side-by-side review set:
+`screenshots/ios-android-filter-side-by-side-20260703/`
 Android golden baseline:
 
 - `../../test/goldens/android/search_top_compact.png`
@@ -57,6 +59,20 @@ are captured from the real Swift filter sheet using scroll-targeted reference mo
 - `screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`
 - `screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`
 - `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`
+
+The same iOS references are now paired with existing Android emulator screenshots in generated
+side-by-side review images:
+
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_location_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_contract_seniority_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_grade_ccog_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_organizations_work_mode_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_capability_tags_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_japan_selected_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`
+- `screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`
 
 These captures render the real Swift views with seeded review data. They are better than a hand-made
 mock and are now suitable for local human review. The user-provided iOS screenshots are still not
@@ -106,6 +122,10 @@ Earlier checked-in iOS reference side-by-side image:
 Single-image Android review contact sheet:
 
 ![Android evidence contact sheet](screenshots/filter-cache-icons-emulator-20260703/android_review_contact_sheet.png)
+
+Generated iOS-vs-Android Filter review contact sheet:
+
+![Filter side-by-side contact sheet](screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png)
 
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
@@ -162,6 +182,8 @@ Single-image Android review contact sheet:
 - [x] Source-rendered iOS Filter-sheet section and cascade references exist for Location,
   Contract/Seniority, Grade/CCOG, Organizations/Work Mode, Capability Tags, Country -> City,
   City -> Country, Seniority -> Grade, and Grade-selected states.
+- [x] Generated iOS-vs-Android side-by-side images exist for the major filter sections and cascade
+  states.
 - [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
@@ -176,6 +198,9 @@ Single-image Android review contact sheet:
 - Android Location filters now support multiple City/Country values, but the visible text-field
   representation is comma-separated. Human review should decide whether this is visually close
   enough to iOS or should become a dedicated selected-chip editor.
+- Existing Android Japan/Tokyo cascade screenshots show the software keyboard because the location
+  text fields are focused. This proves the cascade state, but physical recapture should include
+  cleaner non-keyboard states for final review.
 - Physical Pixel rendering may differ from the emulator capture; the physical device must be
   unlocked and reviewed before this can be treated as final.
 
@@ -183,6 +208,7 @@ Single-image Android review contact sheet:
 
 This package now satisfies the local source-rendered iOS evidence requirement for Search, Filter
 sheet, the major Filter subsections/cascade states, Job Detail, Saved, Updates, Sources, and
-Settings. It still does not satisfy the final human gate because exact user-provided iOS screenshot
-files and physical Pixel screenshots are still blocked. The strict completion score remains below
-85 until those two review gaps are closed.
+Settings, and includes generated iOS-vs-Android side-by-side Filter comparisons. It still does not
+satisfy the final human gate because exact user-provided iOS screenshot files and physical Pixel
+screenshots are still blocked. The strict completion score remains below 85 until those two review
+gaps are closed.
