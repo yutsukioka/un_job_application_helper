@@ -2,13 +2,14 @@
 
 Gate state: implementation for persistent cache, full iOS-style filter groups, single-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
-Emulator release-app screenshots and offline restart evidence are captured. PR #10 remains below
-completion because physical Pixel in-app screenshots, physical offline-restart verification, and
-human iOS side-by-side review are still pending.
+Emulator release-app screenshots, Search-top side-by-side review, and offline restart evidence are
+captured. PR #10 remains below completion because physical Pixel in-app screenshots, physical
+offline-restart verification, and full iOS filter/detail side-by-side review are still pending.
 
 ## Intent
 
-Capture human-reviewable evidence on the unlocked Pixel 8 Pro, create the final iOS-vs-Android
+Capture human-reviewable evidence on the unlocked Pixel 8 Pro, add local copies of the
+user-provided iOS filter/detail screenshots if available, complete the final iOS-vs-Android
 side-by-side review package, and fix any visible regressions found from that evidence. Do not start
 broad backend or JobAgg lifecycle work.
 
@@ -42,7 +43,7 @@ broad backend or JobAgg lifecycle work.
 | --- | --- | --- |
 | Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
-| iOS side-by-side package | Search-top reference exists; full user-provided iOS filter screenshots are not yet packaged side by side. | Build final side-by-side review package after physical Android captures. |
+| iOS side-by-side package | Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md`; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS references, then build final side-by-side review package after physical Android captures. |
 | Multiple city/country selections | Flutter matches current Swift model with single `city` and `countryISO3`. | Decide whether product wants to extend both iOS and Android to multi-select. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
 | Coverage | 90.62% after large filter UI addition. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
@@ -61,3 +62,4 @@ broad backend or JobAgg lifecycle work.
 - Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
 - Emulator offline restart: pass, cached Search showed `2,271 searchable results` immediately from
   local save.
+- Search side-by-side review: `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`.

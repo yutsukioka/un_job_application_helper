@@ -87,12 +87,17 @@ Post-fix emulator screenshots from the release app are available under
 `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`:
 
 - Search: `search_top_refreshed.png`, `search_scrolled.png`, `offline_restart_cached.png`
+- Search side-by-side: `ios_android_search_top_side_by_side.png`
 - Settings/cache status: `settings_after_reload.png`
 - Filter sheet: `filter_top.png`, `filter_contract_seniority.png`, `filter_grade_ccog.png`,
   `filter_organizations_workmode.png`, `filter_capability_tags.png`
 - Cascade states: `filter_japan_selected.png`, `filter_tokyo_selected.png`,
   `filter_entry_junior_selected.png`, `filter_grade_selected.png`
 - Detail/tabs: `job_detail.png`, `saved_tab.png`, `updates_tab.png`, `sources_tab.png`
+
+Dedicated review package:
+
+- `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
 
 Previously generated evidence remains available for Search top comparison:
 
@@ -117,8 +122,8 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
 
 - Physical in-app screenshots for the new cache/filter/icon slice are missing due to lock-screen
   blocker, though emulator screenshots are now captured.
-- Filter sheet parity is implemented from Swift source and covered by tests, but still needs human
-  visual review against the user-provided iOS screenshots.
+- Filter sheet parity is implemented from Swift source and covered by tests, but true pixel-paired
+  human review still needs local copies of the user-provided iOS filter screenshots.
 - Flutter still models Location as single `city` and single `countryISO3`, matching the checked-in
   Swift model. Multi-country/multi-city selection from the user note is not implemented in this
   slice.
@@ -133,11 +138,11 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
 
 ## Scorecard
 
-Strict score under the new user caps: **78/100**.
+Strict score under the new user caps: **79/100**.
 
-The screenshot cap is no longer the limiting factor for emulator review, but the score remains below
-80 because physical Pixel in-app screenshots and user-provided iOS side-by-side review are still not
-complete.
+The screenshot cap is no longer the limiting factor for emulator review, and a Search-top
+side-by-side package now exists. The score remains below 80 because physical Pixel in-app screenshots
+and user-provided iOS filter/detail side-by-side review are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
@@ -146,7 +151,7 @@ complete.
 | Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 12 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact; live count moved to 2,271 due deadline timing. |
 | Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, release AAB, and emulator integration test pass; builds were not rerun after the integration-test-only patch. |
-| Evidence/human readiness | 5 / 10 | Emulator evidence is captured; physical Pixel app screenshots and iOS side-by-side package still need final human review. |
+| Evidence/human readiness | 6 / 10 | Emulator evidence and Search side-by-side are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action
 
