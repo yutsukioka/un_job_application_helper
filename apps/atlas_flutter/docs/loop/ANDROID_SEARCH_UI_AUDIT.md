@@ -11,10 +11,10 @@ Updates, Sources, Saved, Settings, and Job Detail flows. The final Android scree
 captured from the installed release APK on `emulator-5554` against the LAN backend
 `http://10.253.1.43:8765`.
 
-This is not a final 90%+ completion claim. Generated iOS simulator Search references are now
-available for the top Search screen, including a refreshed iteration-8 capture, but the full
-multi-screen iOS golden set is still not available. Human review is still required before
-claiming final visual parity.
+This is not a final 80%+ or 90%+ completion claim. Human testing superseded the previous score:
+Android still lacks full iOS filter parity and icon parity. The persistent-cache blocker has a
+new code/test slice, but the cache still needs emulator offline-restart screenshot evidence and
+the filter/icon blockers remain open.
 
 ## iOS Reference Availability
 
@@ -99,6 +99,26 @@ Deadline-past open source breakdown:
 - Sources tab is no longer a placeholder; it lists real source health/open counts and can drive source-filtered Search state.
 - Job Detail now loads `/api/job-detail`, shows core fields, full description, source/apply data when present, saved state, weak-detail handling, copy-link action, and expandable diagnostics hidden by default.
 - Saved tab shows saved tracker records and saved searches with tappable rows.
+- Persistent cache code/test slice: successful refreshes now write a schema-versioned local JSON
+  cache to Android app-private storage via a native `filesDir` method channel; app-owned startup
+  loads the cache before network refresh; offline refresh failures keep cached Search rows; Settings
+  shows cache status and provides Clear Local Cache.
+
+## New Phase 1 Gap Audit
+
+The stricter 2026-07-03 completion criteria are tracked in `NEXT_SLICE.md`. Current audited gaps:
+
+- Full iOS filter sheet parity is still pending. Android still needs the dark modal sheet, sticky
+  Reset/Apply actions, all iOS filter groups, counts, dimmed zero-result values, and draft/apply
+  semantics.
+- City/Country and Seniority/Grade cascades are still pending. Code inspection shows the API can
+  filter city/country and returns `standard_seniority_tier` in search rows, but current facets do
+  not expose country/city option counts or grade-to-seniority metadata.
+- Icon parity is still pending. The Android app still uses mostly Material icons rather than a
+  shared Cupertino/iOS-style Atlas icon mapping.
+- The running API at `http://10.253.1.43:8765` was not reachable during the latest audit attempt,
+  and no local `output/all_jobs.sqlite3` exists in this checkout, so live field-value inspection is
+  still required before final seniority/grade cascade implementation.
 
 ## Verification
 
@@ -106,7 +126,7 @@ Commands run from `apps/atlas_flutter`:
 
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed with no issues.
-- `flutter test --coverage` passed: 34 tests, `1834/1856` lines, `98.81%`.
+- `flutter test --coverage` passed after the persistent-cache slice: 39 tests, `2078/2102` lines, `98.86%`.
 - `flutter build apk --debug` passed.
 - `flutter build appbundle --release` passed.
 - `flutter build apk --release` passed.
@@ -125,7 +145,7 @@ Physical Pixel install evidence:
 - Device: `38281FDJG001DJ` (`product:husky`, `model:Pixel_8_Pro`, USB)
 - Package: `com.yutsukioka.jobagg.atlas`
 - Installed version: `versionName=1.0.0`, `versionCode=1`
-- Android package `lastUpdateTime`: `2026-07-02 23:57:59`
+- Android package `lastUpdateTime`: `2026-07-03 00:45:44`
 - Launch command returned successfully, but the phone was on the lock screen, so no physical in-app screenshot was committed.
 
 ## Visual Parity Assessment
@@ -147,21 +167,21 @@ Remaining visual differences needing human review:
 
 ## Scorecard
 
-Strict score with user caps applied: **84/100**.
+Strict score under the new user caps: **47/100**.
 
-The previous cap for having no iOS side-by-side evidence no longer applies to the Search top
-screen, and iteration 8 refreshes that comparison. The score remains below 90 because the iOS
-reference set is incomplete and physical Pixel review is still pending.
+The previous 84/100 score is superseded. Persistent-cache code and focused tests now exist, but
+offline restart has not yet been screenshot-verified, the iOS filter groups/cascades are incomplete,
+and icon parity is incomplete. Because screenshots after these fixes are still missing, the current
+score remains capped at 60.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Visual parity evidence | 20 / 25 | Android package plus generated iOS Search side-by-side exists; full iOS multi-screen baseline still missing. |
-| Functional completeness | 18 / 20 | Search/filter/sort/save/detail/tabs work; local save is not persisted across relaunch. |
-| Data correctness | 20 / 20 | `2,274` vs `2,420` reconciled and surfaced in UI. |
-| Updates/Sources completion | 10 / 10 | Both tabs implemented with live API data. |
-| Job Detail completion | 8 / 10 | Core fields and full description render; grouping can still improve for long descriptions. |
-| Tests/builds | 10 / 10 | Format, analyze, unit/widget coverage, integration, debug/release builds pass. |
-| Human-review readiness | 4 / 5 | Audit and screenshots complete; still needs human visual review and physical Pixel signoff. |
+| Persistent cache | 12 / 20 | File-backed cache, startup hydration, stale/clear UI, and focused tests exist; offline restart screenshot/manual evidence pending. |
+| Filter parity | 5 / 30 | Existing model supports many fields, but UI still lacks iOS-complete sheet, groups, counts, dimming, and cascades. |
+| Icon parity | 2 / 10 | Mostly Material icons remain. |
+| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact. |
+| Tests/builds | 10 / 15 | Format, analyze, full `flutter test --coverage`, debug APK, release APK, and release AAB pass; integration test not rerun for this slice. |
+| Evidence/human readiness | 5 / 10 | Search-top side-by-side exists; required post-cache/filter/icon screenshots are not produced yet. |
 
 ## Remaining Gates
 

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
@@ -24,8 +26,20 @@ void main() {
   });
 
   test('controller saves server refreshes search and updates sort', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'atlas_controller_refresh_cache_test_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+    final store = AtlasLocalCacheStore(
+      file: File('${tempDir.path}/atlas-local-cache.json'),
+    );
     final transport = _RecordingTransport();
     final controller = AtlasAppController(
+      localCacheStore: store,
       clientFactory: (baseURL) =>
           AtlasAPIClient(baseURL: baseURL, transport: transport),
     );
@@ -59,6 +73,14 @@ void main() {
       'Saved http://atlas.test:8765 and refreshed 1 job.',
     );
     expect(controller.statusSubtitle, startsWith('Local save · updated '));
+    final persistedAfterReload = await store.read();
+    expect(persistedAfterReload, isNotNull);
+    expect(persistedAfterReload!.baseURL.toString(), 'http://atlas.test:8765');
+    expect(persistedAfterReload.searchResponse.total, 1);
+    expect(
+      persistedAfterReload.searchResponse.results.single.title,
+      'Programme Analyst',
+    );
 
     controller.connectionMessage = 'Dismiss me';
     controller.clearConnectionMessage();
@@ -89,6 +111,8 @@ void main() {
     await controller.saveCurrentSearch();
     expect(transport.savedSearchNames, ['Search 1']);
     expect(controller.savedSearches.single.name, 'Search 1');
+    final persistedAfterSearchSave = await store.read();
+    expect(persistedAfterSearchSave!.savedSearches.single.name, 'Search 1');
 
     await controller.removeActiveFilter('work.modalities');
     await controller.removeActiveFilter('deadline.soon');
@@ -124,6 +148,97 @@ void main() {
       'Refreshing from http://10.253.1.43:8765',
     );
   });
+
+  test(
+    'controller loads persisted cache before offline refresh fails',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_controller_cache_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+      );
+      await store.write(
+        AtlasLocalCacheSnapshot(
+          schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+          baseURL: Uri.parse('http://atlas.cached:8765'),
+          savedAt: DateTime.utc(2026, 7, 2, 12),
+          searchRequest: const AtlasSearchRequest(text: 'cached analyst'),
+          searchResponse: AtlasSearchResponse(
+            total: 1,
+            limit: 50,
+            offset: 0,
+            facets: const {
+              'organizations': {'UNDP': 1},
+            },
+            facetLabels: const {
+              'organizations': {'UNDP': 'UNDP'},
+            },
+            unclassifiedCount: 0,
+            results: [JobSearchResult.fromJson(_jobJson)],
+          ),
+          healthSummary: AtlasHealthSummary(
+            status: 'ok',
+            openJobs: 128,
+            enabledSources: 12,
+            lastSyncAt: '2026-07-02T02:38:47Z',
+          ),
+          savedSearches: [
+            AtlasSavedSearch(
+              name: 'Search 1',
+              description: 'Cached search',
+              request: const AtlasSearchRequest(text: 'cached analyst'),
+            ),
+          ],
+          trackerRecords: [
+            AtlasApplicationRecord(
+              id: 'undp_oracle_hcm-34063',
+              jobKey: 'undp_oracle_hcm:34063',
+              status: 'saved',
+            ),
+          ],
+        ),
+      );
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.loadPersistedCache();
+
+      expect(controller.baseURL.toString(), 'http://atlas.cached:8765');
+      expect(controller.query, 'cached analyst');
+      expect(controller.total, 1);
+      expect(controller.results.single.title, 'Programme Analyst');
+      expect(controller.savedSearches.single.name, 'Search 1');
+      expect(controller.isJobSaved('undp_oracle_hcm:34063'), isTrue);
+      expect(controller.connectionStatus, 'Offline (cached)');
+      expect(controller.statusSubtitle, startsWith('Local save · updated '));
+
+      await controller.refreshLocalSave();
+
+      expect(controller.total, 1);
+      expect(controller.results.single.title, 'Programme Analyst');
+      expect(
+        controller.connectionMessage,
+        startsWith('Local save refresh failed:'),
+      );
+
+      await controller.clearPersistedCache();
+
+      expect(await store.read(), isNull);
+      expect(controller.results, isEmpty);
+      expect(controller.total, 0);
+      expect(controller.connectionMessage, 'Local cache cleared.');
+    },
+  );
 
   test(
     'controller debounces query changes and reports save failures',

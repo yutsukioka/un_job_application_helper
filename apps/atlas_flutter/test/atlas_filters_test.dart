@@ -2,6 +2,14 @@ import 'package:atlas/atlas.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('facet option stores id title and count for filter pills', () {
+    const option = AtlasFacetOption(id: 'JPN', title: 'Japan', count: 42);
+
+    expect(option.id, 'JPN');
+    expect(option.title, 'Japan');
+    expect(option.count, 42);
+  });
+
   test('displayAtlasFilterValue matches Swift formatting', () {
     expect(
       displayAtlasFilterValue('consultant_contractor'),

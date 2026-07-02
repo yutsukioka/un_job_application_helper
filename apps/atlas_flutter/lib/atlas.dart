@@ -254,6 +254,40 @@ final class JobSearchResult {
   final Uri? applyURL;
   final Uri? sourceURL;
 
+  Map<String, Object?> toJson() {
+    return {
+      'jobKey': jobKey,
+      'title': title,
+      'organization': organization,
+      'sourceID': sourceID,
+      'dutyStation': dutyStation,
+      'gradeCode': gradeCode,
+      'nationalInternational': nationalInternational,
+      'contractCategory': contractCategory,
+      'contractGroup': contractGroup,
+      'seniorityGroup': seniorityGroup,
+      'contractLabel': contractLabel,
+      'workModality': workModality,
+      'ccogFamilyCode': ccogFamilyCode,
+      'ccogFamilyLabel': ccogFamilyLabel,
+      'ccogPrimaryCode': ccogPrimaryCode,
+      'ccogPrimaryLabel': ccogPrimaryLabel,
+      'capabilityTags': capabilityTags,
+      'closingDate': closingDate?.toIso8601String(),
+      'needsReview': needsReview,
+      'locationConfidence': locationConfidence,
+      'gradeConfidence': gradeConfidence,
+      'score': score,
+      'scoreReasons': scoreReasons,
+      'matchSummary': matchSummary,
+      'description': description,
+      'status': status,
+      'postedDate': postedDate?.toIso8601String(),
+      'applyURL': applyURL?.toString(),
+      'sourceURL': sourceURL?.toString(),
+    };
+  }
+
   String get organizationDisplay {
     const atsTokens = <String>{
       'pageup',
@@ -826,6 +860,163 @@ final class AtlasSearchResponse {
   final Map<String, Map<String, int>> facets;
   final Map<String, Map<String, String>> facetLabels;
   final int unclassifiedCount;
+
+  Map<String, Object?> toJson() {
+    return {
+      'total': total,
+      'limit': limit,
+      'offset': offset,
+      'results': results.map((job) => job.toJson()).toList(),
+      'facets': facets,
+      'facet_labels': facetLabels,
+      'unclassified_count': unclassifiedCount,
+    };
+  }
+}
+
+final class AtlasLocalCacheSnapshot {
+  AtlasLocalCacheSnapshot({
+    required this.schemaVersion,
+    required this.baseURL,
+    required this.savedAt,
+    required this.searchRequest,
+    required this.searchResponse,
+    this.healthSummary,
+    this.savedSearches = const <AtlasSavedSearch>[],
+    this.trackerRecords = const <AtlasApplicationRecord>[],
+    this.updateRuns = const <AtlasSourceRun>[],
+    this.sources = const <AtlasSourceSummary>[],
+    this.operationalDataLoadedAt,
+  });
+
+  factory AtlasLocalCacheSnapshot.fromJson(Map<String, Object?> json) {
+    final baseURL =
+        AtlasAPIClient.normalizedBaseURL(_string(json['base_url']) ?? '') ??
+        AtlasAPIClient.defaultBaseURL();
+    final savedAt =
+        _date(json['saved_at']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return AtlasLocalCacheSnapshot(
+      schemaVersion: _int(json['schema_version']) ?? 0,
+      baseURL: baseURL,
+      savedAt: savedAt,
+      searchRequest: AtlasSearchRequest.fromJson(
+        _map(json['search_request']) ?? const <String, Object?>{},
+      ),
+      searchResponse: AtlasSearchResponse.fromJson(
+        _map(json['search_response']) ?? const <String, Object?>{},
+      ),
+      healthSummary: _map(json['health_summary']) == null
+          ? null
+          : AtlasHealthSummary.fromJson(_map(json['health_summary'])!),
+      savedSearches: _list(
+        json['saved_searches'],
+      ).map(_map).nonNulls.map(AtlasSavedSearch.fromJson).toList(),
+      trackerRecords: _list(
+        json['tracker_records'],
+      ).map(_map).nonNulls.map(AtlasApplicationRecord.fromJson).toList(),
+      updateRuns: _list(
+        json['update_runs'],
+      ).map(_map).nonNulls.map(AtlasSourceRun.fromJson).toList(),
+      sources: _list(
+        json['sources'],
+      ).map(_map).nonNulls.map(AtlasSourceSummary.fromJson).toList(),
+      operationalDataLoadedAt: _date(json['operational_data_loaded_at']),
+    );
+  }
+
+  static const currentSchemaVersion = 1;
+  static const staleAfter = Duration(hours: 24);
+  static const retainFor = Duration(days: 7);
+
+  final int schemaVersion;
+  final Uri baseURL;
+  final DateTime savedAt;
+  final AtlasSearchRequest searchRequest;
+  final AtlasSearchResponse searchResponse;
+  final AtlasHealthSummary? healthSummary;
+  final List<AtlasSavedSearch> savedSearches;
+  final List<AtlasApplicationRecord> trackerRecords;
+  final List<AtlasSourceRun> updateRuns;
+  final List<AtlasSourceSummary> sources;
+  final DateTime? operationalDataLoadedAt;
+
+  bool isStale({DateTime? now}) {
+    return (now ?? DateTime.now()).difference(savedAt) > staleAfter;
+  }
+
+  bool isExpired({DateTime? now}) {
+    return (now ?? DateTime.now()).difference(savedAt) > retainFor;
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'schema_version': schemaVersion,
+      'base_url': baseURL.toString(),
+      'saved_at': savedAt.toIso8601String(),
+      'search_request': searchRequest.toJson(),
+      'search_response': searchResponse.toJson(),
+      'health_summary': healthSummary?.toJson(),
+      'saved_searches': savedSearches.map((search) => search.toJson()).toList(),
+      'tracker_records': trackerRecords
+          .map((record) => record.toJson())
+          .toList(),
+      'update_runs': updateRuns.map((run) => run.toJson()).toList(),
+      'sources': sources.map((source) => source.toJson()).toList(),
+      'operational_data_loaded_at': operationalDataLoadedAt?.toIso8601String(),
+    };
+  }
+}
+
+final class AtlasLocalCacheStore {
+  AtlasLocalCacheStore({required this.file, DateTime Function()? now})
+    : _now = now ?? DateTime.now;
+
+  final File file;
+  final DateTime Function() _now;
+
+  Future<AtlasLocalCacheSnapshot?> read() async {
+    try {
+      if (!await file.exists()) {
+        return null;
+      }
+      final decoded = jsonDecode(await file.readAsString());
+      final map = _map(decoded);
+      if (map == null) {
+        return null;
+      }
+      final snapshot = AtlasLocalCacheSnapshot.fromJson(map);
+      if (snapshot.schemaVersion !=
+          AtlasLocalCacheSnapshot.currentSchemaVersion) {
+        return null;
+      }
+      if (snapshot.isExpired(now: _now())) {
+        return null;
+      }
+      return snapshot;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
+    await file.parent.create(recursive: true);
+    final temporaryFile = File('${file.path}.tmp');
+    await temporaryFile.writeAsString(
+      jsonEncode(snapshot.toJson()),
+      flush: true,
+    );
+    await temporaryFile.rename(file.path);
+  }
+
+  Future<void> clear() async {
+    if (await file.exists()) {
+      await file.delete();
+    }
+    final temporaryFile = File('${file.path}.tmp');
+    if (await temporaryFile.exists()) {
+      await temporaryFile.delete();
+    }
+  }
 }
 
 final class AtlasHealthSummary {
@@ -855,6 +1046,17 @@ final class AtlasHealthSummary {
   final int? openJobs;
   final int? enabledSources;
   final String? lastSyncAt;
+
+  Map<String, Object?> toJson() {
+    return {
+      'status': status,
+      'db_path': dbPath,
+      'schema_version': schemaVersion,
+      'open_jobs': openJobs,
+      'enabled_sources': enabledSources,
+      'last_sync_at': lastSyncAt,
+    };
+  }
 }
 
 final class AtlasSavedSearch {
@@ -883,6 +1085,16 @@ final class AtlasSavedSearch {
   final AtlasSearchRequest request;
   final String? createdAt;
   final String? updatedAt;
+
+  Map<String, Object?> toJson() {
+    return {
+      'name': name,
+      'description': description,
+      'request': request.toJson(),
+      'created_at': createdAt,
+      'updated_at': updatedAt,
+    };
+  }
 }
 
 final class AtlasApplicationRecord {
@@ -912,6 +1124,17 @@ final class AtlasApplicationRecord {
   final String? notes;
   final String? appliedAt;
   final String? updatedAt;
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'job_key': jobKey,
+      'status': status,
+      'notes': notes,
+      'applied_at': appliedAt,
+      'updated_at': updatedAt,
+    };
+  }
 }
 
 final class AtlasSourceSummary {
@@ -953,6 +1176,21 @@ final class AtlasSourceSummary {
   final int? detailAttempted;
   final int? detailFailed;
   final bool? missingTransitionAllowed;
+
+  Map<String, Object?> toJson() {
+    return {
+      'source_id': sourceID,
+      'organization': organization,
+      'total_jobs': totalJobs,
+      'open_jobs': openJobs,
+      'last_seen_at': lastSeenAt,
+      'health_status': healthStatus,
+      'observed_at': observedAt,
+      'detail_attempted': detailAttempted,
+      'detail_failed': detailFailed,
+      'missing_transition_allowed': missingTransitionAllowed,
+    };
+  }
 }
 
 final class AtlasSourceRun {
@@ -985,6 +1223,18 @@ final class AtlasSourceRun {
   final int missing;
   final int closed;
   final String? observedAt;
+
+  Map<String, Object?> toJson() {
+    return {
+      'source_id': sourceID,
+      'fetched': fetched,
+      'inserted': inserted,
+      'updated': updated,
+      'missing': missing,
+      'closed': closed,
+      'observed_at': observedAt,
+    };
+  }
 }
 
 final class AtlasJobDetail {

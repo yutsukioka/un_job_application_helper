@@ -31,6 +31,8 @@ void main() {
       expect(find.text('Not connected'), findsOneWidget);
       expect(find.text('Local Save'), findsOneWidget);
       expect(find.text('Last updated'), findsOneWidget);
+      expect(find.text('Cache status'), findsOneWidget);
+      expect(find.text('Clear Local Cache'), findsOneWidget);
       expect(find.text('Cached jobs'), findsOneWidget);
       expect(find.text('Cached details'), findsOneWidget);
       expect(find.text('Auto refresh'), findsOneWidget);
@@ -199,7 +201,7 @@ void main() {
     await tester.tap(find.text('Refresh Local Save Now'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Local save refreshed: 1 job cached for this session.'),
+      find.text('Local save refreshed: 1 job cached on this device.'),
       findsOneWidget,
     );
     expect(find.text('1'), findsWidgets);

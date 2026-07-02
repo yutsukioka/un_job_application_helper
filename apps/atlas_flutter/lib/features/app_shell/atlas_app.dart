@@ -1,16 +1,54 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
+typedef AtlasCacheStoreFactory = Future<AtlasLocalCacheStore?> Function();
+
+const MethodChannel _storageChannel = MethodChannel('atlas/storage');
+
+Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
+  try {
+    if (Platform.isAndroid) {
+      // coverage:ignore-start
+      final directoryPath = await _storageChannel.invokeMethod<String>(
+        'appFilesDir',
+      );
+      if (directoryPath != null && directoryPath.trim().isNotEmpty) {
+        return AtlasLocalCacheStore(
+          file: File('${directoryPath.trim()}/atlas-local-cache-v1.json'),
+        );
+      }
+      // coverage:ignore-end
+    }
+  } catch (_) {
+    // Fall through to a local development/test fallback.
+  }
+  final fallbackDirectory = Directory(
+    '${Directory.systemTemp.path}/atlas_flutter',
+  );
+  return AtlasLocalCacheStore(
+    file: File('${fallbackDirectory.path}/atlas-local-cache-v1.json'),
+  );
+}
 
 class AtlasAppController extends ChangeNotifier {
-  AtlasAppController({Uri? initialBaseURL, AtlasClientFactory? clientFactory})
-    : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
-      _clientFactory =
-          clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL));
+  AtlasAppController({
+    Uri? initialBaseURL,
+    AtlasClientFactory? clientFactory,
+    AtlasLocalCacheStore? localCacheStore,
+    AtlasCacheStoreFactory? localCacheStoreFactory,
+  }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
+       _clientFactory =
+           clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL)),
+       // Keep public constructor parameter names stable while storing privately.
+       // ignore: prefer_initializing_formals
+       _localCacheStore = localCacheStore,
+       // ignore: prefer_initializing_formals
+       _localCacheStoreFactory = localCacheStoreFactory;
 
   Uri baseURL;
   final AtlasClientFactory _clientFactory;
@@ -30,12 +68,17 @@ class AtlasAppController extends ChangeNotifier {
   List<AtlasSourceSummary> sources = const [];
   List<AtlasApplicationRecord> trackerRecords = const [];
   AtlasHealthSummary? healthSummary;
+  Map<String, Map<String, int>> facets = const {};
+  Map<String, Map<String, String>> facetLabels = const {};
+  int unclassifiedCount = 0;
   int total = 0;
   int cachedJobCount = 0;
   DateTime? cacheSavedAt;
   DateTime? operationalDataLoadedAt;
   Timer? _searchDebounce;
   int _savedSearchSequence = 0;
+  AtlasLocalCacheStore? _localCacheStore;
+  final AtlasCacheStoreFactory? _localCacheStoreFactory;
 
   void clearConnectionMessage() {
     if (connectionMessage == null) {
@@ -73,6 +116,15 @@ class AtlasAppController extends ChangeNotifier {
         ? 'result'
         : 'results';
     return '${_formatCount(total)} $suffix';
+  }
+
+  String get cacheFreshnessLabel {
+    final savedAt = cacheSavedAt;
+    if (savedAt == null) {
+      return 'Empty';
+    }
+    final age = DateTime.now().difference(savedAt);
+    return age > AtlasLocalCacheSnapshot.staleAfter ? 'Stale' : 'Fresh';
   }
 
   bool get canReconcileDefaultOpenCount {
@@ -126,6 +178,40 @@ class AtlasAppController extends ChangeNotifier {
     super.dispose();
   }
 
+  Future<void> loadPersistedCache() async {
+    final store = await _ensureLocalCacheStore();
+    if (store == null) {
+      return;
+    }
+    final snapshot = await store.read();
+    if (snapshot == null) {
+      return;
+    }
+    _applyCacheSnapshot(snapshot);
+    notifyListeners();
+  }
+
+  Future<void> clearPersistedCache() async {
+    final store = await _ensureLocalCacheStore();
+    await store?.clear();
+    results = const [];
+    savedSearches = const [];
+    updateRuns = const [];
+    sources = const [];
+    trackerRecords = const [];
+    healthSummary = null;
+    facets = const {};
+    facetLabels = const {};
+    unclassifiedCount = 0;
+    total = 0;
+    cachedJobCount = 0;
+    cacheSavedAt = null;
+    operationalDataLoadedAt = null;
+    connectionStatus = 'Not connected';
+    connectionMessage = 'Local cache cleared.';
+    notifyListeners();
+  }
+
   void updateQuery(String value) {
     if (query == value) {
       return;
@@ -177,6 +263,7 @@ class AtlasAppController extends ChangeNotifier {
       final refreshed = await _refreshSearch(client);
       await _loadSavedSearches(client);
       await _loadOperationalData(client);
+      await _writePersistedCache();
       connectionMessage =
           'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
     } catch (error) {
@@ -198,11 +285,14 @@ class AtlasAppController extends ChangeNotifier {
       final refreshed = await _refreshSearch(client);
       await _loadSavedSearches(client);
       await _loadOperationalData(client);
+      await _writePersistedCache();
       connectionStatus = 'Connected';
       connectionMessage =
-          'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached for this session.';
+          'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached on this device.';
     } catch (error) {
-      connectionStatus = 'Not connected';
+      connectionStatus = cacheSavedAt == null
+          ? 'Not connected'
+          : 'Offline (cached)';
       connectionMessage = 'Local save refresh failed: $error';
     } finally {
       isRefreshingLocalSave = false;
@@ -269,6 +359,7 @@ class AtlasAppController extends ChangeNotifier {
         summary: summary,
       );
       _upsertSavedSearch(savedSearch);
+      await _writePersistedCache();
       connectionStatus = 'Connected';
       connectionMessage = 'Saved ${savedSearch.name} locally.';
     } catch (error) {
@@ -286,6 +377,7 @@ class AtlasAppController extends ChangeNotifier {
       final client = _clientFactory(baseURL);
       final record = await client.saveJob(job.jobKey);
       _upsertTrackerRecord(record);
+      await _writePersistedCache();
       connectionStatus = 'Connected';
       connectionMessage = 'Saved job locally.';
     } catch (error) {
@@ -319,8 +411,7 @@ class AtlasAppController extends ChangeNotifier {
     notifyListeners();
     try {
       final response = await client.search(_currentSearchRequest());
-      results = List.unmodifiable(response.results);
-      total = response.total;
+      _applySearchResponse(response);
       cachedJobCount = response.results.length;
       cacheSavedAt = DateTime.now();
       return response.results.length;
@@ -418,6 +509,77 @@ class AtlasAppController extends ChangeNotifier {
         _savedSearchSequence = index;
       }
     }
+  }
+
+  void _applySearchResponse(AtlasSearchResponse response) {
+    results = List.unmodifiable(response.results);
+    total = response.total;
+    facets = Map.unmodifiable(response.facets);
+    facetLabels = Map.unmodifiable(response.facetLabels);
+    unclassifiedCount = response.unclassifiedCount;
+  }
+
+  void _applyCacheSnapshot(AtlasLocalCacheSnapshot snapshot) {
+    baseURL = snapshot.baseURL;
+    query = snapshot.searchRequest.text ?? '';
+    filters = _filtersFromRequest(snapshot.searchRequest);
+    sortOrder = SortOrder.fromAPIValue(snapshot.searchRequest.sort);
+    _applySearchResponse(snapshot.searchResponse);
+    savedSearches = List.unmodifiable(snapshot.savedSearches);
+    trackerRecords = List.unmodifiable(snapshot.trackerRecords);
+    updateRuns = List.unmodifiable(snapshot.updateRuns);
+    sources = List.unmodifiable(snapshot.sources);
+    healthSummary = snapshot.healthSummary;
+    cachedJobCount = snapshot.searchResponse.results.length;
+    cacheSavedAt = snapshot.savedAt;
+    operationalDataLoadedAt = snapshot.operationalDataLoadedAt;
+    connectionStatus = 'Offline (cached)';
+    connectionMessage = snapshot.isStale()
+        ? 'Loaded stale local save from this device.'
+        : 'Loaded local save from this device.';
+    _syncSavedSearchSequence();
+  }
+
+  Future<AtlasLocalCacheStore?> _ensureLocalCacheStore() async {
+    if (_localCacheStore != null) {
+      return _localCacheStore;
+    }
+    final factory = _localCacheStoreFactory;
+    if (factory == null) {
+      return null;
+    }
+    _localCacheStore = await factory();
+    return _localCacheStore;
+  }
+
+  Future<void> _writePersistedCache() async {
+    final store = await _ensureLocalCacheStore();
+    final savedAt = cacheSavedAt;
+    if (store == null || savedAt == null) {
+      return;
+    }
+    final snapshot = AtlasLocalCacheSnapshot(
+      schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+      baseURL: baseURL,
+      savedAt: savedAt,
+      searchRequest: _currentSearchRequest(),
+      searchResponse: AtlasSearchResponse(
+        total: total,
+        limit: 50,
+        offset: 0,
+        results: results,
+        facets: facets,
+        facetLabels: facetLabels,
+        unclassifiedCount: unclassifiedCount,
+      ),
+      healthSummary: healthSummary,
+      savedSearches: savedSearches,
+      trackerRecords: trackerRecords,
+      updateRuns: updateRuns,
+      sources: sources,
+      operationalDataLoadedAt: operationalDataLoadedAt,
+    );
+    await store.write(snapshot);
   }
 
   void _upsertSavedSearch(AtlasSavedSearch savedSearch) {
@@ -730,8 +892,13 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   @override
   void initState() {
     super.initState();
-    _controller = widget.controller ?? AtlasAppController();
+    _controller =
+        widget.controller ??
+        AtlasAppController(localCacheStoreFactory: _defaultCacheStore);
     _ownsController = widget.controller == null;
+    if (_ownsController) {
+      unawaited(_controller.loadPersistedCache());
+    }
   }
 
   @override
@@ -2686,6 +2853,11 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               ),
               const SizedBox(height: 6),
               _SettingsValueRow(
+                label: 'Cache status',
+                value: controller.cacheFreshnessLabel,
+              ),
+              const SizedBox(height: 6),
+              _SettingsValueRow(
                 label: 'Cached jobs',
                 value: _formatCount(controller.cachedJobCount),
               ),
@@ -2748,8 +2920,16 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 label: const Text('Refresh Local Save Now'),
               ),
               const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: controller.cacheSavedAt == null
+                    ? null
+                    : _clearLocalCache,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Clear Local Cache'),
+              ),
+              const SizedBox(height: 8),
               const Text(
-                'Refresh pulls the latest open vacancies from the saved server so Search can work immediately.',
+                'Refresh writes the latest open vacancies to this device. Cache is marked stale after 24 hours and retained for 7 days.',
                 style: TextStyle(fontSize: 12, color: AtlasPalette.muted),
               ),
               if (controller.results.isNotEmpty) ...[
@@ -2847,6 +3027,10 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
 
   Future<void> _refreshLocalSave() async {
     await widget.controller.refreshLocalSave();
+  }
+
+  Future<void> _clearLocalCache() async {
+    await widget.controller.clearPersistedCache();
   }
 }
 
