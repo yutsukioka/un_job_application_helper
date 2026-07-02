@@ -23,15 +23,18 @@ the executable target debug-dylib setting.
 
 ## iOS Simulator
 
-The committed package contains the shared `AtlasUI` library and a Mac preview
-host. To view the iOS app shell now:
+The committed package contains the shared `AtlasUI` library, a Mac preview host,
+and a separate iOS host Xcode project. The root package at `apps/apple` is
+library-only, so `swift run` from that directory will not launch an app.
 
-1. Open `apps/apple/Package.swift` in Xcode.
-2. Open `Sources/AtlasUI/SearchScreen.swift`.
-3. Use the SwiftUI preview canvas and select an iPhone preview device.
+To run the iOS app:
 
-To run a full iOS simulator app, create a small Xcode iOS App target that imports
-the local `AtlasUI` package and uses this app entry point:
+1. Open `apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj` in Xcode.
+2. Select the `AtlasIOSHost` scheme.
+3. Choose an iPhone simulator or your connected iPhone.
+4. Press Run.
+
+The iOS host app imports the local `AtlasUI` package and uses:
 
 ```swift
 import AtlasUI
@@ -49,6 +52,9 @@ struct AtlasIOSHostApp: App {
 
 Run `job-api` first so the simulator can load real data from
 `http://127.0.0.1:8765`.
+
+For a physical iPhone, use the Mac LAN URL in the app Settings tab and keep
+`job-api` running on the Mac.
 
 ## Current Prototype
 
@@ -80,8 +86,19 @@ For a physical iPhone, use the Mac LAN address in the app Settings tab, for
 example:
 
 ```text
-http://192.168.50.208:8765
+http://<current-mac-ip>:8765
 ```
+
+Find the current Wi-Fi IP on the Mac with:
+
+```bash
+ipconfig getifaddr en0
+ipconfig getifaddr en1
+```
+
+Use the address that matches the active Wi-Fi network. If you paste a full health
+URL such as `http://192.168.50.22:8765/api/health`, the app normalizes it to the
+base URL `http://192.168.50.22:8765`.
 
 Run the server from the repository root:
 
@@ -119,11 +136,32 @@ cd apps/apple
 swift build
 ```
 
-To run a standalone Mac preview app:
+The command above builds the shared `AtlasUI` package only. It does not launch an
+app because `AtlasApple` has no executable product.
+
+To run the standalone Mac preview app from a terminal:
 
 ```bash
 cd apps/apple/PreviewHost
 swift run AtlasPreviewApp
+```
+
+If you see an error such as `no executable product named AtlasPreviewApp`, you
+are probably still in `apps/apple`; change into `apps/apple/PreviewHost` first.
+The terminal remains attached while the app is open. Close the app window or use
+`Control-C` in the terminal to stop it.
+
+To validate both app surfaces without launching a GUI:
+
+```bash
+cd apps/apple
+swift test
+
+cd ../..
+xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj \
+  -scheme AtlasIOSHost \
+  -destination generic/platform=iOS \
+  CODE_SIGNING_ALLOWED=NO build
 ```
 
 ## Planned Shared Client Modules
