@@ -65,6 +65,13 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   `apps/atlas_flutter/test/goldens/android/job_detail_top.png`; it locks the useful detail header,
   metadata chips, full description/core details, ATS-formatted content, and the absence of raw source
   diagnostics from the main detail body.
+- Implemented tab Android golden coverage now exists at:
+  - `apps/atlas_flutter/test/goldens/android/saved_tab.png`
+  - `apps/atlas_flutter/test/goldens/android/updates_tab.png`
+  - `apps/atlas_flutter/test/goldens/android/sources_tab.png`
+  - `apps/atlas_flutter/test/goldens/android/settings_tab.png`
+  These baselines lock non-placeholder Saved, Updates, Sources, and Settings content using seeded
+  operational data.
 
 ## Data Count Reconciliation
 
@@ -152,6 +159,12 @@ Commands run from `apps/atlas_flutter`:
   test/search_golden_test.dart`, `dart format --set-exit-if-changed test/search_golden_test.dart`,
   `dart analyze`, and `flutter test --coverage` passed with 58 tests and `2994/3255` lines
   (`91.98%`).
+- Tab golden verification passed: fail-first `flutter test test/tab_golden_test.dart` failed only
+  because `saved_tab.png`, `updates_tab.png`, `sources_tab.png`, and `settings_tab.png` did not
+  exist; `flutter test --update-goldens test/tab_golden_test.dart` generated all four baselines;
+  normal `flutter test test/tab_golden_test.dart`, `dart format --set-exit-if-changed
+  test/tab_golden_test.dart`, `dart analyze`, and `flutter test --coverage` passed with 62 tests
+  and `2994/3255` lines (`91.98%`).
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -272,6 +285,11 @@ Android golden baseline:
 - `apps/atlas_flutter/test/goldens/android/job_detail_top.png`: Flutter golden for populated Job
   Detail top content, metadata chips, core rows, and formatted detail body at a 393x852 viewport.
   This is a regression artifact and not a replacement for physical Pixel/iOS paired screenshots.
+- `apps/atlas_flutter/test/goldens/android/saved_tab.png`,
+  `apps/atlas_flutter/test/goldens/android/updates_tab.png`,
+  `apps/atlas_flutter/test/goldens/android/sources_tab.png`, and
+  `apps/atlas_flutter/test/goldens/android/settings_tab.png`: Flutter goldens for the implemented
+  non-placeholder Atlas tabs at a 393x852 viewport.
 
 Dedicated review package:
 
@@ -309,8 +327,9 @@ local iOS filter/detail reference screenshots.
 - Search-top parity now has a fresh iOS Simulator side-by-side image. Filter sheet and detail parity
   are implemented from Swift source and covered by tests, but true pixel-paired human review still
   needs local copies of the user-provided iOS filter/detail screenshots.
-- Search-top, filter-sheet top, and populated Job Detail top now have Android golden regression
-  tests. Remaining tab surfaces still need broader goldens or human screenshot review.
+- Search-top, filter-sheet top, populated Job Detail top, and implemented Saved/Updates/Sources/
+  Settings tabs now have Android golden regression tests. Physical Pixel and iOS reference review
+  are still required.
 - Local Android supports multiple City/Country values through comma-separated input and multi-select
   filter pills. User-facing visual review is still needed to decide whether the comma text display is
   close enough to iOS or should become a dedicated selected-chip editor.
@@ -320,7 +339,7 @@ local iOS filter/detail reference screenshots.
   device.` occupying the Search result area.
 - Source badges were changed from generic pale-cyan blocks to deterministic source colors with white
   monograms, matching Swift `SourceMonogram`.
-- Coverage remains strong at `91.98%` after adding Search, filter-sheet, and Job Detail golden
+- Coverage remains strong at `91.98%` after adding Search, filter-sheet, Job Detail, and tab golden
   coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but

@@ -3,8 +3,8 @@
 Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
 Emulator release-app screenshots, a fresh iOS Simulator Search-top side-by-side review, offline
-restart evidence, and Android Search/filter-sheet/Job Detail golden baselines are captured. PR #10
-remains below completion because physical Pixel in-app screenshots, physical offline-restart
+restart evidence, and Android Search/filter-sheet/Job Detail/tab golden baselines are captured. PR
+#10 remains below completion because physical Pixel in-app screenshots, physical offline-restart
 verification, and full iOS filter/detail side-by-side review are still pending.
 
 ## Intent
@@ -48,7 +48,7 @@ broad backend or JobAgg lifecycle work.
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
 | iOS side-by-side package | Fresh Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md` from `AtlasIOSHost` on iPhone 17 Pro Simulator; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS filter/detail references, then build final side-by-side review package after physical Android captures. |
-| Android goldens | Search-top compact layout golden exists at `test/goldens/android/search_top_compact.png`; filter-sheet top golden exists at `test/goldens/android/filter_sheet_top.png`; populated Job Detail top golden exists at `test/goldens/android/job_detail_top.png`. | Add tab goldens after the physical/iOS reference evidence confirms the target layouts. |
+| Android goldens | Search-top, filter-sheet top, populated Job Detail top, Saved, Updates, Sources, and Settings goldens exist under `test/goldens/android/`. | Use physical Pixel/iOS review to decide whether additional scrolled-state or component goldens are needed. |
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
 | Coverage | 91.98% after Search, filter-sheet, and Job Detail golden coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
@@ -58,7 +58,7 @@ broad backend or JobAgg lifecycle work.
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 58 tests after Search-top, filter-sheet, and Job Detail golden coverage.
+- Full tests: pass, 62 tests after Search-top, filter-sheet, Job Detail, and tab golden coverage.
 - Coverage: pass, `2994/3255` lines, `91.98%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
@@ -73,4 +73,8 @@ broad backend or JobAgg lifecycle work.
 - Android golden baselines:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`,
   `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`, and
-  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`.
+  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`,
+  `apps/atlas_flutter/test/goldens/android/saved_tab.png`,
+  `apps/atlas_flutter/test/goldens/android/updates_tab.png`,
+  `apps/atlas_flutter/test/goldens/android/sources_tab.png`, and
+  `apps/atlas_flutter/test/goldens/android/settings_tab.png`.

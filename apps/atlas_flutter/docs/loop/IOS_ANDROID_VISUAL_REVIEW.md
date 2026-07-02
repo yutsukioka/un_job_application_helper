@@ -14,6 +14,10 @@ Android golden baseline:
 - `../../test/goldens/android/search_top_compact.png`
 - `../../test/goldens/android/filter_sheet_top.png`
 - `../../test/goldens/android/job_detail_top.png`
+- `../../test/goldens/android/saved_tab.png`
+- `../../test/goldens/android/updates_tab.png`
+- `../../test/goldens/android/sources_tab.png`
+- `../../test/goldens/android/settings_tab.png`
 
 ## Evidence Boundaries
 
@@ -73,6 +77,7 @@ Single-image Android review contact sheet:
 | Search top golden | iOS references above | `../../test/goldens/android/search_top_compact.png` | Android Search-top layout is covered by a Flutter golden. It is useful for regression, not a substitute for human screenshots because Flutter tests use the test renderer/font behavior. |
 | Filter sheet top golden | Written iOS filter requirements; local iOS filter screenshot still missing | `../../test/goldens/android/filter_sheet_top.png` | Android filter-sheet top is covered by a Flutter golden for dark modal structure, compact option grids/counts, and sticky Reset/Apply footer. It supplements emulator screenshots and human review. |
 | Job Detail top golden | Swift `JobDetailView.swift`; local iOS detail screenshot still missing | `../../test/goldens/android/job_detail_top.png` | Android populated Job Detail top is covered by a Flutter golden for useful detail content, metadata chips, formatted ATS body, and hidden raw diagnostics. It supplements the emulator `job_detail_top_fixed.png` screenshot. |
+| Saved/Updates/Sources/Settings tab goldens | Swift `SearchScreen.swift`; local iOS tab screenshots still missing | `../../test/goldens/android/saved_tab.png`, `../../test/goldens/android/updates_tab.png`, `../../test/goldens/android/sources_tab.png`, `../../test/goldens/android/settings_tab.png` | Implemented tabs are covered by Flutter goldens with seeded saved jobs/searches, update runs, source health, cache status, and server controls. |
 | Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
 | Search top, latest live count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Current release shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. |
@@ -113,7 +118,7 @@ Single-image Android review contact sheet:
 - [x] Multi City/Country values are implemented in Android request serialization and offline cached filtering.
 - [x] One-page Android evidence contact sheet is generated for human review.
 - [x] Fresh iOS Simulator Search-top side-by-side is generated from a local `AtlasIOSHost` build.
-- [x] Android Search-top, filter-sheet top, and Job Detail top layout goldens are checked in.
+- [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
 
