@@ -210,20 +210,10 @@ public final class AtlasSearchViewModel: ObservableObject {
             let health = try await client.health()
             let fetchedSnapshot = try await fetchSnapshot(health: health)
             let snapshot = snapshotWithCurrentSavedAt(fetchedSnapshot)
-            let updateSummary = try await replaceLocalSaveWhenComplete(snapshot)
+            try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil)
             applyCachedSnapshot(snapshot)
-            startDetailCacheWarmupIfNeeded(snapshot)
-            if updateSummary.failed > 0 {
-                detailCacheFailed = updateSummary.failed
-                if updateSummary.missing > 0 {
-                    detailCacheMessage = "Local save refreshed; \(updateSummary.failed.formatted()) detail requests failed, \(updateSummary.reused.formatted()) reused from the previous cache, \(updateSummary.missing.formatted()) still missing and will retry later"
-                } else {
-                    detailCacheMessage = "Local save refreshed; \(updateSummary.failed.formatted()) detail requests failed but previous cached details were reused"
-                }
-                userMessage = "Local save refreshed with \(updateSummary.missing.formatted()) missing details"
-            } else {
-                userMessage = "Local save refreshed"
-            }
+            startDetailCacheWarmupIfNeeded(snapshot, force: true)
+            userMessage = "Local save refreshed"
         } catch {
             applyOfflineFallback(error)
         }
