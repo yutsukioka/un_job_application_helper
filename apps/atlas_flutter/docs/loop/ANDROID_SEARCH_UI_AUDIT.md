@@ -12,9 +12,9 @@ Seniority/Grade cascade tests, and a shared Cupertino-style `AtlasIcons` mapping
 controls.
 
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
-Pixel 8 Pro, but post-fix in-app screenshots are blocked because the physical device remained on the
-lock screen. Human-visible review is therefore still incomplete and the score is capped by the
-evidence rule.
+Pixel 8 Pro, but post-fix physical in-app screenshots are blocked because the physical device
+remained on the lock screen. Emulator screenshots from the release app now provide human-reviewable
+evidence for the cache, filter, cascade, icon, tab, and detail slice.
 
 ## Implemented This Slice
 
@@ -43,12 +43,14 @@ evidence rule.
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,274` |
-| `android_displayed_total` | `2,274 searchable results` |
+| `search_api_total` | `2,271` |
+| `android_displayed_total` | `2,271 searchable results` |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `excluded_count` | `146` |
+| `local_cache_timestamp` | `2026-07-03 01:16` on the emulator screenshot pass; offline restart reused the cache at `2026-07-03 01:34`. |
+| `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
+| `excluded_count` | `149` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,274` is correct for Android default Search because it matches `/api/search`; `2,420` is the raw health open count. |
+| `final_decision` | `2,271` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
 
 ## Verification
 
@@ -62,6 +64,8 @@ Commands run from `apps/atlas_flutter`:
 - `flutter build apk --debug` passed.
 - `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`46.6MB`).
 - `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`49.2MB`). Gradle emitted an `llvm-strip` warning for `lib/armeabi-v7a/libapp.so`, but the APK was produced.
+- `flutter test integration_test -d emulator-5554` passed against the Android emulator after updating
+  the smoke test for the new `Done` filter-sheet control.
 - Release APK installed on USB Pixel 8 Pro: `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success`.
 
 Installed package evidence:
@@ -73,30 +77,46 @@ Installed package evidence:
 
 ## Screenshot Evidence
 
-Post-fix in-app screenshots are blocked because the connected Pixel remained on the lock screen.
-Captured files show the lock state only:
+Physical Pixel in-app screenshots are still blocked because the connected Pixel remained on the lock
+screen. Captured physical-device files show the lock state only:
 
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/lock_check.png`
+
+Post-fix emulator screenshots from the release app are available under
+`apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`:
+
+- Search: `search_top_refreshed.png`, `search_scrolled.png`, `offline_restart_cached.png`
+- Settings/cache status: `settings_after_reload.png`
+- Filter sheet: `filter_top.png`, `filter_contract_seniority.png`, `filter_grade_ccog.png`,
+  `filter_organizations_workmode.png`, `filter_capability_tags.png`
+- Cascade states: `filter_japan_selected.png`, `filter_tokyo_selected.png`,
+  `filter_entry_junior_selected.png`, `filter_grade_selected.png`
+- Detail/tabs: `job_detail.png`, `saved_tab.png`, `updates_tab.png`, `sources_tab.png`
 
 Previously generated evidence remains available for Search top comparison:
 
 - `apps/atlas_flutter/docs/loop/screenshots/ios-reference/iteration-8/ios_search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
 
-The required post-fix screenshots still need to be captured after the device is unlocked:
+The remaining screenshot gap is physical Pixel in-app evidence after the device is unlocked.
 
-- Search top and scrolled
-- Filter sheet top, Location, Contract, Seniority, Grade, CCOG, Organizations, Work Mode, Capability Tags
-- Filter sheet with Japan/Tokyo and Entry Junior/P1 selected
-- Offline restart with cached data visible
-- Settings cache status
-- Job Detail, Saved, Updates, Sources
+## Manual Emulator Evidence
+
+- Release APK installed on `emulator-5554`.
+- Server available at `http://10.253.1.43:8765`; Settings `Save and Reload` refreshed and persisted
+  `2,271` cached searchable rows.
+- Emulator networking was disabled with `svc wifi disable` and `svc data disable`.
+- App was force-stopped and relaunched while offline.
+- `offline_restart_cached.png` shows cached Search rows immediately with `2,271 searchable results`
+  and local save timestamp instead of an empty screen.
+- Search/filter/sort rows remained visible from cache. Full offline interaction depth is covered by
+  controller/cache tests; physical offline interaction remains a human-review item.
 
 ## Current Remaining Gaps
 
 - Physical in-app screenshots for the new cache/filter/icon slice are missing due to lock-screen
-  blocker.
+  blocker, though emulator screenshots are now captured.
 - Filter sheet parity is implemented from Swift source and covered by tests, but still needs human
   visual review against the user-provided iOS screenshots.
 - Flutter still models Location as single `city` and single `countryISO3`, matching the checked-in
@@ -106,27 +126,30 @@ The required post-fix screenshots still need to be captured after the device is 
   those facets locally from cached Search rows.
 - Coverage remains strong but lower than the previous cache-slice number because this slice added a
   large amount of UI code.
-- Integration test on `emulator-5554` was not rerun in this slice.
+- The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
+  visible as the matching country option. This matches the "selected values remain visible" rule but
+  should be reviewed for whether the displayed same-group count is the desired product copy.
+- Physical Pixel offline restart still needs human verification after the device is unlocked.
 
 ## Scorecard
 
-Strict score under the new user caps: **60/100**.
+Strict score under the new user caps: **78/100**.
 
-The underlying implementation is materially higher than the previous 47/100 cache-only state, but
-the screenshot cap limits this slice to 60/100 until post-fix app screenshots are captured and
-human-visible parity is reviewed.
+The screenshot cap is no longer the limiting factor for emulator review, but the score remains below
+80 because physical Pixel in-app screenshots and user-provided iOS side-by-side review are still not
+complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Persistent cache | 17 / 20 | Full-dataset file cache, startup hydration, stale/clear UI, and offline filter tests exist; physical offline-restart screenshot evidence pending. |
+| Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
 | Filter parity | 24 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple city/country selection is not implemented. |
-| Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; screenshot comparison pending. |
-| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact. |
-| Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, and release AAB pass; integration test not rerun. |
-| Evidence/human readiness | 2 / 10 | Audit updated, but post-fix app screenshots are blocked by the locked Pixel. |
+| Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
+| Existing Search/data/detail/tabs | 12 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact; live count moved to 2,271 due deadline timing. |
+| Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, release AAB, and emulator integration test pass; builds were not rerun after the integration-test-only patch. |
+| Evidence/human readiness | 5 / 10 | Emulator evidence is captured; physical Pixel app screenshots and iOS side-by-side package still need final human review. |
 
 ## Next Required Human Action
 
-Unlock the connected Pixel 8 Pro, then rerun screenshot capture and offline-restart verification.
-Do not claim 80%+ completion until those screenshots prove the Android UI/behavior is close to the
-iOS reference.
+Unlock the connected Pixel 8 Pro, then rerun physical screenshot capture and offline-restart
+verification. Do not claim 80%+ completion until those screenshots prove the Android UI/behavior is
+close to the iOS reference.

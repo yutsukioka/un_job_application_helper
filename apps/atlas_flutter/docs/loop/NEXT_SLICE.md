@@ -2,13 +2,15 @@
 
 Gate state: implementation for persistent cache, full iOS-style filter groups, single-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
-PR #10 remains below completion because post-fix in-app screenshots and physical offline-restart
-verification are blocked by the locked Pixel.
+Emulator release-app screenshots and offline restart evidence are captured. PR #10 remains below
+completion because physical Pixel in-app screenshots, physical offline-restart verification, and
+human iOS side-by-side review are still pending.
 
 ## Intent
 
-Capture human-reviewable evidence on the unlocked Pixel 8 Pro and fix any visible regressions found
-from that evidence. Do not start broad backend or JobAgg lifecycle work.
+Capture human-reviewable evidence on the unlocked Pixel 8 Pro, create the final iOS-vs-Android
+side-by-side review package, and fix any visible regressions found from that evidence. Do not start
+broad backend or JobAgg lifecycle work.
 
 ## Acceptance Tests
 
@@ -19,7 +21,7 @@ from that evidence. Do not start broad backend or JobAgg lifecycle work.
   appear immediately with `Offline (cached)`/stale state.
 - Verify Search, filter sheet, filter chips, sort, saved state, Job Detail, Updates, Sources, and
   Settings still work from cached or live data as appropriate.
-- Capture screenshots:
+- Capture physical Pixel screenshots:
   - Search top and scrolled
   - Filter sheet top
   - Filter Location, Contract, Seniority, Grade, CCOG, Organizations, Work Mode, Capability Tags
@@ -30,7 +32,7 @@ from that evidence. Do not start broad backend or JobAgg lifecycle work.
   - Offline restart with cached data visible
   - Settings cache status
   - Job Detail, Saved, Updates, Sources
-- Update `ANDROID_SEARCH_UI_AUDIT.md` with screenshot paths and human-visible differences.
+- Update `ANDROID_SEARCH_UI_AUDIT.md` with physical screenshot paths and human-visible differences.
 - Run `dart format --set-exit-if-changed .`, `dart analyze`, `flutter test --coverage`, and the
   Android release build after any visual fixes.
 
@@ -38,12 +40,13 @@ from that evidence. Do not start broad backend or JobAgg lifecycle work.
 
 | Gap | Current state | Required next action |
 | --- | --- | --- |
-| Screenshot evidence | Latest capture shows Pixel lock screen only. | Unlock device and capture post-fix app screenshots. |
-| Physical offline restart | Covered by controller/cache tests, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
+| Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
+| Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
+| iOS side-by-side package | Search-top reference exists; full user-provided iOS filter screenshots are not yet packaged side by side. | Build final side-by-side review package after physical Android captures. |
 | Multiple city/country selections | Flutter matches current Swift model with single `city` and `countryISO3`. | Decide whether product wants to extend both iOS and Android to multi-select. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
 | Coverage | 90.62% after large filter UI addition. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
-| Integration test | Not rerun in the latest slice. | Run `flutter test integration_test -d emulator-5554` or document emulator blocker. |
+| Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control. | Keep this green after any physical-review fixes. |
 
 ## Last Verification Snapshot
 
@@ -55,3 +58,6 @@ from that evidence. Do not start broad backend or JobAgg lifecycle work.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
 - Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
 - USB Pixel install: pass, `lastUpdateTime=2026-07-03 01:07:21`.
+- Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
+- Emulator offline restart: pass, cached Search showed `2,271 searchable results` immediately from
+  local save.

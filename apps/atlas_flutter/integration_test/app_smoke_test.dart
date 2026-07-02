@@ -24,7 +24,9 @@ void main() {
     await tester.tap(find.byTooltip('Filters'));
     await tester.pumpAndSettle();
     expect(find.text('Filters'), findsOneWidget);
-    await tester.tap(find.byTooltip('Close filters'));
+    expect(find.text('Status'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+    await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Sort: Closing soon'));
