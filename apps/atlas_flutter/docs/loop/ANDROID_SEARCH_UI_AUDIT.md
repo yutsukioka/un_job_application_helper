@@ -73,7 +73,24 @@ Installed package evidence:
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 01:07:21`
+- Package `lastUpdateTime`: `2026-07-03 01:59:49` after the review-fix release APK install.
+
+## PR Review Feedback
+
+Latest actionable Copilot review clusters addressed:
+
+- Windows runner:
+  - Guarded `OnDestroy()` against re-entrant `WM_DESTROY`.
+  - Linked `advapi32.lib` for `RegGetValue`.
+  - Replaced `UNICODE_STRING_MAX_CHARS` dependency with a local bounded constant.
+  - Fixed the duplicated "as as" comment in `win32_window.h`.
+- Android networking:
+  - Removed global release `android:usesCleartextTraffic="true"`.
+  - Changed network security from a cleartext base config to a default-deny base plus an allowlist
+    for local development hosts: `10.253.1.43`, `10.0.2.2`, `127.0.0.1`, and `localhost`.
+- README:
+  - Replaced the stock Flutter template with Atlas-specific setup, test, build, local server, cache,
+    screenshot, and physical-device verification instructions.
 
 ## Screenshot Evidence
 

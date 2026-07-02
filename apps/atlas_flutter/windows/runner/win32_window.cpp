@@ -124,6 +124,7 @@ bool Win32Window::Create(const std::wstring& title,
                          const Point& origin,
                          const Size& size) {
   Destroy();
+  destroy_handled_ = false;
 
   const wchar_t* window_class =
       WindowClassRegistrar::GetInstance()->GetWindowClass();
@@ -181,7 +182,10 @@ Win32Window::MessageHandler(HWND hwnd,
   switch (message) {
     case WM_DESTROY:
       window_handle_ = nullptr;
-      OnDestroy();
+      if (!destroy_handled_) {
+        destroy_handled_ = true;
+        OnDestroy();
+      }
       if (quit_on_close_) {
         PostQuitMessage(0);
       }
