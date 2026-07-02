@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `8f139d3`
+Latest branch head before this report update: `47a0d5d`
 
 ## Summary
 
@@ -29,6 +29,8 @@ not available as local files in this worktree.
   restart.
 - Search startup from cache no longer shows a large normal-state local-save banner; status is compact
   under the result count.
+- Search result source badges now match Swift `SourceMonogram` treatment with deterministic
+  per-source color blocks and white initials.
 - Settings exposes server URL, cache status, refresh, and clear-cache controls.
 - Filter sheet implements Status, Location, Scope, Contract, UN Volunteer Category, Seniority,
   Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
@@ -44,16 +46,16 @@ not available as local files in this worktree.
 Last verified reconciliation from current app/API evidence:
 
 - `health_open_jobs`: `2,420`
-- `search_api_total`: `2,269`
-- Android displayed count after current refresh: `2,269 searchable results`
-- Difference: `151` deadline-past rows still counted by health as open but hidden by Search because
+- `search_api_total`: `2,268`
+- Android displayed count after current refresh: `2,268 searchable results`
+- Difference: `152` deadline-past rows still counted by health as open but hidden by Search because
   default Search uses `exclude_expired_open=true`.
 
 Current live refresh status:
 
 - `curl http://10.253.1.43:8765/api/health` succeeded on 2026-07-03 and reported
   `open_jobs=2420`.
-- Default `/api/search` with Android open/searchable filters reported `total=2269`.
+- Default `/api/search` with Android open/searchable filters reported `total=2268`.
 
 ## Evidence
 
@@ -74,6 +76,8 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/offline_restart_cached.png`
 - Current no-banner/cache refresh evidence:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703-current/`
+- Source badge parity evidence:
+  `apps/atlas_flutter/docs/loop/screenshots/source-badge-parity-20260703/search_badges_64bit.png`
 - Filter, cascade, detail, settings, saved, updates, and sources screenshots:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
 - Physical Pixel lock-screen evidence:
@@ -85,7 +89,7 @@ Latest app-code verification:
 
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed.
-- `flutter test --coverage` passed with 44 tests: `2727/3011` lines, `90.57%`.
+- `flutter test --coverage` passed with 45 tests: `2733/3016` lines, `90.62%`.
 - `flutter build apk --debug` passed.
 - `flutter build apk --release` passed.
 - `flutter build appbundle --release` passed.
@@ -106,7 +110,7 @@ Latest physical install evidence:
 
 - Device: Pixel 8 Pro `38281FDJG001DJ`
 - Package: `com.yutsukioka.jobagg.atlas`
-- Last installed release APK timestamp: `2026-07-03 03:18:02`
+- Last installed release APK timestamp: `2026-07-03 03:38:08`
 
 ## Remaining Gaps
 

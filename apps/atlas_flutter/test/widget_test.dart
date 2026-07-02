@@ -149,6 +149,43 @@ void main() {
     expect(find.text('Connection failed: test server offline'), findsOneWidget);
   });
 
+  testWidgets('source badge uses iOS-style source color monogram', (
+    tester,
+  ) async {
+    final unicefJob = _badgeJob(
+      sourceID: 'unicef_pageup',
+      organization: 'UNICEF PageUp',
+    );
+    final undpJob = _badgeJob(
+      sourceID: 'undp_oracle_hcm',
+      organization: 'UNDP Oracle HCM',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Row(
+          children: [
+            AtlasSourceBadge(job: unicefJob),
+            AtlasSourceBadge(job: undpJob),
+          ],
+        ),
+      ),
+    );
+
+    final unicefBox = tester.widget<Container>(
+      find.widgetWithText(Container, 'UNI').first,
+    );
+    final undpBox = tester.widget<Container>(
+      find.widgetWithText(Container, 'UND').first,
+    );
+    final unicefDecoration = unicefBox.decoration! as BoxDecoration;
+    final undpDecoration = undpBox.decoration! as BoxDecoration;
+
+    expect(unicefDecoration.color, isNot(AtlasPalette.accent));
+    expect(unicefDecoration.color, isNot(undpDecoration.color));
+    expect(tester.widget<Text>(find.text('UNI')).style?.color, Colors.white);
+  });
+
   testWidgets('updates and sources tabs render live operational data', (
     tester,
   ) async {
@@ -358,6 +395,27 @@ final class _SavedSearchTransport implements AtlasTransport {
         fail('Unexpected request ${request.method} ${request.path}');
     }
   }
+}
+
+JobSearchResult _badgeJob({
+  required String sourceID,
+  required String organization,
+}) {
+  return JobSearchResult(
+    jobKey: '$sourceID:1',
+    title: 'Programme Officer',
+    organization: organization,
+    sourceID: sourceID,
+    dutyStation: 'Geneva',
+    gradeCode: 'P-3',
+    contractLabel: 'Staff',
+    workModality: 'Onsite',
+    closingDate: DateTime.utc(2026, 7, 30),
+    needsReview: false,
+    scoreReasons: const [],
+    matchSummary: 'Matched',
+    description: 'Description',
+  );
 }
 
 final class _OperationalTransport implements AtlasTransport {

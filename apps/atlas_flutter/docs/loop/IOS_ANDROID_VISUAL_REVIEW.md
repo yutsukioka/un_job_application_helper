@@ -53,6 +53,7 @@ Single-image Android review contact sheet:
 | --- | --- | --- | --- |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
 | Search top, current count/no banner | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Current release shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
+| Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
 | Search scrolled | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/search_scrolled.png` | Android evidence captured; no local iOS pair. |
 | Filter sheet top | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | Matches written iOS requirements: dark sheet, drag handle, title, Done, sticky Reset/Apply, count pills. |
 | Filter Contract/Seniority | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_contract_seniority.png` | Android evidence captured. |
@@ -81,6 +82,7 @@ Single-image Android review contact sheet:
 - [x] Normal cache-load state does not show a large blue Search banner.
 - [x] Sort control is compact and right aligned.
 - [x] Job rows are compact and hide diagnostic paragraphs.
+- [x] Source badges use per-source color blocks with white initials, matching Swift `SourceMonogram`.
 - [x] Bottom tabs are Search, Saved, Updates, Sources, Settings.
 - [x] Filter sheet uses dark modal styling with `Filters`, `Done`, and sticky `Reset` / `Apply filters`.
 - [x] Filter sheet exposes all required groups from the written iOS reference.
@@ -95,8 +97,6 @@ Single-image Android review contact sheet:
 - The checked-in iOS Search screenshot appears stale relative to the user's latest requirements:
   it includes diagnostic explanation text in list rows, while the requirement now says diagnostics
   must be hidden from the main list.
-- Android currently uses source monograms with a light cyan background. The checked-in iOS screenshot
-  uses stronger per-source color blocks. This should receive human review.
 - Android filter icon style is Cupertino-style sliders, but not a pixel-identical clone of the
   filled iOS glyph in the checked-in reference.
 - Android Location filters now support multiple City/Country values, but the visible text-field

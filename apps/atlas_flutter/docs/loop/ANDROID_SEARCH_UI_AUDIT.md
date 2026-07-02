@@ -45,20 +45,22 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
 - Core app icons now route through shared `AtlasIcons` using Cupertino-style symbols for Search,
   filters, bookmark, deadline, location, organization, contract, remote, updates, sources, settings,
   chevron, info/warning, copy/link, refresh, and delete.
+- Search result source badges now match the Swift `SourceMonogram` pattern: 34px rounded squares,
+  deterministic per-source colors, and white source initials instead of pale cyan generic badges.
 
 ## Data Count Reconciliation
 
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,269` |
-| `android_displayed_total` | `2,269 searchable results` after a current refresh; older screenshots show `2,271` from the prior cache timestamp. |
+| `search_api_total` | `2,268` |
+| `android_displayed_total` | `2,268 searchable results` after the current source-badge screenshot refresh; older screenshots show `2,269` or `2,271` from prior cache timestamps. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
 | `local_cache_timestamp` | `2026-07-03 03:04` on the latest emulator refresh; offline restart reused that cache immediately. |
 | `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `151` |
+| `excluded_count` | `152` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,269` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
+| `final_decision` | `2,268` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
 
 ## Verification
 
@@ -99,6 +101,10 @@ Commands run from `apps/atlas_flutter`:
 - Full current verification passed: `dart analyze`; `flutter test --coverage` with 44 tests and
   `2727/3011` lines (`90.57%`); `flutter build apk --debug`; `flutter build apk --release`;
   `flutter build appbundle --release`; and `flutter test integration_test -d emulator-5554`.
+- Source-badge parity verification passed: fail-first widget test for the pale cyan badge, then
+  `dart analyze`, `flutter test --coverage` with 45 tests and `2733/3016` lines (`90.62%`),
+  `flutter build apk --debug`, `flutter build apk --release`, `flutter build appbundle --release`,
+  and `flutter test integration_test -d emulator-5554`.
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -109,7 +115,7 @@ Installed package evidence:
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 03:18:02` after the cache-load banner fix release APK
+- Package `lastUpdateTime`: `2026-07-03 03:38:08` after the source-badge parity release APK
   install.
 
 ## PR Review Feedback
@@ -170,6 +176,18 @@ Current refreshed emulator screenshots after the cache-load banner fix are avail
 - `offline_restart_no_banner.png`: offline restart with cached `2,269 searchable results` visible
   immediately and no large banner.
 
+Source-badge parity screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/source-badge-parity-20260703/`:
+
+- `search_badges.png`: clean emulator startup before local cache refresh.
+- `search_badges_64bit.png`: refreshed Search results from the rebuilt release APK with
+  Swift-style source-colored badges, current `2,268 searchable results`, and the Unicode-scalar
+  source-color hash.
+- `settings_after_reload_64bit.png`: live reload from the rebuilt release APK showing
+  `2,268 searchable results`, `2,420` health open
+  jobs, and `152` deadline-past open rows hidden by Search.
+- `settings_before_reload_64bit.png`: emulator Settings state before the same refresh.
+
 Dedicated review package:
 
 - `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
@@ -209,8 +227,10 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
   those facets locally from cached Search rows.
 - Normal cache-load banner was removed after screenshot review found `Loaded local save from this
   device.` occupying the Search result area.
-- Coverage remains strong at `90.57%` after adding persistent Job Detail cache and cache-load banner
-  coverage.
+- Source badges were changed from generic pale-cyan blocks to deterministic source colors with white
+  monograms, matching Swift `SourceMonogram`.
+- Coverage remains strong at `90.62%` after adding persistent Job Detail cache, cache-load banner,
+  and source-badge coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
@@ -230,9 +250,9 @@ still applies.
 | --- | ---: | --- |
 | Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
-| Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
-| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, and persistent cached details remain intact; live Search count moved to 2,269 due deadline timing. |
-| Tests/builds | 15 / 15 | Format, analyze, 44 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
+| Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
+| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, and persistent cached details remain intact; live Search count moved to 2,268 due deadline timing. |
+| Tests/builds | 15 / 15 | Format, analyze, 45 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
 | Evidence/human readiness | 1 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action

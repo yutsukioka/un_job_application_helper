@@ -1487,6 +1487,16 @@ String _displayScope(String? value) {
 
 String _jobWord(int count) => count == 1 ? 'job' : 'jobs';
 
+Color _sourceColor(String value) {
+  const mask64 = 0xffffffffffffffff;
+  var seed = 0;
+  for (final scalar in value.runes) {
+    seed = ((seed * 31) + scalar) & mask64;
+  }
+  final hue = (seed % 360).toDouble();
+  return HSVColor.fromAHSV(1, hue, 0.52, 0.58).toColor();
+}
+
 class AtlasApp extends StatelessWidget {
   const AtlasApp({super.key});
 
@@ -1891,7 +1901,7 @@ class AtlasSourceBadge extends StatelessWidget {
       height: 34,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: AtlasPalette.accent.withValues(alpha: 0.14),
+        color: _sourceColor(job.sourceID),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
@@ -1899,7 +1909,7 @@ class AtlasSourceBadge extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.clip,
         style: const TextStyle(
-          color: AtlasPalette.accent,
+          color: Colors.white,
           fontSize: 11,
           fontWeight: FontWeight.w800,
         ),
