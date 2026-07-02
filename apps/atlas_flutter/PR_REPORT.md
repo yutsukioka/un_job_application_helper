@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `400e51a`
+Latest branch head before this report update: `22114fa`
 
 ## Summary
 
@@ -17,10 +17,10 @@ Android Search-top, filter-sheet top, Job Detail top, and implemented-tab golden
 Android screenshot package.
 
 This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
-verification remain blocked by the connected phone being locked. Search-top iOS-vs-Android evidence
-now exists from a local iOS Simulator build, but full pixel-paired review against the user-provided
-iOS filter/detail screenshots remains blocked because those screenshots are not available as local
-files in this worktree.
+verification remain blocked by the connected phone being locked. Search, Filter sheet, Job Detail,
+Saved, Updates, Sources, and Settings now have source-rendered iOS Simulator references from the
+real Swift screens, but final pixel-paired review against the exact user-provided iOS screenshots
+remains blocked because those screenshots are not available as local files in this worktree.
 
 ## Scope Implemented
 
@@ -92,6 +92,14 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
 - Fresh iOS Simulator Search-top reference:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png`
+- Expanded source-rendered iOS Simulator references:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_search_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`
 - Android Search-top golden:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
 - Android filter-sheet top golden:
@@ -129,6 +137,14 @@ Latest app-code verification:
   -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
   -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed.
 - `xcrun simctl` boot/install/launch/screenshot captured the fresh iOS Simulator Search reference.
+- `swift build --scratch-path /private/tmp/atlas-swift-build` passed after adding the
+  source-rendered reference capture harness.
+- `xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost
+  -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
+  -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed again.
+- `xcrun simctl` installed and launched `AtlasIOSHost` with `SIMCTL_CHILD_ATLAS_REFERENCE_CAPTURE`
+  modes for Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings; screenshots
+  were captured under `screenshots/ios-simulator-expanded-20260703/`.
 - `flutter test test/search_golden_test.dart` passed after generating
   `test/goldens/android/search_top_compact.png`, `test/goldens/android/filter_sheet_top.png`, and
   `test/goldens/android/job_detail_top.png`.
@@ -154,8 +170,8 @@ Latest physical install evidence:
 - Physical Pixel in-app screenshots are missing because the device remains locked.
 - Physical offline restart with cached data visible is not yet human-verified.
 - Human G3 approval is pending.
-- User-provided iOS filter/detail screenshots are not available as local files for true pixel-paired
-  side-by-side review. Search-top now has fresh iOS Simulator side-by-side evidence.
+- Source-rendered iOS references now exist for primary screens, but exact user-provided iOS
+  screenshots are not available as local files for final pixel-paired side-by-side review.
 - Additional Android scrolled-state or component goldens may still be useful after physical/iOS
   review, but primary Search, filter-sheet, Job Detail, Saved, Updates, Sources, and Settings
   baselines now exist.
@@ -172,14 +188,15 @@ Latest physical install evidence:
 4. Capture the required physical screenshots into
    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/`.
 5. Re-run live count reconciliation against `/api/health` and `/api/search`.
-6. Copy the user-provided iOS filter/detail screenshots into the repo or provide accessible paths,
-   then update `IOS_ANDROID_VISUAL_REVIEW.md` with true iOS-vs-Android pairs.
+6. Copy the user-provided iOS screenshots into the repo or provide accessible paths, then update
+   `IOS_ANDROID_VISUAL_REVIEW.md` with true iOS-vs-Android pairs against those exact images.
 7. Post final report evidence as a PR comment and wait for `APPROVED: G3`.
 
 ## Honest Score
 
-Current strict score: `79/100`.
+Current strict score: `82/100`.
 
-The score is capped below 80 because physical Pixel in-app evidence and full iOS filter/detail
-side-by-side evidence are still missing. Do not claim final Android parity completion until those
+The score improves because source-rendered iOS references now exist for the primary screens. It is
+still capped below final parity because physical Pixel in-app evidence and exact user-provided iOS
+side-by-side review are still missing. Do not claim final Android parity completion until those
 gates are satisfied.

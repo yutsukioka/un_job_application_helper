@@ -15,7 +15,9 @@ raw source payloads no longer dominate the main detail screen.
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
 Pixel 8 Pro, but post-fix physical in-app screenshots are blocked because the physical device
 remained on the lock screen. Emulator screenshots from the release app now provide human-reviewable
-evidence for the cache, filter, cascade, icon, tab, and detail slice.
+evidence for the cache, filter, cascade, icon, tab, and detail slice. Source-rendered iOS Simulator
+captures now provide local references for Search, Filter sheet, Job Detail, Saved, Updates, Sources,
+and Settings.
 
 ## Implemented This Slice
 
@@ -201,6 +203,9 @@ Latest actionable Copilot review clusters addressed:
   - Booted iPhone 17 Pro Simulator, installed and launched `AtlasIOSHost`, and captured a fresh iOS
     Search-top reference screenshot.
   - Generated a fresh iOS Simulator vs Android Search side-by-side image for human review.
+  - Added an environment-gated `ATLAS_REFERENCE_CAPTURE` harness in `AtlasIOSHost` and
+    source-rendered iOS references for Search, Filter sheet, Job Detail, Saved, Updates, Sources,
+    and Settings. Normal iOS app launches still use `AtlasRootView()`.
 
 ## Screenshot Evidence
 
@@ -272,6 +277,19 @@ Fresh iOS Simulator reference screenshots are available under
 - `ios_simulator_android_search_side_by_side.png`: fresh iOS Simulator Search top beside the latest
   Android Search screenshot.
 
+Expanded source-rendered iOS Simulator reference screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/`:
+
+- `ios_search_reference.png`: normal-state iOS Search reference with compact local-save status and
+  no large cache-progress banner.
+- `ios_filter_reference.png`: dark iOS Filter sheet reference with Done, sticky Reset/Apply,
+  compact count pills, status/location/scope/contract/seniority sections, and explanatory text.
+- `ios_detail_reference.png`: populated iOS Job Detail reference with apply/source/save controls,
+  deadline panel, match details, and classification.
+- `ios_saved_reference.png`, `ios_updates_reference.png`, `ios_sources_reference.png`, and
+  `ios_settings_reference.png`: source-rendered iOS tab references for the implemented non-Search
+  screens.
+
 Android golden baseline:
 
 - `apps/atlas_flutter/test/goldens/android/search_top_compact.png`: Flutter golden for Search-top
@@ -302,7 +320,8 @@ Previously generated evidence remains available for Search top comparison:
 - `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
 
 The remaining screenshot gaps are physical Pixel in-app evidence after the device is unlocked and
-local iOS filter/detail reference screenshots.
+exact user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS
+references now exist for the main review screens.
 
 ## Manual Emulator Evidence
 
@@ -324,9 +343,9 @@ local iOS filter/detail reference screenshots.
   blocker, though emulator screenshots are now captured.
 - Fresh Pixel check on 2026-07-03 still shows the lock screen while Atlas is resumed underneath
   keyguard.
-- Search-top parity now has a fresh iOS Simulator side-by-side image. Filter sheet and detail parity
-  are implemented from Swift source and covered by tests, but true pixel-paired human review still
-  needs local copies of the user-provided iOS filter/detail screenshots.
+- Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings now have source-rendered
+  iOS Simulator reference screenshots. True pixel-paired human review still needs local copies of
+  the user-provided iOS screenshots and physical Android captures.
 - Search-top, filter-sheet top, populated Job Detail top, and implemented Saved/Updates/Sources/
   Settings tabs now have Android golden regression tests. Physical Pixel and iOS reference review
   are still required.
@@ -348,13 +367,12 @@ local iOS filter/detail reference screenshots.
 
 ## Scorecard
 
-Strict score under the new user caps: **79/100**.
+Strict score under the new user caps: **82/100**.
 
-The screenshot cap is no longer the limiting factor for emulator review, and a fresh iOS Simulator
-Search-top side-by-side package now exists. The score remains below 80 because physical Pixel in-app
-screenshots and user-provided iOS filter/detail side-by-side review are still not complete. The raw
-score would now be higher from emulator integration and refreshed screenshots, but the strict
-human-review cap still applies.
+The local iOS evidence gap is reduced because source-rendered iOS references now exist for Search,
+Filter sheet, Job Detail, Saved, Updates, Sources, and Settings. The score remains below final
+completion because physical Pixel in-app screenshots/offline restart and exact user-provided iOS
+screenshot pairing are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
@@ -363,7 +381,7 @@ human-review cap still applies.
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
 | Tests/builds | 15 / 15 | Format, analyze, 55 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
-| Evidence/human readiness | 2 / 10 | Emulator evidence, Android contact sheet, and fresh iOS Simulator Search side-by-side are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
+| Evidence/human readiness | 5 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens, and Search side-by-side are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
 
 ## Next Required Human Action
 
