@@ -1,14 +1,15 @@
 # Next Slice
 
-Pending gate: G1 parity matrix approval.
+Gate state: G1 approved. G2 design review, G3 physical device pass, and G4 review feedback remain pending.
 
-Intent: after G1 approval, implement the Atlas Flutter domain/API foundation without touching shared packages or `services/job-api`. This slice will port the job/search/detail DTOs, filter helper logic, base URL normalization, local API client interface, and formatter-independent display helpers so later UI slices can be tested against stable contracts.
+Intent: replace the generated counter surface with the first Android Atlas app shell and Search tab skeleton, backed by the newly added domain/API contracts. This slice should establish the Material app name, Android bottom navigation, Atlas tab labels, search field, filter-chip ribbon placeholder, result-count/sort bar, and empty/offline-ready search content without yet implementing the full view model or API-backed result list.
 
 Acceptance tests to add before implementation:
 
-- Unit tests for base URL normalization using the Swift `AtlasAPIClientTests` cases.
-- Unit tests for decoding cached camelCase search rows and snake_case API rows into one Dart `JobSearchResult` model.
-- Unit tests for grade formatting, organization display cleanup, source initials, deadline urgency/text, score normalization, and active filter chip removal/reset behavior.
-- Mock HTTP tests proving the client targets `/api/health`, `/api/search`, `/api/job-detail`, `/api/saved-searches`, `/api/tracker`, `/api/updates`, and `/api/sources` with compatible methods and JSON keys.
+- Widget test proving the Atlas app title/theme replaces the generated counter app.
+- Widget test proving Android bottom navigation exposes Search, Saved, Updates, Sources, and Settings tabs and switches visible tab content.
+- Widget test proving the Search tab contains a search field, filter-chip ribbon placeholder, result-count/status/sort bar, and empty/offline state.
+- Integration test launching the app on `Pixel_8_Pro_API_17` and navigating all primary tabs without crash.
+- Remove or replace the generated counter widget test so the test suite verifies Atlas behavior only.
 
-No implementation work should start until the PR has an explicit `APPROVED: G1` comment.
+Implementation should remain scoped to app shell/search-skeleton UI and tests. Full API search execution, local cache, detail screen, goldens, and settings connection flows stay in later slices.

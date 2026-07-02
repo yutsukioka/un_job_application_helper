@@ -3,17 +3,17 @@
 Generated: 2026-07-02
 Branch: `codex/atlas-flutter-android-parity`
 Reference source: `apps/apple/Sources/AtlasUI/*.swift`
-Target source inspected: `apps/atlas_flutter/lib/main.dart`
+Target source inspected: `apps/atlas_flutter/lib/main.dart`, `apps/atlas_flutter/lib/atlas.dart`
 
 ## Summary
 
-The Apple app is a SwiftUI Atlas client for `services/job-api` with a mobile tab shell, API-backed job search, local offline save, saved searches/jobs, source updates, source summaries, settings, job detail formatting, and the Atlas visual system. The Flutter app is currently the generated Flutter counter scaffold. No parity feature is complete yet.
+The Apple app is a SwiftUI Atlas client for `services/job-api` with a mobile tab shell, API-backed job search, local offline save, saved searches/jobs, source updates, source summaries, settings, job detail formatting, and the Atlas visual system. The Flutter app currently has the generated Flutter visual shell plus a tested Dart domain/API foundation. UI parity, local cache, formatter, settings, feedback, and design-golden work remain open.
 
 Status counts:
 
-- Complete: 0
-- Partial/scaffold only: 1
-- Not started: 24
+- Complete: 4
+- Partial/scaffold only: 3
+- Not started: 18
 - Blocked/pending contract: 1
 
 ## Feature Matrix
@@ -22,15 +22,15 @@ Status counts:
 | --- | --- | --- | --- | --- | --- | --- |
 | P01 | App shell and mobile navigation | `SearchScreen.swift` (`AtlasRootView`, `AtlasMobileTab`) | Material app named Atlas with Android bottom navigation tabs: Search, Saved, Updates, Sources, Settings; per-tab navigation stack and detail routing. | Generated counter app in `lib/main.dart`. | Not started | Widget test for tabs and navigation; integration primary journey. |
 | P02 | Atlas design system | `AtlasTheme.swift`, `AtlasComponents.swift`, `AtlasAppIcon.swift` | UN-cyan accent, strategy orange, deadline amber/red, success/warning/danger colors, deterministic source colors, compact 8px-ish source monograms, deadline pills, confidence dots, score ring/badge, filter chips, metadata capsules, Android launcher icon derived from Atlas app icon. | Flutter default purple Material seed and default icon. | Not started | Golden tests for components; launcher icon asset check. |
-| P03 | Job/result data model | `AtlasModels.swift`, `AtlasAPIClient.swift` DTOs | Dart models for `JobSearchResult`, health, search request/response, saved searches, tracker records, sources, updates, job detail, deadline info, detail sections/rows; JSON key compatibility including both cached camelCase and API snake_case rows. | None. | Not started | Unit tests mirroring `AtlasAPIClientTests.testDecodesCachedSearchResponseRows`. |
-| P04 | Derived job display fields | `AtlasModels.swift`, `AtlasTheme.swift` | Organization display cleanup, source initials, deadline urgency/text, grade formatting, source color hashing, score normalization, percent/confidence display. | None. | Not started | Unit tests for organization cleanup, deadline windows, source color stability, grade/score formatting. |
-| P05 | API client contract | `AtlasAPIClient.swift`; `services/job-api/job_api/app.py` | HTTP client with configurable base URL; endpoints: `GET /api/health`, `POST /api/search`, `GET /api/job-detail?job_key=...`, saved-search CRUD, tracker list/save/delete, updates, sources. | None. | Not started | Unit tests with mocked HTTP; integration test against local `job-api`. |
-| P06 | Base URL normalization and transport errors | `AtlasAPIClient.swift`, `AtlasAPIClientTests.swift` | Normalize pasted full health URLs/bare LAN hosts; Android-appropriate local/LAN server error messaging while preserving remote error text. | None. | Not started | Unit tests ported from Swift API client tests. |
+| P03 | Job/result data model | `AtlasModels.swift`, `AtlasAPIClient.swift` DTOs | Dart models for `JobSearchResult`, health, search request/response, saved searches, tracker records, sources, updates, job detail, deadline info, detail sections/rows; JSON key compatibility including both cached camelCase and API snake_case rows. | Dart DTO/domain models added in `lib/atlas.dart`, including cached camelCase and API snake_case aliases. | Complete | Unit tests mirroring `AtlasAPIClientTests.testDecodesCachedSearchResponseRows`. |
+| P04 | Derived job display fields | `AtlasModels.swift`, `AtlasTheme.swift` | Organization display cleanup, source initials, deadline urgency/text, grade formatting, source color hashing, score normalization, percent/confidence display. | Display helpers and derived fields implemented and covered by unit tests. | Complete | Unit tests for organization cleanup, deadline windows, source color stability, grade/score formatting. |
+| P05 | API client contract | `AtlasAPIClient.swift`; `services/job-api/job_api/app.py` | HTTP client with configurable base URL; endpoints: `GET /api/health`, `POST /api/search`, `GET /api/job-detail?job_key=...`, saved-search CRUD, tracker list/save/delete, updates, sources. | `AtlasAPIClient` and `AtlasIOTransport` implement the documented service endpoints with fake-transport and local HTTP tests. | Complete | Unit tests with mocked HTTP; integration test against local `job-api`. |
+| P06 | Base URL normalization and transport errors | `AtlasAPIClient.swift`, `AtlasAPIClientTests.swift` | Normalize pasted full health URLs/bare LAN hosts; Android-appropriate local/LAN server error messaging while preserving remote error text. | Base URL normalization and HTTP status/transport exceptions are implemented; Android local/LAN setup copy remains for Settings. | Partial/scaffold only | Unit tests ported from Swift API client tests. |
 | P07 | Local offline save and detail cache | `AtlasLocalCache.swift`, `SearchViewModel.swift`, `JobDetailView.swift` | Persist list snapshot, refresh interval, detail JSON files, detail staging/commit semantics, cached detail counts, stale check, safe filenames, fallback to cache when offline. Android storage should use app documents/support directory. | None. | Not started | Unit tests using temp directory; integration offline fallback test. |
 | P08 | Search view model state | `SearchViewModel.swift` | Query, loading/error/user messages, total/results/facets/facet labels, unclassified count, server state, saved searches/jobs, sources, recent runs, local cache counters, detail-cache progress, sort order, filters. | None. | Not started | View-model unit tests with fake API/cache. |
 | P09 | Search lifecycle | `SearchViewModel.swift` | `loadIfNeeded`, refresh from server, fallback to cached/local/offline state, debounce query/filter changes, search/reset/load-more, preview data only for tests/goldens. | None. | Not started | Unit tests for load/refresh/search/debounce/load-more/offline paths. |
-| P10 | Search request construction and sorting | `SearchViewModel.swift`, `AtlasSearchFilters.swift`, `AtlasTheme.swift` | Map query/filter/sort state to API request; sort orders: Closing soon, Newest posted, Deadline latest, Best fit; local cached sorting equivalent. | None. | Not started | Unit tests for request JSON and sorted local rows. |
-| P11 | Search filters domain | `AtlasSearchFilters.swift`, `SearchScreen.swift` | Open only, city, country ISO3, scope, include low confidence, closing soon, grades, work modalities, source IDs, organizations, CCOG families, contract groups, seniority, volunteer kinds, UNV categories/types, capability tags/query; active chips and chip removal. | None. | Not started | Unit tests for chips, summaries, remote-only, grade sort, remove/reset behavior. |
+| P10 | Search request construction and sorting | `SearchViewModel.swift`, `AtlasSearchFilters.swift`, `AtlasTheme.swift` | Map query/filter/sort state to API request; sort orders: Closing soon, Newest posted, Deadline latest, Best fit; local cached sorting equivalent. | Request JSON mapping and sort-order serialization are implemented; local cached sorting remains for the view-model/cache slice. | Partial/scaffold only | Unit tests for request JSON and sorted local rows. |
+| P11 | Search filters domain | `AtlasSearchFilters.swift`, `SearchScreen.swift` | Open only, city, country ISO3, scope, include low confidence, closing soon, grades, work modalities, source IDs, organizations, CCOG families, contract groups, seniority, volunteer kinds, UNV categories/types, capability tags/query; active chips and chip removal. | Filter model, active chip summaries, chip removal, reset behavior, grade sort, and remote-filter detection are implemented. | Complete | Unit tests for chips, summaries, remote-only, grade sort, remove/reset behavior. |
 | P12 | Filter sheet UI | `SearchScreen.swift` (`FilterSheetView`) | Android modal/bottom sheet with grouped status, location, scope segmented control, contract/volunteer, UNV category, seniority, grade, CCOG, organization, work mode, capability controls; availability counts and disabled zero-match values. | None. | Not started | Widget tests for all groups; golden for sheet at Pixel 8 Pro size. |
 | P13 | Search screen UI | `SearchScreen.swift` (`AtlasSearchScreen`) | Search tab with search field, horizontal active/quick filter ribbon, result count/status/sort bar, server/user/detail-cache banners, pull-to-refresh, empty states, list, load-more row. | None. | Not started | Widget tests and golden for loaded, loading, offline, empty states. |
 | P14 | Result row | `JobResultRow.swift`, `AtlasComponents.swift` | Row with source monogram, title with needs-review icon, organization/location/confidence, deadline pill, grade/contract/work mode, match summary, score ring/badge. | None. | Not started | Component golden and interaction/accessibility tests. |
@@ -47,10 +47,10 @@ Status counts:
 | P25 | Flutter Android build/test/release docs | User completion criteria; existing Flutter scaffold | README documents setup, job-api, tests, emulator, debug APK, release AAB, troubleshooting, physical Pixel 8 Pro handoff. | Default Flutter README. | Partial/scaffold only | README review plus command smoke tests. |
 | P26 | In-app feedback loop to `services/job-api` | User completion criterion; no matching endpoint found in bounded repo search | Add/verify user-feedback flow only after API contract is identified or agreed. If service changes are needed, stop and open a sub-issue before modifying `services/job-api`. | No Flutter UI; no discovered job-api endpoint. | Blocked/pending contract | Contract discovery; integration test once endpoint exists or approved stub/proxy is defined. |
 
-## Initial Slice Recommendation After G1
+## Iteration 1 Result
 
-The smallest safe first implementation slice is the non-UI domain/API layer: Dart models, filter value helpers, base URL normalization, search request JSON, API client interface, and tests ported from `AtlasAPIClientTests`. This reduces risk for every later UI slice and does not require changing `packages/` or `services/job-api`.
+Completed the non-UI domain/API layer: Dart models, filter value helpers, base URL normalization, search request JSON, API client interface, and tests ported from the Swift API/filter behavior. This did not modify `packages/` or `services/job-api`.
 
 ## Gate
 
-G1 is pending. Do not write implementation code until a PR comment receives explicit `APPROVED: G1`.
+G1 approved by PR comment on 2026-07-02. G2 design review, G3 physical device pass, and G4 review feedback gates remain pending.
