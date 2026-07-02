@@ -102,12 +102,21 @@ Commands run from `apps/atlas_flutter`:
 - `flutter build apk --release` passed.
 - `flutter test integration_test -d emulator-5554` passed.
 - Release APK installed with `adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-release.apk`.
+- Latest release APK rebuilt and installed on USB Pixel 8 Pro `38281FDJG001DJ` with `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk`.
 
 Build artifacts:
 
 - Debug APK: `apps/atlas_flutter/build/app/outputs/flutter-apk/app-debug.apk`
 - Release AAB: `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`
 - Release APK: `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk`
+
+Physical Pixel install evidence:
+
+- Device: `38281FDJG001DJ` (`product:husky`, `model:Pixel_8_Pro`, USB)
+- Package: `com.yutsukioka.jobagg.atlas`
+- Installed version: `versionName=1.0.0`, `versionCode=1`
+- Android package `lastUpdateTime`: `2026-07-02 23:57:59`
+- Launch command returned successfully, but the phone was on the lock screen, so no physical in-app screenshot was committed.
 
 ## Visual Parity Assessment
 
