@@ -136,6 +136,7 @@ Post-fix emulator screenshots from the release app are available under
 Dedicated review package:
 
 - `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
+- `apps/atlas_flutter/PR_REPORT.md`
 
 Previously generated evidence remains available for Search top comparison:
 
