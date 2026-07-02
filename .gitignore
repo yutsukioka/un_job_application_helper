@@ -43,6 +43,7 @@ packages/jobagg/tmp/
 *.db
 *.har
 *.jsonl
+!apps/atlas_flutter/docs/loop/STATUS.jsonl
 
 # === Apex generated/protected artifacts ===
 agents/apex/logs/
