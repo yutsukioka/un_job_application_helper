@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `47a0d5d`
+Latest branch head before this report update: `fcf773b`
 
 ## Summary
 
@@ -12,7 +12,7 @@ The Android Flutter app has moved beyond the initial Search-only parity slice. I
 persistent local cache, offline startup behavior on emulator, an iOS-style Search screen, full
 filter groups, City/Country and Seniority/Grade cascades, multi-value City/Country filter support,
 compact result rows, populated and persistently cached Job Detail, Saved/Updates/Sources/Settings
-tabs, and a reviewable Android screenshot package.
+tabs, a Dart port of the Swift ATS detail formatter, and a reviewable Android screenshot package.
 
 This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
 verification remain blocked by the connected phone being locked. Full pixel-paired review against
@@ -40,22 +40,25 @@ not available as local files in this worktree.
 - Sources tab shows source health and allows source filtering.
 - Job Detail shows core fields, full description, detail sections, apply/source links, save state,
   weak-detail state, and diagnostics behind an expansion panel.
+- Job Detail now formats ATS/PageUp sections instead of dumping raw section text: ATS chrome is
+  hidden, fact runs become compact rows, bullet/numbered lists become structured blocks, orphan
+  fragments are healed, and raw/source-data sections stay behind diagnostics.
 
 ## Data Count Reconciliation
 
 Last verified reconciliation from current app/API evidence:
 
 - `health_open_jobs`: `2,420`
-- `search_api_total`: `2,268`
-- Android displayed count after current refresh: `2,268 searchable results`
-- Difference: `152` deadline-past rows still counted by health as open but hidden by Search because
+- `search_api_total`: `2,266`
+- Android displayed count after current refresh: `2,266 searchable results`
+- Difference: `154` deadline-past rows still counted by health as open but hidden by Search because
   default Search uses `exclude_expired_open=true`.
 
 Current live refresh status:
 
 - `curl http://10.253.1.43:8765/api/health` succeeded on 2026-07-03 and reported
   `open_jobs=2420`.
-- Default `/api/search` with Android open/searchable filters reported `total=2268`.
+- Default `/api/search` with Android open/searchable filters reported `total=2266`.
 
 ## Evidence
 
@@ -78,6 +81,10 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703-current/`
 - Source badge parity evidence:
   `apps/atlas_flutter/docs/loop/screenshots/source-badge-parity-20260703/search_badges_64bit.png`
+- Detail formatter evidence:
+  `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/job_detail_top_fixed.png`
+- Current live count evidence:
+  `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/settings_after_reload.png`
 - Filter, cascade, detail, settings, saved, updates, and sources screenshots:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
 - Physical Pixel lock-screen evidence:
@@ -89,7 +96,7 @@ Latest app-code verification:
 
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed.
-- `flutter test --coverage` passed with 45 tests: `2733/3016` lines, `90.62%`.
+- `flutter test --coverage` passed with 55 tests: `2956/3255` lines, `90.81%`.
 - `flutter build apk --debug` passed.
 - `flutter build apk --release` passed.
 - `flutter build appbundle --release` passed.
@@ -110,7 +117,7 @@ Latest physical install evidence:
 
 - Device: Pixel 8 Pro `38281FDJG001DJ`
 - Package: `com.yutsukioka.jobagg.atlas`
-- Last installed release APK timestamp: `2026-07-03 03:38:08`
+- Last installed release APK timestamp: `2026-07-03 04:11:11`
 
 ## Remaining Gaps
 

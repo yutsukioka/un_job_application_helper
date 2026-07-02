@@ -3,8 +3,10 @@
 Date: 2026-07-03
 Branch: `codex/atlas-flutter-android-parity`
 Android evidence set: `screenshots/filter-cache-icons-emulator-20260703/`
-Current refreshed Android evidence set:
+Prior no-banner Android evidence set:
 `screenshots/filter-cache-icons-emulator-20260703-current/`
+Latest detail formatter evidence set:
+`screenshots/detail-formatter-20260703/`
 
 ## Evidence Boundaries
 
@@ -38,7 +40,7 @@ Generated side-by-side image:
 | Top-right filter/bookmark group | Pass with style note | Android uses a rounded pill with Cupertino-style sliders/bookmark. Checked-in iOS reference has the same grouping concept but a different filled filter glyph. |
 | Search box under header | Pass | Both place search field directly below the header controls. |
 | Compact filter chips | Pass | Android chips are compact and horizontally arranged. |
-| Result count and local-save text | Pass | Current Android evidence shows `2,269 searchable results` and compact local save timestamp. |
+| Result count and local-save text | Pass | Current Android evidence shows `2,266 searchable results` and compact local save timestamp. |
 | Sort link alignment | Pass | Android sort control is compact and right aligned. |
 | Compact list rows | Pass against current product requirement | Android rows are compact and hide diagnostic text. Checked-in iOS screenshot is stale and still shows diagnostic explanation text in rows. |
 | Bottom navigation | Pass | Both show Search, Saved, Updates, Sources, Settings. |
@@ -52,8 +54,9 @@ Single-image Android review contact sheet:
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
-| Search top, current count/no banner | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Current release shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
+| Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
+| Search top, latest live count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Current release shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search scrolled | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/search_scrolled.png` | Android evidence captured; no local iOS pair. |
 | Filter sheet top | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | Matches written iOS requirements: dark sheet, drag handle, title, Done, sticky Reset/Apply, count pills. |
 | Filter Contract/Seniority | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_contract_seniority.png` | Android evidence captured. |
@@ -66,8 +69,8 @@ Single-image Android review contact sheet:
 | Seniority -> Grade cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_entry_junior_selected.png` | `Entry Junior` selected; Grade options narrow. |
 | Grade selected | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_selected.png` | Grade selected state captured. |
 | Offline restart | Not applicable | `screenshots/filter-cache-icons-emulator-20260703-current/offline_restart_no_banner.png` | Cached rows visible immediately after offline relaunch with no large normal-state cache banner. |
-| Settings cache status | Missing locally | `screenshots/filter-cache-icons-emulator-20260703-current/settings_after_refresh.png` | Shows cache timestamp, freshness, cached/search/health counts, refresh and clear controls with current `2,269` count. |
-| Job Detail | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/job_detail.png` | Shows populated detail, core fields, weak-detail state, description, and save affordance. |
+| Settings cache status | Missing locally | `screenshots/detail-formatter-20260703/settings_after_reload.png` | Shows cache timestamp, freshness, cached/search/health counts, refresh and clear controls with current `2,266` count. |
+| Job Detail | Missing locally | `screenshots/detail-formatter-20260703/job_detail_top_fixed.png` | Shows populated detail with ATS formatter output; raw source data is hidden from the main detail body and remains behind diagnostics. |
 | Saved tab | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/saved_tab.png` | Implemented screen captured. |
 | Updates tab | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/updates_tab.png` | Implemented screen captured. |
 | Sources tab | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/sources_tab.png` | Implemented screen captured. |
@@ -83,6 +86,7 @@ Single-image Android review contact sheet:
 - [x] Sort control is compact and right aligned.
 - [x] Job rows are compact and hide diagnostic paragraphs.
 - [x] Source badges use per-source color blocks with white initials, matching Swift `SourceMonogram`.
+- [x] Job Detail renders formatted ATS sections and keeps raw/debug source data out of the main body.
 - [x] Bottom tabs are Search, Saved, Updates, Sources, Settings.
 - [x] Filter sheet uses dark modal styling with `Filters`, `Done`, and sticky `Reset` / `Apply filters`.
 - [x] Filter sheet exposes all required groups from the written iOS reference.

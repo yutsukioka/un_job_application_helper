@@ -321,12 +321,23 @@ void main() {
       expect(find.text('P-3'), findsWidgets);
       expect(find.text('Contract'), findsOneWidget);
       expect(find.text('Fixed term'), findsWidgets);
+
+      await tester.scrollUntilVisible(find.text('ATS page chrome hidden'), 300);
+      await tester.pumpAndSettle();
+      expect(find.text('ATS page chrome hidden'), findsOneWidget);
+      expect(find.textContaining('Back to search results'), findsNothing);
+
+      await tester.scrollUntilVisible(find.text('Responsibilities'), 300);
+      await tester.pumpAndSettle();
       expect(find.text('Responsibilities'), findsOneWidget);
       expect(find.textContaining('Lead partner coordination'), findsOneWidget);
 
-      await tester.scrollUntilVisible(find.text('Qualifications'), 300);
+      await tester.scrollUntilVisible(
+        find.text('Qualifications & education'),
+        300,
+      );
       await tester.pumpAndSettle();
-      expect(find.text('Qualifications'), findsOneWidget);
+      expect(find.text('Qualifications & education'), findsOneWidget);
       expect(find.textContaining('Advanced university degree'), findsOneWidget);
 
       await tester.scrollUntilVisible(find.text('Apply URL'), 300);
@@ -341,6 +352,8 @@ void main() {
         find.text('Location matched Nairobi from title evidence.'),
         findsNothing,
       );
+      expect(find.text('Raw Source Data'), findsNothing);
+      expect(find.textContaining('debug source payload'), findsNothing);
 
       await tester.tap(find.text('Match diagnostics'));
       await tester.pumpAndSettle();
@@ -350,6 +363,8 @@ void main() {
       );
       expect(find.text('Job Record'), findsOneWidget);
       expect(find.text('Detail quality status'), findsOneWidget);
+      expect(find.text('Raw Source Data'), findsOneWidget);
+      expect(find.textContaining('debug source payload'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Save job'));
       await tester.pumpAndSettle();
@@ -512,7 +527,8 @@ final class _PopulatedDetailTransport implements AtlasTransport {
           'display_sections': [
             {
               'title': 'Responsibilities',
-              'body': 'Lead partner coordination and situation reporting.',
+              'body':
+                  'Achieving results such as:• Lead partner coordination and situation reporting across emergency clusters.• Maintain response dashboards and partner follow-up logs.• Prepare concise operational updates for senior leadership. Real responsibilities content continues with partner mapping, risk tracking, and field coordination. Back to search results Apply now Whatsapp Facebook LinkedIn Send me jobs like these',
             },
             {
               'title': 'Qualifications',
@@ -525,6 +541,10 @@ final class _PopulatedDetailTransport implements AtlasTransport {
                 {'label': 'Detail quality status', 'value': 'complete'},
                 {'label': 'Extractor', 'value': 'fixture'},
               ],
+            },
+            {
+              'title': 'Raw Source Data',
+              'body': 'listing_html: <div>debug source payload</div>',
             },
           ],
         };

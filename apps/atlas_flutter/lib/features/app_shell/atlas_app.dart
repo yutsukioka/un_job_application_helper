@@ -1459,6 +1459,9 @@ bool _isDiagnosticSection(AtlasDetailSection section) {
       title == 'classification' ||
       title == 'locations' ||
       title == 'source features' ||
+      title.contains('raw source') ||
+      title.contains('raw record') ||
+      title.contains('source data') ||
       title.contains('diagnostic') ||
       title.contains('evidence');
 }
@@ -4110,6 +4113,9 @@ class _AtlasJobDetailBody extends StatelessWidget {
     ]);
     final contentSections = _contentSections(detail);
     final diagnosticSections = _diagnosticSections(detail);
+    final formattedDetail = AtlasATSDetailFormatter.format(
+      sections: contentSections,
+    );
     final qualityStatus = _detailQualityStatus(detail);
     final weakDetail =
         job.needsReview ||
@@ -4226,33 +4232,23 @@ class _AtlasJobDetailBody extends StatelessWidget {
             MapEntry('Remote/onsite', job.workModality),
           ],
         ),
-        if (contentSections.isNotEmpty) ...[
+        if (formattedDetail.hiddenBoilerplate) ...[
+          const SizedBox(height: 16),
+          const AtlasInfoStrip(
+            icon: AtlasIcons.info,
+            title: 'ATS page chrome hidden',
+            body:
+                'Navigation, apply-button, and sharing text from the source page were removed from this display. Use the source link for the original posting.',
+          ),
+        ],
+        if (formattedDetail.sections.isNotEmpty) ...[
           const SizedBox(height: 20),
-          for (final section in contentSections) ...[
-            _DetailSectionTitle(section.title),
-            if (section.body != null && section.body!.trim().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(
-                section.body!,
-                style: const TextStyle(
-                  color: AtlasPalette.ink,
-                  fontSize: 14,
-                  height: 1.38,
-                ),
-              ),
-            ],
-            if (section.rows.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _DetailRows(
-                rows: section.rows
-                    .map((row) => MapEntry(row.label, row.value))
-                    .toList(growable: false),
-              ),
-            ],
+          for (final section in formattedDetail.sections) ...[
+            _FormattedDetailSectionView(section: section),
             const SizedBox(height: 16),
           ],
         ],
-        if (contentSections.isEmpty && !isLoading) ...[
+        if (formattedDetail.sections.isEmpty && !isLoading) ...[
           const SizedBox(height: 16),
           const AtlasInfoStrip(
             icon: AtlasIcons.info,
@@ -4329,6 +4325,86 @@ class _AtlasJobDetailBody extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+class _FormattedDetailSectionView extends StatelessWidget {
+  const _FormattedDetailSectionView({required this.section});
+
+  final AtlasFormattedDetailSection section;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DetailSectionTitle(section.title),
+        const SizedBox(height: 6),
+        for (final block in section.blocks) ...[
+          _FormattedDetailBlockView(block: block),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _FormattedDetailBlockView extends StatelessWidget {
+  const _FormattedDetailBlockView({required this.block});
+
+  final AtlasDetailBlock block;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (block) {
+      AtlasDetailParagraphBlock(:final text) => Text(
+        text,
+        style: const TextStyle(
+          color: AtlasPalette.ink,
+          fontSize: 14,
+          height: 1.38,
+        ),
+      ),
+      AtlasDetailBulletsBlock(:final items) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '•',
+                    style: TextStyle(
+                      color: AtlasPalette.accent,
+                      fontSize: 14,
+                      height: 1.38,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      item,
+                      style: const TextStyle(
+                        color: AtlasPalette.ink,
+                        fontSize: 14,
+                        height: 1.38,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+      AtlasDetailFactsBlock(:final facts) => _DetailRows(
+        rows: facts
+            .map((fact) => MapEntry(fact.label, fact.value))
+            .toList(growable: false),
+      ),
+    };
   }
 }
 

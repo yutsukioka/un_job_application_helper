@@ -9,7 +9,8 @@ Slice: persistent cache, full filters/cascades, icon parity
 The Flutter Android app now has implemented Updates, Sources, Saved, Settings, Job Detail,
 persistent local cache, offline local filtering, an iOS-style filter sheet, City/Country and
 Seniority/Grade cascade tests, and a shared Cupertino-style `AtlasIcons` mapping for visible Atlas
-controls.
+controls. Job Detail now also uses a Dart port of the Swift ATS detail formatter, so ATS chrome and
+raw source payloads no longer dominate the main detail screen.
 
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
 Pixel 8 Pro, but post-fix physical in-app screenshots are blocked because the physical device
@@ -47,20 +48,26 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   chevron, info/warning, copy/link, refresh, and delete.
 - Search result source badges now match the Swift `SourceMonogram` pattern: 34px rounded squares,
   deterministic per-source colors, and white source initials instead of pale cyan generic badges.
+- Job Detail now formats section payloads through `AtlasATSDetailFormatter`, matching Swift
+  behaviors for ATS/PageUp chrome trimming, orphan-fragment healing, canonical section titles, fact
+  extraction, bullet/numbered-list blocks, long paragraph splitting, and hidden-boilerplate
+  reporting.
+- Raw source/source-data/raw-record sections are hidden from the main detail body and remain
+  available only under the diagnostics expansion panel.
 
 ## Data Count Reconciliation
 
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,268` |
-| `android_displayed_total` | `2,268 searchable results` after the current source-badge screenshot refresh; older screenshots show `2,269` or `2,271` from prior cache timestamps. |
+| `search_api_total` | `2,266` |
+| `android_displayed_total` | `2,266 searchable results` after the current detail-formatter screenshot refresh; older screenshots show `2,268`, `2,269`, or `2,271` from prior cache timestamps. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `local_cache_timestamp` | `2026-07-03 03:04` on the latest emulator refresh; offline restart reused that cache immediately. |
+| `local_cache_timestamp` | `2026-07-03 04:06` on the latest emulator refresh; offline restart reused the persisted cache immediately. |
 | `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `152` |
+| `excluded_count` | `154` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,268` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
+| `final_decision` | `2,266` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
 
 ## Verification
 
@@ -105,6 +112,16 @@ Commands run from `apps/atlas_flutter`:
   `dart analyze`, `flutter test --coverage` with 45 tests and `2733/3016` lines (`90.62%`),
   `flutter build apk --debug`, `flutter build apk --release`, `flutter build appbundle --release`,
   and `flutter test integration_test -d emulator-5554`.
+- ATS detail formatter verification passed: fail-first `flutter test
+  test/atlas_detail_formatter_test.dart` failed before the formatter API existed; after
+  implementation, `flutter test test/atlas_detail_formatter_test.dart` passed with 10 formatter
+  tests, and `flutter test test/widget_test.dart --plain-name "job detail renders populated fields
+  and keeps diagnostics hidden"` passed.
+- Latest full verification passed: `dart format --set-exit-if-changed .`, `dart analyze`,
+  `flutter test --coverage` with 55 tests and `2956/3255` lines (`90.81%`), `flutter build apk
+  --debug`, `flutter build apk --release`, `flutter build appbundle --release`, `flutter test
+  integration_test -d emulator-5554`, and `.venv/bin/python -m pytest tests` with 7 passed and 1
+  skipped.
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -115,7 +132,7 @@ Installed package evidence:
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 03:38:08` after the source-badge parity release APK
+- Package `lastUpdateTime`: `2026-07-03 04:11:11` after the detail-formatter release APK
   install.
 
 ## PR Review Feedback
@@ -188,6 +205,15 @@ Source-badge parity screenshots are available under
   jobs, and `152` deadline-past open rows hidden by Search.
 - `settings_before_reload_64bit.png`: emulator Settings state before the same refresh.
 
+Detail formatter screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/`:
+
+- `settings_after_reload.png`: live reload from the rebuilt release APK showing `2,266 searchable
+  results`, `2,420` health open jobs, and `154` deadline-past open rows hidden by Search.
+- `search_after_relaunch.png`: Search top after relaunch with the current persisted count.
+- `job_detail_top_fixed.png`: corrected Job Detail top view after formatter/rendering fixes; raw
+  source data is absent from the main detail body and remains available through diagnostics.
+
 Dedicated review package:
 
 - `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
@@ -204,11 +230,13 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
 
 - Release APK installed on `emulator-5554`.
 - Server available at `http://10.253.1.43:8765`; Settings `Save and Reload` refreshed and persisted
-  `2,269` cached searchable rows in the latest pass.
+  `2,266` cached searchable rows in the latest detail-formatter pass.
 - Emulator networking was disabled with `svc wifi disable` and `svc data disable`.
 - App was force-stopped and relaunched while offline.
-- `offline_restart_no_banner.png` shows cached Search rows immediately with `2,269 searchable
-  results` and local save timestamp instead of an empty screen or large normal-state banner.
+- `offline_restart_no_banner.png` shows cached Search rows immediately with the prior `2,269`
+  searchable-results cache and local save timestamp instead of an empty screen or large normal-state
+  banner. The current live cache evidence is `search_after_relaunch.png` with `2,266 searchable
+  results`.
 - Search/filter/sort rows remained visible from cache. Full offline interaction depth is covered by
   controller/cache tests; physical offline interaction remains a human-review item.
 
@@ -229,8 +257,8 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
   device.` occupying the Search result area.
 - Source badges were changed from generic pale-cyan blocks to deterministic source colors with white
   monograms, matching Swift `SourceMonogram`.
-- Coverage remains strong at `90.62%` after adding persistent Job Detail cache, cache-load banner,
-  and source-badge coverage.
+- Coverage remains strong at `90.81%` after adding persistent Job Detail cache, cache-load banner,
+  source-badge coverage, and ATS detail formatter coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
@@ -251,8 +279,8 @@ still applies.
 | Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
-| Existing Search/data/detail/tabs | 13 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, and persistent cached details remain intact; live Search count moved to 2,268 due deadline timing. |
-| Tests/builds | 15 / 15 | Format, analyze, 45 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
+| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
+| Tests/builds | 15 / 15 | Format, analyze, 55 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
 | Evidence/human readiness | 1 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action

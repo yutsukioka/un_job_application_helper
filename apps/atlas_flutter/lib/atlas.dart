@@ -1466,7 +1466,7 @@ final class AtlasDeadlineInfo {
 }
 
 final class AtlasDetailSection {
-  AtlasDetailSection({
+  const AtlasDetailSection({
     required this.title,
     this.body,
     this.rows = const <AtlasDetailRow>[],
@@ -1496,7 +1496,7 @@ final class AtlasDetailSection {
 }
 
 final class AtlasDetailRow {
-  AtlasDetailRow({required this.label, required this.value});
+  const AtlasDetailRow({required this.label, required this.value});
 
   factory AtlasDetailRow.fromJson(Map<String, Object?> json) {
     return AtlasDetailRow(
@@ -1510,6 +1510,508 @@ final class AtlasDetailRow {
 
   Map<String, Object?> toJson() {
     return {'label': label, 'value': value};
+  }
+}
+
+enum AtlasDetailSectionKind {
+  about('About the role'),
+  responsibilities('Responsibilities'),
+  qualifications('Qualifications & education'),
+  experience('Experience'),
+  competencies('Competencies'),
+  languages('Languages'),
+  compensation('Compensation & benefits'),
+  application('Application & notes'),
+  other('More details');
+
+  const AtlasDetailSectionKind(this.displayTitle);
+
+  final String displayTitle;
+}
+
+final class AtlasDetailFact {
+  const AtlasDetailFact(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  bool operator ==(Object other) {
+    return other is AtlasDetailFact &&
+        other.label == label &&
+        other.value == value;
+  }
+
+  @override
+  int get hashCode => Object.hash(label, value);
+}
+
+sealed class AtlasDetailBlock {
+  const AtlasDetailBlock();
+
+  int get characterCount;
+}
+
+final class AtlasDetailParagraphBlock extends AtlasDetailBlock {
+  const AtlasDetailParagraphBlock(this.text);
+
+  final String text;
+
+  @override
+  int get characterCount => text.length;
+}
+
+final class AtlasDetailBulletsBlock extends AtlasDetailBlock {
+  const AtlasDetailBulletsBlock(this.items);
+
+  final List<String> items;
+
+  @override
+  int get characterCount => items.fold(0, (count, item) => count + item.length);
+}
+
+final class AtlasDetailFactsBlock extends AtlasDetailBlock {
+  const AtlasDetailFactsBlock(this.facts);
+
+  final List<AtlasDetailFact> facts;
+
+  @override
+  int get characterCount => facts.fold(
+    0,
+    (count, fact) => count + fact.label.length + fact.value.length,
+  );
+}
+
+final class AtlasFormattedDetailSection {
+  const AtlasFormattedDetailSection({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.blocks,
+  });
+
+  final String id;
+  final AtlasDetailSectionKind kind;
+  final String title;
+  final List<AtlasDetailBlock> blocks;
+
+  int get characterCount =>
+      blocks.fold(0, (count, block) => count + block.characterCount);
+}
+
+final class AtlasFormattedDetail {
+  const AtlasFormattedDetail({
+    required this.sections,
+    required this.hiddenBoilerplate,
+  });
+
+  static const empty = AtlasFormattedDetail(
+    sections: <AtlasFormattedDetailSection>[],
+    hiddenBoilerplate: false,
+  );
+
+  final List<AtlasFormattedDetailSection> sections;
+  final bool hiddenBoilerplate;
+}
+
+abstract final class AtlasATSDetailFormatter {
+  static AtlasFormattedDetail format({
+    required List<AtlasDetailSection> sections,
+    String? fallbackDescription,
+  }) {
+    var working = sections
+        .map(
+          (section) => (
+            title: _cleanedWhitespace(section.title),
+            body: _cleanedWhitespace(section.body ?? ''),
+          ),
+        )
+        .where((section) => section.body.isNotEmpty)
+        .toList(growable: false);
+    final fallback = _cleanedWhitespace(fallbackDescription ?? '');
+    if (working.isEmpty && fallback.isNotEmpty) {
+      working = [(title: 'About the role', body: fallback)];
+    }
+    if (working.isEmpty) {
+      return AtlasFormattedDetail.empty;
+    }
+
+    var hidden = false;
+    final scrubbed = <({String title, String body})>[];
+    for (final section in working) {
+      final result = _scrubChrome(section.body);
+      if (result == null) {
+        hidden = true;
+        continue;
+      }
+      hidden = hidden || result.trimmed;
+      scrubbed.add((title: section.title, body: result.body));
+    }
+
+    final healed = <({String title, String body})>[];
+    for (final section in scrubbed) {
+      if (_isOrphanFragment(section.body)) {
+        final rejoined = _cleanedWhitespace('${section.title} ${section.body}');
+        if (healed.isEmpty) {
+          healed.add((title: 'Details', body: rejoined));
+        } else {
+          final previous = healed.removeLast();
+          healed.add((
+            title: previous.title,
+            body: _cleanedWhitespace('${previous.body} $rejoined'),
+          ));
+        }
+      } else {
+        healed.add(section);
+      }
+    }
+
+    final byKind =
+        <AtlasDetailSectionKind, List<({String title, String body})>>{};
+    final kindOrder = <AtlasDetailSectionKind>[];
+    final others = <({String title, String body})>[];
+    for (final section in healed) {
+      final kind = _kindForTitle(section.title);
+      if (kind == AtlasDetailSectionKind.other) {
+        others.add(section);
+        continue;
+      }
+      if (!byKind.containsKey(kind)) {
+        kindOrder.add(kind);
+      }
+      byKind.putIfAbsent(kind, () => []).add(section);
+    }
+
+    final result = <AtlasFormattedDetailSection>[];
+    final sortedKinds = kindOrder.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+    for (final kind in sortedKinds) {
+      final blocks = (byKind[kind] ?? const <({String title, String body})>[])
+          .expand((section) => _blockify(section.body, section.title))
+          .toList(growable: false);
+      if (blocks.isEmpty) {
+        continue;
+      }
+      result.add(
+        AtlasFormattedDetailSection(
+          id: 'kind-${kind.index}',
+          kind: kind,
+          title: kind.displayTitle,
+          blocks: blocks,
+        ),
+      );
+    }
+    for (final (index, section) in others.indexed) {
+      final blocks = _blockify(section.body, section.title);
+      if (blocks.isEmpty) {
+        continue;
+      }
+      result.add(
+        AtlasFormattedDetailSection(
+          id: 'other-$index',
+          kind: AtlasDetailSectionKind.other,
+          title: section.title,
+          blocks: blocks,
+        ),
+      );
+    }
+    return AtlasFormattedDetail(sections: result, hiddenBoilerplate: hidden);
+  }
+
+  static const _chromeMarkers = <String>[
+    'skip to main content',
+    'toggle navigation',
+    'candidate login',
+    'back to search results',
+    'apply now',
+    'powered by pageup',
+    'send me jobs like these',
+    'we will email you new jobs',
+    'privacy agreement',
+    'recaptcha',
+    'visit us on linkedin',
+    'visit us on facebook',
+    'sharethis',
+    'report fraud',
+    'beware of fraudulent',
+    'main navigation',
+    'explore our current job opportunities',
+    'search using keywords',
+    'whatsapp facebook linkedin',
+    'cookie policy',
+    'current vacancies explore',
+  ];
+
+  static ({String body, bool trimmed})? _scrubChrome(String body) {
+    int? earliest;
+    final lower = body.toLowerCase();
+    for (final marker in _chromeMarkers) {
+      final index = lower.indexOf(marker);
+      if (index >= 0 && (earliest == null || index < earliest)) {
+        earliest = index;
+      }
+    }
+    if (earliest == null) {
+      return (body: body, trimmed: false);
+    }
+    final prefix = _cleanedWhitespace(body.substring(0, earliest));
+    if (prefix.length >= 200) {
+      return (body: prefix, trimmed: true);
+    }
+    return null;
+  }
+
+  static bool _isOrphanFragment(String body) {
+    final trimmed = body.trimLeft();
+    if (trimmed.isEmpty) {
+      return true;
+    }
+    final first = trimmed.runes.first;
+    return first >= 97 && first <= 122;
+  }
+
+  static AtlasDetailSectionKind _kindForTitle(String title) {
+    final value = title.toLowerCase();
+    if (value.contains('work experience') || value == 'experience') {
+      return AtlasDetailSectionKind.experience;
+    }
+    if (value.contains('responsibilit') ||
+        value.contains('duties') ||
+        value.contains('key functions') ||
+        value.contains('tasks')) {
+      return AtlasDetailSectionKind.responsibilities;
+    }
+    if (value.contains('education') ||
+        value.contains('qualification') ||
+        value.contains('requirement')) {
+      return AtlasDetailSectionKind.qualifications;
+    }
+    if (value.contains('competenc') ||
+        value.contains('core values') ||
+        value.contains('skills')) {
+      return AtlasDetailSectionKind.competencies;
+    }
+    if (value.contains('language')) {
+      return AtlasDetailSectionKind.languages;
+    }
+    if (value.contains('benefit') ||
+        value.contains('remuneration') ||
+        value.contains('compensation') ||
+        value.contains('salary') ||
+        value.contains('entitlement')) {
+      return AtlasDetailSectionKind.compensation;
+    }
+    if (value.contains('how to apply') ||
+        value.contains('application') ||
+        value.contains('assessment') ||
+        value.contains('additional information') ||
+        value.contains('special notice') ||
+        value.contains('consideration') ||
+        value.contains('closing date')) {
+      return AtlasDetailSectionKind.application;
+    }
+    if (value.contains('summary') ||
+        value.contains('setting') ||
+        value.contains('background') ||
+        value.contains('purpose') ||
+        value.contains('objective') ||
+        value.contains('about') ||
+        value.contains('contract type') ||
+        value.contains('position level') ||
+        value.contains('location') ||
+        value.contains('department') ||
+        value.contains('organization')) {
+      return AtlasDetailSectionKind.about;
+    }
+    return AtlasDetailSectionKind.other;
+  }
+
+  static const _factLabels = <String>[
+    'Contract type',
+    'Contractual Agreement',
+    'Duty Station',
+    'Duty station',
+    'Position level',
+    'Position Level',
+    'Level',
+    'Locations',
+    'Location',
+    'Categories',
+    'Job no',
+    'Job Posting',
+    'Schedule',
+    'Organization',
+    'Functional Area',
+    'Grade',
+    'Advertised',
+    'Deadline',
+    'Closing Date',
+    'Closing date',
+    'Department',
+  ];
+
+  static List<AtlasDetailBlock> _blockify(String text, String sectionTitle) {
+    final blocks = <AtlasDetailBlock>[];
+    final (facts: facts, remainder: remainder) = _extractFacts(
+      text,
+      sectionTitle,
+    );
+    if (facts.isNotEmpty) {
+      blocks.add(AtlasDetailFactsBlock(facts));
+    }
+    if (remainder == null || remainder.isEmpty) {
+      return blocks;
+    }
+
+    final bulletParts = remainder.split('• ');
+    if (bulletParts.length >= 3) {
+      final intro = _cleanedWhitespace(bulletParts.first);
+      if (intro.isNotEmpty) {
+        blocks.addAll(_paragraphBlocks(intro));
+      }
+      final items = bulletParts
+          .skip(1)
+          .map(_cleanedWhitespace)
+          .where((item) => item.length >= 3)
+          .toList(growable: false);
+      if (items.isNotEmpty) {
+        blocks.add(AtlasDetailBulletsBlock(items));
+      }
+      return blocks;
+    }
+
+    final numbered = _splitNumberedList(remainder);
+    if (numbered.length >= 3) {
+      blocks.add(AtlasDetailBulletsBlock(numbered));
+      return blocks;
+    }
+
+    blocks.addAll(_paragraphBlocks(remainder));
+    return blocks;
+  }
+
+  static ({List<AtlasDetailFact> facts, String? remainder}) _extractFacts(
+    String text,
+    String sectionTitle,
+  ) {
+    final escaped = _factLabels.map(RegExp.escape).join('|');
+    final regex = RegExp('\\b(?:$escaped)\\s*:', caseSensitive: false);
+    final matches = regex.allMatches(text).toList(growable: false);
+    if (matches.length < 2) {
+      return (facts: const <AtlasDetailFact>[], remainder: text);
+    }
+
+    final facts = <AtlasDetailFact>[];
+    var consumedUpTo = 0;
+    final prefix = _cleanedWhitespace(text.substring(0, matches.first.start));
+    final titleIsLabel = _factLabels.any(
+      (label) => label.toLowerCase() == sectionTitle.toLowerCase(),
+    );
+    String? leadingProse;
+    if (titleIsLabel && prefix.isNotEmpty && prefix.length <= 60) {
+      facts.add(AtlasDetailFact(sectionTitle, prefix));
+    } else if (prefix.isNotEmpty) {
+      leadingProse = prefix;
+    }
+
+    for (final (index, match) in matches.indexed) {
+      final labelText = text
+          .substring(match.start, match.end)
+          .replaceAll(RegExp(r'[:\s\u00a0]+$'), '');
+      final valueStart = match.end;
+      final valueEnd = index + 1 < matches.length
+          ? matches[index + 1].start
+          : text.length;
+      final value = _cleanedWhitespace(text.substring(valueStart, valueEnd));
+      if (value.length > 60 || value.isEmpty) {
+        consumedUpTo = match.start;
+        break;
+      }
+      facts.add(AtlasDetailFact(labelText, value));
+      consumedUpTo = valueEnd;
+    }
+
+    if (facts.length < 2) {
+      return (facts: const <AtlasDetailFact>[], remainder: text);
+    }
+    final leadingProseParts = leadingProse == null ? null : [leadingProse];
+    final remainderParts = <String>[
+      ...?leadingProseParts,
+      if (consumedUpTo < text.length)
+        _cleanedWhitespace(text.substring(consumedUpTo)),
+    ];
+    final remainder = _cleanedWhitespace(remainderParts.join(' '));
+    return (facts: facts, remainder: remainder.isEmpty ? null : remainder);
+  }
+
+  static List<String> _splitNumberedList(String text) {
+    final regex = RegExp(r'(?<=\s)\d{1,2}[.)]\s+(?=[A-Z])');
+    final matches = regex.allMatches(text).toList(growable: false);
+    if (matches.length < 3) {
+      return const <String>[];
+    }
+    final firstStart = matches.first.start;
+    if (firstStart >= 240) {
+      return const <String>[];
+    }
+    final items = <String>[];
+    final intro = _cleanedWhitespace(text.substring(0, firstStart));
+    if (intro.isNotEmpty) {
+      items.add(intro);
+    }
+    for (final (index, match) in matches.indexed) {
+      final end = index + 1 < matches.length
+          ? matches[index + 1].start
+          : text.length;
+      final item = _cleanedWhitespace(text.substring(match.start, end));
+      if (item.length >= 3) {
+        items.add(item);
+      }
+    }
+    return items;
+  }
+
+  static List<AtlasDetailParagraphBlock> _paragraphBlocks(String text) {
+    final rough = text
+        .split(RegExp(r'\n{2,}|\n'))
+        .map(_cleanedWhitespace)
+        .where((chunk) => chunk.length >= 3);
+    return [
+      for (final chunk in rough)
+        for (final paragraph in _splitLongParagraph(chunk))
+          AtlasDetailParagraphBlock(paragraph),
+    ];
+  }
+
+  static List<String> _splitLongParagraph(String text) {
+    if (text.length <= 900) {
+      return [text];
+    }
+    final sentences = text.split('. ');
+    final chunks = <String>[];
+    var current = '';
+    for (var index = 0; index < sentences.length; index += 1) {
+      final piece = index + 1 < sentences.length
+          ? '${sentences[index]}. '
+          : sentences[index];
+      current += piece;
+      if (current.length >= 550) {
+        chunks.add(_cleanedWhitespace(current));
+        current = '';
+      }
+    }
+    final tail = _cleanedWhitespace(current);
+    if (tail.isNotEmpty) {
+      chunks.add(tail);
+    }
+    return chunks;
+  }
+
+  static String _cleanedWhitespace(String value) {
+    return value
+        .replaceAll(RegExp(r'[\t\u00a0]+'), ' ')
+        .replaceAll(RegExp(r' {2,}'), ' ')
+        .trim();
   }
 }
 
