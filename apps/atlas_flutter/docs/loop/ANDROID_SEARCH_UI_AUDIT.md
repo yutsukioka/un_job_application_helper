@@ -62,8 +62,8 @@ Commands run from `apps/atlas_flutter`:
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed with no issues.
 - Focused tests passed: `flutter test test/atlas_api_client_test.dart test/atlas_filters_test.dart test/atlas_local_cache_test.dart test/atlas_search_controller_test.dart test/widget_test.dart`.
-- Full tests passed: `flutter test`, 41 tests.
-- Coverage passed: `flutter test --coverage`, 41 tests, `2665/2941` lines, `90.62%`.
+- Full tests passed: `flutter test`, 43 tests.
+- Coverage passed: `flutter test --coverage`, 43 tests, `2683/2961` lines, `90.61%`.
 - `flutter build apk --debug` passed.
 - `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`49.7MB`).
 - `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
@@ -76,6 +76,12 @@ Commands run from `apps/atlas_flutter`:
   Search request serialization and offline cached City/Country OR filtering.
 - Integration smoke was not rerun for this follow-up because `emulator-5554` was unavailable and
   the only attached physical Pixel remained locked.
+- Follow-up Job Detail regression verification: `dart format --set-exit-if-changed .`,
+  `dart analyze`, focused `flutter test test/widget_test.dart --plain-name "job detail renders
+  populated fields and keeps diagnostics hidden"`, full `flutter test`, and `flutter test
+  --coverage` passed with 43 tests and `2683/2961` lines (`90.61%`). The new widget test covers
+  populated core fields, responsibilities/qualifications sections, apply/source links, diagnostics
+  hidden until expansion, and detail save persistence.
 
 Installed package evidence:
 
@@ -184,8 +190,8 @@ and user-provided iOS filter/detail side-by-side review are still not complete.
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 12 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact; live count moved to 2,271 due deadline timing. |
-| Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, release AAB, and emulator integration test pass; builds were not rerun after the integration-test-only patch. |
-| Evidence/human readiness | 6 / 10 | Emulator evidence and Search side-by-side are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
+| Tests/builds | 14 / 15 | Format, analyze, 43 Flutter tests, coverage, debug APK, release APK, release AAB, and prior emulator integration test pass; integration was not rerun after the latest test-only slice because no emulator is attached. |
+| Evidence/human readiness | 2 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action
 

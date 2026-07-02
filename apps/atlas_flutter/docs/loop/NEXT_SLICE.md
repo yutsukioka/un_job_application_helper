@@ -56,7 +56,7 @@ broad backend or JobAgg lifecycle work.
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 42 tests after multi-location coverage.
+- Full tests: pass, 43 tests after multi-location and populated Job Detail coverage.
 - Coverage: pass, `2665/2941` lines, `90.62%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.

@@ -235,6 +235,91 @@ void main() {
     expect(find.text('Weak detail state'), findsOneWidget);
     expect(find.text('Detail load failed'), findsOneWidget);
   });
+
+  testWidgets(
+    'job detail renders populated fields and keeps diagnostics hidden',
+    (tester) async {
+      final transport = _PopulatedDetailTransport();
+      final controller = AtlasAppController(
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+      final job = JobSearchResult(
+        jobKey: 'unicef_pageup:593420',
+        title: 'Emergency Specialist',
+        organization: 'UNICEF PageUp',
+        sourceID: 'unicef_pageup',
+        dutyStation: 'Nairobi, Kenya',
+        gradeCode: 'P-3',
+        contractLabel: 'Fixed term',
+        workModality: 'Onsite',
+        closingDate: DateTime.utc(2026, 7, 5, 23, 59),
+        needsReview: false,
+        scoreReasons: const ['Grade matched from source evidence.'],
+        matchSummary: 'Location matched Nairobi from title evidence.',
+        description: 'Search row fallback description.',
+        status: 'open',
+        nationalInternational: 'international',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AtlasJobDetailScreen(job: job, controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Job Detail'), findsOneWidget);
+      expect(find.text('Emergency Specialist'), findsOneWidget);
+      expect(find.textContaining('UNICEF'), findsWidgets);
+      expect(find.text('Full Description'), findsOneWidget);
+      expect(
+        find.textContaining('Coordinate emergency response'),
+        findsOneWidget,
+      );
+      expect(find.text('Core Details'), findsOneWidget);
+      expect(find.text('Deadline'), findsOneWidget);
+      expect(find.text('Grade'), findsOneWidget);
+      expect(find.text('P-3'), findsWidgets);
+      expect(find.text('Contract'), findsOneWidget);
+      expect(find.text('Fixed term'), findsWidgets);
+      expect(find.text('Responsibilities'), findsOneWidget);
+      expect(find.textContaining('Lead partner coordination'), findsOneWidget);
+
+      await tester.scrollUntilVisible(find.text('Qualifications'), 300);
+      await tester.pumpAndSettle();
+      expect(find.text('Qualifications'), findsOneWidget);
+      expect(find.textContaining('Advanced university degree'), findsOneWidget);
+
+      await tester.scrollUntilVisible(find.text('Apply URL'), 300);
+      await tester.pumpAndSettle();
+      expect(find.text('Apply URL'), findsOneWidget);
+      expect(find.text('Source URL'), findsOneWidget);
+
+      await tester.scrollUntilVisible(find.text('Match diagnostics'), 300);
+      await tester.pumpAndSettle();
+      expect(find.text('Match diagnostics'), findsOneWidget);
+      expect(
+        find.text('Location matched Nairobi from title evidence.'),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('Match diagnostics'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Location matched Nairobi from title evidence.'),
+        findsOneWidget,
+      );
+      expect(find.text('Job Record'), findsOneWidget);
+      expect(find.text('Detail quality status'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Save job'));
+      await tester.pumpAndSettle();
+      expect(controller.isJobSaved(job.jobKey), isTrue);
+      expect(transport.savedJobKeys, ['unicef_pageup:593420']);
+    },
+  );
 }
 
 final class _SavedSearchTransport implements AtlasTransport {
@@ -340,5 +425,64 @@ final class _DetailFailingTransport implements AtlasTransport {
   @override
   Future<Object?> send(AtlasRequest request) async {
     throw const AtlasAPIException.http(503, 'detail unavailable');
+  }
+}
+
+final class _PopulatedDetailTransport implements AtlasTransport {
+  final savedJobKeys = <String>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    switch (request.path) {
+      case 'api/job-detail':
+        return {
+          'job_key': request.queryParameters['job_key'],
+          'title': 'Emergency Specialist',
+          'description':
+              'Coordinate emergency response planning with country teams and partners.',
+          'status': 'open',
+          'closes_at': '2026-07-05T23:59:00Z',
+          'closes_at_local': '2026-07-06 08:59',
+          'closes_tz': 'Asia/Tokyo',
+          'apply_url': 'https://example.org/apply',
+          'source_url': 'https://example.org/source',
+          'deadline_info': {
+            'source_text': 'Closes 5 July 2026',
+            'source_local': '2026-07-05 23:59',
+            'source_timezone': 'EAT',
+          },
+          'display_sections': [
+            {
+              'title': 'Responsibilities',
+              'body': 'Lead partner coordination and situation reporting.',
+            },
+            {
+              'title': 'Qualifications',
+              'body': 'Advanced university degree and emergency experience.',
+            },
+            {
+              'title': 'Job Record',
+              'body': 'Hidden diagnostic metadata.',
+              'rows': [
+                {'label': 'Detail quality status', 'value': 'complete'},
+                {'label': 'Extractor', 'value': 'fixture'},
+              ],
+            },
+          ],
+        };
+      case final path when path.startsWith('api/tracker/jobs/'):
+        final jobKey = Uri.decodeComponent(
+          path.substring('api/tracker/jobs/'.length),
+        );
+        savedJobKeys.add(jobKey);
+        return {
+          'id': 'saved-$jobKey',
+          'job_key': jobKey,
+          'status': 'saved',
+          'updated_at': '2026-07-03T00:00:00Z',
+        };
+      default:
+        fail('Unexpected request ${request.method} ${request.path}');
+    }
   }
 }
