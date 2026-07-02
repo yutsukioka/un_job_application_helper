@@ -54,6 +54,9 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   reporting.
 - Raw source/source-data/raw-record sections are hidden from the main detail body and remain
   available only under the diagnostics expansion panel.
+- Search-top Android golden coverage now exists at
+  `apps/atlas_flutter/test/goldens/android/search_top_compact.png`; it locks the compact header,
+  chips, count/status row, bottom navigation, and dense result-row layout at a 393x852 viewport.
 
 ## Data Count Reconciliation
 
@@ -122,6 +125,12 @@ Commands run from `apps/atlas_flutter`:
   --debug`, `flutter build apk --release`, `flutter build appbundle --release`, `flutter test
   integration_test -d emulator-5554`, and `.venv/bin/python -m pytest tests` with 7 passed and 1
   skipped.
+- Search-top golden verification passed: fail-first `flutter test test/search_golden_test.dart`
+  failed because `goldens/android/search_top_compact.png` did not exist; `flutter test
+  --update-goldens test/search_golden_test.dart` generated the baseline; normal `flutter test
+  test/search_golden_test.dart` passed; `dart format --set-exit-if-changed test/search_golden_test.dart`,
+  `dart analyze`, and `flutter test --coverage` passed with 56 tests and `2956/3255` lines
+  (`90.81%`).
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -229,6 +238,13 @@ Fresh iOS Simulator reference screenshots are available under
 - `ios_simulator_android_search_side_by_side.png`: fresh iOS Simulator Search top beside the latest
   Android Search screenshot.
 
+Android golden baseline:
+
+- `apps/atlas_flutter/test/goldens/android/search_top_compact.png`: Flutter golden for Search-top
+  layout, compact control hierarchy, and dense result rows at a 393x852 viewport. This uses the
+  Flutter test renderer, so it is a regression artifact rather than a replacement for human
+  screenshots.
+
 Dedicated review package:
 
 - `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
@@ -265,6 +281,8 @@ local iOS filter/detail reference screenshots.
 - Search-top parity now has a fresh iOS Simulator side-by-side image. Filter sheet and detail parity
   are implemented from Swift source and covered by tests, but true pixel-paired human review still
   needs local copies of the user-provided iOS filter/detail screenshots.
+- Search-top layout now has an Android golden regression test. Remaining visual surfaces still need
+  broader goldens or human screenshot review.
 - Local Android supports multiple City/Country values through comma-separated input and multi-select
   filter pills. User-facing visual review is still needed to decide whether the comma text display is
   close enough to iOS or should become a dedicated selected-chip editor.

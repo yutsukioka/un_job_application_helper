@@ -48,6 +48,7 @@ broad backend or JobAgg lifecycle work.
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
 | iOS side-by-side package | Fresh Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md` from `AtlasIOSHost` on iPhone 17 Pro Simulator; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS filter/detail references, then build final side-by-side review package after physical Android captures. |
+| Android goldens | Search-top compact layout golden exists at `test/goldens/android/search_top_compact.png`. | Add filter sheet, detail, and tab goldens only after the physical/iOS reference evidence confirms the target layouts. |
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
 | Coverage | 90.81% after ATS detail formatter coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
@@ -57,7 +58,7 @@ broad backend or JobAgg lifecycle work.
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 55 tests after ATS detail formatter coverage.
+- Full tests: pass, 56 tests after Search-top golden coverage.
 - Coverage: pass, `2956/3255` lines, `90.81%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.

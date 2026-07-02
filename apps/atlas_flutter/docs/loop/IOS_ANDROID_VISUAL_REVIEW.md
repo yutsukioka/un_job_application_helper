@@ -9,6 +9,8 @@ Latest detail formatter evidence set:
 `screenshots/detail-formatter-20260703/`
 Fresh iOS Simulator reference set:
 `screenshots/ios-simulator-reference-20260703/`
+Android golden baseline:
+`../../test/goldens/android/search_top_compact.png`
 
 ## Evidence Boundaries
 
@@ -65,6 +67,7 @@ Single-image Android review contact sheet:
 | --- | --- | --- | --- |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
 | Search top, fresh iOS Simulator | `screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Fresh side-by-side generated at `screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`; Android matches the top hierarchy and intentionally hides normal-state banners/diagnostics. |
+| Search top golden | iOS references above | `../../test/goldens/android/search_top_compact.png` | Android Search-top layout is now covered by a Flutter golden. It is useful for regression, not a substitute for human screenshots because Flutter tests use the test renderer/font behavior. |
 | Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
 | Search top, latest live count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Current release shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. |
@@ -105,6 +108,7 @@ Single-image Android review contact sheet:
 - [x] Multi City/Country values are implemented in Android request serialization and offline cached filtering.
 - [x] One-page Android evidence contact sheet is generated for human review.
 - [x] Fresh iOS Simulator Search-top side-by-side is generated from a local `AtlasIOSHost` build.
+- [x] Android Search-top layout golden is checked in.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
 
