@@ -3,9 +3,9 @@
 Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
 Emulator release-app screenshots, a fresh iOS Simulator Search-top side-by-side review, offline
-restart evidence, and Android Search/filter-sheet golden baselines are captured. PR #10 remains
-below completion because physical Pixel in-app screenshots, physical offline-restart verification,
-and full iOS filter/detail side-by-side review are still pending.
+restart evidence, and Android Search/filter-sheet/Job Detail golden baselines are captured. PR #10
+remains below completion because physical Pixel in-app screenshots, physical offline-restart
+verification, and full iOS filter/detail side-by-side review are still pending.
 
 ## Intent
 
@@ -48,17 +48,17 @@ broad backend or JobAgg lifecycle work.
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
 | iOS side-by-side package | Fresh Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md` from `AtlasIOSHost` on iPhone 17 Pro Simulator; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS filter/detail references, then build final side-by-side review package after physical Android captures. |
-| Android goldens | Search-top compact layout golden exists at `test/goldens/android/search_top_compact.png`; filter-sheet top golden exists at `test/goldens/android/filter_sheet_top.png`. | Add detail and tab goldens only after the physical/iOS reference evidence confirms the target layouts. |
+| Android goldens | Search-top compact layout golden exists at `test/goldens/android/search_top_compact.png`; filter-sheet top golden exists at `test/goldens/android/filter_sheet_top.png`; populated Job Detail top golden exists at `test/goldens/android/job_detail_top.png`. | Add tab goldens after the physical/iOS reference evidence confirms the target layouts. |
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
-| Coverage | 90.81% after ATS detail formatter coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
+| Coverage | 91.98% after Search, filter-sheet, and Job Detail golden coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
 | Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control. | Keep this green after any physical-review fixes. |
 
 ## Last Verification Snapshot
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 57 tests after Search-top and filter-sheet golden coverage.
+- Full tests: pass, 58 tests after Search-top, filter-sheet, and Job Detail golden coverage.
 - Coverage: pass, `2994/3255` lines, `91.98%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
@@ -71,5 +71,6 @@ broad backend or JobAgg lifecycle work.
 - Fresh iOS Simulator Search side-by-side review:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`.
 - Android golden baselines:
-  `apps/atlas_flutter/test/goldens/android/search_top_compact.png` and
-  `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`.
+  `apps/atlas_flutter/test/goldens/android/search_top_compact.png`,
+  `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`, and
+  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`.

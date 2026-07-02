@@ -57,6 +57,36 @@ void main() {
       matchesGoldenFile('goldens/android/filter_sheet_top.png'),
     );
   });
+
+  testWidgets('job detail top matches populated Android parity golden', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+
+    final transport = _GoldenDetailTransport();
+    final controller = AtlasAppController(
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepaintBoundary(
+          child: AtlasJobDetailScreen(
+            job: _detailGoldenJob(),
+            controller: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byType(AtlasJobDetailScreen),
+      matchesGoldenFile('goldens/android/job_detail_top.png'),
+    );
+  });
 }
 
 void _configurePhoneViewport(WidgetTester tester) {
@@ -262,4 +292,81 @@ List<JobSearchResult> _goldenJobs() {
       status: 'open',
     ),
   ];
+}
+
+JobSearchResult _detailGoldenJob() {
+  return JobSearchResult(
+    jobKey: 'unicef_pageup:593420',
+    title: 'Emergency Specialist',
+    organization: 'UNICEF PageUp',
+    sourceID: 'unicef_pageup',
+    dutyStation: 'Nairobi, Kenya',
+    city: 'Nairobi',
+    countryISO3: 'KEN',
+    gradeCode: 'P-3',
+    standardSeniorityTier: 'mid',
+    contractGroup: 'staff',
+    contractLabel: 'Fixed term',
+    workModality: 'Onsite',
+    closingDate: DateTime.utc(2026, 7, 5, 23, 59),
+    needsReview: false,
+    scoreReasons: const ['Grade matched from source evidence.'],
+    matchSummary: 'Location matched Nairobi from title evidence.',
+    description: 'Search row fallback description.',
+    status: 'open',
+    nationalInternational: 'international',
+    applyURL: Uri.parse('https://example.org/apply'),
+    sourceURL: Uri.parse('https://example.org/source'),
+  );
+}
+
+final class _GoldenDetailTransport implements AtlasTransport {
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    switch (request.path) {
+      case 'api/job-detail':
+        return {
+          'job_key': request.queryParameters['job_key'],
+          'title': 'Emergency Specialist',
+          'description':
+              'Coordinate emergency response planning with country teams and partners.',
+          'status': 'open',
+          'closes_at': '2026-07-05T23:59:00Z',
+          'closes_at_local': '2026-07-06 08:59',
+          'closes_tz': 'Asia/Tokyo',
+          'apply_url': 'https://example.org/apply',
+          'source_url': 'https://example.org/source',
+          'deadline_info': {
+            'source_text': 'Closes 5 July 2026',
+            'source_local': '2026-07-05 23:59',
+            'source_timezone': 'EAT',
+          },
+          'display_sections': [
+            {
+              'title': 'Responsibilities',
+              'body':
+                  'Achieving results such as:• Lead partner coordination and situation reporting across emergency clusters.• Maintain response dashboards and partner follow-up logs.• Prepare concise operational updates for senior leadership. Back to search results Apply now Whatsapp Facebook LinkedIn Send me jobs like these',
+            },
+            {
+              'title': 'Qualifications',
+              'body': 'Advanced university degree and emergency experience.',
+            },
+            {
+              'title': 'Job Record',
+              'body': 'Hidden diagnostic metadata.',
+              'rows': [
+                {'label': 'Detail quality status', 'value': 'complete'},
+                {'label': 'Extractor', 'value': 'fixture'},
+              ],
+            },
+            {
+              'title': 'Raw Source Data',
+              'body': 'listing_html: <div>debug source payload</div>',
+            },
+          ],
+        };
+      default:
+        fail('Unexpected request ${request.method} ${request.path}');
+    }
+  }
 }

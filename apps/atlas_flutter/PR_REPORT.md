@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `13a309b`
+Latest branch head before this report update: `389e3f5`
 
 ## Summary
 
@@ -13,7 +13,8 @@ persistent local cache, offline startup behavior on emulator, an iOS-style Searc
 filter groups, City/Country and Seniority/Grade cascades, multi-value City/Country filter support,
 compact result rows, populated and persistently cached Job Detail, Saved/Updates/Sources/Settings
 tabs, a Dart port of the Swift ATS detail formatter, a fresh iOS Simulator Search-top side-by-side,
-Android Search-top and filter-sheet top goldens, and a reviewable Android screenshot package.
+Android Search-top, filter-sheet top, and Job Detail top goldens, and a reviewable Android
+screenshot package.
 
 This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
 verification remain blocked by the connected phone being locked. Search-top iOS-vs-Android evidence
@@ -95,6 +96,8 @@ Screenshot evidence:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
 - Android filter-sheet top golden:
   `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`
+- Android Job Detail top golden:
+  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`
 - Filter, cascade, detail, settings, saved, updates, and sources screenshots:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
 - Physical Pixel lock-screen evidence:
@@ -122,8 +125,9 @@ Latest app-code verification:
   -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed.
 - `xcrun simctl` boot/install/launch/screenshot captured the fresh iOS Simulator Search reference.
 - `flutter test test/search_golden_test.dart` passed after generating
-  `test/goldens/android/search_top_compact.png` and `test/goldens/android/filter_sheet_top.png`.
-- Current `flutter test --coverage` passed with 57 tests: `2994/3255` lines, `91.98%`.
+  `test/goldens/android/search_top_compact.png`, `test/goldens/android/filter_sheet_top.png`, and
+  `test/goldens/android/job_detail_top.png`.
+- Current `flutter test --coverage` passed with 58 tests: `2994/3255` lines, `91.98%`.
 
 Latest artifacts:
 
@@ -145,8 +149,8 @@ Latest physical install evidence:
 - Human G3 approval is pending.
 - User-provided iOS filter/detail screenshots are not available as local files for true pixel-paired
   side-by-side review. Search-top now has fresh iOS Simulator side-by-side evidence.
-- Broader Android goldens are still missing for detail, Saved, Updates, Sources, and Settings;
-  Search top and filter-sheet top are covered by golden baselines.
+- Broader Android goldens are still missing for Saved, Updates, Sources, and Settings; Search top,
+  filter-sheet top, and Job Detail top are covered by golden baselines.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
   should decide whether this is visually close enough to the iOS reference.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or

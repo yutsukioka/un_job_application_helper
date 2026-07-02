@@ -61,6 +61,10 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`; it locks the dark modal sheet,
   drag handle/header, Done action, Status and Location controls, compact option grids, counts, and
   sticky Reset/Apply footer at the same 393x852 viewport.
+- Populated Job Detail top Android golden coverage now exists at
+  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`; it locks the useful detail header,
+  metadata chips, full description/core details, ATS-formatted content, and the absence of raw source
+  diagnostics from the main detail body.
 
 ## Data Count Reconciliation
 
@@ -141,6 +145,12 @@ Commands run from `apps/atlas_flutter`:
   test/search_golden_test.dart` generated the baseline; normal `flutter test
   test/search_golden_test.dart`, `dart format --set-exit-if-changed test/search_golden_test.dart`,
   `dart analyze`, and `flutter test --coverage` passed with 57 tests and `2994/3255` lines
+  (`91.98%`).
+- Job Detail golden verification passed: fail-first `flutter test test/search_golden_test.dart`
+  failed only because `goldens/android/job_detail_top.png` did not exist; `flutter test
+  --update-goldens test/search_golden_test.dart` generated the baseline; normal `flutter test
+  test/search_golden_test.dart`, `dart format --set-exit-if-changed test/search_golden_test.dart`,
+  `dart analyze`, and `flutter test --coverage` passed with 58 tests and `2994/3255` lines
   (`91.98%`).
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
@@ -259,6 +269,9 @@ Android golden baseline:
   filter-sheet top, compact option-grid/count layout, and sticky bottom actions at a 393x852
   viewport. This also uses the Flutter test renderer and should supplement, not replace, human
   screenshots.
+- `apps/atlas_flutter/test/goldens/android/job_detail_top.png`: Flutter golden for populated Job
+  Detail top content, metadata chips, core rows, and formatted detail body at a 393x852 viewport.
+  This is a regression artifact and not a replacement for physical Pixel/iOS paired screenshots.
 
 Dedicated review package:
 
@@ -296,8 +309,8 @@ local iOS filter/detail reference screenshots.
 - Search-top parity now has a fresh iOS Simulator side-by-side image. Filter sheet and detail parity
   are implemented from Swift source and covered by tests, but true pixel-paired human review still
   needs local copies of the user-provided iOS filter/detail screenshots.
-- Search-top layout now has an Android golden regression test. Remaining visual surfaces still need
-  broader goldens or human screenshot review.
+- Search-top, filter-sheet top, and populated Job Detail top now have Android golden regression
+  tests. Remaining tab surfaces still need broader goldens or human screenshot review.
 - Local Android supports multiple City/Country values through comma-separated input and multi-select
   filter pills. User-facing visual review is still needed to decide whether the comma text display is
   close enough to iOS or should become a dedicated selected-chip editor.
@@ -307,8 +320,8 @@ local iOS filter/detail reference screenshots.
   device.` occupying the Search result area.
 - Source badges were changed from generic pale-cyan blocks to deterministic source colors with white
   monograms, matching Swift `SourceMonogram`.
-- Coverage remains strong at `90.81%` after adding persistent Job Detail cache, cache-load banner,
-  source-badge coverage, and ATS detail formatter coverage.
+- Coverage remains strong at `91.98%` after adding Search, filter-sheet, and Job Detail golden
+  coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
