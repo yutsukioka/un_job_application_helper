@@ -1013,6 +1013,44 @@ def test_complete_unchanged_details_are_skipped_from_backlog(tmp_path):
     assert backlog[0]["detail_status"] == "complete"
 
 
+def test_refresh_all_details_retries_previously_skipped_backlog(tmp_path):
+    db = JobDatabase(tmp_path / "jobs.sqlite3")
+    db.initialize()
+    source = _source("selective_detail_was_skipped", "selective_detail_counting_test")
+    listing_job = build_job(
+        source,
+        title="Listing Role A1",
+        external_id="A1",
+        closes_at="2099-12-31",
+        apply_url="https://example.org/jobs/A1",
+        raw={"id": "A1"},
+    )
+    db.upsert_job(listing_job)
+    db.record_detail_backlog_attempt(
+        job_key=listing_job.identity_key(),
+        source_id=source.id,
+        status="skipped",
+        listing_hash=listing_job.normalized_hash or "listing-hash",
+        error="adapter missing fetch_detail_for_listing_item",
+    )
+    SelectiveDetailCountingTestAdapter.calls = []
+
+    result = sync_source_with_selective_details(
+        source,
+        db=db,
+        policy=_policy(),
+        refresh_all_details=True,
+    )
+
+    assert result.fetched == 1
+    assert SelectiveDetailCountingTestAdapter.calls == ["A1"]
+    backlog = db.get_detail_backlog("selective_detail_was_skipped:A1")
+    assert backlog is not None
+    assert backlog["detail_status"] == "complete"
+    stored = db.get_job("selective_detail_was_skipped:A1")
+    assert "Detailed responsibilities for A1" in stored["description"]
+
+
 def test_listing_payload_can_satisfy_detail_without_detail_fetch(tmp_path):
     db = JobDatabase(tmp_path / "jobs.sqlite3")
     db.initialize()

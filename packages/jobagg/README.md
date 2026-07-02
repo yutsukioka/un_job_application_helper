@@ -222,7 +222,10 @@ canonical current view:
   are agency-filter views of `un_inspira` until a reliable source-specific
   filter is confirmed.
 - Duplicate current rows are demoted to `status = duplicate` when they share
-  the same `(ats_family, external_id)` or normalized `apply_url`. The chosen
+  the same `(source_id, ats_family, external_id)` within one configured source,
+  or when their normalized `apply_url` matches across sources. Source-native
+  external IDs are not treated as globally unique across different
+  organizations or Oracle Candidate Experience site numbers. The chosen
   canonical row stays `open`; duplicate relationships are recorded in
   `consolidated_job_aliases`.
 - Current rows from stale, unknown, or inconclusive sources keep an explicit

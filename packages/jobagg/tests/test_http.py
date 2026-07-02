@@ -114,6 +114,15 @@ class RecordingTimeoutOpener:
         return FakeResponse()
 
 
+class RecordingHeaderOpener:
+    def __init__(self):
+        self.headers = []
+
+    def open(self, request, timeout):
+        self.headers.append(dict(request.header_items()))
+        return FakeResponse()
+
+
 def test_transient_url_error_retries_then_succeeds():
     client = JobAggHTTPClient(max_retries=2, backoff_base_seconds=0, jitter_ratio=0)
     opener = RetryThenSuccessOpener()
@@ -213,3 +222,30 @@ def test_get_can_override_timeout_per_request():
     client.get("https://example.org/listing")
 
     assert opener.timeouts == [120, 30]
+
+
+def test_default_cookie_header_is_scoped_to_first_request_host():
+    client = JobAggHTTPClient(default_headers={"Cookie": "token=abc"})
+    opener = RecordingHeaderOpener()
+    client._opener = opener
+
+    client.get("https://example.org/listing")
+    client.get("https://other.example/detail")
+
+    assert opener.headers[0]["Cookie"] == "token=abc"
+    assert "Cookie" not in opener.headers[1]
+
+
+def test_default_cookie_header_respects_configured_host_allowlist():
+    client = JobAggHTTPClient(
+        default_headers={"Cookie": "token=abc"},
+        default_header_hosts={"allowed.example"},
+    )
+    opener = RecordingHeaderOpener()
+    client._opener = opener
+
+    client.get("https://blocked.example/listing")
+    client.get("https://allowed.example/listing")
+
+    assert "Cookie" not in opener.headers[0]
+    assert opener.headers[1]["Cookie"] == "token=abc"

@@ -49,6 +49,21 @@ class ResponseTooLargeError(HTTPError):
 _DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
 
 
+class _ScopedCookieRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, client: "JobAggHTTPClient") -> None:
+        self._client = client
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        host = (urllib.parse.urlsplit(redirected.full_url).hostname or "").lower()
+        if not self._client._default_cookie_allowed_for_host(host):
+            _remove_header(redirected.headers, "Cookie")
+            _remove_header(redirected.unredirected_hdrs, "Cookie")
+        return redirected
+
+
 class JobAggHTTPClient:
     def __init__(
         self,
@@ -62,6 +77,7 @@ class JobAggHTTPClient:
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         tls_verify: bool = True,
         default_headers: dict[str, str] | None = None,
+        default_header_hosts: set[str] | None = None,
     ) -> None:
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
@@ -72,13 +88,21 @@ class JobAggHTTPClient:
         self.max_response_bytes = int(max_response_bytes)
         self.tls_verify = bool(tls_verify)
         self.default_headers = dict(default_headers or {})
+        self._default_cookie_hosts = {
+            str(host).lower()
+            for host in (default_header_hosts or set())
+            if str(host).strip()
+        }
         # Per-host last-request timestamp. Robots policies promise "one
         # request per host every ``min_delay_seconds``" — a single shared
         # timestamp would over-throttle when the same client straddles
         # multiple hosts (e.g. listing API + CDN attachment fetch).
         self._last_request_at_by_host: dict[str, float] = {}
         self._cookie_jar = CookieJar()
-        handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
+        handlers = [
+            urllib.request.HTTPCookieProcessor(self._cookie_jar),
+            _ScopedCookieRedirectHandler(self),
+        ]
         if not self.tls_verify:
             context = ssl.create_default_context()
             context.check_hostname = False
@@ -100,10 +124,10 @@ class JobAggHTTPClient:
             "Accept": "*/*",
             "Accept-Encoding": _default_accept_encoding(),
         }
-        request_headers.update(self.default_headers)
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        request_headers.update(self._default_headers_for_host(host))
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         for attempt in range(self.max_retries + 1):
             self._respect_min_delay(host)
@@ -176,6 +200,25 @@ class JobAggHTTPClient:
         if remaining > 0:
             time.sleep(remaining)
 
+    def _default_headers_for_host(self, host: str) -> dict[str, str]:
+        headers = dict(self.default_headers)
+        cookie_key = _header_key(headers, "Cookie")
+        if cookie_key is None:
+            return headers
+        if not self._default_cookie_allowed_for_host(host, bind_if_unset=True):
+            headers.pop(cookie_key, None)
+        return headers
+
+    def _default_cookie_allowed_for_host(self, host: str, *, bind_if_unset: bool = False) -> bool:
+        if not host:
+            return False
+        if self._default_cookie_hosts:
+            return host in self._default_cookie_hosts
+        if bind_if_unset:
+            self._default_cookie_hosts.add(host)
+            return True
+        return False
+
     def _mark_request(self, host: str) -> None:
         self._last_request_at_by_host[host] = time.monotonic()
 
@@ -247,6 +290,20 @@ class JobAggHTTPClient:
             body=body,
             timeout_seconds=timeout_seconds,
         )
+
+
+def _header_key(headers: dict[str, str], name: str) -> str | None:
+    name_lower = name.lower()
+    for key in headers:
+        if key.lower() == name_lower:
+            return key
+    return None
+
+
+def _remove_header(headers: dict[str, str], name: str) -> None:
+    key = _header_key(headers, name)
+    if key is not None:
+        headers.pop(key, None)
 
 
 def _retry_after_from_headers(headers: Any) -> float | None:

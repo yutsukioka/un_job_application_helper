@@ -482,7 +482,6 @@ sources:
       detail_batch_pause_seconds: 120
       stop_after_transient_failures: 3
       host_cooldown_seconds: 900
-      detail_jitter_seconds: 1
       date_locale: US
       request_timeout_seconds: 60
       headers:
@@ -968,12 +967,12 @@ sources:
     enabled: true
     extra:
       output_slug: ipu
-      listing_url: https://r.jina.ai/http://r.jina.ai/http://https://www.ipu.org/about-ipu/work-with-us/vacancies
+      listing_url: https://r.jina.ai/http://https://www.ipu.org/about-ipu/work-with-us/vacancies
       parser: markdown_public_links
       job_link_hints:
         - /work-with-ipu/vacancies/
         - /about-ipu/work-with-us/vacancies/
-      reader_proxy_url_template: https://r.jina.ai/http://r.jina.ai/http://{url}
+      reader_proxy_url_template: https://r.jina.ai/http://{url}
       fetch_details: true
       empty_policy:
         mode: verified_structural_empty

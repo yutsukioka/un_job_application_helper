@@ -820,6 +820,8 @@ def _detail_queue_reason(
             return None
         return "previous_permanent_failed_quarantine_expired"
     if backlog_status == "skipped" and backlog_hash == listing_hash:
+        if refresh_all_details:
+            return "refresh_requested"
         return None
     if current is not None:
         quality_status = detail_quality_status(
@@ -1443,7 +1445,9 @@ def _http_client_for_source(
     source: OrganizationSource,
     policy: RobotsPolicy,
 ) -> JobAggHTTPClient:
-    source_host = urlsplit(source.base_url).netloc
+    parsed_base_url = urlsplit(source.base_url)
+    source_host = parsed_base_url.netloc
+    default_header_host = (parsed_base_url.hostname or "").lower()
     timeout_seconds = (
         _optional_int(source.extra.get("request_timeout_seconds"))
         or _optional_int(source.extra.get("timeout_seconds"))
@@ -1464,6 +1468,7 @@ def _http_client_for_source(
         backoff_base_seconds=backoff_base_seconds if backoff_base_seconds is not None else 1.0,
         tls_verify=True if tls_verify is None else tls_verify,
         default_headers=default_headers,
+        default_header_hosts={default_header_host} if default_header_host else set(),
     )
 
 
