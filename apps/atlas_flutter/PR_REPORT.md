@@ -125,6 +125,9 @@ Screenshot evidence:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
 - Android filter-sheet top golden:
   `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`
+- Android keyboard-free location cascade goldens:
+  `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png`
+  `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`
 - Android Job Detail top golden:
   `apps/atlas_flutter/test/goldens/android/job_detail_top.png`
 - Android implemented-tab goldens:
@@ -178,12 +181,19 @@ Latest app-code verification:
 - `/Users/yutsukioka2/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
   /private/tmp/make_filter_side_by_side.py` generated nine iOS-vs-Android Filter side-by-side
   screenshots plus a contact sheet under `screenshots/ios-android-filter-side-by-side-20260703/`.
+  The Japan/Tokyo Android panes are cropped above the keyboard for cleaner review.
+- `flutter test test/search_golden_test.dart --name "filter sheet country cascade"` failed first
+  because `goldens/android/filter_country_jpn.png` did not exist.
+- `flutter test --update-goldens test/search_golden_test.dart --name "filter sheet (country|city)
+  cascade"` generated `filter_country_jpn.png` and `filter_city_tokyo.png`.
+- `flutter test test/search_golden_test.dart` passed with the new Country -> City and City ->
+  Country cascade golden tests.
 - `flutter test test/search_golden_test.dart` passed after generating
   `test/goldens/android/search_top_compact.png`, `test/goldens/android/filter_sheet_top.png`, and
   `test/goldens/android/job_detail_top.png`.
 - `flutter test test/tab_golden_test.dart` passed after generating `saved_tab.png`,
   `updates_tab.png`, `sources_tab.png`, and `settings_tab.png`.
-- Current `flutter test --coverage` passed with 62 tests: `2994/3255` lines, `91.98%`.
+- Current `flutter test --coverage` passed with 64 tests: `3002/3255` lines, `92.23%`.
 
 Latest artifacts:
 
@@ -211,9 +221,10 @@ Latest physical install evidence:
   baselines now exist.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
   should decide whether this is visually close enough to the iOS reference.
-- Existing Android Japan/Tokyo cascade screenshots show the software keyboard because the text
-  fields are focused. They prove cascade state, but physical recapture should include cleaner
-  non-keyboard states.
+- Existing source Android Japan/Tokyo cascade screenshots show the software keyboard because the
+  text fields are focused. The generated side-by-side review now crops those panes above the
+  keyboard, and keyboard-free cascade states are covered by Flutter goldens. Physical recapture
+  should still include full-screen non-keyboard states.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or
   Grade/Seniority; Android computes those facets locally from cached rows.
 

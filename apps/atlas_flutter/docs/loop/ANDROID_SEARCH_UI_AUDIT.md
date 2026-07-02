@@ -167,6 +167,13 @@ Commands run from `apps/atlas_flutter`:
   normal `flutter test test/tab_golden_test.dart`, `dart format --set-exit-if-changed
   test/tab_golden_test.dart`, `dart analyze`, and `flutter test --coverage` passed with 62 tests
   and `2994/3255` lines (`91.98%`).
+- Location cascade golden verification passed: fail-first `flutter test
+  test/search_golden_test.dart --name "filter sheet country cascade"` failed only because
+  `goldens/android/filter_country_jpn.png` did not exist; `flutter test --update-goldens
+  test/search_golden_test.dart --name "filter sheet (country|city) cascade"` generated
+  `filter_country_jpn.png` and `filter_city_tokyo.png`; normal `flutter test
+  test/search_golden_test.dart`, `dart analyze`, and `flutter test --coverage` passed with 64 tests
+  and `3002/3255` lines (`92.23%`).
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -309,7 +316,8 @@ Generated iOS-vs-Android Filter side-by-side screenshots are available under
 
 - `filter_side_by_side_contact_sheet.png`: one-page review sheet for Location, Contract/Seniority,
   Grade/CCOG, Organizations/Work Mode, Capability Tags, Country -> City, City -> Country,
-  Seniority -> Grade, and Grade-selected states.
+  Seniority -> Grade, and Grade-selected states. The Japan/Tokyo Android panes are cropped above
+  the keyboard so the cascade state remains visible in the review sheet.
 - `filter_location_ios_android_side_by_side.png`
 - `filter_contract_seniority_ios_android_side_by_side.png`
 - `filter_grade_ccog_ios_android_side_by_side.png`
@@ -330,6 +338,9 @@ Android golden baseline:
   filter-sheet top, compact option-grid/count layout, and sticky bottom actions at a 393x852
   viewport. This also uses the Flutter test renderer and should supplement, not replace, human
   screenshots.
+- `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png` and
+  `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`: Flutter goldens for keyboard-free
+  Country -> City and City -> Country cascade states.
 - `apps/atlas_flutter/test/goldens/android/job_detail_top.png`: Flutter golden for populated Job
   Detail top content, metadata chips, core rows, and formatted detail body at a 393x852 viewport.
   This is a regression artifact and not a replacement for physical Pixel/iOS paired screenshots.
@@ -385,17 +396,17 @@ and generated side-by-side Filter comparisons are available for human review.
   filter pills. User-facing visual review is still needed to decide whether the comma text display is
   close enough to iOS or should become a dedicated selected-chip editor.
 - The generated Filter side-by-side contact sheet makes the current Android cascade behavior
-  reviewable against local iOS references. The Japan/Tokyo Android cascade screenshots still include
-  the software keyboard because the text fields are focused; physical recapture should include
-  cleaner non-keyboard states.
+  reviewable against local iOS references. The Japan/Tokyo side-by-side panes are cropped above the
+  keyboard, and the keyboard-free selected states are also covered by Flutter golden baselines.
+  Physical recapture should still include full-screen non-keyboard states.
 - Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
   those facets locally from cached Search rows.
 - Normal cache-load banner was removed after screenshot review found `Loaded local save from this
   device.` occupying the Search result area.
 - Source badges were changed from generic pale-cyan blocks to deterministic source colors with white
   monograms, matching Swift `SourceMonogram`.
-- Coverage remains strong at `91.98%` after adding Search, filter-sheet, Job Detail, and tab golden
-  coverage.
+- Coverage remains strong at `92.23%` after adding Search, filter-sheet, location-cascade,
+  Job Detail, and tab golden coverage.
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
@@ -417,7 +428,7 @@ still not complete.
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
-| Tests/builds | 15 / 15 | Format, analyze, 55 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
+| Tests/builds | 15 / 15 | Format, analyze, focused Search/filter golden tests, full Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
 | Evidence/human readiness | 7 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, Search side-by-side, and Filter side-by-side comparisons are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
 
 ## Next Required Human Action

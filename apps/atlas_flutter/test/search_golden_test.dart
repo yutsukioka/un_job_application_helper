@@ -37,24 +37,47 @@ void main() {
     final controller = _filterSheetGoldenController();
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          backgroundColor: Colors.black,
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: RepaintBoundary(
-              child: AtlasFilterSheet(controller: controller),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
+    await _pumpFilterSheetGolden(tester, controller);
 
     await expectLater(
       find.byType(AtlasFilterSheet),
       matchesGoldenFile('goldens/android/filter_sheet_top.png'),
+    );
+  });
+
+  testWidgets('filter sheet country cascade matches Android parity golden', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(countryISO3: 'JPN'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    await expectLater(
+      find.byType(AtlasFilterSheet),
+      matchesGoldenFile('goldens/android/filter_country_jpn.png'),
+    );
+  });
+
+  testWidgets('filter sheet city cascade matches Android parity golden', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(city: 'Tokyo'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    await expectLater(
+      find.byType(AtlasFilterSheet),
+      matchesGoldenFile('goldens/android/filter_city_tokyo.png'),
     );
   });
 
@@ -94,6 +117,26 @@ void _configurePhoneViewport(WidgetTester tester) {
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+Future<void> _pumpFilterSheetGolden(
+  WidgetTester tester,
+  AtlasAppController controller,
+) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        backgroundColor: Colors.black,
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: RepaintBoundary(
+            child: AtlasFilterSheet(controller: controller),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
 AtlasAppController _searchTopGoldenController() {
@@ -143,11 +186,12 @@ AtlasAppController _searchTopGoldenController() {
   return controller;
 }
 
-AtlasAppController _filterSheetGoldenController() {
+AtlasAppController _filterSheetGoldenController({AtlasSearchFilters? filters}) {
   final controller = AtlasAppController()
     ..connectionStatus = 'Connected'
     ..cacheSavedAt = DateTime.utc(2026, 7, 3, 4)
     ..total = 2274
+    ..filters = filters ?? AtlasSearchFilters()
     ..results = _goldenJobs()
     ..facetLabels = const {
       'organizations': {

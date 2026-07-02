@@ -19,6 +19,8 @@ Android golden baseline:
 
 - `../../test/goldens/android/search_top_compact.png`
 - `../../test/goldens/android/filter_sheet_top.png`
+- `../../test/goldens/android/filter_country_jpn.png`
+- `../../test/goldens/android/filter_city_tokyo.png`
 - `../../test/goldens/android/job_detail_top.png`
 - `../../test/goldens/android/saved_tab.png`
 - `../../test/goldens/android/updates_tab.png`
@@ -61,7 +63,8 @@ are captured from the real Swift filter sheet using scroll-targeted reference mo
 - `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`
 
 The same iOS references are now paired with existing Android emulator screenshots in generated
-side-by-side review images:
+side-by-side review images. The Japan/Tokyo comparisons use cropped Android emulator panes so the
+location cascade state remains visible without the software keyboard obscuring the review image:
 
 - `screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`
 - `screenshots/ios-android-filter-side-by-side-20260703/filter_location_ios_android_side_by_side.png`
@@ -134,6 +137,7 @@ Generated iOS-vs-Android Filter review contact sheet:
 | Search top, fresh iOS Simulator | `screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Fresh side-by-side generated at `screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`; Android matches the top hierarchy and intentionally hides normal-state banners/diagnostics. |
 | Search top golden | iOS references above | `../../test/goldens/android/search_top_compact.png` | Android Search-top layout is covered by a Flutter golden. It is useful for regression, not a substitute for human screenshots because Flutter tests use the test renderer/font behavior. |
 | Filter sheet top golden | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `../../test/goldens/android/filter_sheet_top.png` | Android filter-sheet top is covered by a Flutter golden for dark modal structure, compact option grids/counts, and sticky Reset/Apply footer. It supplements emulator screenshots and human review. |
+| Filter cascade goldens | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png`, `ios_filter_tokyo_selected.png` | `../../test/goldens/android/filter_country_jpn.png`, `../../test/goldens/android/filter_city_tokyo.png` | Android Country -> City and City -> Country selected states are covered by keyboard-free Flutter goldens. These are regression artifacts; the human side-by-side images still use emulator screenshots. |
 | Job Detail top golden | `screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png` | `../../test/goldens/android/job_detail_top.png` | Android populated Job Detail top is covered by a Flutter golden for useful detail content, metadata chips, formatted ATS body, and hidden raw diagnostics. It supplements the emulator `job_detail_top_fixed.png` screenshot. |
 | Saved/Updates/Sources/Settings tab goldens | `screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`, `ios_updates_reference.png`, `ios_sources_reference.png`, `ios_settings_reference.png` | `../../test/goldens/android/saved_tab.png`, `../../test/goldens/android/updates_tab.png`, `../../test/goldens/android/sources_tab.png`, `../../test/goldens/android/settings_tab.png` | Implemented tabs are covered by Flutter goldens with seeded saved jobs/searches, update runs, source health, cache status, and server controls. |
 | Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
@@ -184,6 +188,8 @@ Generated iOS-vs-Android Filter review contact sheet:
   City -> Country, Seniority -> Grade, and Grade-selected states.
 - [x] Generated iOS-vs-Android side-by-side images exist for the major filter sections and cascade
   states.
+- [x] Android Country -> City and City -> Country cascade states have keyboard-free golden
+  regression baselines.
 - [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
@@ -198,9 +204,10 @@ Generated iOS-vs-Android Filter review contact sheet:
 - Android Location filters now support multiple City/Country values, but the visible text-field
   representation is comma-separated. Human review should decide whether this is visually close
   enough to iOS or should become a dedicated selected-chip editor.
-- Existing Android Japan/Tokyo cascade screenshots show the software keyboard because the location
-  text fields are focused. This proves the cascade state, but physical recapture should include
-  cleaner non-keyboard states for final review.
+- The generated Japan/Tokyo side-by-side comparisons crop the Android emulator pane above the
+  keyboard so the cascade state is reviewable. The source emulator screenshots still include the
+  keyboard because the location fields were focused; physical recapture should capture cleaner
+  full-screen non-keyboard states for final review.
 - Physical Pixel rendering may differ from the emulator capture; the physical device must be
   unlocked and reviewed before this can be treated as final.
 
