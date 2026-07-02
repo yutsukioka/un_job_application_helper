@@ -528,6 +528,11 @@ final class AtlasSearchFilters {
 
   String get trimmedCapabilityQuery => capabilityQuery.trim();
 
+  Set<String> get selectedCities => _selectionTokens(trimmedCity);
+
+  Set<String> get selectedCountriesISO3 =>
+      _selectionTokens(trimmedCountryISO3, uppercase: true);
+
   bool get isRemoteOnly => _setEquals(workModalities, remoteWorkModalities);
 
   List<String> get capabilityTerms {
@@ -548,6 +553,10 @@ final class AtlasSearchFilters {
       );
     return values;
   }
+
+  List<String> get sortedCities => _sorted(selectedCities);
+
+  List<String> get sortedCountriesISO3 => _sorted(selectedCountriesISO3);
 
   String get gradeSummary {
     final sorted = sortedGradeCodes;
@@ -576,14 +585,22 @@ final class AtlasSearchFilters {
         const AtlasActiveFilterChip(id: 'deadline.soon', title: 'Closing soon'),
       );
     }
-    if (trimmedCity.isNotEmpty) {
-      chips.add(AtlasActiveFilterChip(id: 'location.city', title: trimmedCity));
+    if (selectedCities.isNotEmpty) {
+      chips.add(
+        AtlasActiveFilterChip(
+          id: 'location.city',
+          title: _selectionSummary(prefix: 'City', values: selectedCities),
+        ),
+      );
     }
-    if (trimmedCountryISO3.isNotEmpty) {
+    if (selectedCountriesISO3.isNotEmpty) {
       chips.add(
         AtlasActiveFilterChip(
           id: 'location.country',
-          title: trimmedCountryISO3.toUpperCase(),
+          title: _selectionSummary(
+            prefix: 'Country',
+            values: selectedCountriesISO3,
+          ),
         ),
       );
     }
@@ -821,15 +838,13 @@ final class AtlasSearchRequest {
     DateTime? now,
   }) {
     final trimmedQuery = query.trim();
-    final city = filters.trimmedCity;
-    final country = filters.trimmedCountryISO3.toUpperCase();
     return AtlasSearchRequest(
       text: trimmedQuery.isEmpty ? null : trimmedQuery,
       status: filters.openOnly ? const <String>['open'] : const <String>[],
       organizations: _sorted(filters.organizations),
       sourceIDs: _sorted(filters.sourceIDs),
-      cities: city.isEmpty ? const <String>[] : <String>[city],
-      countriesISO3: country.isEmpty ? const <String>[] : <String>[country],
+      cities: filters.sortedCities,
+      countriesISO3: filters.sortedCountriesISO3,
       nationalInternational: filters.scope.apiValues,
       gradeCodes: filters.sortedGradeCodes,
       ccogFamilies: _sorted(filters.ccogFamilies),
@@ -1907,6 +1922,15 @@ List<String> _backendVolunteerKinds(AtlasSearchFilters filters) {
     kinds.add(AtlasVolunteerKind.volunteer.value);
   }
   return _sorted(kinds);
+}
+
+Set<String> _selectionTokens(String value, {bool uppercase = false}) {
+  final tokens = value
+      .split(RegExp(r'[,;]'))
+      .map((part) => uppercase ? part.trim().toUpperCase() : part.trim())
+      .where((part) => part.isNotEmpty)
+      .toSet();
+  return Set.unmodifiable(tokens);
 }
 
 List<String> _sorted(Iterable<String> values) {

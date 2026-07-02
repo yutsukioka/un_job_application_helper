@@ -32,6 +32,9 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
   Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
 - City/Country cascade test: selecting `JPN` restricts cities to Tokyo/Osaka; selecting `Tokyo`
   restricts countries to `JPN`.
+- Multi-location selection is now supported in Android: comma-separated text input and filter-sheet
+  pills can select multiple cities/countries, which serialize to Search API list fields and match
+  locally as OR within the Location group.
 - Seniority/Grade cascade test: `standard_seniority_tier` maps Entry Junior rows to junior grades;
   selecting grade `P1` restricts seniority to Entry Junior.
 - Core app icons now route through shared `AtlasIcons` using Cupertino-style symbols for Search,
@@ -62,18 +65,24 @@ Commands run from `apps/atlas_flutter`:
 - Full tests passed: `flutter test`, 41 tests.
 - Coverage passed: `flutter test --coverage`, 41 tests, `2665/2941` lines, `90.62%`.
 - `flutter build apk --debug` passed.
-- `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`46.6MB`).
-- `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`49.2MB`). Gradle emitted an `llvm-strip` warning for `lib/armeabi-v7a/libapp.so`, but the APK was produced.
+- `flutter build appbundle --release` passed: `build/app/outputs/bundle/release/app-release.aab` (`49.7MB`).
+- `flutter build apk --release` passed: `build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
 - `flutter test integration_test -d emulator-5554` passed against the Android emulator after updating
   the smoke test for the new `Done` filter-sheet control.
 - Release APK installed on USB Pixel 8 Pro: `adb -s 38281FDJG001DJ install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success`.
+- Follow-up multi-location verification: `dart format --set-exit-if-changed .`, `dart analyze`,
+  focused `flutter test test/atlas_filters_test.dart test/atlas_search_controller_test.dart`, and
+  full `flutter test` passed with 42 tests. The new tests cover comma-separated multi-city/country
+  Search request serialization and offline cached City/Country OR filtering.
+- Integration smoke was not rerun for this follow-up because `emulator-5554` was unavailable and
+  the only attached physical Pixel remained locked.
 
 Installed package evidence:
 
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 01:59:49` after the review-fix release APK install.
+- Package `lastUpdateTime`: `2026-07-03 02:13:38` after the multi-location release APK install.
 
 ## PR Review Feedback
 
@@ -148,9 +157,9 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
   keyguard.
 - Filter sheet parity is implemented from Swift source and covered by tests, but true pixel-paired
   human review still needs local copies of the user-provided iOS filter screenshots.
-- Flutter still models Location as single `city` and single `countryISO3`, matching the checked-in
-  Swift model. Multi-country/multi-city selection from the user note is not implemented in this
-  slice.
+- Local Android supports multiple City/Country values through comma-separated input and multi-select
+  filter pills. User-facing visual review is still needed to decide whether the comma text display is
+  close enough to iOS or should become a dedicated selected-chip editor.
 - Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
   those facets locally from cached Search rows.
 - Coverage remains strong but lower than the previous cache-slice number because this slice added a
@@ -171,7 +180,7 @@ and user-provided iOS filter/detail side-by-side review are still not complete.
 | Category | Score | Notes |
 | --- | ---: | --- |
 | Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
-| Filter parity | 24 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple city/country selection is not implemented. |
+| Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 7 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 12 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, and Detail remain intact; live count moved to 2,271 due deadline timing. |
 | Tests/builds | 12 / 15 | Format, analyze, full tests, coverage, debug APK, release APK, release AAB, and emulator integration test pass; builds were not rerun after the integration-test-only patch. |

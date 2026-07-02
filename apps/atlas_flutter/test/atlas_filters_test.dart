@@ -125,4 +125,22 @@ void main() {
     expect(json['offset'], 0);
     expect(json['sort'], 'posted_date_desc');
   });
+
+  test('builds multi-location search requests from comma selections', () {
+    final filters = AtlasSearchFilters(
+      city: 'Tokyo, Nairobi',
+      countryISO3: 'jpn, ken',
+    );
+
+    final request = AtlasSearchRequest.fromFilters(
+      filters: filters,
+      query: '',
+      sortOrder: SortOrder.closingSoon,
+      limit: 200,
+    );
+    final json = request.toJson();
+
+    expect(json['cities'], ['Nairobi', 'Tokyo']);
+    expect(json['countries_iso3'], ['JPN', 'KEN']);
+  });
 }

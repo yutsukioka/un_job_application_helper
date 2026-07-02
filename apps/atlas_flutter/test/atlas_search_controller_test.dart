@@ -342,6 +342,30 @@ void main() {
         ['JPN'],
       );
 
+      await controller.applyFilters(AtlasSearchFilters(city: 'Tokyo, Nairobi'));
+      expect(controller.total, 2);
+      expect(
+        controller.results.map((job) => job.city),
+        containsAll(['Tokyo', 'Nairobi']),
+      );
+      expect(
+        controller
+            .availabilityFacetOptions('countries')
+            .map((option) => option.id),
+        containsAll(['JPN', 'KEN']),
+      );
+
+      await controller.applyFilters(
+        AtlasSearchFilters(countryISO3: 'JPN, KEN'),
+      );
+      expect(controller.total, 3);
+      expect(
+        controller
+            .availabilityFacetOptions('cities')
+            .map((option) => option.id),
+        containsAll(['Tokyo', 'Osaka', 'Nairobi']),
+      );
+
       await controller.applyFilters(
         AtlasSearchFilters(seniorityGroups: {'entry_junior'}),
       );

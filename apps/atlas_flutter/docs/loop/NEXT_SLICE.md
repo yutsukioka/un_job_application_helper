@@ -1,6 +1,6 @@
 # Next Slice
 
-Gate state: implementation for persistent cache, full iOS-style filter groups, single-value
+Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
 Emulator release-app screenshots, Search-top side-by-side review, and offline restart evidence are
 captured. PR #10 remains below completion because physical Pixel in-app screenshots, physical
@@ -47,7 +47,7 @@ broad backend or JobAgg lifecycle work.
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
 | iOS side-by-side package | Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md`; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS references, then build final side-by-side review package after physical Android captures. |
-| Multiple city/country selections | Flutter matches current Swift model with single `city` and `countryISO3`. | Decide whether product wants to extend both iOS and Android to multi-select. |
+| Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
 | Coverage | 90.62% after large filter UI addition. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
 | Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control. | Keep this green after any physical-review fixes. |
@@ -56,12 +56,12 @@ broad backend or JobAgg lifecycle work.
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 41 tests.
+- Full tests: pass, 42 tests after multi-location coverage.
 - Coverage: pass, `2665/2941` lines, `90.62%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
 - Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
-- USB Pixel install: pass, `lastUpdateTime=2026-07-03 01:07:21`.
+- USB Pixel install: pass, `lastUpdateTime=2026-07-03 02:05:15`.
 - Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
 - Emulator offline restart: pass, cached Search showed `2,271 searchable results` immediately from
   local save.

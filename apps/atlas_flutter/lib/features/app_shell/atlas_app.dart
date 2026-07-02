@@ -133,8 +133,8 @@ class AtlasAppController extends ChangeNotifier {
     return query.trim().isEmpty &&
         filters.openOnly &&
         !filters.closingSoon &&
-        filters.trimmedCity.isEmpty &&
-        filters.trimmedCountryISO3.isEmpty &&
+        filters.selectedCities.isEmpty &&
+        filters.selectedCountriesISO3.isEmpty &&
         filters.scope == AtlasScopeFilter.any &&
         !filters.includeLowConfidence &&
         filters.gradeCodes.isEmpty &&
@@ -647,8 +647,10 @@ class AtlasAppController extends ChangeNotifier {
         .split(RegExp(r'\s+'))
         .where((value) => value.isNotEmpty)
         .toList();
-    final city = filters.trimmedCity.toLowerCase();
-    final country = filters.trimmedCountryISO3.toUpperCase();
+    final cities = filters.selectedCities
+        .map((value) => value.toLowerCase())
+        .toSet();
+    final countries = filters.selectedCountriesISO3;
     final scopeValues = filters.scope.apiValues.map(_normalizedToken).toSet();
     final gradeValues = filters.sortedGradeCodes.map(_normalizedGrade).toSet();
     final workModes = filters.workModalities.map(_normalizedToken).toSet();
@@ -669,10 +671,12 @@ class AtlasAppController extends ChangeNotifier {
           if (filters.closingSoon && !_isClosingSoon(job)) {
             return false;
           }
-          if (city.isNotEmpty && !_jobMatchesCity(job, city)) {
+          if (cities.isNotEmpty &&
+              !cities.any((city) => _jobMatchesCity(job, city))) {
             return false;
           }
-          if (country.isNotEmpty && !_jobMatchesCountry(job, country)) {
+          if (countries.isNotEmpty &&
+              !countries.any((country) => _jobMatchesCountry(job, country))) {
             return false;
           }
           if (filters.sourceIDs.isNotEmpty &&
@@ -1257,10 +1261,8 @@ int _compareNullableDates(
 AtlasSearchFilters _filtersFromRequest(AtlasSearchRequest request) {
   return AtlasSearchFilters(
     openOnly: request.status.contains('open'),
-    city: request.cities.isEmpty ? '' : request.cities.first,
-    countryISO3: request.countriesISO3.isEmpty
-        ? ''
-        : request.countriesISO3.first,
+    city: request.cities.join(', '),
+    countryISO3: request.countriesISO3.join(', '),
     scope: _scopeFromAPIValues(request.nationalInternational),
     includeLowConfidence: request.includeLowConfidence,
     closingSoon: request.closingDateTo != null,
@@ -2342,9 +2344,7 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
                               const SizedBox(height: 10),
                               _FilterOptionGrid(
                                 options: _cityOptions,
-                                selectedIDs: _draftFilters.trimmedCity.isEmpty
-                                    ? const <String>{}
-                                    : <String>{_draftFilters.trimmedCity},
+                                selectedIDs: _draftFilters.selectedCities,
                                 enabled: (id) =>
                                     widget.controller.isFilterOptionEnabled(
                                       key: 'cities',
@@ -2352,9 +2352,9 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
                                       filters: _draftFilters,
                                     ),
                                 onToggle: (id) {
-                                  final next = _draftFilters.trimmedCity == id
-                                      ? ''
-                                      : id;
+                                  final next = _locationSelectionText(
+                                    _toggled(_draftFilters.selectedCities, id),
+                                  );
                                   _cityController.text = next;
                                   _setDraft(_draftFilters.copyWith(city: next));
                                 },
@@ -2363,12 +2363,7 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
                               _FilterOptionGrid(
                                 options: _countryOptions,
                                 selectedIDs:
-                                    _draftFilters.trimmedCountryISO3.isEmpty
-                                    ? const <String>{}
-                                    : <String>{
-                                        _draftFilters.trimmedCountryISO3
-                                            .toUpperCase(),
-                                      },
+                                    _draftFilters.selectedCountriesISO3,
                                 enabled: (id) =>
                                     widget.controller.isFilterOptionEnabled(
                                       key: 'countries',
@@ -2376,10 +2371,12 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
                                       filters: _draftFilters,
                                     ),
                                 onToggle: (id) {
-                                  final current = _draftFilters
-                                      .trimmedCountryISO3
-                                      .toUpperCase();
-                                  final next = current == id ? '' : id;
+                                  final next = _locationSelectionText(
+                                    _toggled(
+                                      _draftFilters.selectedCountriesISO3,
+                                      id,
+                                    ),
+                                  );
                                   _countryController.text = next;
                                   _setDraft(
                                     _draftFilters.copyWith(countryISO3: next),
@@ -2697,11 +2694,11 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
   }
 
   String get _locationSummary {
-    final city = _draftFilters.trimmedCity;
-    final country = _draftFilters.trimmedCountryISO3.toUpperCase();
+    final cities = _draftFilters.selectedCities;
+    final countries = _draftFilters.selectedCountriesISO3;
     final parts = <String>[
-      if (city.isNotEmpty) city,
-      if (country.isNotEmpty) country,
+      if (cities.isNotEmpty) _compactSelectionSummary('City', cities),
+      if (countries.isNotEmpty) _compactSelectionSummary('Country', countries),
     ];
     if (parts.isEmpty) {
       return 'Any location';
@@ -2714,9 +2711,7 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
       'cities',
       filters: _draftFilters,
       limit: 10,
-      selected: _draftFilters.trimmedCity.isEmpty
-          ? const <String>{}
-          : <String>{_draftFilters.trimmedCity},
+      selected: _draftFilters.selectedCities,
     );
   }
 
@@ -2725,9 +2720,7 @@ class _AtlasFilterSheetState extends State<AtlasFilterSheet> {
       'countries',
       filters: _draftFilters,
       limit: 10,
-      selected: _draftFilters.trimmedCountryISO3.isEmpty
-          ? const <String>{}
-          : <String>{_draftFilters.trimmedCountryISO3.toUpperCase()},
+      selected: _draftFilters.selectedCountriesISO3,
     );
   }
 
@@ -3292,6 +3285,23 @@ Set<String> _toggled(Set<String> values, String id) {
     next.remove(id);
   }
   return next;
+}
+
+String _locationSelectionText(Set<String> values) {
+  final sorted = values.toList()..sort();
+  return sorted.join(', ');
+}
+
+String _compactSelectionSummary(String prefix, Set<String> values) {
+  final sorted = values.toList()..sort();
+  if (sorted.isEmpty) {
+    return prefix;
+  }
+  final first = displayAtlasFilterValue(sorted.first);
+  if (sorted.length == 1) {
+    return '$prefix: $first';
+  }
+  return '$prefix: $first +${sorted.length - 1}';
 }
 
 String _contractSortKey(String value) {
