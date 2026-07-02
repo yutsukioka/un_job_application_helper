@@ -16,6 +16,8 @@ broad backend or JobAgg lifecycle work.
 ## Acceptance Tests
 
 - Unlock Pixel 8 Pro `38281FDJG001DJ`.
+- Confirm `mDreamingLockscreen=false`; the latest check still showed the lock screen while Atlas was
+  resumed underneath keyguard.
 - Launch installed release APK `com.yutsukioka.jobagg.atlas`.
 - With server available, refresh Search and confirm cached dataset is written.
 - Kill app, disable/stop server or make it unreachable, relaunch app, and confirm cached Search rows
@@ -43,6 +45,7 @@ broad backend or JobAgg lifecycle work.
 | --- | --- | --- |
 | Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
+| Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
 | iOS side-by-side package | Search-top side-by-side exists in `IOS_ANDROID_VISUAL_REVIEW.md`; full user-provided iOS filter/detail screenshots are not available as local files. | Add/copy local iOS references, then build final side-by-side review package after physical Android captures. |
 | Multiple city/country selections | Flutter matches current Swift model with single `city` and `countryISO3`. | Decide whether product wants to extend both iOS and Android to multi-select. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |

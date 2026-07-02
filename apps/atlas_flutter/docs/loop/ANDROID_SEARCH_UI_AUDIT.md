@@ -82,6 +82,11 @@ screen. Captured physical-device files show the lock state only:
 
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/lock_check.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/current_visibility_check.png`
+
+Physical verification runbook:
+
+- `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`
 
 Post-fix emulator screenshots from the release app are available under
 `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`:
@@ -122,6 +127,8 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
 
 - Physical in-app screenshots for the new cache/filter/icon slice are missing due to lock-screen
   blocker, though emulator screenshots are now captured.
+- Fresh Pixel check on 2026-07-03 still shows the lock screen while Atlas is resumed underneath
+  keyguard.
 - Filter sheet parity is implemented from Swift source and covered by tests, but true pixel-paired
   human review still needs local copies of the user-provided iOS filter screenshots.
 - Flutter still models Location as single `city` and single `countryISO3`, matching the checked-in
