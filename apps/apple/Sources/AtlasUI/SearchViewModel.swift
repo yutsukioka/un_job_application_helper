@@ -212,6 +212,7 @@ public final class AtlasSearchViewModel: ObservableObject {
             let snapshot = snapshotWithCurrentSavedAt(fetchedSnapshot)
             let updateSummary = try await replaceLocalSaveWhenComplete(snapshot)
             applyCachedSnapshot(snapshot)
+            startDetailCacheWarmupIfNeeded(snapshot)
             if updateSummary.failed > 0 {
                 detailCacheFailed = updateSummary.failed
                 if updateSummary.missing > 0 {
@@ -223,7 +224,6 @@ public final class AtlasSearchViewModel: ObservableObject {
             } else {
                 userMessage = "Local save refreshed"
             }
-            startDetailCacheWarmupIfNeeded(snapshot)
         } catch {
             applyOfflineFallback(error)
         }

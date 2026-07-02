@@ -55,4 +55,39 @@ final class AtlasAPIClientTests: XCTestCase {
         XCTAssertEqual(response.results.first?.jobKey, "undp_oracle_hcm:34063")
         XCTAssertEqual(response.results.first?.gradeCode, "IPSA-9")
     }
+
+    func testTransportErrorMessageExplainsLocalNetworkPermission() throws {
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let url = try XCTUnwrap(URL(string: "http://192.168.50.22:8765/api/health"))
+
+        let message = transportErrorMessage(error, url: url)
+
+        XCTAssertTrue(message.contains("iOS is blocking local network access"))
+        XCTAssertTrue(message.contains("192.168.50.22"))
+        XCTAssertTrue(message.contains("Enable Local Network"))
+    }
+
+    func testTransportErrorMessageExplainsUnreachableLANServer() throws {
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost)
+        let url = try XCTUnwrap(URL(string: "http://10.0.0.12:8765/api/search"))
+
+        let message = transportErrorMessage(error, url: url)
+
+        XCTAssertTrue(message.contains("Cannot reach http://10.0.0.12:8765/api/search"))
+        XCTAssertTrue(message.contains("--host 0.0.0.0"))
+        XCTAssertTrue(message.contains("current LAN IP"))
+    }
+
+    func testTransportErrorMessageKeepsRemoteErrorDescription() throws {
+        let error = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorTimedOut,
+            userInfo: [NSLocalizedDescriptionKey: "The request timed out."]
+        )
+        let url = try XCTUnwrap(URL(string: "https://example.org/api/health"))
+
+        let message = transportErrorMessage(error, url: url)
+
+        XCTAssertEqual(message, "The request timed out.")
+    }
 }

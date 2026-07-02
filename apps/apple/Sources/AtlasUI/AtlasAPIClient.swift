@@ -537,7 +537,7 @@ public struct AtlasAPIClient: Sendable {
     }
 }
 
-private func transportErrorMessage(_ error: Error, url: URL?) -> String {
+func transportErrorMessage(_ error: Error, url: URL?) -> String {
     let nsError = error as NSError
     let host = url?.host()
     if nsError.domain == NSURLErrorDomain,
@@ -553,7 +553,7 @@ private func transportErrorMessage(_ error: Error, url: URL?) -> String {
     return message
 }
 
-private func isLocalNetworkHost(_ host: String?) -> Bool {
+func isLocalNetworkHost(_ host: String?) -> Bool {
     guard let host = host?.lowercased(), !host.isEmpty else { return false }
     if host == "localhost" || host.hasSuffix(".local") || host.hasPrefix("127.") {
         return true
