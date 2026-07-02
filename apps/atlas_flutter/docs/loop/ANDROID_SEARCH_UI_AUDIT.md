@@ -151,6 +151,13 @@ Latest actionable Copilot review clusters addressed:
 - README:
   - Replaced the stock Flutter template with Atlas-specific setup, test, build, local server, cache,
     screenshot, and physical-device verification instructions.
+- iOS reference capture:
+  - Built `apps/apple/PreviewHost` with a temporary SwiftPM scratch path to verify the preview host
+    is buildable.
+  - Built `apps/apple/AtlasIOSHost` for iOS Simulator with derived data under `/private/tmp`.
+  - Booted iPhone 17 Pro Simulator, installed and launched `AtlasIOSHost`, and captured a fresh iOS
+    Search-top reference screenshot.
+  - Generated a fresh iOS Simulator vs Android Search side-by-side image for human review.
 
 ## Screenshot Evidence
 
@@ -214,6 +221,14 @@ Detail formatter screenshots are available under
 - `job_detail_top_fixed.png`: corrected Job Detail top view after formatter/rendering fixes; raw
   source data is absent from the main detail body and remains available through diagnostics.
 
+Fresh iOS Simulator reference screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/`:
+
+- `ios_search_top_simulator.png`: fresh Search-top screenshot from a locally built `AtlasIOSHost`
+  running on the iPhone 17 Pro Simulator.
+- `ios_simulator_android_search_side_by_side.png`: fresh iOS Simulator Search top beside the latest
+  Android Search screenshot.
+
 Dedicated review package:
 
 - `apps/atlas_flutter/docs/loop/IOS_ANDROID_VISUAL_REVIEW.md`
@@ -224,7 +239,8 @@ Previously generated evidence remains available for Search top comparison:
 - `apps/atlas_flutter/docs/loop/screenshots/ios-reference/iteration-8/ios_search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
 
-The remaining screenshot gap is physical Pixel in-app evidence after the device is unlocked.
+The remaining screenshot gaps are physical Pixel in-app evidence after the device is unlocked and
+local iOS filter/detail reference screenshots.
 
 ## Manual Emulator Evidence
 
@@ -246,8 +262,9 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
   blocker, though emulator screenshots are now captured.
 - Fresh Pixel check on 2026-07-03 still shows the lock screen while Atlas is resumed underneath
   keyguard.
-- Filter sheet parity is implemented from Swift source and covered by tests, but true pixel-paired
-  human review still needs local copies of the user-provided iOS filter screenshots.
+- Search-top parity now has a fresh iOS Simulator side-by-side image. Filter sheet and detail parity
+  are implemented from Swift source and covered by tests, but true pixel-paired human review still
+  needs local copies of the user-provided iOS filter/detail screenshots.
 - Local Android supports multiple City/Country values through comma-separated input and multi-select
   filter pills. User-facing visual review is still needed to decide whether the comma text display is
   close enough to iOS or should become a dedicated selected-chip editor.
@@ -268,11 +285,11 @@ The remaining screenshot gap is physical Pixel in-app evidence after the device 
 
 Strict score under the new user caps: **79/100**.
 
-The screenshot cap is no longer the limiting factor for emulator review, and a Search-top
-side-by-side package now exists. The score remains below 80 because physical Pixel in-app screenshots
-and user-provided iOS filter/detail side-by-side review are still not complete. The raw score would
-now be higher from emulator integration and refreshed screenshots, but the strict human-review cap
-still applies.
+The screenshot cap is no longer the limiting factor for emulator review, and a fresh iOS Simulator
+Search-top side-by-side package now exists. The score remains below 80 because physical Pixel in-app
+screenshots and user-provided iOS filter/detail side-by-side review are still not complete. The raw
+score would now be higher from emulator integration and refreshed screenshots, but the strict
+human-review cap still applies.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
@@ -281,7 +298,7 @@ still applies.
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
 | Tests/builds | 15 / 15 | Format, analyze, 55 Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
-| Evidence/human readiness | 1 / 10 | Emulator evidence, Search side-by-side, and Android contact sheet are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
+| Evidence/human readiness | 2 / 10 | Emulator evidence, Android contact sheet, and fresh iOS Simulator Search side-by-side are captured; physical Pixel app screenshots and iOS filter/detail pairs still need final human review. |
 
 ## Next Required Human Action
 

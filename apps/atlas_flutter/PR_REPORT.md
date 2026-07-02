@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `fcf773b`
+Latest branch head before this report update: `7a4062c`
 
 ## Summary
 
@@ -12,12 +12,14 @@ The Android Flutter app has moved beyond the initial Search-only parity slice. I
 persistent local cache, offline startup behavior on emulator, an iOS-style Search screen, full
 filter groups, City/Country and Seniority/Grade cascades, multi-value City/Country filter support,
 compact result rows, populated and persistently cached Job Detail, Saved/Updates/Sources/Settings
-tabs, a Dart port of the Swift ATS detail formatter, and a reviewable Android screenshot package.
+tabs, a Dart port of the Swift ATS detail formatter, a fresh iOS Simulator Search-top side-by-side,
+and a reviewable Android screenshot package.
 
 This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
-verification remain blocked by the connected phone being locked. Full pixel-paired review against
-the user-provided iOS filter/detail screenshots also remains blocked because those screenshots are
-not available as local files in this worktree.
+verification remain blocked by the connected phone being locked. Search-top iOS-vs-Android evidence
+now exists from a local iOS Simulator build, but full pixel-paired review against the user-provided
+iOS filter/detail screenshots remains blocked because those screenshots are not available as local
+files in this worktree.
 
 ## Scope Implemented
 
@@ -85,6 +87,10 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/job_detail_top_fixed.png`
 - Current live count evidence:
   `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/settings_after_reload.png`
+- Fresh iOS Simulator Search-top side-by-side:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
+- Fresh iOS Simulator Search-top reference:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png`
 - Filter, cascade, detail, settings, saved, updates, and sources screenshots:
   `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
 - Physical Pixel lock-screen evidence:
@@ -105,6 +111,12 @@ Latest app-code verification:
 - `flutter test integration_test -d 38281FDJG001DJ` built and installed the debug test APK, but the
   device-driven test did not complete after launch and was interrupted after `1:46`; the connected
   Pixel still reports keyguard/doze state.
+- `swift build --scratch-path /private/tmp/atlas-previewhost-build` passed for
+  `apps/apple/PreviewHost`.
+- `xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost
+  -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
+  -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed.
+- `xcrun simctl` boot/install/launch/screenshot captured the fresh iOS Simulator Search reference.
 
 Latest artifacts:
 
@@ -125,7 +137,7 @@ Latest physical install evidence:
 - Physical offline restart with cached data visible is not yet human-verified.
 - Human G3 approval is pending.
 - User-provided iOS filter/detail screenshots are not available as local files for true pixel-paired
-  side-by-side review.
+  side-by-side review. Search-top now has fresh iOS Simulator side-by-side evidence.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
   should decide whether this is visually close enough to the iOS reference.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or

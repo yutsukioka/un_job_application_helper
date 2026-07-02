@@ -7,13 +7,18 @@ Prior no-banner Android evidence set:
 `screenshots/filter-cache-icons-emulator-20260703-current/`
 Latest detail formatter evidence set:
 `screenshots/detail-formatter-20260703/`
+Fresh iOS Simulator reference set:
+`screenshots/ios-simulator-reference-20260703/`
 
 ## Evidence Boundaries
 
-The repo currently contains checked-in iOS Search-top screenshots only:
+The repo now contains checked-in iOS Search-top screenshots plus a fresh iOS Simulator capture from
+the built `AtlasIOSHost` app:
 
 - `screenshots/ios-reference/iteration-7/ios_search_seeded_top.png`
 - `screenshots/ios-reference/iteration-8/ios_search_top.png`
+- `screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png`
+- `screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
 
 No local iOS reference screenshots exist for the filter sheet, cascade states, Job Detail, Saved,
 Updates, Sources, or Settings. The user-provided iOS filter screenshots are therefore not available
@@ -30,19 +35,24 @@ Swift source references used for non-screenshot review:
 
 ## Search Top Side-by-Side
 
-Generated side-by-side image:
+Fresh iOS Simulator vs Android side-by-side image:
+
+![iOS Simulator and Android Search top side-by-side](screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png)
+
+Earlier checked-in iOS reference side-by-side image:
 
 ![iOS and Android Search top side-by-side](screenshots/filter-cache-icons-emulator-20260703/ios_android_search_top_side_by_side.png)
 
 | Review item | Status | Evidence |
 | --- | --- | --- |
-| Centered `Search` title | Pass | Both screenshots show centered `Search`. |
-| Top-right filter/bookmark group | Pass with style note | Android uses a rounded pill with Cupertino-style sliders/bookmark. Checked-in iOS reference has the same grouping concept but a different filled filter glyph. |
+| Centered `Search` title | Pass | Fresh iOS Simulator and Android screenshots both show centered `Search`. |
+| Top-right filter/bookmark group | Pass with style note | Android uses a rounded pill with Cupertino-style sliders/bookmark. Fresh iOS has the same grouped control hierarchy with a filled filter glyph. |
 | Search box under header | Pass | Both place search field directly below the header controls. |
 | Compact filter chips | Pass | Android chips are compact and horizontally arranged. |
-| Result count and local-save text | Pass | Current Android evidence shows `2,266 searchable results` and compact local save timestamp. |
+| Result count and local-save text | Pass with label note | iOS says `2,266 results`; Android says `2,266 searchable results` to document the reconciled difference from health `open_jobs`. |
 | Sort link alignment | Pass | Android sort control is compact and right aligned. |
-| Compact list rows | Pass against current product requirement | Android rows are compact and hide diagnostic text. Checked-in iOS screenshot is stale and still shows diagnostic explanation text in rows. |
+| Normal-state banners | Intentional Android divergence | Fresh iOS Simulator still shows `Local save refreshed` and detail-cache banners. Android hides the normal cache-load banner per the newer Android requirement. |
+| Compact list rows | Pass against current product requirement | Android rows are substantially denser and hide diagnostic text. Fresh iOS Simulator still shows diagnostic explanation text in rows, which conflicts with the newer Android acceptance rule. |
 | Bottom navigation | Pass | Both show Search, Saved, Updates, Sources, Settings. |
 
 ## Android Screen Evidence
@@ -54,6 +64,7 @@ Single-image Android review contact sheet:
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
+| Search top, fresh iOS Simulator | `screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Fresh side-by-side generated at `screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`; Android matches the top hierarchy and intentionally hides normal-state banners/diagnostics. |
 | Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
 | Search top, latest live count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Current release shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. |
@@ -93,14 +104,15 @@ Single-image Android review contact sheet:
 - [x] City/Country and Seniority/Grade cascade states have Android screenshot evidence.
 - [x] Multi City/Country values are implemented in Android request serialization and offline cached filtering.
 - [x] One-page Android evidence contact sheet is generated for human review.
+- [x] Fresh iOS Simulator Search-top side-by-side is generated from a local `AtlasIOSHost` build.
 - [ ] Physical Pixel screenshots are captured after unlock.
-- [ ] User-provided iOS filter screenshots are checked into or copied into the repo for true pixel-paired comparison.
+- [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
 
 ## Remaining Visual Differences / Risks
 
-- The checked-in iOS Search screenshot appears stale relative to the user's latest requirements:
-  it includes diagnostic explanation text in list rows, while the requirement now says diagnostics
-  must be hidden from the main list.
+- The fresh iOS Simulator Search screenshot still includes diagnostic explanation text in list rows
+  and normal-state local-save/detail-cache banners, while the newer Android requirement says
+  diagnostics and normal cache-load banners must be hidden from the main Search list.
 - Android filter icon style is Cupertino-style sliders, but not a pixel-identical clone of the
   filled iOS glyph in the checked-in reference.
 - Android Location filters now support multiple City/Country values, but the visible text-field
@@ -112,6 +124,7 @@ Single-image Android review contact sheet:
 ## Score Impact
 
 This package satisfies the "create a reviewable evidence package" requirement for available local
-artifacts, but it does not satisfy the final human gate because most iOS reference images are missing
-locally and physical Pixel screenshots are still blocked. The strict completion score remains below
-80 until those two gaps are closed.
+artifacts, including a fresh local iOS Simulator Search-top side-by-side. It does not satisfy the
+final human gate because iOS filter/detail reference images are still missing locally and physical
+Pixel screenshots are still blocked. The strict completion score remains below 80 until those two
+gaps are closed.
