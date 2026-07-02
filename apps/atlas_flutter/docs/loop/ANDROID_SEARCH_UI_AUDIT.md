@@ -11,15 +11,25 @@ Updates, Sources, Saved, Settings, and Job Detail flows. The final Android scree
 captured from the installed release APK on `emulator-5554` against the LAN backend
 `http://10.253.1.43:8765`.
 
-This is not a final 90%+ completion claim. No checked-in iOS screenshot/golden baseline was
-found in the repo, so the visual score remains capped until a human compares these Android
-screenshots against the live iOS app or provides iOS reference captures.
+This is not a final 90%+ completion claim. A generated iOS simulator Search reference is now
+available for the top Search screen, but the full multi-screen iOS golden set is still not
+available. Human review is still required before claiming final visual parity.
 
 ## iOS Reference Availability
 
-No generated iOS screenshot bundle was found under `apps/apple/PreviewHost` or the Flutter
-docs loop folders. The review package therefore uses these iOS source files as the reference
-contract and embeds fresh Android screenshots for human comparison:
+No checked-in iOS screenshot bundle was found under `apps/apple/PreviewHost` or the Flutter
+docs loop folders. To reduce the evidence gap, `AtlasIOSHost` was built for the booted iOS
+simulator and seeded with an `AtlasLocalCache` snapshot generated from the same local API.
+This produced a populated iOS Search reference screen:
+
+- `screenshots/ios-reference/iteration-7/ios_search_seeded_top.png`
+- `screenshots/iteration-7/search_top_ios_android_side_by_side.png`
+
+The seeded iOS snapshot intentionally contains the first 80 default Search rows so the visual
+layout can be compared without relying on simulator networking. It is not a count-reconciliation
+source; Android still uses the live Search total of `2,274 searchable results`.
+
+The remaining iOS source contract is:
 
 - `apps/apple/Sources/AtlasUI/SearchScreen.swift`
 - `apps/apple/Sources/AtlasUI/SearchViewModel.swift`
@@ -32,6 +42,7 @@ contract and embeds fresh Android screenshots for human comparison:
 | Screen | iOS reference | Previous Android evidence | Final Android evidence | Review checklist |
 | --- | --- | --- | --- | --- |
 | Search top | Source reference: `SearchScreen.swift`, `JobResultRow.swift` | Previous parity slice: `screenshots/iteration-5/search_top.png` | ![Search top](screenshots/iteration-6/search_top.png) | Centered `Search` title, grouped filter/save controls, search input, compact chips, `2,274 searchable results`, compact local-save text, right-aligned sort link, dense rows. |
+| Search top side-by-side | Generated iOS simulator reference: `screenshots/ios-reference/iteration-7/ios_search_seeded_top.png` | n/a | ![Search top side-by-side](screenshots/iteration-7/search_top_ios_android_side_by_side.png) | Top hierarchy is close. Android is denser and hides match-summary diagnostics from rows; current iOS still shows a short match-summary line in each row. |
 | Search scrolled | Source reference: `JobResultRow.swift` | Previous parity slice: `screenshots/iteration-5/search_scrolled.png` | ![Search scrolled](screenshots/iteration-6/search_scrolled.png) | Rows remain compact after scrolling; no diagnostic paragraphs in the main list; title maxes visually to compact row density. |
 | Filter sheet | Source reference: `AtlasSearchFilters.swift` | Previous parity slice: `screenshots/iteration-5/filter_sheet.png` | ![Filter sheet](screenshots/iteration-6/filter_sheet.png) | Filter button opens real toggles for Open only, Closing soon, Remote, Best fit over live Search state. |
 | Sort UI | Source reference: `SearchScreen.swift` | Previous parity slice: `screenshots/iteration-5/sort_menu.png` | ![Sort menu](screenshots/iteration-6/sort_menu.png) | Sort link opens real menu; active `Closing soon` state is visible. |
@@ -109,26 +120,29 @@ Strengths:
 
 Remaining visual differences needing human review:
 
-- No checked-in iOS screenshots or golden baselines were available for true side-by-side pixel comparison.
+- Only the Search top screen has generated iOS-vs-Android side-by-side evidence so far; filter, sort, detail, Saved, Updates, Sources, and Settings still rely on Android screenshots plus Swift source references.
+- The generated iOS Search row still shows a short match-summary line. Android intentionally hides match diagnostics in Search rows per the Android parity goal, so row height is denser than the current iOS implementation.
 - Job Detail is useful but still text-heavy because full descriptions can dominate the first viewport.
 - Saved job rows currently use synthesized labels like `Saved vacancy 34992` until richer tracker metadata is available.
 - Local save is session-memory in the Flutter app; after app relaunch it must be refreshed again.
 
 ## Scorecard
 
-Strict score with user caps applied: **80/100**.
+Strict score with user caps applied: **84/100**.
 
-Uncapped implementation evidence would score higher, but the user rule caps the result at 80 because no actual iOS side-by-side screenshot/golden evidence exists yet.
+The previous cap for having no iOS side-by-side evidence no longer applies to the Search top
+screen, but the score remains below 90 because the iOS reference set is incomplete and physical
+Pixel review is still pending.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Visual parity evidence | 17 / 25 | Full Android screenshot package exists; iOS screenshot baseline missing. |
+| Visual parity evidence | 20 / 25 | Android package plus generated iOS Search side-by-side exists; full iOS multi-screen baseline still missing. |
 | Functional completeness | 18 / 20 | Search/filter/sort/save/detail/tabs work; local save is not persisted across relaunch. |
 | Data correctness | 20 / 20 | `2,274` vs `2,420` reconciled and surfaced in UI. |
 | Updates/Sources completion | 10 / 10 | Both tabs implemented with live API data. |
 | Job Detail completion | 8 / 10 | Core fields and full description render; grouping can still improve for long descriptions. |
 | Tests/builds | 10 / 10 | Format, analyze, unit/widget coverage, integration, debug/release builds pass. |
-| Human-review readiness | 4 / 5 | Audit and screenshots complete; still needs iOS visual and physical Pixel signoff. |
+| Human-review readiness | 4 / 5 | Audit and screenshots complete; still needs human visual review and physical Pixel signoff. |
 
 ## Remaining Gates
 
