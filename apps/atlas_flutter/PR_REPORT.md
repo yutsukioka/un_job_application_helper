@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head at report time: `57b3418`
+Latest branch head at report time: `7e3590b`
 
 ## Summary
 
@@ -108,6 +108,18 @@ Latest physical install evidence:
   should decide whether this is visually close enough to the iOS reference.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or
   Grade/Seniority; Android computes those facets locally from cached rows.
+
+## Required Closeout Actions
+
+1. Unlock Pixel 8 Pro `38281FDJG001DJ` and keep the screen awake.
+2. Start or restore the local API at `http://10.253.1.43:8765`.
+3. Follow `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`.
+4. Capture the required physical screenshots into
+   `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/`.
+5. Re-run live count reconciliation against `/api/health` and `/api/search`.
+6. Copy the user-provided iOS filter/detail screenshots into the repo or provide accessible paths,
+   then update `IOS_ANDROID_VISUAL_REVIEW.md` with true iOS-vs-Android pairs.
+7. Post final report evidence as a PR comment and wait for `APPROVED: G3`.
 
 ## Honest Score
 
