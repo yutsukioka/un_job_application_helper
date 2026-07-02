@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `d441a96`
+Latest branch head before this report update: `400e51a`
 
 ## Summary
 
@@ -147,7 +147,7 @@ Latest physical install evidence:
 
 - Device: Pixel 8 Pro `38281FDJG001DJ`
 - Package: `com.yutsukioka.jobagg.atlas`
-- Last installed release APK timestamp: `2026-07-03 04:11:11`
+- Last installed release APK timestamp: `2026-07-03 04:58:56`
 
 ## Remaining Gaps
 

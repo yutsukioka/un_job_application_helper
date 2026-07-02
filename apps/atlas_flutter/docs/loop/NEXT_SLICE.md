@@ -63,7 +63,8 @@ broad backend or JobAgg lifecycle work.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
 - Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
-- USB Pixel install: pass, `lastUpdateTime=2026-07-03 04:11:11`.
+- USB Pixel install: pass, `lastUpdateTime=2026-07-03 04:58:56` after rebuilding and installing the
+  current branch release APK.
 - Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
 - Emulator offline restart: pass, cached Search showed results immediately from local save.
 - Current live Android/Search API count evidence: `2,266 searchable results` with `2,420`

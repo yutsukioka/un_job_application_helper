@@ -175,8 +175,8 @@ Installed package evidence:
 - Package: `com.yutsukioka.jobagg.atlas`
 - Version: `versionCode=1`, `versionName=1.0.0`
 - Device: `38281FDJG001DJ`
-- Package `lastUpdateTime`: `2026-07-03 04:11:11` after the detail-formatter release APK
-  install.
+- Package `lastUpdateTime`: `2026-07-03 04:58:56` after rebuilding and installing the current
+  branch release APK.
 
 ## PR Review Feedback
 
