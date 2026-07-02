@@ -684,7 +684,7 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
                     source.id,
                 )
                 try:
-                    _apply_browser_cookie_assist(args, [source])
+                    _apply_browser_cookie_assist(args, [source], target_ids={source.id})
                 except RuntimeError as exc:
                     LOGGER.error("Browser cookie assist failed for %s: %s", source.id, exc)
                 else:
@@ -866,29 +866,34 @@ def _should_retry_with_browser_cookie_assist(
     )
 
 
-def _apply_browser_cookie_assist(args: argparse.Namespace, sources: list[OrganizationSource]) -> None:
+def _apply_browser_cookie_assist(
+    args: argparse.Namespace,
+    sources: list[OrganizationSource],
+    *,
+    target_ids: set[str] | None = None,
+) -> None:
     if not (
         getattr(args, "browser_cookie_assist", False)
         or getattr(args, "browser_cookie_assist_on_block", False)
     ):
         return
     selected_by_id = {source.id: source for source in sources}
-    target_ids = set(getattr(args, "browser_cookie_source_id", []) or [])
-    if not target_ids:
-        target_ids = {
+    selected_target_ids = set(target_ids or getattr(args, "browser_cookie_source_id", []) or [])
+    if not selected_target_ids:
+        selected_target_ids = {
             source.id
             for source in sources
             if _truthy(source.extra.get("browser_cookie_assist"))
         }
-    if not target_ids:
+    if not selected_target_ids:
         raise RuntimeError(
             "no selected sources have browser_cookie_assist=true; pass --browser-cookie-source-id"
         )
-    missing = sorted(target_ids - set(selected_by_id))
+    missing = sorted(selected_target_ids - set(selected_by_id))
     if missing:
         raise RuntimeError(f"browser cookie assist source not selected: {', '.join(missing)}")
 
-    for source_id in sorted(target_ids):
+    for source_id in sorted(selected_target_ids):
         source = selected_by_id[source_id]
         cookie_url = _browser_cookie_url(source)
         if not getattr(args, "no_browser_open", False):
@@ -940,6 +945,8 @@ def _normalize_cookie_header(value: str) -> str:
     text = value.strip()
     if not text:
         raise RuntimeError("Cookie header is empty")
+    if "\n" in text or "\r" in text:
+        raise RuntimeError("Cookie header must be a single header line")
 
     header_match = re.search(r"(?im)^\s*cookie\s*:\s*(?P<value>.+?)\s*$", text)
     if header_match:
@@ -952,9 +959,7 @@ def _normalize_cookie_header(value: str) -> str:
         if curl_match:
             text = curl_match.group("value").strip()
 
-    text = text.replace("\r", "").strip()
-    if "\n" in text:
-        raise RuntimeError("Cookie header must be a single header line")
+    text = text.strip()
     if text.lower().startswith("cookie:"):
         text = text.split(":", 1)[1].strip()
     if "=" not in text:

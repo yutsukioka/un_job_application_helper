@@ -907,7 +907,9 @@ def _refresh_consolidated_source_status(
                 SUM(CASE WHEN trusted_current = 1 THEN 1 ELSE 0 END) AS trusted_current_jobs,
                 SUM(CASE WHEN application_ready = 1 THEN 1 ELSE 0 END)
                     AS application_ready_jobs,
-                SUM(CASE WHEN status = 'open' AND deadline_state = 'expired' THEN 1 ELSE 0 END)
+                SUM(CASE
+                    WHEN status = ? AND consolidation_status = 'expired_deadline_grace_elapsed'
+                    THEN 1 ELSE 0 END)
                     AS expired_current_jobs,
                 SUM(CASE
                     WHEN status = 'open'
@@ -918,7 +920,7 @@ def _refresh_consolidated_source_status(
             FROM jobs
             WHERE source_id = ?
             """,
-            (DUPLICATE_STATUS, DETAIL_QUALITY_COMPLETE, source_id),
+            (DUPLICATE_STATUS, EXPIRED_STATUS, DETAIL_QUALITY_COMPLETE, source_id),
         ).fetchone()
         conn.execute(
             """

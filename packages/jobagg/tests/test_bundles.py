@@ -1086,6 +1086,13 @@ def test_consolidate_bundle_databases_marks_detail_quality_deadlines_and_trusted
                 """
             )
         }
+        source_status = conn.execute(
+            """
+            SELECT expired_current_jobs
+            FROM consolidated_source_status
+            WHERE source_id = 'org_oracle_hcm'
+            """
+        ).fetchone()
     assert rows["A1"]["detail_quality_status"] == "complete"
     assert rows["A1"]["deadline_state"] == "future"
     assert rows["A1"]["source_listed_current"] == 1
@@ -1103,6 +1110,7 @@ def test_consolidate_bundle_databases_marks_detail_quality_deadlines_and_trusted
     assert rows["A4"]["detail_quality_status"] == "complete"
     assert rows["A4"]["detail_status"] == "pending"
     assert rows["A4"]["application_ready"] == 1
+    assert source_status["expired_current_jobs"] == 1
 
 
 def test_consolidate_bundles_health_report_includes_consolidated_only_stale_sources(tmp_path):
