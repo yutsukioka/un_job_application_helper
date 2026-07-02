@@ -57,6 +57,10 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice.
 - Search-top Android golden coverage now exists at
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`; it locks the compact header,
   chips, count/status row, bottom navigation, and dense result-row layout at a 393x852 viewport.
+- Filter-sheet top Android golden coverage now exists at
+  `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`; it locks the dark modal sheet,
+  drag handle/header, Done action, Status and Location controls, compact option grids, counts, and
+  sticky Reset/Apply footer at the same 393x852 viewport.
 
 ## Data Count Reconciliation
 
@@ -131,6 +135,13 @@ Commands run from `apps/atlas_flutter`:
   test/search_golden_test.dart` passed; `dart format --set-exit-if-changed test/search_golden_test.dart`,
   `dart analyze`, and `flutter test --coverage` passed with 56 tests and `2956/3255` lines
   (`90.81%`).
+- Filter-sheet golden verification passed: after isolating the existing Search fixture, fail-first
+  `flutter test test/search_golden_test.dart` failed only because
+  `goldens/android/filter_sheet_top.png` did not exist; `flutter test --update-goldens
+  test/search_golden_test.dart` generated the baseline; normal `flutter test
+  test/search_golden_test.dart`, `dart format --set-exit-if-changed test/search_golden_test.dart`,
+  `dart analyze`, and `flutter test --coverage` passed with 57 tests and `2994/3255` lines
+  (`91.98%`).
 - Physical Pixel integration attempt: `flutter test integration_test -d 38281FDJG001DJ` built and
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
@@ -243,6 +254,10 @@ Android golden baseline:
 - `apps/atlas_flutter/test/goldens/android/search_top_compact.png`: Flutter golden for Search-top
   layout, compact control hierarchy, and dense result rows at a 393x852 viewport. This uses the
   Flutter test renderer, so it is a regression artifact rather than a replacement for human
+  screenshots.
+- `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`: Flutter golden for the dark
+  filter-sheet top, compact option-grid/count layout, and sticky bottom actions at a 393x852
+  viewport. This also uses the Flutter test renderer and should supplement, not replace, human
   screenshots.
 
 Dedicated review package:
