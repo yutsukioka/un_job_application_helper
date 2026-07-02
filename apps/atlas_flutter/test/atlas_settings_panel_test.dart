@@ -90,7 +90,7 @@ void main() {
             body: AtlasSettingsPanel(
               clientFactory: (baseURL) => AtlasAPIClient(
                 baseURL: baseURL,
-                transport: _HealthTransport(),
+                transport: _HealthAndSearchTransport(),
               ),
             ),
           ),
@@ -109,9 +109,10 @@ void main() {
       expect(find.text('Saved server'), findsOneWidget);
       expect(find.textContaining('https://atlas.example.org'), findsWidgets);
       expect(
-        find.text('Saved https://atlas.example.org and reloaded search data.'),
+        find.text('Saved https://atlas.example.org and refreshed 1 job.'),
         findsOneWidget,
       );
+      expect(find.text('Programme Analyst'), findsOneWidget);
     },
   );
 
@@ -177,7 +178,7 @@ void main() {
           body: AtlasSettingsPanel(
             clientFactory: (_) => AtlasAPIClient(
               baseURL: Uri.parse('http://127.0.0.1:8765'),
-              transport: _HealthTransport(),
+              transport: _HealthAndSearchTransport(),
             ),
           ),
         ),
@@ -198,11 +199,11 @@ void main() {
     await tester.tap(find.text('Refresh Local Save Now'));
     await tester.pumpAndSettle();
     expect(
-      find.text(
-        'Local save refresh will run after the offline cache slice is implemented.',
-      ),
+      find.text('Local save refreshed: 1 job cached for this session.'),
       findsOneWidget,
     );
+    expect(find.text('1'), findsWidgets);
+    expect(find.text('Programme Analyst'), findsOneWidget);
   });
 }
 
@@ -224,5 +225,50 @@ final class _FailingTransport implements AtlasTransport {
   @override
   Future<Object?> send(AtlasRequest request) async {
     throw const AtlasAPIException.http(503, 'job-api unavailable');
+  }
+}
+
+final class _HealthAndSearchTransport implements AtlasTransport {
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    switch (request.path) {
+      case 'api/health':
+        return {
+          'status': 'ok',
+          'open_jobs': 128,
+          'enabled_sources': 12,
+          'schema_version': '2026-07',
+        };
+      case 'api/search':
+        expect(request.method, 'POST');
+        return {
+          'total': 1,
+          'limit': request.jsonBody?['limit'] ?? 50,
+          'offset': 0,
+          'facets': <String, Object?>{},
+          'facet_labels': <String, Object?>{},
+          'unclassified_count': 0,
+          'results': [
+            {
+              'job_key': 'undp_oracle_hcm:34063',
+              'title': 'Programme Analyst',
+              'organization': 'UNDP Oracle HCM',
+              'source_id': 'undp_oracle_hcm',
+              'duty_station': 'Nairobi, Kenya',
+              'grade_code': 'P-3',
+              'contract_group': 'Fixed term',
+              'work_modality': 'Onsite',
+              'closing_date': '2026-07-30T23:59:00Z',
+              'needs_review': false,
+              'score_reasons': <String>[],
+              'match_summary': 'Matched current filters',
+              'description': 'Role summary',
+              'status': 'open',
+            },
+          ],
+        };
+      default:
+        fail('Unexpected request ${request.method} ${request.path}');
+    }
   }
 }

@@ -1,6 +1,177 @@
 import 'package:atlas/atlas.dart';
 import 'package:flutter/material.dart';
 
+typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
+
+class AtlasAppController extends ChangeNotifier {
+  AtlasAppController({Uri? initialBaseURL, AtlasClientFactory? clientFactory})
+    : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
+      _clientFactory =
+          clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL));
+
+  Uri baseURL;
+  final AtlasClientFactory _clientFactory;
+  String connectionStatus = 'Not connected';
+  String? connectionMessage;
+  bool isTesting = false;
+  bool isSaving = false;
+  bool isRefreshingLocalSave = false;
+  bool isSearching = false;
+  String query = '';
+  SortOrder sortOrder = SortOrder.closingSoon;
+  List<JobSearchResult> results = const [];
+  int total = 0;
+  int cachedJobCount = 0;
+  DateTime? cacheSavedAt;
+
+  void clearConnectionMessage() {
+    if (connectionMessage == null) {
+      return;
+    }
+    connectionMessage = null;
+    notifyListeners();
+  }
+
+  void reportValidationError(String message) {
+    connectionStatus = 'Not connected';
+    connectionMessage = message;
+    notifyListeners();
+  }
+
+  String get statusSubtitle {
+    if (isSearching || isRefreshingLocalSave) {
+      return 'Refreshing from ${_formatBaseURL(baseURL)}';
+    }
+    if (cacheSavedAt != null) {
+      return 'Updated ${_formatSavedAt(cacheSavedAt!)} from ${_formatBaseURL(baseURL)}';
+    }
+    if (connectionStatus == 'Connected') {
+      return 'Connected to ${_formatBaseURL(baseURL)}';
+    }
+    return 'Offline until API connection is configured';
+  }
+
+  Future<void> testConnection(Uri candidateBaseURL) async {
+    isTesting = true;
+    connectionMessage = null;
+    notifyListeners();
+    try {
+      final health = await _clientFactory(candidateBaseURL).health();
+      connectionStatus = 'Connected';
+      connectionMessage = _healthMessage(health);
+    } catch (error) {
+      connectionStatus = 'Not connected';
+      connectionMessage = 'Connection failed: $error';
+    } finally {
+      isTesting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> saveAndReload(Uri candidateBaseURL) async {
+    isSaving = true;
+    connectionMessage = null;
+    notifyListeners();
+    try {
+      final client = _clientFactory(candidateBaseURL);
+      await client.health();
+      baseURL = candidateBaseURL;
+      connectionStatus = 'Connected';
+      final refreshed = await _refreshSearch(client);
+      connectionMessage =
+          'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
+    } catch (error) {
+      connectionStatus = 'Not connected';
+      connectionMessage = 'Save failed: $error';
+    } finally {
+      isSaving = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshLocalSave() async {
+    isRefreshingLocalSave = true;
+    connectionMessage = null;
+    notifyListeners();
+    try {
+      final refreshed = await _refreshSearch(_clientFactory(baseURL));
+      connectionStatus = 'Connected';
+      connectionMessage =
+          'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached for this session.';
+    } catch (error) {
+      connectionStatus = 'Not connected';
+      connectionMessage = 'Local save refresh failed: $error';
+    } finally {
+      isRefreshingLocalSave = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setSortOrder(SortOrder order) async {
+    if (sortOrder == order) {
+      return;
+    }
+    sortOrder = order;
+    notifyListeners();
+    if (cacheSavedAt != null || connectionStatus == 'Connected') {
+      await refreshLocalSave();
+    }
+  }
+
+  Future<int> _refreshSearch(AtlasAPIClient client) async {
+    isSearching = true;
+    notifyListeners();
+    try {
+      final response = await client.search(
+        AtlasSearchRequest.fromFilters(
+          filters: AtlasSearchFilters(),
+          query: query,
+          sortOrder: sortOrder,
+          limit: 50,
+        ),
+      );
+      results = List.unmodifiable(response.results);
+      total = response.total;
+      cachedJobCount = response.results.length;
+      cacheSavedAt = DateTime.now();
+      return response.results.length;
+    } finally {
+      isSearching = false;
+    }
+  }
+}
+
+String _healthMessage(AtlasHealthSummary health) {
+  final pieces = <String>['Connected: ${health.status}'];
+  if (health.openJobs != null) {
+    pieces.add('${health.openJobs} open jobs');
+  }
+  if (health.enabledSources != null) {
+    pieces.add('${health.enabledSources} enabled sources');
+  }
+  return '${pieces.join(', ')}.';
+}
+
+String _formatBaseURL(Uri uri) {
+  final userInfo = uri.userInfo.isEmpty ? '' : '${uri.userInfo}@';
+  final port = uri.hasPort && uri.port != 0 ? ':${uri.port}' : '';
+  return '${uri.scheme}://$userInfo${uri.host}$port';
+}
+
+String _formatSavedAt(DateTime value) {
+  final local = value.toLocal();
+  final date =
+      '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')}';
+  final time =
+      '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}';
+  return '$date $time';
+}
+
+String _jobWord(int count) => count == 1 ? 'job' : 'jobs';
+
 class AtlasApp extends StatelessWidget {
   const AtlasApp({super.key});
 
@@ -80,6 +251,19 @@ class AtlasHomeShell extends StatefulWidget {
 
 class _AtlasHomeShellState extends State<AtlasHomeShell> {
   AtlasMobileTab _selectedTab = AtlasMobileTab.search;
+  late final AtlasAppController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AtlasAppController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -108,7 +292,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
         child: IndexedStack(
           index: _selectedTab.index,
           children: [
-            const AtlasSearchSkeleton(),
+            AtlasSearchSkeleton(controller: _controller),
             const AtlasPlaceholderPanel(
               title: 'Saved Jobs',
               icon: Icons.bookmark_border,
@@ -127,7 +311,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
               summary:
                   'Each source will show health, open jobs, total jobs, and last-seen status.',
             ),
-            AtlasSettingsPanel(),
+            AtlasSettingsPanel(controller: _controller),
           ],
         ),
       ),
@@ -171,7 +355,9 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
 }
 
 class AtlasSearchSkeleton extends StatelessWidget {
-  const AtlasSearchSkeleton({super.key});
+  const AtlasSearchSkeleton({required this.controller, super.key});
+
+  final AtlasAppController controller;
 
   static const _quickFilters = [
     _QuickFilter('Closing soon', Icons.schedule),
@@ -181,92 +367,303 @@ class AtlasSearchSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      children: [
-        const TextField(
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            labelText: 'Title, keyword, skill, or organization',
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            TextField(
+              textInputAction: TextInputAction.search,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                labelText: 'Title, keyword, skill, or organization',
+              ),
+              onChanged: (value) {
+                controller.query = value;
+              },
+              onSubmitted: (_) {
+                controller.refreshLocalSave();
+              },
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 36,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _quickFilters.length + 1,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return const AtlasFilterChip(
+                      label: 'Open only',
+                      icon: Icons.check_circle_outline,
+                      selected: true,
+                    );
+                  }
+                  final filter = _quickFilters[index - 1];
+                  return AtlasFilterChip(
+                    label: filter.label,
+                    icon: filter.icon,
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+            AtlasSearchStatusBar(controller: controller),
+            if (controller.connectionMessage != null) ...[
+              const SizedBox(height: 12),
+              AtlasStatusBanner(message: controller.connectionMessage!),
+            ],
+            const SizedBox(height: 24),
+            if (controller.results.isEmpty)
+              const AtlasEmptySearchState()
+            else
+              ...controller.results.map(AtlasJobResultTile.new),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AtlasJobResultTile extends StatelessWidget {
+  const AtlasJobResultTile(this.job, {super.key});
+
+  final JobSearchResult job;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AtlasPalette.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AtlasPalette.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              job.sourceInitials,
+              style: const TextStyle(
+                color: AtlasPalette.accent,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 36,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _quickFilters.length + 1,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              if (index == 0) {
-                return const AtlasFilterChip(
-                  label: 'Open only',
-                  icon: Icons.check_circle_outline,
-                  selected: true,
-                );
-              }
-              final filter = _quickFilters[index - 1];
-              return AtlasFilterChip(label: filter.label, icon: filter.icon);
-            },
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  job.title,
+                  style: const TextStyle(
+                    color: AtlasPalette.ink,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${job.organizationDisplay} · ${job.dutyStation}',
+                  style: const TextStyle(
+                    color: AtlasPalette.muted,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    AtlasMetadataPill(
+                      icon: Icons.schedule,
+                      label: job.deadlineText(),
+                      color: job.deadlineUrgency() == DeadlineUrgency.critical
+                          ? AtlasPalette.deadlineRed
+                          : AtlasPalette.deadlineAmber,
+                    ),
+                    if (job.gradeCode.isNotEmpty)
+                      AtlasMetadataPill(
+                        icon: Icons.badge_outlined,
+                        label: job.gradeCode,
+                      ),
+                    AtlasMetadataPill(
+                      icon: Icons.work_outline,
+                      label: job.contractLabel,
+                    ),
+                    AtlasMetadataPill(
+                      icon: Icons.place_outlined,
+                      label: job.workModality,
+                    ),
+                  ],
+                ),
+                if (job.matchSummary.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    job.matchSummary,
+                    style: const TextStyle(
+                      color: AtlasPalette.ink,
+                      fontSize: 13,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
-        const AtlasSearchStatusBar(),
-        const SizedBox(height: 32),
-        const AtlasEmptySearchState(),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+class AtlasMetadataPill extends StatelessWidget {
+  const AtlasMetadataPill({
+    required this.icon,
+    required this.label,
+    this.color = AtlasPalette.muted,
+    super.key,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AtlasStatusBanner extends StatelessWidget {
+  const AtlasStatusBanner({required this.message, super.key});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AtlasPalette.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AtlasPalette.accent.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, color: AtlasPalette.accent, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: AtlasPalette.ink,
+                fontSize: 13,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class AtlasSearchStatusBar extends StatelessWidget {
-  const AtlasSearchStatusBar({super.key});
+  const AtlasSearchStatusBar({required this.controller, super.key});
+
+  final AtlasAppController controller;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const SizedBox.square(
+        SizedBox.square(
           dimension: 18,
-          child: Icon(
-            Icons.wifi_off,
-            size: 18,
-            color: AtlasPalette.deadlineAmber,
-          ),
+          child: controller.isSearching || controller.isRefreshingLocalSave
+              ? const CircularProgressIndicator(strokeWidth: 2)
+              : Icon(
+                  controller.connectionStatus == 'Connected'
+                      ? Icons.wifi
+                      : Icons.wifi_off,
+                  size: 18,
+                  color: controller.connectionStatus == 'Connected'
+                      ? AtlasPalette.success
+                      : AtlasPalette.deadlineAmber,
+                ),
         ),
         const SizedBox(width: 8),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '0 results',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                '${controller.total} results',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              SizedBox(height: 2),
+              const SizedBox(height: 2),
               Text(
-                'Offline until API connection is configured',
+                controller.statusSubtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: AtlasPalette.muted),
+                style: const TextStyle(fontSize: 12, color: AtlasPalette.muted),
               ),
             ],
           ),
         ),
         MenuAnchor(
-          builder: (context, controller, child) {
+          builder: (context, menuController, child) {
             return TextButton.icon(
-              onPressed: controller.open,
+              onPressed: menuController.open,
               icon: const Icon(Icons.swap_vert, size: 18),
-              label: Text('Sort: ${SortOrder.closingSoon.label}'),
+              label: Text('Sort: ${controller.sortOrder.label}'),
             );
           },
           menuChildren: [
             for (final order in SortOrder.values)
               MenuItemButton(
-                onPressed: () {},
-                leadingIcon: order == SortOrder.closingSoon
+                onPressed: () {
+                  controller.setSortOrder(order);
+                },
+                leadingIcon: order == controller.sortOrder
                     ? const Icon(Icons.check, size: 18)
                     : null,
                 child: Text(order.label),
@@ -375,25 +772,22 @@ class AtlasPlaceholderPanel extends StatelessWidget {
 
 class AtlasSettingsPanel extends StatefulWidget {
   AtlasSettingsPanel({
-    AtlasAPIClient Function(Uri baseURL)? clientFactory,
+    AtlasAppController? controller,
+    AtlasClientFactory? clientFactory,
     super.key,
-  }) : clientFactory =
-           clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL));
+  }) : controller =
+           controller ?? AtlasAppController(clientFactory: clientFactory),
+       ownsController = controller == null;
 
-  final AtlasAPIClient Function(Uri baseURL) clientFactory;
+  final AtlasAppController controller;
+  final bool ownsController;
 
   @override
   State<AtlasSettingsPanel> createState() => _AtlasSettingsPanelState();
 }
 
 class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
-  late Uri _savedBaseURL;
   late TextEditingController _apiBaseURLController;
-  String _status = 'Not connected';
-  String? _connectionMessage;
-  bool _isTesting = false;
-  bool _isSaving = false;
-  bool _isRefreshingLocalSave = false;
   double _refreshIntervalHours = 24;
 
   static const _refreshOptions = <(String, double)>[
@@ -408,20 +802,46 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
   @override
   void initState() {
     super.initState();
-    _savedBaseURL = Uri.parse('http://10.253.1.43:8765');
     _apiBaseURLController = TextEditingController(
-      text: _formatBaseURL(_savedBaseURL),
+      text: _formatBaseURL(widget.controller.baseURL),
     );
+    widget.controller.addListener(_handleControllerChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant AtlasSettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) {
+      return;
+    }
+    oldWidget.controller.removeListener(_handleControllerChanged);
+    if (oldWidget.ownsController) {
+      oldWidget.controller.dispose();
+    }
+    _apiBaseURLController.text = _formatBaseURL(widget.controller.baseURL);
+    widget.controller.addListener(_handleControllerChanged);
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerChanged);
+    if (widget.ownsController) {
+      widget.controller.dispose();
+    }
     _apiBaseURLController.dispose();
     super.dispose();
   }
 
+  void _handleControllerChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final draftBaseURL = AtlasAPIClient.normalizedBaseURL(
       _apiBaseURLController.text,
     );
@@ -446,17 +866,16 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                   prefixIcon: Icon(Icons.link),
                 ),
                 onChanged: (_) {
-                  setState(() {
-                    _connectionMessage = null;
-                  });
+                  controller.clearConnectionMessage();
                 },
               ),
               const SizedBox(height: 10),
               _SettingsValueRow(
                 label: 'Saved server',
-                value: _formatBaseURL(_savedBaseURL),
+                value: _formatBaseURL(controller.baseURL),
               ),
-              if (draftBaseURL != null && draftBaseURL != _savedBaseURL) ...[
+              if (draftBaseURL != null &&
+                  draftBaseURL != controller.baseURL) ...[
                 const SizedBox(height: 6),
                 _SettingsValueRow(
                   label: 'Editing',
@@ -474,8 +893,8 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                 runSpacing: 8,
                 children: [
                   FilledButton.icon(
-                    onPressed: _isTesting ? null : _testConnection,
-                    icon: _isTesting
+                    onPressed: controller.isTesting ? null : _testConnection,
+                    icon: controller.isTesting
                         ? const SizedBox.square(
                             dimension: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -484,8 +903,8 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
                     label: const Text('Test'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: _isSaving ? null : _saveAndReload,
-                    icon: _isSaving
+                    onPressed: controller.isSaving ? null : _saveAndReload,
+                    icon: controller.isSaving
                         ? const SizedBox.square(
                             dimension: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -501,13 +920,13 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
             title: 'Status',
             children: [
               Text(
-                _status,
+                controller.connectionStatus,
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              if (_connectionMessage != null) ...[
+              if (controller.connectionMessage != null) ...[
                 const SizedBox(height: 6),
                 Text(
-                  _connectionMessage!,
+                  controller.connectionMessage!,
                   style: const TextStyle(
                     fontSize: 13,
                     color: AtlasPalette.muted,
@@ -519,9 +938,17 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
           _SettingsSection(
             title: 'Local Save',
             children: [
-              const _SettingsValueRow(label: 'Last updated', value: 'Never'),
+              _SettingsValueRow(
+                label: 'Last updated',
+                value: controller.cacheSavedAt == null
+                    ? 'Never'
+                    : _formatSavedAt(controller.cacheSavedAt!),
+              ),
               const SizedBox(height: 6),
-              const _SettingsValueRow(label: 'Cached jobs', value: '0'),
+              _SettingsValueRow(
+                label: 'Cached jobs',
+                value: controller.cachedJobCount.toString(),
+              ),
               const SizedBox(height: 6),
               const _SettingsValueRow(label: 'Cached details', value: '0 / 0'),
               const SizedBox(height: 12),
@@ -546,8 +973,10 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
-                onPressed: _isRefreshingLocalSave ? null : _refreshLocalSave,
-                icon: _isRefreshingLocalSave
+                onPressed: controller.isRefreshingLocalSave
+                    ? null
+                    : _refreshLocalSave,
+                icon: controller.isRefreshingLocalSave
                     ? const SizedBox.square(
                         dimension: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
@@ -557,9 +986,44 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'The app will use cached vacancies as soon as the local save implementation lands.',
+                'Refresh pulls the latest open vacancies from the saved server so Search can work immediately.',
                 style: TextStyle(fontSize: 12, color: AtlasPalette.muted),
               ),
+              if (controller.results.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Latest refreshed jobs',
+                  style: TextStyle(
+                    color: AtlasPalette.ink,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final job in controller.results.take(3))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.work_outline,
+                          size: 16,
+                          color: AtlasPalette.accent,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            job.title,
+                            style: const TextStyle(
+                              color: AtlasPalette.ink,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ],
           ),
           const _SettingsSection(
@@ -594,35 +1058,13 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
       _apiBaseURLController.text,
     );
     if (baseURL == null) {
-      setState(() {
-        _status = 'Not connected';
-        _connectionMessage = 'Enter a valid http:// or https:// API base URL.';
-      });
+      widget.controller.reportValidationError(
+        'Enter a valid http:// or https:// API base URL.',
+      );
       return;
     }
 
-    setState(() {
-      _isTesting = true;
-      _connectionMessage = null;
-    });
-    try {
-      final health = await widget.clientFactory(baseURL).health();
-      setState(() {
-        _status = 'Connected';
-        _connectionMessage = _healthMessage(health);
-      });
-    } catch (error) {
-      setState(() {
-        _status = 'Not connected';
-        _connectionMessage = 'Connection failed: $error';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isTesting = false;
-        });
-      }
-    }
+    await widget.controller.testConnection(baseURL);
   }
 
   Future<void> _saveAndReload() async {
@@ -630,71 +1072,18 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
       _apiBaseURLController.text,
     );
     if (baseURL == null) {
-      setState(() {
-        _status = 'Not connected';
-        _connectionMessage = 'Enter a valid http:// or https:// API base URL.';
-      });
+      widget.controller.reportValidationError(
+        'Enter a valid http:// or https:// API base URL.',
+      );
       return;
     }
 
-    setState(() {
-      _isSaving = true;
-      _connectionMessage = null;
-    });
-    try {
-      await widget.clientFactory(baseURL).health();
-      setState(() {
-        _savedBaseURL = baseURL;
-        _apiBaseURLController.text = _formatBaseURL(baseURL);
-        _status = 'Connected';
-        _connectionMessage =
-            'Saved ${_formatBaseURL(baseURL)} and reloaded search data.';
-      });
-    } catch (error) {
-      setState(() {
-        _status = 'Not connected';
-        _connectionMessage = 'Save failed: $error';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSaving = false;
-        });
-      }
-    }
+    await widget.controller.saveAndReload(baseURL);
+    _apiBaseURLController.text = _formatBaseURL(widget.controller.baseURL);
   }
 
   Future<void> _refreshLocalSave() async {
-    setState(() {
-      _isRefreshingLocalSave = true;
-      _connectionMessage = null;
-    });
-    await Future<void>.delayed(Duration.zero);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _isRefreshingLocalSave = false;
-      _connectionMessage =
-          'Local save refresh will run after the offline cache slice is implemented.';
-    });
-  }
-
-  String _healthMessage(AtlasHealthSummary health) {
-    final pieces = <String>['Connected: ${health.status}'];
-    if (health.openJobs != null) {
-      pieces.add('${health.openJobs} open jobs');
-    }
-    if (health.enabledSources != null) {
-      pieces.add('${health.enabledSources} enabled sources');
-    }
-    return '${pieces.join(', ')}.';
-  }
-
-  String _formatBaseURL(Uri uri) {
-    final userInfo = uri.userInfo.isEmpty ? '' : '${uri.userInfo}@';
-    final port = uri.hasPort && uri.port != 0 ? ':${uri.port}' : '';
-    return '${uri.scheme}://$userInfo${uri.host}$port';
+    await widget.controller.refreshLocalSave();
   }
 }
 
@@ -877,6 +1266,7 @@ abstract final class AtlasPalette {
   static const strategyOrange = Color(0xFFE86E14);
   static const deadlineAmber = Color(0xFFD98C14);
   static const deadlineRed = Color(0xFFC72924);
+  static const success = Color(0xFF238636);
   static const ink = Color(0xFF1D252D);
   static const muted = Color(0xFF5F6B76);
   static const border = Color(0xFFD9E2EA);
