@@ -117,6 +117,7 @@ Physical verification runbook:
 Post-fix emulator screenshots from the release app are available under
 `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`:
 
+- Contact sheet: `android_review_contact_sheet.png`
 - Search: `search_top_refreshed.png`, `search_scrolled.png`, `offline_restart_cached.png`
 - Search side-by-side: `ios_android_search_top_side_by_side.png`
 - Settings/cache status: `settings_after_reload.png`

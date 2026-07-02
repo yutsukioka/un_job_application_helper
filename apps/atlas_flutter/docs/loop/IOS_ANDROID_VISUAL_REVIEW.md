@@ -16,6 +16,14 @@ Updates, Sources, or Settings. The user-provided iOS filter screenshots are ther
 as files in this worktree. Those screens are reviewed below against the written iOS requirements and
 the Swift source structure, not against a pixel-paired iOS image.
 
+Swift source references used for non-screenshot review:
+
+- `apps/apple/Sources/AtlasUI/SearchScreen.swift`: iOS tab structure and Search navigation shell.
+- `apps/apple/Sources/AtlasUI/AtlasSearchFilters.swift`: iOS filter model, active chip behavior,
+  status/location/scope/grade/organization/capability filter fields, and chip removal semantics.
+- `apps/apple/Sources/AtlasUI/JobDetailView.swift`: iOS detail screen hierarchy, classification
+  rows, deadline panel, source link, and raw-record disclosure.
+
 ## Search Top Side-by-Side
 
 Generated side-by-side image:
@@ -35,6 +43,10 @@ Generated side-by-side image:
 
 ## Android Screen Evidence
 
+Single-image Android review contact sheet:
+
+![Android evidence contact sheet](screenshots/filter-cache-icons-emulator-20260703/android_review_contact_sheet.png)
+
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
@@ -46,6 +58,7 @@ Generated side-by-side image:
 | Filter Capability Tags | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_capability_tags.png` | Android evidence captured. |
 | Country -> City cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png` | `JPN` selected; city options narrow to `TOKYO`. |
 | City -> Country cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png` | `TOKYO` selected; `JPN` remains visible as matching country option. |
+| Multi City/Country values | Swift source has string fields; product requirement asks Android multi-select | `screenshots/filter-cache-icons-emulator-20260703/filter_japan_selected.png`, `screenshots/filter-cache-icons-emulator-20260703/filter_tokyo_selected.png`; tests in `test/atlas_filters_test.dart` and `test/atlas_search_controller_test.dart` | Android now accepts comma/semicolon-separated location text and multi-select pills; values serialize as Search API lists and filter cached rows as OR within Location. |
 | Seniority -> Grade cascade | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_entry_junior_selected.png` | `Entry Junior` selected; Grade options narrow. |
 | Grade selected | Missing locally | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_selected.png` | Grade selected state captured. |
 | Offline restart | Not applicable | `screenshots/filter-cache-icons-emulator-20260703/offline_restart_cached.png` | Cached rows visible immediately after offline relaunch. |
@@ -68,6 +81,8 @@ Generated side-by-side image:
 - [x] Filter sheet uses dark modal styling with `Filters`, `Done`, and sticky `Reset` / `Apply filters`.
 - [x] Filter sheet exposes all required groups from the written iOS reference.
 - [x] City/Country and Seniority/Grade cascade states have Android screenshot evidence.
+- [x] Multi City/Country values are implemented in Android request serialization and offline cached filtering.
+- [x] One-page Android evidence contact sheet is generated for human review.
 - [ ] Physical Pixel screenshots are captured after unlock.
 - [ ] User-provided iOS filter screenshots are checked into or copied into the repo for true pixel-paired comparison.
 
@@ -80,8 +95,9 @@ Generated side-by-side image:
   uses stronger per-source color blocks. This should receive human review.
 - Android filter icon style is Cupertino-style sliders, but not a pixel-identical clone of the
   filled iOS glyph in the checked-in reference.
-- Android Location filters remain single city and single country because the checked-in Swift model
-  uses single-value `city` and `countryISO3` fields.
+- Android Location filters now support multiple City/Country values, but the visible text-field
+  representation is comma-separated. Human review should decide whether this is visually close
+  enough to iOS or should become a dedicated selected-chip editor.
 - Physical Pixel rendering may differ from the emulator capture; the physical device must be
   unlocked and reviewed before this can be treated as final.
 
