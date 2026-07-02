@@ -181,7 +181,7 @@ Win32Window::MessageHandler(HWND hwnd,
   switch (message) {
     case WM_DESTROY:
       window_handle_ = nullptr;
-      Destroy();
+      OnDestroy();
       if (quit_on_close_) {
         PostQuitMessage(0);
       }
@@ -222,8 +222,6 @@ Win32Window::MessageHandler(HWND hwnd,
 }
 
 void Win32Window::Destroy() {
-  OnDestroy();
-
   if (window_handle_) {
     DestroyWindow(window_handle_);
     window_handle_ = nullptr;
