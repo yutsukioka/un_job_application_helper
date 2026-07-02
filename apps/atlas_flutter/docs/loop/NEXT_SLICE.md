@@ -3,10 +3,11 @@
 Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
 Emulator release-app screenshots, source-rendered iOS Simulator references, filter-section/cascade
-iOS Simulator references, generated Filter side-by-side comparisons, keyboard-free location-cascade
-goldens, offline restart evidence, and Android Search/filter-sheet/Job Detail/tab golden baselines
-are captured. PR #10 remains below completion because physical Pixel in-app screenshots, physical
-offline-restart verification, and exact user-provided iOS screenshot pairing are still pending.
+iOS Simulator references, generated Filter and primary-screen side-by-side comparisons,
+keyboard-free location-cascade goldens, offline restart evidence, and Android
+Search/filter-sheet/Job Detail/tab golden baselines are captured. PR #10 remains below completion
+because physical Pixel in-app screenshots, physical offline-restart verification, and exact
+user-provided iOS screenshot pairing are still pending.
 
 ## Intent
 
@@ -48,7 +49,7 @@ JobAgg lifecycle work.
 | Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
 | Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
 | Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
-| iOS side-by-side package | Source-rendered iOS Simulator references now exist for Search, Filter sheet, Filter section/cascade states, Job Detail, Saved, Updates, Sources, and Settings. Generated Filter side-by-side comparisons exist. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots, then build final side-by-side review package after physical Android captures. |
+| iOS side-by-side package | Source-rendered iOS Simulator references now exist for Search, Filter sheet, Filter section/cascade states, Job Detail, Saved, Updates, Sources, and Settings. Generated Filter and primary-screen side-by-side comparisons exist. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots, then build final side-by-side review package after physical Android captures. |
 | Android goldens | Search-top, filter-sheet top, populated Job Detail top, Saved, Updates, Sources, and Settings goldens exist under `test/goldens/android/`. | Use physical Pixel/iOS review to decide whether additional scrolled-state or component goldens are needed. |
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Cascade screenshot keyboard | Generated side-by-side comparisons now crop the Android Japan/Tokyo panes above the keyboard, and keyboard-free cascade goldens exist. Source emulator screenshots still include keyboard. | Recapture cleaner full-screen physical/emulator cascade states with keyboard dismissed after the Pixel is unlocked. |
@@ -103,6 +104,14 @@ JobAgg lifecycle work.
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`,
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`, and
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`.
+- Generated iOS-vs-Android primary-screen side-by-side package:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/search_top_ios_android_side_by_side.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/job_detail_ios_android_side_by_side.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/saved_tab_ios_android_side_by_side.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/updates_tab_ios_android_side_by_side.png`,
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/sources_tab_ios_android_side_by_side.png`, and
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/settings_tab_ios_android_side_by_side.png`.
 - Keyboard-free Android location-cascade goldens:
   `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png` and
   `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`.

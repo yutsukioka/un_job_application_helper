@@ -328,6 +328,18 @@ Generated iOS-vs-Android Filter side-by-side screenshots are available under
 - `filter_entry_junior_selected_ios_android_side_by_side.png`
 - `filter_grade_selected_ios_android_side_by_side.png`
 
+Generated iOS-vs-Android primary-screen side-by-side screenshots are available under
+`apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/`:
+
+- `primary_side_by_side_contact_sheet.png`: one-page review sheet for Search, Job Detail, Saved,
+  Updates, Sources, and Settings.
+- `search_top_ios_android_side_by_side.png`
+- `job_detail_ios_android_side_by_side.png`
+- `saved_tab_ios_android_side_by_side.png`
+- `updates_tab_ios_android_side_by_side.png`
+- `sources_tab_ios_android_side_by_side.png`
+- `settings_tab_ios_android_side_by_side.png`
+
 Android golden baseline:
 
 - `apps/atlas_flutter/test/goldens/android/search_top_compact.png`: Flutter golden for Search-top
@@ -363,7 +375,7 @@ Previously generated evidence remains available for Search top comparison:
 The remaining screenshot gaps are physical Pixel in-app evidence after the device is unlocked and
 exact user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS
 references now exist for the main review screens plus the major filter sections and cascade states,
-and generated side-by-side Filter comparisons are available for human review.
+and generated side-by-side Filter plus primary-screen comparisons are available for human review.
 
 ## Manual Emulator Evidence
 
@@ -399,6 +411,9 @@ and generated side-by-side Filter comparisons are available for human review.
   reviewable against local iOS references. The Japan/Tokyo side-by-side panes are cropped above the
   keyboard, and the keyboard-free selected states are also covered by Flutter golden baselines.
   Physical recapture should still include full-screen non-keyboard states.
+- The generated primary-screen side-by-side contact sheet now pairs Search, Job Detail, Saved,
+  Updates, Sources, and Settings against local source-rendered iOS references. This improves local
+  reviewability but still does not replace physical Pixel screenshots.
 - Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
   those facets locally from cached Search rows.
 - Normal cache-load banner was removed after screenshot review found `Loaded local save from this
@@ -418,9 +433,9 @@ Strict score under the new user caps: **84/100**.
 
 The local iOS evidence gap is reduced because source-rendered iOS references now exist for Search,
 Filter sheet sections/cascades, Job Detail, Saved, Updates, Sources, and Settings, with generated
-iOS-vs-Android side-by-side Filter comparisons. The score remains below final completion because
-physical Pixel in-app screenshots/offline restart and exact user-provided iOS screenshot pairing are
-still not complete.
+iOS-vs-Android side-by-side Filter and primary-screen comparisons. The score remains below final
+completion because physical Pixel in-app screenshots/offline restart and exact user-provided iOS
+screenshot pairing are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
@@ -429,7 +444,7 @@ still not complete.
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
 | Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
 | Tests/builds | 15 / 15 | Format, analyze, focused Search/filter golden tests, full Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
-| Evidence/human readiness | 7 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, Search side-by-side, and Filter side-by-side comparisons are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
+| Evidence/human readiness | 7 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, Search/Filter/primary-screen side-by-side comparisons are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
 
 ## Next Required Human Action
 

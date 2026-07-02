@@ -121,6 +121,14 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`
   `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`
+- Generated iOS-vs-Android primary-screen side-by-side review package:
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/search_top_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/job_detail_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/saved_tab_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/updates_tab_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/sources_tab_ios_android_side_by_side.png`
+  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/settings_tab_ios_android_side_by_side.png`
 - Android Search-top golden:
   `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
 - Android filter-sheet top golden:
@@ -182,6 +190,10 @@ Latest app-code verification:
   /private/tmp/make_filter_side_by_side.py` generated nine iOS-vs-Android Filter side-by-side
   screenshots plus a contact sheet under `screenshots/ios-android-filter-side-by-side-20260703/`.
   The Japan/Tokyo Android panes are cropped above the keyboard for cleaner review.
+- `/Users/yutsukioka2/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
+  /private/tmp/make_primary_side_by_side.py` generated six iOS-vs-Android primary-screen
+  side-by-side screenshots plus a contact sheet under
+  `screenshots/ios-android-primary-side-by-side-20260703/`.
 - `flutter test test/search_golden_test.dart --name "filter sheet country cascade"` failed first
   because `goldens/android/filter_country_jpn.png` did not exist.
 - `flutter test --update-goldens test/search_golden_test.dart --name "filter sheet (country|city)
@@ -214,8 +226,9 @@ Latest physical install evidence:
 - Physical offline restart with cached data visible is not yet human-verified.
 - Human G3 approval is pending.
 - Source-rendered iOS references now exist for primary screens and the major Filter
-  section/cascade states, and generated Filter side-by-side comparisons exist. Exact user-provided
-  iOS screenshots are not available as local files for final pixel-paired side-by-side review.
+  section/cascade states, and generated Filter plus primary-screen side-by-side comparisons exist.
+  Exact user-provided iOS screenshots are not available as local files for final pixel-paired
+  side-by-side review.
 - Additional Android scrolled-state or component goldens may still be useful after physical/iOS
   review, but primary Search, filter-sheet, Job Detail, Saved, Updates, Sources, and Settings
   baselines now exist.
@@ -245,7 +258,7 @@ Latest physical install evidence:
 Current strict score: `84/100`.
 
 The score improves because source-rendered iOS references now exist for the primary screens plus
-the major Filter section/cascade states, and the Filter side-by-side package is generated. It is
-still capped below final parity because physical Pixel in-app evidence and exact user-provided iOS
-side-by-side review are still missing. Do not claim final Android parity completion until those
-gates are satisfied.
+the major Filter section/cascade states, and Filter plus primary-screen side-by-side packages are
+generated. It is still capped below final parity because physical Pixel in-app evidence and exact
+user-provided iOS side-by-side review are still missing. Do not claim final Android parity
+completion until those gates are satisfied.

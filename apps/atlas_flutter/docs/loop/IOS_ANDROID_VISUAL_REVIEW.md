@@ -15,6 +15,8 @@ Filter-section iOS Simulator reference set:
 `screenshots/ios-simulator-filter-sections-20260703/`
 Filter side-by-side review set:
 `screenshots/ios-android-filter-side-by-side-20260703/`
+Primary-screen side-by-side review set:
+`screenshots/ios-android-primary-side-by-side-20260703/`
 Android golden baseline:
 
 - `../../test/goldens/android/search_top_compact.png`
@@ -77,6 +79,16 @@ location cascade state remains visible without the software keyboard obscuring t
 - `screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`
 - `screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`
 
+Primary screens are now also paired in generated iOS-vs-Android review images:
+
+- `screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/search_top_ios_android_side_by_side.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/job_detail_ios_android_side_by_side.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/saved_tab_ios_android_side_by_side.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/updates_tab_ios_android_side_by_side.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/sources_tab_ios_android_side_by_side.png`
+- `screenshots/ios-android-primary-side-by-side-20260703/settings_tab_ios_android_side_by_side.png`
+
 These captures render the real Swift views with seeded review data. They are better than a hand-made
 mock and are now suitable for local human review. The user-provided iOS screenshots are still not
 available as files in this worktree, so final pixel-paired review against those exact images remains
@@ -129,6 +141,10 @@ Single-image Android review contact sheet:
 Generated iOS-vs-Android Filter review contact sheet:
 
 ![Filter side-by-side contact sheet](screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png)
+
+Generated iOS-vs-Android primary-screen review contact sheet:
+
+![Primary side-by-side contact sheet](screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png)
 
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
@@ -188,6 +204,8 @@ Generated iOS-vs-Android Filter review contact sheet:
   City -> Country, Seniority -> Grade, and Grade-selected states.
 - [x] Generated iOS-vs-Android side-by-side images exist for the major filter sections and cascade
   states.
+- [x] Generated iOS-vs-Android side-by-side images exist for Search, Job Detail, Saved, Updates,
+  Sources, and Settings.
 - [x] Android Country -> City and City -> Country cascade states have keyboard-free golden
   regression baselines.
 - [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
@@ -215,7 +233,7 @@ Generated iOS-vs-Android Filter review contact sheet:
 
 This package now satisfies the local source-rendered iOS evidence requirement for Search, Filter
 sheet, the major Filter subsections/cascade states, Job Detail, Saved, Updates, Sources, and
-Settings, and includes generated iOS-vs-Android side-by-side Filter comparisons. It still does not
-satisfy the final human gate because exact user-provided iOS screenshot files and physical Pixel
-screenshots are still blocked. The strict completion score remains below 85 until those two review
-gaps are closed.
+Settings, and includes generated iOS-vs-Android side-by-side Filter and primary-screen comparisons.
+It still does not satisfy the final human gate because exact user-provided iOS screenshot files and
+physical Pixel screenshots are still blocked. The strict completion score remains below 85 until
+those two review gaps are closed.
