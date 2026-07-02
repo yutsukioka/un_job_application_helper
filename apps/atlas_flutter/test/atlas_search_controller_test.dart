@@ -4,6 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('active filter chips use value equality', () {
+    const openChip = AtlasActiveFilterChip(
+      id: 'status.open',
+      title: 'Open only',
+    );
+    const matchingChip = AtlasActiveFilterChip(
+      id: 'status.open',
+      title: 'Open only',
+    );
+    const differentChip = AtlasActiveFilterChip(
+      id: 'deadline.soon',
+      title: 'Closing soon',
+    );
+
+    expect(openChip, matchingChip);
+    expect(openChip == differentChip, isFalse);
+    expect(openChip.hashCode, matchingChip.hashCode);
+  });
+
   test('controller saves server refreshes search and updates sort', () async {
     final transport = _RecordingTransport();
     final controller = AtlasAppController(
@@ -34,7 +53,7 @@ void main() {
       controller.connectionMessage,
       'Saved http://atlas.test:8765 and refreshed 1 job.',
     );
-    expect(controller.statusSubtitle, startsWith('Updated '));
+    expect(controller.statusSubtitle, startsWith('Local save · updated '));
 
     controller.connectionMessage = 'Dismiss me';
     controller.clearConnectionMessage();
@@ -49,6 +68,31 @@ void main() {
 
     await controller.setSortOrder(SortOrder.newestPosted);
     expect(transport.searchSorts, hasLength(searchCount));
+
+    await controller.toggleQuickFilter('Remote');
+    expect(controller.filters.isRemoteOnly, isTrue);
+    expect(
+      transport.searchBodies.last['work_modalities'],
+      containsAll(AtlasSearchFilters.remoteWorkModalities),
+    );
+
+    await controller.removeActiveFilter('work.modalities');
+    expect(controller.filters.isRemoteOnly, isFalse);
+
+    await controller.toggleQuickFilter('Remote');
+    await controller.toggleQuickFilter('Closing soon');
+    await controller.saveCurrentSearch();
+    expect(transport.savedSearchNames, ['Search 1']);
+    expect(controller.savedSearches.single.name, 'Search 1');
+
+    await controller.removeActiveFilter('work.modalities');
+    await controller.removeActiveFilter('deadline.soon');
+    expect(controller.filters.isRemoteOnly, isFalse);
+    expect(controller.filters.closingSoon, isFalse);
+
+    await controller.runSavedSearch(controller.savedSearches.single);
+    expect(controller.filters.isRemoteOnly, isTrue);
+    expect(controller.filters.closingSoon, isTrue);
   });
 
   test('controller reports validation and local refresh failures', () async {
@@ -74,6 +118,104 @@ void main() {
       controller.statusSubtitle,
       'Refreshing from http://10.253.1.43:8765',
     );
+  });
+
+  test(
+    'controller debounces query changes and reports save failures',
+    () async {
+      final transport = _RecordingTransport();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      controller.connectionStatus = 'Connected';
+      controller.updateQuery('finance');
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+
+      expect(transport.searchTexts.last, 'finance');
+
+      await controller.saveCurrentSearch();
+      expect(controller.savedSearches.single.description, contains('finance'));
+
+      final failingController = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+      );
+      addTearDown(failingController.dispose);
+
+      await failingController.saveCurrentSearch();
+      expect(
+        failingController.connectionMessage,
+        startsWith('Save search failed:'),
+      );
+    },
+  );
+
+  test('saved searches restore text, filters, and sort', () async {
+    final controller = AtlasAppController();
+    addTearDown(controller.dispose);
+
+    await controller.runSavedSearch(
+      AtlasSavedSearch(
+        name: 'Policy',
+        request: const AtlasSearchRequest(
+          text: 'policy',
+          status: ['open'],
+          cities: ['Geneva'],
+          countriesISO3: ['che'],
+          nationalInternational: ['international', 'local'],
+          gradeCodes: ['P-4'],
+          workModalities: ['home_based', 'online_remote'],
+          sourceIDs: ['unicef_pageup'],
+          organizations: ['UNICEF'],
+          contractGroups: ['fixed_term'],
+          seniorityGroups: ['mid'],
+          volunteerKinds: ['un_volunteer'],
+          unvCategories: ['international_specialist'],
+          unvVolunteerTypes: ['online'],
+          ccogFamilies: ['Political Affairs'],
+          capabilityTags: ['analysis'],
+          includeLowConfidence: true,
+          closingDateTo: '2026-07-09',
+          sort: 'closing_date_desc',
+        ),
+      ),
+    );
+
+    expect(controller.query, 'policy');
+    expect(controller.filters.openOnly, isTrue);
+    expect(controller.filters.trimmedCity, 'Geneva');
+    expect(controller.filters.trimmedCountryISO3, 'che');
+    expect(controller.filters.scope, AtlasScopeFilter.international);
+    expect(controller.filters.sortedGradeCodes, ['P-4']);
+    expect(controller.filters.isRemoteOnly, isTrue);
+    expect(controller.filters.includeLowConfidence, isTrue);
+    expect(controller.filters.closingSoon, isTrue);
+    expect(controller.sortOrder, SortOrder.deadlineLatest);
+
+    await controller.runSavedSearch(
+      AtlasSavedSearch(
+        name: 'National',
+        request: const AtlasSearchRequest(
+          nationalInternational: ['national', 'unknown'],
+        ),
+      ),
+    );
+    expect(controller.filters.scope, AtlasScopeFilter.national);
+
+    await controller.runSavedSearch(
+      AtlasSavedSearch(
+        name: 'Unknown',
+        request: const AtlasSearchRequest(
+          nationalInternational: ['unknown', 'other'],
+        ),
+      ),
+    );
+    expect(controller.filters.scope, AtlasScopeFilter.unspecified);
   });
 
   testWidgets('search submits query and renders refreshed result rows', (
@@ -103,24 +245,44 @@ void main() {
 
     expect(transport.searchTexts.single, 'analyst');
     expect(find.text('1 results'), findsOneWidget);
-    expect(
-      find.text('Local save refreshed: 1 job cached for this session.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Local save · updated'), findsOneWidget);
     expect(find.text('Programme Analyst'), findsOneWidget);
     expect(find.textContaining('UNDP'), findsWidgets);
     expect(find.textContaining('Nairobi, Kenya'), findsOneWidget);
-    expect(find.text('P-3'), findsOneWidget);
+    expect(find.textContaining('P-3'), findsOneWidget);
     expect(find.textContaining('Fixed'), findsOneWidget);
-    expect(find.text('Onsite'), findsOneWidget);
-    expect(find.text('Matched the current search filters.'), findsOneWidget);
+    expect(find.textContaining('Onsite'), findsOneWidget);
+    expect(find.text('Matched the current search filters.'), findsNothing);
     expect(find.text('Sort: Closing soon'), findsOneWidget);
+
+    await tester.tap(find.text('Remote'));
+    await tester.pumpAndSettle();
+    expect(controller.filters.isRemoteOnly, isTrue);
+
+    await tester.tap(find.byIcon(Icons.close).first);
+    await tester.pumpAndSettle();
+    expect(controller.filters.openOnly, isFalse);
+
+    await tester.tap(find.text('Sort: Closing soon'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Newest posted').last);
+    await tester.pumpAndSettle();
+    expect(controller.sortOrder, SortOrder.newestPosted);
+
+    await tester.tap(find.text('Programme Analyst'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Why this matched'), findsOneWidget);
+    expect(find.text('Matched the current search filters.'), findsOneWidget);
   });
 }
 
 final class _RecordingTransport implements AtlasTransport {
   final searchTexts = <String?>[];
   final searchSorts = <String?>[];
+  final searchBodies = <Map<String, Object?>>[];
+  final savedSearchNames = <String>[];
+  final savedSearchStore = <Map<String, Object?>>[];
 
   @override
   Future<Object?> send(AtlasRequest request) async {
@@ -135,6 +297,7 @@ final class _RecordingTransport implements AtlasTransport {
         };
       case 'api/search':
         expect(request.method, 'POST');
+        searchBodies.add(request.jsonBody ?? const <String, Object?>{});
         searchTexts.add(request.jsonBody?['text'] as String?);
         searchSorts.add(request.jsonBody?['sort'] as String?);
         return {
@@ -146,6 +309,22 @@ final class _RecordingTransport implements AtlasTransport {
           'unclassified_count': 0,
           'results': [_jobJson],
         };
+      case 'api/saved-searches':
+        if (request.method == 'POST') {
+          final name = request.jsonBody?['name'] as String? ?? '';
+          savedSearchNames.add(name);
+          final savedSearch = {
+            'name': name,
+            'description': request.jsonBody?['summary'],
+            'request': request.jsonBody?['request'],
+            'created_at': '2026-07-02T00:00:00Z',
+          };
+          savedSearchStore.removeWhere((search) => search['name'] == name);
+          savedSearchStore.insert(0, savedSearch);
+          return savedSearch;
+        }
+        expect(request.method, 'GET');
+        return savedSearchStore;
       default:
         fail('Unexpected request ${request.method} ${request.path}');
     }

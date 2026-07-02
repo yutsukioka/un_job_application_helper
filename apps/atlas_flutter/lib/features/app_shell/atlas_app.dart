@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:atlas/atlas.dart';
 import 'package:flutter/material.dart';
 
@@ -15,14 +17,19 @@ class AtlasAppController extends ChangeNotifier {
   String? connectionMessage;
   bool isTesting = false;
   bool isSaving = false;
+  bool isSavingSearch = false;
   bool isRefreshingLocalSave = false;
   bool isSearching = false;
   String query = '';
+  AtlasSearchFilters filters = AtlasSearchFilters();
   SortOrder sortOrder = SortOrder.closingSoon;
   List<JobSearchResult> results = const [];
+  List<AtlasSavedSearch> savedSearches = const [];
   int total = 0;
   int cachedJobCount = 0;
   DateTime? cacheSavedAt;
+  Timer? _searchDebounce;
+  int _savedSearchSequence = 0;
 
   void clearConnectionMessage() {
     if (connectionMessage == null) {
@@ -43,7 +50,7 @@ class AtlasAppController extends ChangeNotifier {
       return 'Refreshing from ${_formatBaseURL(baseURL)}';
     }
     if (cacheSavedAt != null) {
-      return 'Updated ${_formatSavedAt(cacheSavedAt!)} from ${_formatBaseURL(baseURL)}';
+      return 'Local save · updated ${_formatSavedAt(cacheSavedAt!)}';
     }
     if (connectionStatus == 'Connected') {
       return 'Connected to ${_formatBaseURL(baseURL)}';
@@ -51,14 +58,40 @@ class AtlasAppController extends ChangeNotifier {
     return 'Offline until API connection is configured';
   }
 
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  void updateQuery(String value) {
+    if (query == value) {
+      return;
+    }
+    query = value;
+    notifyListeners();
+    _scheduleSearchIfReady();
+  }
+
+  bool isQuickFilterActive(String title) {
+    return switch (title) {
+      'Closing soon' => filters.closingSoon,
+      'Remote' => filters.isRemoteOnly,
+      'Best fit' => sortOrder == SortOrder.bestFit,
+      _ => false,
+    };
+  }
+
   Future<void> testConnection(Uri candidateBaseURL) async {
     isTesting = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final health = await _clientFactory(candidateBaseURL).health();
+      final client = _clientFactory(candidateBaseURL);
+      final health = await client.health();
       connectionStatus = 'Connected';
       connectionMessage = _healthMessage(health);
+      await _loadSavedSearches(client);
     } catch (error) {
       connectionStatus = 'Not connected';
       connectionMessage = 'Connection failed: $error';
@@ -78,6 +111,7 @@ class AtlasAppController extends ChangeNotifier {
       baseURL = candidateBaseURL;
       connectionStatus = 'Connected';
       final refreshed = await _refreshSearch(client);
+      await _loadSavedSearches(client);
       connectionMessage =
           'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
     } catch (error) {
@@ -94,7 +128,9 @@ class AtlasAppController extends ChangeNotifier {
     connectionMessage = null;
     notifyListeners();
     try {
-      final refreshed = await _refreshSearch(_clientFactory(baseURL));
+      final client = _clientFactory(baseURL);
+      final refreshed = await _refreshSearch(client);
+      await _loadSavedSearches(client);
       connectionStatus = 'Connected';
       connectionMessage =
           'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached for this session.';
@@ -118,18 +154,77 @@ class AtlasAppController extends ChangeNotifier {
     }
   }
 
+  Future<void> toggleQuickFilter(String title) async {
+    switch (title) {
+      case 'Closing soon':
+        filters = filters.copyWith(closingSoon: !filters.closingSoon);
+      case 'Remote':
+        filters = filters.copyWith(
+          workModalities: filters.isRemoteOnly
+              ? <String>{}
+              : AtlasSearchFilters.remoteWorkModalities,
+        );
+      case 'Best fit':
+        sortOrder = sortOrder == SortOrder.bestFit
+            ? SortOrder.closingSoon
+            : SortOrder.bestFit;
+      default:
+        return;
+    }
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
+  Future<void> removeActiveFilter(String id) async {
+    filters = filters.removingChip(id);
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
+  Future<void> setOpenOnly(bool value) async {
+    filters = filters.copyWith(openOnly: value);
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
+  Future<void> saveCurrentSearch() async {
+    isSavingSearch = true;
+    connectionMessage = null;
+    notifyListeners();
+    final request = _currentSearchRequest();
+    final name = _nextSavedSearchName();
+    final summary = _savedSearchSummary(request);
+    try {
+      final client = _clientFactory(baseURL);
+      final savedSearch = await client.saveSearch(
+        name: name,
+        request: request,
+        summary: summary,
+      );
+      _upsertSavedSearch(savedSearch);
+      connectionStatus = 'Connected';
+      connectionMessage = 'Saved ${savedSearch.name} locally.';
+    } catch (error) {
+      connectionMessage = 'Save search failed: $error';
+    } finally {
+      isSavingSearch = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> runSavedSearch(AtlasSavedSearch search) async {
+    query = search.request.text ?? '';
+    filters = _filtersFromRequest(search.request);
+    sortOrder = SortOrder.fromAPIValue(search.request.sort);
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
   Future<int> _refreshSearch(AtlasAPIClient client) async {
     isSearching = true;
     notifyListeners();
     try {
-      final response = await client.search(
-        AtlasSearchRequest.fromFilters(
-          filters: AtlasSearchFilters(),
-          query: query,
-          sortOrder: sortOrder,
-          limit: 50,
-        ),
-      );
+      final response = await client.search(_currentSearchRequest());
       results = List.unmodifiable(response.results);
       total = response.total;
       cachedJobCount = response.results.length;
@@ -139,6 +234,128 @@ class AtlasAppController extends ChangeNotifier {
       isSearching = false;
     }
   }
+
+  Future<void> _loadSavedSearches(AtlasAPIClient client) async {
+    try {
+      savedSearches = List.unmodifiable(await client.savedSearches());
+      _syncSavedSearchSequence();
+    } catch (_) {
+      // Saved-search persistence is not required for health/search success.
+    }
+  }
+
+  AtlasSearchRequest _currentSearchRequest() {
+    return AtlasSearchRequest.fromFilters(
+      filters: filters,
+      query: query,
+      sortOrder: sortOrder,
+      limit: 50,
+    );
+  }
+
+  Future<void> _refreshIfReady() async {
+    if (cacheSavedAt != null || connectionStatus == 'Connected') {
+      await refreshLocalSave();
+    }
+  }
+
+  void _scheduleSearchIfReady() {
+    _searchDebounce?.cancel();
+    if (cacheSavedAt == null && connectionStatus != 'Connected') {
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      refreshLocalSave();
+    });
+  }
+
+  String _savedSearchSummary(AtlasSearchRequest request) {
+    final parts = <String>[];
+    if (request.text != null && request.text!.trim().isNotEmpty) {
+      parts.add('Query: ${request.text!.trim()}');
+    }
+    parts.add('${filters.activeChips.length} filters');
+    parts.add('Sort: ${sortOrder.label}');
+    return parts.join(' · ');
+  }
+
+  String _nextSavedSearchName() {
+    _syncSavedSearchSequence();
+    _savedSearchSequence += 1;
+    return 'Search $_savedSearchSequence';
+  }
+
+  void _syncSavedSearchSequence() {
+    final searchNamePattern = RegExp(r'^Search (\d+)$');
+    for (final savedSearch in savedSearches) {
+      final match = searchNamePattern.firstMatch(savedSearch.name.trim());
+      if (match == null) {
+        continue;
+      }
+      final index = int.tryParse(match.group(1) ?? '');
+      if (index != null && index > _savedSearchSequence) {
+        _savedSearchSequence = index;
+      }
+    }
+  }
+
+  void _upsertSavedSearch(AtlasSavedSearch savedSearch) {
+    final remaining = savedSearches
+        .where((existing) => existing.name != savedSearch.name)
+        .toList(growable: false);
+    savedSearches = List.unmodifiable([savedSearch, ...remaining]);
+    _syncSavedSearchSequence();
+  }
+}
+
+AtlasSearchFilters _filtersFromRequest(AtlasSearchRequest request) {
+  return AtlasSearchFilters(
+    openOnly: request.status.contains('open'),
+    city: request.cities.isEmpty ? '' : request.cities.first,
+    countryISO3: request.countriesISO3.isEmpty
+        ? ''
+        : request.countriesISO3.first,
+    scope: _scopeFromAPIValues(request.nationalInternational),
+    includeLowConfidence: request.includeLowConfidence,
+    closingSoon: request.closingDateTo != null,
+    gradeCodes: request.gradeCodes.toSet(),
+    workModalities: request.workModalities.toSet(),
+    sourceIDs: request.sourceIDs.toSet(),
+    organizations: request.organizations.toSet(),
+    ccogFamilies: request.ccogFamilies.toSet(),
+    contractGroups: request.contractGroups.toSet(),
+    seniorityGroups: request.seniorityGroups.toSet(),
+    volunteerKinds: request.volunteerKinds.toSet(),
+    unvCategories: request.unvCategories.toSet(),
+    unvVolunteerTypes: request.unvVolunteerTypes.toSet(),
+    capabilityTags: request.capabilityTags.toSet(),
+  );
+}
+
+AtlasScopeFilter _scopeFromAPIValues(List<String> values) {
+  final valueSet = values.toSet();
+  for (final scope in AtlasScopeFilter.values) {
+    if (_stringSetEquals(valueSet, scope.apiValues.toSet())) {
+      return scope;
+    }
+  }
+  if (valueSet.contains('international')) {
+    return AtlasScopeFilter.international;
+  }
+  if (valueSet.contains('national') || valueSet.contains('local')) {
+    return AtlasScopeFilter.national;
+  }
+  if (valueSet.contains('unknown')) {
+    return AtlasScopeFilter.unspecified;
+  }
+  return AtlasScopeFilter.any;
+}
+
+bool _stringSetEquals(Set<String> left, Set<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  return left.containsAll(right);
 }
 
 String _healthMessage(AtlasHealthSummary health) {
@@ -243,7 +460,9 @@ class AtlasApp extends StatelessWidget {
 }
 
 class AtlasHomeShell extends StatefulWidget {
-  const AtlasHomeShell({super.key});
+  const AtlasHomeShell({super.key, this.controller});
+
+  final AtlasAppController? controller;
 
   @override
   State<AtlasHomeShell> createState() => _AtlasHomeShellState();
@@ -252,16 +471,20 @@ class AtlasHomeShell extends StatefulWidget {
 class _AtlasHomeShellState extends State<AtlasHomeShell> {
   AtlasMobileTab _selectedTab = AtlasMobileTab.search;
   late final AtlasAppController _controller;
+  late final bool _ownsController;
 
   @override
   void initState() {
     super.initState();
-    _controller = AtlasAppController();
+    _controller = widget.controller ?? AtlasAppController();
+    _ownsController = widget.controller == null;
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    if (_ownsController) {
+      _controller.dispose();
+    }
     super.dispose();
   }
 
@@ -269,21 +492,17 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Atlas'),
+        centerTitle: true,
+        title: Text(_selectedTab.title),
         actions: _selectedTab == AtlasMobileTab.search
-            ? const [
-                Tooltip(
-                  message: 'Filters',
-                  child: IconButton(onPressed: null, icon: Icon(Icons.tune)),
-                ),
-                Tooltip(
-                  message: 'Save search',
-                  child: IconButton(
-                    onPressed: null,
-                    icon: Icon(Icons.bookmark_border),
+            ? [
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: AtlasSearchActionGroup(
+                    controller: _controller,
+                    onShowFilters: _showFilterSheet,
                   ),
                 ),
-                SizedBox(width: 4),
               ]
             : null,
       ),
@@ -293,12 +512,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
           index: _selectedTab.index,
           children: [
             AtlasSearchSkeleton(controller: _controller),
-            const AtlasPlaceholderPanel(
-              title: 'Saved Jobs',
-              icon: Icons.bookmark_border,
-              summary:
-                  'Saved searches and tracked applications will appear here.',
-            ),
+            AtlasSavedPanel(controller: _controller),
             const AtlasPlaceholderPanel(
               title: 'Source Updates',
               icon: Icons.history,
@@ -352,6 +566,14 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       ),
     );
   }
+
+  void _showFilterSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => AtlasFilterSheet(controller: _controller),
+    );
+  }
 }
 
 class AtlasSearchSkeleton extends StatelessWidget {
@@ -380,7 +602,7 @@ class AtlasSearchSkeleton extends StatelessWidget {
                 labelText: 'Title, keyword, skill, or organization',
               ),
               onChanged: (value) {
-                controller.query = value;
+                controller.updateQuery(value);
               },
               onSubmitted: (_) {
                 controller.refreshLocalSave();
@@ -388,38 +610,50 @@ class AtlasSearchSkeleton extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             SizedBox(
-              height: 36,
+              height: 34,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
-                itemCount: _quickFilters.length + 1,
+                itemCount:
+                    controller.filters.activeChips.length +
+                    _quickFilters.length,
                 separatorBuilder: (_, _) => const SizedBox(width: 8),
                 itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return const AtlasFilterChip(
-                      label: 'Open only',
+                  final activeChips = controller.filters.activeChips;
+                  if (index < activeChips.length) {
+                    final chip = activeChips[index];
+                    return AtlasFilterChip(
+                      label: chip.title,
                       icon: Icons.check_circle_outline,
                       selected: true,
+                      onDeleted: () {
+                        controller.removeActiveFilter(chip.id);
+                      },
                     );
                   }
-                  final filter = _quickFilters[index - 1];
+                  final filter = _quickFilters[index - activeChips.length];
                   return AtlasFilterChip(
                     label: filter.label,
                     icon: filter.icon,
+                    selected: controller.isQuickFilterActive(filter.label),
+                    onTap: () {
+                      controller.toggleQuickFilter(filter.label);
+                    },
                   );
                 },
               ),
             ),
             const SizedBox(height: 14),
             AtlasSearchStatusBar(controller: controller),
-            if (controller.connectionMessage != null) ...[
+            if (controller.connectionMessage != null &&
+                controller.connectionStatus != 'Connected') ...[
               const SizedBox(height: 12),
               AtlasStatusBanner(message: controller.connectionMessage!),
             ],
-            const SizedBox(height: 24),
+            const SizedBox(height: 10),
             if (controller.results.isEmpty)
               const AtlasEmptySearchState()
             else
-              ...controller.results.map(AtlasJobResultTile.new),
+              ...controller.results.map((job) => AtlasJobResultTile(job)),
           ],
         );
       },
@@ -434,97 +668,158 @@ class AtlasJobResultTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
+    return DecoratedBox(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AtlasPalette.border),
+        border: const Border(
+          bottom: BorderSide(color: AtlasPalette.border, width: 0.8),
+        ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: AtlasPalette.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => AtlasJobDetailScreen(job: job),
             ),
-            child: Text(
-              job.sourceInitials,
-              style: const TextStyle(
-                color: AtlasPalette.accent,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  job.title,
-                  style: const TextStyle(
-                    color: AtlasPalette.ink,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${job.organizationDisplay} · ${job.dutyStation}',
-                  style: const TextStyle(
-                    color: AtlasPalette.muted,
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AtlasSourceBadge(job: job),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AtlasMetadataPill(
-                      icon: Icons.schedule,
-                      label: job.deadlineText(),
-                      color: job.deadlineUrgency() == DeadlineUrgency.critical
-                          ? AtlasPalette.deadlineRed
-                          : AtlasPalette.deadlineAmber,
-                    ),
-                    if (job.gradeCode.isNotEmpty)
-                      AtlasMetadataPill(
-                        icon: Icons.badge_outlined,
-                        label: job.gradeCode,
+                    Text(
+                      job.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AtlasPalette.ink,
+                        fontSize: 15,
+                        height: 1.18,
+                        fontWeight: FontWeight.w800,
                       ),
-                    AtlasMetadataPill(
-                      icon: Icons.work_outline,
-                      label: job.contractLabel,
                     ),
-                    AtlasMetadataPill(
-                      icon: Icons.place_outlined,
-                      label: job.workModality,
+                    const SizedBox(height: 3),
+                    Text(
+                      '${job.organizationDisplay} · ${job.dutyStation}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AtlasPalette.muted,
+                        fontSize: 12,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        AtlasDeadlinePill(job: job),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            _compactMetadata(job),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AtlasPalette.muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                if (job.matchSummary.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    job.matchSummary,
-                    style: const TextStyle(
-                      color: AtlasPalette.ink,
-                      fontSize: 13,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ],
-            ),
+              ),
+              const SizedBox(width: 4),
+              const Padding(
+                padding: EdgeInsets.only(top: 17),
+                child: Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: AtlasPalette.muted,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+
+  String _compactMetadata(JobSearchResult job) {
+    final grade = job.gradeCode.isEmpty ? 'Grade unknown' : job.gradeCode;
+    final contract = job.contractLabel.isEmpty
+        ? 'Contract unknown'
+        : job.contractLabel;
+    final modality = job.workModality.isEmpty ? 'Unknown' : job.workModality;
+    return '$grade · $contract · $modality';
+  }
+}
+
+class AtlasSourceBadge extends StatelessWidget {
+  const AtlasSourceBadge({required this.job, super.key});
+
+  final JobSearchResult job;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AtlasPalette.accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        job.sourceInitials,
+        maxLines: 1,
+        overflow: TextOverflow.clip,
+        style: const TextStyle(
+          color: AtlasPalette.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class AtlasDeadlinePill extends StatelessWidget {
+  const AtlasDeadlinePill({required this.job, super.key});
+
+  final JobSearchResult job;
+
+  @override
+  Widget build(BuildContext context) {
+    final urgency = job.deadlineUrgency();
+    final color = switch (urgency) {
+      DeadlineUrgency.critical ||
+      DeadlineUrgency.passed => AtlasPalette.deadlineRed,
+      DeadlineUrgency.soon => AtlasPalette.deadlineAmber,
+      _ => AtlasPalette.muted,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        job.deadlineText(),
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -704,6 +999,289 @@ class AtlasEmptySearchState extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class AtlasSearchActionGroup extends StatelessWidget {
+  const AtlasSearchActionGroup({
+    required this.controller,
+    required this.onShowFilters,
+    super.key,
+  });
+
+  final AtlasAppController controller;
+  final VoidCallback onShowFilters;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return Container(
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AtlasPalette.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Tooltip(
+                message: 'Filters',
+                child: IconButton(
+                  onPressed: onShowFilters,
+                  icon: Icon(
+                    controller.filters.activeChips.length > 1
+                        ? Icons.tune
+                        : Icons.tune_outlined,
+                    color: controller.filters.activeChips.length > 1
+                        ? AtlasPalette.accent
+                        : AtlasPalette.ink,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              Container(width: 1, height: 20, color: AtlasPalette.border),
+              Tooltip(
+                message: 'Save search',
+                child: IconButton(
+                  onPressed: controller.isSavingSearch
+                      ? null
+                      : () => unawaited(controller.saveCurrentSearch()),
+                  icon: Icon(
+                    controller.isSavingSearch
+                        ? Icons.hourglass_empty
+                        : controller.savedSearches.isEmpty
+                        ? Icons.bookmark_border
+                        : Icons.bookmark,
+                    color: controller.savedSearches.isEmpty
+                        ? AtlasPalette.ink
+                        : AtlasPalette.accent,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class AtlasFilterSheet extends StatelessWidget {
+  const AtlasFilterSheet({required this.controller, super.key});
+
+  final AtlasAppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Filters',
+                      style: TextStyle(
+                        color: AtlasPalette.ink,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Tooltip(
+                    message: 'Close filters',
+                    child: IconButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
+                ],
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Open only'),
+                subtitle: const Text('Hide closed and history rows'),
+                value: controller.filters.openOnly,
+                onChanged: (value) {
+                  controller.setOpenOnly(value);
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Closing soon'),
+                value: controller.filters.closingSoon,
+                onChanged: (_) {
+                  controller.toggleQuickFilter('Closing soon');
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Remote'),
+                value: controller.filters.isRemoteOnly,
+                onChanged: (_) {
+                  controller.toggleQuickFilter('Remote');
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Best fit'),
+                value: controller.sortOrder == SortOrder.bestFit,
+                onChanged: (_) {
+                  controller.toggleQuickFilter('Best fit');
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class AtlasSavedPanel extends StatelessWidget {
+  const AtlasSavedPanel({required this.controller, super.key});
+
+  final AtlasAppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        if (controller.savedSearches.isEmpty) {
+          return const AtlasPlaceholderPanel(
+            title: 'Saved Searches',
+            icon: Icons.bookmark_border,
+            summary:
+                'Saved searches and tracked applications will appear here.',
+          );
+        }
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            const Text(
+              'Saved Searches',
+              style: TextStyle(
+                color: AtlasPalette.ink,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            for (final search in controller.savedSearches)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.bookmark, color: AtlasPalette.accent),
+                title: Text(search.name),
+                subtitle: Text(search.description ?? 'Saved search'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  controller.runSavedSearch(search);
+                },
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AtlasJobDetailScreen extends StatelessWidget {
+  const AtlasJobDetailScreen({required this.job, super.key});
+
+  final JobSearchResult job;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Job Detail')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          Text(
+            job.title,
+            style: const TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 22,
+              height: 1.15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${job.organizationDisplay} · ${job.dutyStation}',
+            style: const TextStyle(color: AtlasPalette.muted, fontSize: 14),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              AtlasDeadlinePill(job: job),
+              AtlasMetadataPill(
+                icon: Icons.badge_outlined,
+                label: job.gradeCode.isEmpty ? 'Grade unknown' : job.gradeCode,
+              ),
+              AtlasMetadataPill(
+                icon: Icons.work_outline,
+                label: job.contractLabel,
+              ),
+              AtlasMetadataPill(
+                icon: Icons.place_outlined,
+                label: job.workModality,
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Why this matched',
+            style: TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            job.matchSummary,
+            style: const TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 14,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Preview',
+            style: TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            job.description,
+            style: const TextStyle(
+              color: AtlasPalette.muted,
+              fontSize: 14,
+              height: 1.35,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1214,45 +1792,76 @@ class AtlasFilterChip extends StatelessWidget {
     required this.label,
     required this.icon,
     this.selected = false,
+    this.onTap,
+    this.onDeleted,
     super.key,
   });
 
   final String label;
   final IconData icon;
   final bool selected;
+  final VoidCallback? onTap;
+  final VoidCallback? onDeleted;
 
   @override
   Widget build(BuildContext context) {
     final foreground = selected ? Colors.white : AtlasPalette.ink;
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        color: selected ? AtlasPalette.accent : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: selected ? AtlasPalette.accent : AtlasPalette.border,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: foreground),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: foreground,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          height: 32,
+          padding: EdgeInsets.only(left: 9, right: onDeleted == null ? 9 : 5),
+          decoration: BoxDecoration(
+            color: selected ? AtlasPalette.accent : Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? AtlasPalette.accent : AtlasPalette.border,
             ),
           ),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: foreground),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  color: foreground,
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              ),
+              if (onDeleted != null) ...[
+                const SizedBox(width: 3),
+                GestureDetector(
+                  onTap: onDeleted,
+                  child: Icon(Icons.close, size: 14, color: foreground),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
 enum AtlasMobileTab { search, saved, updates, sources, settings }
+
+extension AtlasMobileTabTitle on AtlasMobileTab {
+  String get title {
+    return switch (this) {
+      AtlasMobileTab.search => 'Search',
+      AtlasMobileTab.saved => 'Saved',
+      AtlasMobileTab.updates => 'Updates',
+      AtlasMobileTab.sources => 'Sources',
+      AtlasMobileTab.settings => 'Settings',
+    };
+  }
+}
 
 final class _QuickFilter {
   const _QuickFilter(this.label, this.icon);

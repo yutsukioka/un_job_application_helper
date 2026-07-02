@@ -1129,7 +1129,9 @@ final class AtlasIOTransport implements AtlasTransport {
         HttpHeaders.contentTypeHeader,
         'application/json',
       );
-      httpRequest.write(jsonEncode(request.jsonBody));
+      final bodyBytes = utf8.encode(jsonEncode(request.jsonBody));
+      httpRequest.contentLength = bodyBytes.length;
+      httpRequest.add(bodyBytes);
     }
     final response = await httpRequest.close();
     final body = await utf8.decoder.bind(response).join();
