@@ -225,6 +225,7 @@ public final class AtlasSearchViewModel: ObservableObject {
                 userMessage = "Local save refreshed"
             }
         } catch {
+            guard !isCancellationError(error) else { return }
             applyOfflineFallback(error)
         }
     }
@@ -557,8 +558,17 @@ public final class AtlasSearchViewModel: ObservableObject {
             errorMessage = nil
             await refreshFilterAvailability()
         } catch {
+            guard !isCancellationError(error) else { return }
             applyOfflineFallback(error)
         }
+    }
+
+    private func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func applyOfflineFallback(_ error: Error) {
