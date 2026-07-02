@@ -42,6 +42,9 @@ void main() {
       controller.connectionMessage,
       'Connected: ok, 128 open jobs, 12 enabled sources.',
     );
+    expect(controller.healthSummary?.openJobs, 128);
+    expect(controller.updateRuns.single.sourceID, 'undp_oracle_hcm');
+    expect(controller.sources.single.openJobs, 1);
     expect(controller.statusSubtitle, 'Connected to http://10.253.1.43:8765');
 
     await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
@@ -49,6 +52,8 @@ void main() {
     expect(controller.total, 1);
     expect(controller.cachedJobCount, 1);
     expect(controller.results.single.title, 'Programme Analyst');
+    expect(controller.resultCountLabel, '1 searchable result');
+    expect(controller.countReconciliationSummary, contains('127'));
     expect(
       controller.connectionMessage,
       'Saved http://atlas.test:8765 and refreshed 1 job.',
@@ -155,6 +160,42 @@ void main() {
     },
   );
 
+  test('controller reports save job failures', () async {
+    final controller = AtlasAppController(
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+
+    expect(controller.connectionMessage, startsWith('Save job failed:'));
+  });
+
+  test(
+    'controller continues saved search numbering from server state',
+    () async {
+      final transport = _RecordingTransport()
+        ..savedSearchStore.add({
+          'name': 'Search 7',
+          'description': 'Existing saved search',
+          'request': <String, Object?>{},
+          'created_at': '2026-07-01T00:00:00Z',
+        });
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.testConnection(Uri.parse('http://atlas.test:8765'));
+      await controller.saveCurrentSearch();
+
+      expect(transport.savedSearchNames, ['Search 8']);
+    },
+  );
+
   test('saved searches restore text, filters, and sort', () async {
     final controller = AtlasAppController();
     addTearDown(controller.dispose);
@@ -244,7 +285,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(transport.searchTexts.single, 'analyst');
-    expect(find.text('1 results'), findsOneWidget);
+    expect(find.text('1 searchable result'), findsOneWidget);
     expect(find.textContaining('Local save · updated'), findsOneWidget);
     expect(find.text('Programme Analyst'), findsOneWidget);
     expect(find.textContaining('UNDP'), findsWidgets);
@@ -272,8 +313,31 @@ void main() {
     await tester.tap(find.text('Programme Analyst'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Why this matched'), findsOneWidget);
+    expect(find.text('Full Description'), findsOneWidget);
+    expect(find.text('Core Details'), findsOneWidget);
+    expect(find.text('Responsibilities'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Apply URL'), 300);
+    expect(find.text('Apply URL'), findsOneWidget);
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.copy).first);
+    await tester.pump();
+    expect(find.text('Apply URL copied'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Match diagnostics'), 300);
+    expect(find.text('Match diagnostics'), findsOneWidget);
+    expect(find.text('Matched the current search filters.'), findsNothing);
+
+    await tester.tap(find.text('Match diagnostics'));
+    await tester.pumpAndSettle();
     expect(find.text('Matched the current search filters.'), findsOneWidget);
+    expect(find.text('Reason'), findsOneWidget);
+    expect(find.text('Term in title'), findsOneWidget);
+    expect(find.text('Classification'), findsOneWidget);
+    expect(find.text('Classifier evidence'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Save job'));
+    await tester.pumpAndSettle();
+    expect(transport.savedJobKeys, ['undp_oracle_hcm:34063']);
+    expect(controller.isJobSaved('undp_oracle_hcm:34063'), isTrue);
   });
 }
 
@@ -282,6 +346,7 @@ final class _RecordingTransport implements AtlasTransport {
   final searchSorts = <String?>[];
   final searchBodies = <Map<String, Object?>>[];
   final savedSearchNames = <String>[];
+  final savedJobKeys = <String>[];
   final savedSearchStore = <Map<String, Object?>>[];
 
   @override
@@ -325,6 +390,72 @@ final class _RecordingTransport implements AtlasTransport {
         }
         expect(request.method, 'GET');
         return savedSearchStore;
+      case 'api/job-detail':
+        return {
+          'job_key': request.queryParameters['job_key'],
+          'title': 'Programme Analyst',
+          'description':
+              'Full role description with responsibilities and qualifications.',
+          'status': 'open',
+          'apply_url': 'https://example.org/apply',
+          'source_url': 'https://example.org/source',
+          'display_sections': [
+            {
+              'title': 'Responsibilities',
+              'body': 'Lead programme analysis and partner coordination.',
+              'rows': [
+                {'label': 'Duty', 'value': 'Coordinate delivery.'},
+              ],
+            },
+            {'title': 'Classification', 'body': 'Classifier evidence'},
+            {
+              'title': 'Job Record',
+              'rows': [
+                {'label': 'Detail Quality Status', 'value': 'complete'},
+              ],
+            },
+          ],
+        };
+      case 'api/tracker/jobs/undp_oracle_hcm%3A34063':
+        savedJobKeys.add('undp_oracle_hcm:34063');
+        return {
+          'id': 'undp_oracle_hcm-34063',
+          'job_key': 'undp_oracle_hcm:34063',
+          'status': 'saved',
+          'updated_at': '2026-07-02T00:00:00Z',
+        };
+      case 'api/tracker':
+        return <Object?>[];
+      case 'api/updates':
+        return {
+          'recent_source_runs': [
+            {
+              'source_id': 'undp_oracle_hcm',
+              'fetched': 7,
+              'inserted': 1,
+              'updated': 2,
+              'missing': 0,
+              'closed': 0,
+              'observed_at': '2026-07-02T00:00:00Z',
+            },
+          ],
+        };
+      case 'api/sources':
+        return {
+          'sources': [
+            {
+              'source_id': 'undp_oracle_hcm',
+              'organization': 'UNDP Oracle HCM',
+              'total_jobs': 4,
+              'open_jobs': 1,
+              'last_seen_at': '2026-07-02T00:00:00Z',
+              'health_status': 'ok',
+              'detail_attempted': 1,
+              'detail_failed': 0,
+              'missing_transition_allowed': true,
+            },
+          ],
+        };
       default:
         fail('Unexpected request ${request.method} ${request.path}');
     }
@@ -349,7 +480,7 @@ const _jobJson = {
   'work_modality': 'Onsite',
   'closing_date': '2026-07-30T23:59:00Z',
   'needs_review': false,
-  'score_reasons': <String>[],
+  'score_reasons': ['Term in title'],
   'match_summary': 'Matched current filters',
   'description': 'Role summary',
   'status': 'open',

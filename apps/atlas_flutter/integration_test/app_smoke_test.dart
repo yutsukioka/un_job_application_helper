@@ -40,6 +40,6 @@ void main() {
       expect(find.text(tab), findsWidgets);
     }
 
-    expect(find.text('0 results'), findsOneWidget);
+    expect(find.text('0 searchable results'), findsOneWidget);
   });
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:atlas/atlas.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
 
@@ -25,9 +26,14 @@ class AtlasAppController extends ChangeNotifier {
   SortOrder sortOrder = SortOrder.closingSoon;
   List<JobSearchResult> results = const [];
   List<AtlasSavedSearch> savedSearches = const [];
+  List<AtlasSourceRun> updateRuns = const [];
+  List<AtlasSourceSummary> sources = const [];
+  List<AtlasApplicationRecord> trackerRecords = const [];
+  AtlasHealthSummary? healthSummary;
   int total = 0;
   int cachedJobCount = 0;
   DateTime? cacheSavedAt;
+  DateTime? operationalDataLoadedAt;
   Timer? _searchDebounce;
   int _savedSearchSequence = 0;
 
@@ -56,6 +62,62 @@ class AtlasAppController extends ChangeNotifier {
       return 'Connected to ${_formatBaseURL(baseURL)}';
     }
     return 'Offline until API connection is configured';
+  }
+
+  String get resultCountLabel {
+    final suffix = filters.openOnly
+        ? total == 1
+              ? 'searchable result'
+              : 'searchable results'
+        : total == 1
+        ? 'result'
+        : 'results';
+    return '${_formatCount(total)} $suffix';
+  }
+
+  bool get canReconcileDefaultOpenCount {
+    return query.trim().isEmpty &&
+        filters.openOnly &&
+        !filters.closingSoon &&
+        filters.trimmedCity.isEmpty &&
+        filters.trimmedCountryISO3.isEmpty &&
+        filters.scope == AtlasScopeFilter.any &&
+        !filters.includeLowConfidence &&
+        filters.gradeCodes.isEmpty &&
+        filters.workModalities.isEmpty &&
+        filters.sourceIDs.isEmpty &&
+        filters.organizations.isEmpty &&
+        filters.ccogFamilies.isEmpty &&
+        filters.contractGroups.isEmpty &&
+        filters.seniorityGroups.isEmpty &&
+        filters.volunteerKinds.isEmpty &&
+        filters.unvCategories.isEmpty &&
+        filters.unvVolunteerTypes.isEmpty &&
+        filters.capabilityTags.isEmpty &&
+        filters.trimmedCapabilityQuery.isEmpty;
+  }
+
+  int? get hiddenDeadlinePastOpenJobs {
+    final openJobs = healthSummary?.openJobs;
+    if (openJobs == null || !canReconcileDefaultOpenCount) {
+      return null;
+    }
+    final hidden = openJobs - total;
+    return hidden > 0 ? hidden : null;
+  }
+
+  String? get countReconciliationSummary {
+    final hidden = hiddenDeadlinePastOpenJobs;
+    if (hidden == null) {
+      return null;
+    }
+    return '${_formatCount(hidden)} deadline-past open rows hidden by Search';
+  }
+
+  bool isJobSaved(String jobKey) {
+    return trackerRecords.any(
+      (record) => record.jobKey == jobKey && record.status != 'closed',
+    );
   }
 
   @override
@@ -89,9 +151,11 @@ class AtlasAppController extends ChangeNotifier {
     try {
       final client = _clientFactory(candidateBaseURL);
       final health = await client.health();
+      healthSummary = health;
       connectionStatus = 'Connected';
       connectionMessage = _healthMessage(health);
       await _loadSavedSearches(client);
+      await _loadOperationalData(client);
     } catch (error) {
       connectionStatus = 'Not connected';
       connectionMessage = 'Connection failed: $error';
@@ -107,11 +171,12 @@ class AtlasAppController extends ChangeNotifier {
     notifyListeners();
     try {
       final client = _clientFactory(candidateBaseURL);
-      await client.health();
+      healthSummary = await client.health();
       baseURL = candidateBaseURL;
       connectionStatus = 'Connected';
       final refreshed = await _refreshSearch(client);
       await _loadSavedSearches(client);
+      await _loadOperationalData(client);
       connectionMessage =
           'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
     } catch (error) {
@@ -129,8 +194,10 @@ class AtlasAppController extends ChangeNotifier {
     notifyListeners();
     try {
       final client = _clientFactory(baseURL);
+      await _refreshHealthIfAvailable(client);
       final refreshed = await _refreshSearch(client);
       await _loadSavedSearches(client);
+      await _loadOperationalData(client);
       connectionStatus = 'Connected';
       connectionMessage =
           'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached for this session.';
@@ -212,6 +279,33 @@ class AtlasAppController extends ChangeNotifier {
     }
   }
 
+  Future<void> saveJob(JobSearchResult job) async {
+    connectionMessage = null;
+    notifyListeners();
+    try {
+      final client = _clientFactory(baseURL);
+      final record = await client.saveJob(job.jobKey);
+      _upsertTrackerRecord(record);
+      connectionStatus = 'Connected';
+      connectionMessage = 'Saved job locally.';
+    } catch (error) {
+      connectionMessage = 'Save job failed: $error';
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<AtlasJobDetail> loadJobDetail(String jobKey) {
+    final client = _clientFactory(baseURL);
+    return client.jobDetail(jobKey);
+  }
+
+  Future<void> setSourceFilter(String sourceID) async {
+    filters = filters.copyWith(sourceIDs: <String>{sourceID});
+    notifyListeners();
+    await _refreshIfReady();
+  }
+
   Future<void> runSavedSearch(AtlasSavedSearch search) async {
     query = search.request.text ?? '';
     filters = _filtersFromRequest(search.request);
@@ -241,6 +335,33 @@ class AtlasAppController extends ChangeNotifier {
       _syncSavedSearchSequence();
     } catch (_) {
       // Saved-search persistence is not required for health/search success.
+    }
+  }
+
+  Future<void> _loadOperationalData(AtlasAPIClient client) async {
+    try {
+      updateRuns = List.unmodifiable(await client.updates());
+    } catch (_) {
+      // Operational summaries are best-effort and should not block Search.
+    }
+    try {
+      sources = List.unmodifiable(await client.sources());
+    } catch (_) {
+      // Source-health summaries are best-effort and should not block Search.
+    }
+    try {
+      trackerRecords = List.unmodifiable(await client.trackerRecords());
+    } catch (_) {
+      // Saved-job persistence is independent from Search refresh.
+    }
+    operationalDataLoadedAt = DateTime.now();
+  }
+
+  Future<void> _refreshHealthIfAvailable(AtlasAPIClient client) async {
+    try {
+      healthSummary = await client.health();
+    } catch (_) {
+      // Search can still succeed when the health probe is temporarily stale.
     }
   }
 
@@ -305,6 +426,13 @@ class AtlasAppController extends ChangeNotifier {
         .toList(growable: false);
     savedSearches = List.unmodifiable([savedSearch, ...remaining]);
     _syncSavedSearchSequence();
+  }
+
+  void _upsertTrackerRecord(AtlasApplicationRecord record) {
+    final remaining = trackerRecords
+        .where((existing) => existing.jobKey != record.jobKey)
+        .toList(growable: false);
+    trackerRecords = List.unmodifiable([record, ...remaining]);
   }
 }
 
@@ -385,6 +513,132 @@ String _formatSavedAt(DateTime value) {
       '${local.hour.toString().padLeft(2, '0')}:'
       '${local.minute.toString().padLeft(2, '0')}';
   return '$date $time';
+}
+
+String _formatCount(int value) {
+  final sign = value < 0 ? '-' : '';
+  final digits = value.abs().toString();
+  final buffer = StringBuffer();
+  for (var index = 0; index < digits.length; index += 1) {
+    final remaining = digits.length - index;
+    if (index > 0 && remaining % 3 == 0) {
+      buffer.write(',');
+    }
+    buffer.write(digits[index]);
+  }
+  return '$sign$buffer';
+}
+
+String _compactTimestamp(String value) {
+  final parsed = DateTime.tryParse(value);
+  if (parsed == null) {
+    return value;
+  }
+  return _formatSavedAt(parsed);
+}
+
+String _humanSourceName(String value) {
+  final cleaned = value.trim().replaceAll(RegExp(r'[_-]+'), ' ');
+  if (cleaned.isEmpty) {
+    return 'Unknown source';
+  }
+  return cleaned
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty)
+      .map((part) {
+        final lower = part.toLowerCase();
+        if (lower.length <= 4) {
+          return lower.toUpperCase();
+        }
+        return '${lower[0].toUpperCase()}${lower.substring(1)}';
+      })
+      .join(' ');
+}
+
+bool _sourceNeedsAttention(AtlasSourceSummary source) {
+  final status = source.healthStatus?.toLowerCase();
+  final failures = source.detailFailed ?? 0;
+  return status != null && status != 'ok' ||
+      failures > 0 ||
+      source.missingTransitionAllowed == false;
+}
+
+String _firstNonEmpty(Iterable<String?> values) {
+  for (final value in values) {
+    final trimmed = value?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
+    }
+  }
+  return '';
+}
+
+String? _sectionBody(AtlasJobDetail? detail, String title) {
+  if (detail == null) {
+    return null;
+  }
+  final target = title.toLowerCase();
+  for (final section in detail.displaySections) {
+    if (section.title.toLowerCase() == target) {
+      return section.body;
+    }
+  }
+  return null;
+}
+
+List<AtlasDetailSection> _contentSections(AtlasJobDetail? detail) {
+  if (detail == null) {
+    return const <AtlasDetailSection>[];
+  }
+  return detail.displaySections
+      .where((section) => !_isFullDescription(section))
+      .where((section) => !_isDiagnosticSection(section))
+      .toList(growable: false);
+}
+
+List<AtlasDetailSection> _diagnosticSections(AtlasJobDetail? detail) {
+  if (detail == null) {
+    return const <AtlasDetailSection>[];
+  }
+  return detail.displaySections
+      .where(_isDiagnosticSection)
+      .toList(growable: false);
+}
+
+bool _isFullDescription(AtlasDetailSection section) {
+  return section.title.trim().toLowerCase() == 'full description';
+}
+
+bool _isDiagnosticSection(AtlasDetailSection section) {
+  final title = section.title.trim().toLowerCase();
+  return title == 'job record' ||
+      title == 'classification' ||
+      title == 'locations' ||
+      title == 'source features' ||
+      title.contains('diagnostic') ||
+      title.contains('evidence');
+}
+
+String? _detailQualityStatus(AtlasJobDetail? detail) {
+  if (detail == null) {
+    return null;
+  }
+  for (final section in detail.displaySections) {
+    for (final row in section.rows) {
+      if (row.label.trim().toLowerCase() == 'detail quality status') {
+        return row.value;
+      }
+    }
+  }
+  return null;
+}
+
+String _displayScope(String? value) {
+  final raw = value?.trim();
+  if (raw == null || raw.isEmpty) {
+    return 'Scope unknown';
+  }
+  return _humanSourceName(raw);
 }
 
 String _jobWord(int count) => count == 1 ? 'job' : 'jobs';
@@ -513,17 +767,15 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
           children: [
             AtlasSearchSkeleton(controller: _controller),
             AtlasSavedPanel(controller: _controller),
-            const AtlasPlaceholderPanel(
-              title: 'Source Updates',
-              icon: Icons.history,
-              summary:
-                  'Recent source refresh runs will show fetched, inserted, updated, missing, and closed counts.',
-            ),
-            const AtlasPlaceholderPanel(
-              title: 'Source Health',
-              icon: Icons.settings_input_antenna,
-              summary:
-                  'Each source will show health, open jobs, total jobs, and last-seen status.',
+            AtlasUpdatesPanel(controller: _controller),
+            AtlasSourcesPanel(
+              controller: _controller,
+              onSourceSelected: (source) {
+                unawaited(_controller.setSourceFilter(source.sourceID));
+                setState(() {
+                  _selectedTab = AtlasMobileTab.search;
+                });
+              },
             ),
             AtlasSettingsPanel(controller: _controller),
           ],
@@ -653,7 +905,9 @@ class AtlasSearchSkeleton extends StatelessWidget {
             if (controller.results.isEmpty)
               const AtlasEmptySearchState()
             else
-              ...controller.results.map((job) => AtlasJobResultTile(job)),
+              ...controller.results.map(
+                (job) => AtlasJobResultTile(job, controller: controller),
+              ),
           ],
         );
       },
@@ -662,9 +916,10 @@ class AtlasSearchSkeleton extends StatelessWidget {
 }
 
 class AtlasJobResultTile extends StatelessWidget {
-  const AtlasJobResultTile(this.job, {super.key});
+  const AtlasJobResultTile(this.job, {required this.controller, super.key});
 
   final JobSearchResult job;
+  final AtlasAppController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -679,7 +934,8 @@ class AtlasJobResultTile extends StatelessWidget {
         onTap: () {
           Navigator.of(context).push(
             MaterialPageRoute<void>(
-              builder: (_) => AtlasJobDetailScreen(job: job),
+              builder: (_) =>
+                  AtlasJobDetailScreen(job: job, controller: controller),
             ),
           );
         },
@@ -739,12 +995,21 @@ class AtlasJobResultTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              const Padding(
-                padding: EdgeInsets.only(top: 17),
-                child: Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: AtlasPalette.muted,
+              Padding(
+                padding: const EdgeInsets.only(top: 17),
+                child: AnimatedBuilder(
+                  animation: controller,
+                  builder: (context, _) {
+                    return Icon(
+                      controller.isJobSaved(job.jobKey)
+                          ? Icons.bookmark
+                          : Icons.chevron_right,
+                      size: 18,
+                      color: controller.isJobSaved(job.jobKey)
+                          ? AtlasPalette.accent
+                          : AtlasPalette.muted,
+                    );
+                  },
                 ),
               ),
             ],
@@ -928,7 +1193,7 @@ class AtlasSearchStatusBar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${controller.total} results',
+                controller.resultCountLabel,
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -1151,6 +1416,490 @@ class AtlasFilterSheet extends StatelessWidget {
   }
 }
 
+class AtlasUpdatesPanel extends StatelessWidget {
+  const AtlasUpdatesPanel({required this.controller, super.key});
+
+  final AtlasAppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final health = controller.healthSummary;
+        final hidden = controller.hiddenDeadlinePastOpenJobs;
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            const AtlasPanelHeader(
+              title: 'Source Updates',
+              icon: Icons.history,
+              subtitle: 'Refresh status, local save state, and count health.',
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                AtlasStatTile(
+                  label: 'Search',
+                  value: _formatCount(controller.total),
+                  supporting: controller.filters.openOnly
+                      ? 'searchable open rows'
+                      : 'filtered rows',
+                ),
+                AtlasStatTile(
+                  label: 'Health',
+                  value: health?.openJobs == null
+                      ? 'Unknown'
+                      : _formatCount(health!.openJobs!),
+                  supporting: 'raw open rows',
+                ),
+                AtlasStatTile(
+                  label: 'Sources',
+                  value: health?.enabledSources == null
+                      ? _formatCount(controller.sources.length)
+                      : _formatCount(health!.enabledSources!),
+                  supporting: 'enabled sources',
+                ),
+              ],
+            ),
+            if (hidden != null) ...[
+              const SizedBox(height: 10),
+              AtlasInfoStrip(
+                icon: Icons.rule_folder_outlined,
+                title: 'Count reconciliation',
+                body:
+                    '${_formatCount(hidden)} rows are still marked open in health, but have passed deadlines and are hidden from Search.',
+              ),
+            ],
+            const SizedBox(height: 10),
+            AtlasInfoStrip(
+              icon: Icons.save_outlined,
+              title: 'Local save',
+              body: controller.cacheSavedAt == null
+                  ? 'No local save refreshed in this app session.'
+                  : '${_formatCount(controller.cachedJobCount)} rows cached · updated ${_formatSavedAt(controller.cacheSavedAt!)}.',
+            ),
+            if (health?.lastSyncAt != null) ...[
+              const SizedBox(height: 10),
+              AtlasInfoStrip(
+                icon: Icons.cloud_done_outlined,
+                title: 'Backend snapshot',
+                body:
+                    'Last sync ${_compactTimestamp(health!.lastSyncAt!)} from ${_formatBaseURL(controller.baseURL)}.',
+              ),
+            ],
+            const SizedBox(height: 18),
+            const Text(
+              'Recent Runs',
+              style: TextStyle(
+                color: AtlasPalette.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (controller.updateRuns.isEmpty)
+              const AtlasDataEmptyState(
+                icon: Icons.history_toggle_off,
+                title: 'No refresh runs available',
+                body:
+                    'The server did not return recent source-run data for this session.',
+              )
+            else
+              for (final run in controller.updateRuns.take(24))
+                AtlasUpdateRunTile(run: run),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AtlasSourcesPanel extends StatelessWidget {
+  const AtlasSourcesPanel({
+    required this.controller,
+    required this.onSourceSelected,
+    super.key,
+  });
+
+  final AtlasAppController controller;
+  final ValueChanged<AtlasSourceSummary> onSourceSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final sourceCount = controller.sources.length;
+        final totalOpen = controller.sources.fold<int>(
+          0,
+          (sum, source) => sum + source.openJobs,
+        );
+        final degraded = controller.sources.where(_sourceNeedsAttention).length;
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            const AtlasPanelHeader(
+              title: 'Source Health',
+              icon: Icons.settings_input_antenna,
+              subtitle: 'Organizations, source status, and open job coverage.',
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                AtlasStatTile(
+                  label: 'Sources',
+                  value: _formatCount(sourceCount),
+                  supporting: 'returned by API',
+                ),
+                AtlasStatTile(
+                  label: 'Open',
+                  value: _formatCount(totalOpen),
+                  supporting: 'across listed sources',
+                ),
+                AtlasStatTile(
+                  label: 'Warnings',
+                  value: _formatCount(degraded),
+                  supporting: 'need attention',
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (controller.sources.isEmpty)
+              const AtlasDataEmptyState(
+                icon: Icons.travel_explore,
+                title: 'No source health returned',
+                body:
+                    'Connect and refresh local save to load source status from the API.',
+              )
+            else
+              for (final source in controller.sources.take(80))
+                AtlasSourceHealthTile(
+                  source: source,
+                  onTap: () => onSourceSelected(source),
+                ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AtlasPanelHeader extends StatelessWidget {
+  const AtlasPanelHeader({
+    required this.title,
+    required this.icon,
+    required this.subtitle,
+    super.key,
+  });
+
+  final String title;
+  final IconData icon;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: AtlasPalette.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: AtlasPalette.accent),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AtlasPalette.ink,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  color: AtlasPalette.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class AtlasStatTile extends StatelessWidget {
+  const AtlasStatTile({
+    required this.label,
+    required this.value,
+    required this.supporting,
+    super.key,
+  });
+
+  final String label;
+  final String value;
+  final String supporting;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 112,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AtlasPalette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AtlasPalette.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            supporting,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AtlasPalette.muted,
+              fontSize: 11,
+              height: 1.15,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AtlasInfoStrip extends StatelessWidget {
+  const AtlasInfoStrip({
+    required this.icon,
+    required this.title,
+    required this.body,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AtlasPalette.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: AtlasPalette.accent, size: 18),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: AtlasPalette.ink,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    color: AtlasPalette.muted,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AtlasDataEmptyState extends StatelessWidget {
+  const AtlasDataEmptyState({
+    required this.icon,
+    required this.title,
+    required this.body,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 22),
+      child: Column(
+        children: [
+          Icon(icon, size: 38, color: AtlasPalette.muted),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AtlasPalette.ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            body,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AtlasPalette.muted,
+              fontSize: 13,
+              height: 1.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AtlasUpdateRunTile extends StatelessWidget {
+  const AtlasUpdateRunTile({required this.run, super.key});
+
+  final AtlasSourceRun run;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: const Icon(Icons.sync, color: AtlasPalette.accent, size: 22),
+      title: Text(
+        _humanSourceName(run.sourceID),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      subtitle: Text(
+        'Fetched ${_formatCount(run.fetched)} · new ${_formatCount(run.inserted)} · updated ${_formatCount(run.updated)} · closed ${_formatCount(run.closed)} · missing ${_formatCount(run.missing)}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Text(
+        run.observedAt == null ? 'No time' : _compactTimestamp(run.observedAt!),
+        textAlign: TextAlign.end,
+        style: const TextStyle(color: AtlasPalette.muted, fontSize: 11),
+      ),
+    );
+  }
+}
+
+class AtlasSourceHealthTile extends StatelessWidget {
+  const AtlasSourceHealthTile({
+    required this.source,
+    required this.onTap,
+    super.key,
+  });
+
+  final AtlasSourceSummary source;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final warning = _sourceNeedsAttention(source);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      onTap: onTap,
+      leading: Icon(
+        warning ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+        color: warning ? AtlasPalette.deadlineAmber : AtlasPalette.success,
+        size: 22,
+      ),
+      title: Text(
+        _humanSourceName(
+          source.organization.isEmpty ? source.sourceID : source.organization,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      subtitle: Text(
+        '${source.sourceID} · ${_formatCount(source.openJobs)} open · ${_formatCount(source.totalJobs)} total',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            source.healthStatus ?? 'unknown',
+            style: TextStyle(
+              color: warning ? AtlasPalette.deadlineAmber : AtlasPalette.muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            source.lastSeenAt == null
+                ? 'No seen time'
+                : _compactTimestamp(source.lastSeenAt!),
+            style: const TextStyle(color: AtlasPalette.muted, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AtlasSavedPanel extends StatelessWidget {
   const AtlasSavedPanel({required this.controller, super.key});
 
@@ -1161,7 +1910,8 @@ class AtlasSavedPanel extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
-        if (controller.savedSearches.isEmpty) {
+        if (controller.savedSearches.isEmpty &&
+            controller.trackerRecords.isEmpty) {
           return const AtlasPlaceholderPanel(
             title: 'Saved Searches',
             icon: Icons.bookmark_border,
@@ -1173,7 +1923,7 @@ class AtlasSavedPanel extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
             const Text(
-              'Saved Searches',
+              'Saved',
               style: TextStyle(
                 color: AtlasPalette.ink,
                 fontSize: 22,
@@ -1181,6 +1931,32 @@ class AtlasSavedPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
+            if (controller.trackerRecords.isNotEmpty) ...[
+              const Text(
+                'Saved Jobs',
+                style: TextStyle(
+                  color: AtlasPalette.ink,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 4),
+              for (final record in controller.trackerRecords)
+                AtlasSavedJobTile(record: record, controller: controller),
+              if (controller.savedSearches.isNotEmpty)
+                const SizedBox(height: 14),
+            ],
+            if (controller.savedSearches.isNotEmpty) ...[
+              const Text(
+                'Saved Searches',
+                style: TextStyle(
+                  color: AtlasPalette.ink,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             for (final search in controller.savedSearches)
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -1199,89 +1975,475 @@ class AtlasSavedPanel extends StatelessWidget {
   }
 }
 
-class AtlasJobDetailScreen extends StatelessWidget {
-  const AtlasJobDetailScreen({required this.job, super.key});
+class AtlasSavedJobTile extends StatelessWidget {
+  const AtlasSavedJobTile({
+    required this.record,
+    required this.controller,
+    super.key,
+  });
 
-  final JobSearchResult job;
+  final AtlasApplicationRecord record;
+  final AtlasAppController controller;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Job Detail')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        children: [
-          Text(
-            job.title,
-            style: const TextStyle(
-              color: AtlasPalette.ink,
-              fontSize: 22,
-              height: 1.15,
-              fontWeight: FontWeight.w800,
-            ),
+    final job = _jobFromSavedRecord(record);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.bookmark, color: AtlasPalette.accent),
+      title: Text(job.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        '${job.organizationDisplay} · ${_humanSourceName(record.status)}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                AtlasJobDetailScreen(job: job, controller: controller),
           ),
-          const SizedBox(height: 8),
-          Text(
-            '${job.organizationDisplay} · ${job.dutyStation}',
-            style: const TextStyle(color: AtlasPalette.muted, fontSize: 14),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              AtlasDeadlinePill(job: job),
-              AtlasMetadataPill(
-                icon: Icons.badge_outlined,
-                label: job.gradeCode.isEmpty ? 'Grade unknown' : job.gradeCode,
-              ),
-              AtlasMetadataPill(
-                icon: Icons.work_outline,
-                label: job.contractLabel,
-              ),
-              AtlasMetadataPill(
-                icon: Icons.place_outlined,
-                label: job.workModality,
+        );
+      },
+    );
+  }
+}
+
+JobSearchResult _jobFromSavedRecord(AtlasApplicationRecord record) {
+  final parts = record.jobKey.split(':');
+  final sourceID = parts.isEmpty ? 'unknown' : parts.first;
+  final externalID = parts.length > 1 ? parts.sublist(1).join(':') : record.id;
+  return JobSearchResult(
+    jobKey: record.jobKey,
+    title: externalID.isEmpty ? 'Saved vacancy' : 'Saved vacancy $externalID',
+    organization: _humanSourceName(sourceID),
+    sourceID: sourceID,
+    dutyStation: 'Location unknown',
+    gradeCode: '',
+    contractLabel: 'Saved job',
+    workModality: 'Unknown',
+    closingDate: null,
+    needsReview: true,
+    scoreReasons: const <String>[],
+    matchSummary: 'Saved from the application tracker.',
+    description: 'Open detail to load the latest saved vacancy record.',
+    status: record.status,
+  );
+}
+
+class AtlasJobDetailScreen extends StatefulWidget {
+  const AtlasJobDetailScreen({
+    required this.job,
+    required this.controller,
+    super.key,
+  });
+
+  final JobSearchResult job;
+  final AtlasAppController controller;
+
+  @override
+  State<AtlasJobDetailScreen> createState() => _AtlasJobDetailScreenState();
+}
+
+class _AtlasJobDetailScreenState extends State<AtlasJobDetailScreen> {
+  late final Future<AtlasJobDetail> _detailFuture;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _detailFuture = widget.controller.loadJobDetail(widget.job.jobKey);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final saved = widget.controller.isJobSaved(widget.job.jobKey);
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Job Detail'),
+            actions: [
+              Tooltip(
+                message: saved ? 'Saved job' : 'Save job',
+                child: IconButton(
+                  onPressed: _isSaving || saved ? null : _saveJob,
+                  icon: Icon(
+                    saved ? Icons.bookmark : Icons.bookmark_border,
+                    color: saved ? AtlasPalette.accent : AtlasPalette.ink,
+                  ),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Why this matched',
-            style: TextStyle(
-              color: AtlasPalette.ink,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-            ),
+          body: FutureBuilder<AtlasJobDetail>(
+            future: _detailFuture,
+            builder: (context, snapshot) {
+              return _AtlasJobDetailBody(
+                job: widget.job,
+                detail: snapshot.data,
+                isLoading: snapshot.connectionState != ConnectionState.done,
+                error: snapshot.hasError ? snapshot.error : null,
+              );
+            },
           ),
-          const SizedBox(height: 6),
-          Text(
-            job.matchSummary,
-            style: const TextStyle(
-              color: AtlasPalette.ink,
-              fontSize: 14,
-              height: 1.35,
-            ),
+        );
+      },
+    );
+  }
+
+  Future<void> _saveJob() async {
+    setState(() {
+      _isSaving = true;
+    });
+    await widget.controller.saveJob(widget.job);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isSaving = false;
+    });
+  }
+}
+
+class _AtlasJobDetailBody extends StatelessWidget {
+  const _AtlasJobDetailBody({
+    required this.job,
+    required this.detail,
+    required this.isLoading,
+    required this.error,
+  });
+
+  final JobSearchResult job;
+  final AtlasJobDetail? detail;
+  final bool isLoading;
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _firstNonEmpty([detail?.title, job.title]);
+    final organizationLine = '${job.organizationDisplay} · ${job.dutyStation}';
+    final fullDescription = _firstNonEmpty([
+      detail?.description,
+      _sectionBody(detail, 'Full Description'),
+      job.description,
+    ]);
+    final contentSections = _contentSections(detail);
+    final diagnosticSections = _diagnosticSections(detail);
+    final qualityStatus = _detailQualityStatus(detail);
+    final weakDetail =
+        job.needsReview ||
+        (qualityStatus != null && qualityStatus.toLowerCase() != 'complete') ||
+        (!isLoading && fullDescription.isEmpty && contentSections.isEmpty);
+    final applyURL = detail?.applyURL ?? job.applyURL;
+    final sourceURL = detail?.sourceURL ?? job.sourceURL;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: AtlasPalette.ink,
+            fontSize: 22,
+            height: 1.15,
+            fontWeight: FontWeight.w800,
           ),
-          const SizedBox(height: 20),
-          const Text(
-            'Preview',
-            style: TextStyle(
-              color: AtlasPalette.ink,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          organizationLine,
+          style: const TextStyle(color: AtlasPalette.muted, fontSize: 14),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            AtlasDeadlinePill(job: job),
+            AtlasMetadataPill(
+              icon: Icons.badge_outlined,
+              label: job.gradeCode.isEmpty ? 'Grade unknown' : job.gradeCode,
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            job.description,
-            style: const TextStyle(
-              color: AtlasPalette.muted,
-              fontSize: 14,
-              height: 1.35,
+            AtlasMetadataPill(
+              icon: Icons.work_outline,
+              label: job.contractLabel.isEmpty
+                  ? 'Contract unknown'
+                  : job.contractLabel,
             ),
+            AtlasMetadataPill(
+              icon: Icons.place_outlined,
+              label: job.workModality.isEmpty ? 'Unknown' : job.workModality,
+            ),
+            AtlasMetadataPill(
+              icon: Icons.public,
+              label: _displayScope(job.nationalInternational),
+            ),
+            if (detail?.status != null || job.status.isNotEmpty)
+              AtlasMetadataPill(
+                icon: Icons.flag_outlined,
+                label: _firstNonEmpty([detail?.status, job.status]),
+              ),
+          ],
+        ),
+        if (isLoading) ...[
+          const SizedBox(height: 16),
+          const LinearProgressIndicator(minHeight: 2),
+        ],
+        if (error != null) ...[
+          const SizedBox(height: 14),
+          AtlasInfoStrip(
+            icon: Icons.error_outline,
+            title: 'Detail load failed',
+            body: '$error',
           ),
         ],
+        if (weakDetail) ...[
+          const SizedBox(height: 14),
+          const AtlasInfoStrip(
+            icon: Icons.fact_check_outlined,
+            title: 'Weak detail state',
+            body:
+                'This posting has limited structured detail. Use the source or apply link for the authoritative vacancy text.',
+          ),
+        ],
+        const SizedBox(height: 20),
+        const _DetailSectionTitle('Full Description'),
+        const SizedBox(height: 6),
+        Text(
+          fullDescription.isEmpty
+              ? 'No full description was returned for this job.'
+              : fullDescription,
+          style: const TextStyle(
+            color: AtlasPalette.ink,
+            fontSize: 14,
+            height: 1.38,
+          ),
+        ),
+        const SizedBox(height: 20),
+        const _DetailSectionTitle('Core Details'),
+        const SizedBox(height: 6),
+        _DetailRows(
+          rows: [
+            MapEntry('Deadline', job.deadlineText()),
+            MapEntry(
+              'Source deadline',
+              _firstNonEmpty([
+                detail?.deadlineInfo?.sourceText,
+                detail?.closesAtLocal,
+                detail?.closingDate,
+              ]),
+            ),
+            MapEntry(
+              'Grade',
+              job.gradeCode.isEmpty ? 'Unknown' : job.gradeCode,
+            ),
+            MapEntry(
+              'Contract',
+              job.contractLabel.isEmpty ? 'Unknown' : job.contractLabel,
+            ),
+            MapEntry('Scope', _displayScope(job.nationalInternational)),
+            MapEntry('Remote/onsite', job.workModality),
+          ],
+        ),
+        if (contentSections.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          for (final section in contentSections) ...[
+            _DetailSectionTitle(section.title),
+            if (section.body != null && section.body!.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                section.body!,
+                style: const TextStyle(
+                  color: AtlasPalette.ink,
+                  fontSize: 14,
+                  height: 1.38,
+                ),
+              ),
+            ],
+            if (section.rows.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _DetailRows(
+                rows: section.rows
+                    .map((row) => MapEntry(row.label, row.value))
+                    .toList(growable: false),
+              ),
+            ],
+            const SizedBox(height: 16),
+          ],
+        ],
+        if (contentSections.isEmpty && !isLoading) ...[
+          const SizedBox(height: 16),
+          const AtlasInfoStrip(
+            icon: Icons.notes_outlined,
+            title: 'Structured sections unavailable',
+            body:
+                'Responsibilities, qualifications, and other sections were not returned separately for this source.',
+          ),
+        ],
+        const SizedBox(height: 4),
+        const _DetailSectionTitle('Links'),
+        const SizedBox(height: 6),
+        if (applyURL == null && sourceURL == null)
+          const Text(
+            'No apply or source URL returned.',
+            style: TextStyle(color: AtlasPalette.muted, fontSize: 13),
+          )
+        else ...[
+          if (applyURL != null)
+            _CopyLinkTile(label: 'Apply URL', url: applyURL.toString()),
+          if (sourceURL != null)
+            _CopyLinkTile(label: 'Source URL', url: sourceURL.toString()),
+        ],
+        const SizedBox(height: 12),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text(
+            'Match diagnostics',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: const Text('Hidden from Search results by default'),
+          childrenPadding: const EdgeInsets.only(bottom: 12),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                job.matchSummary,
+                style: const TextStyle(
+                  color: AtlasPalette.ink,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+            if (job.scoreReasons.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _DetailRows(
+                rows: [
+                  for (final reason in job.scoreReasons)
+                    MapEntry('Reason', reason),
+                ],
+              ),
+            ],
+            for (final section in diagnosticSections) ...[
+              const SizedBox(height: 12),
+              _DetailSectionTitle(section.title),
+              if (section.body != null && section.body!.trim().isNotEmpty)
+                Text(
+                  section.body!,
+                  style: const TextStyle(
+                    color: AtlasPalette.muted,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              if (section.rows.isNotEmpty)
+                _DetailRows(
+                  rows: section.rows
+                      .take(30)
+                      .map((row) => MapEntry(row.label, row.value))
+                      .toList(growable: false),
+                ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _DetailSectionTitle extends StatelessWidget {
+  const _DetailSectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: AtlasPalette.ink,
+        fontSize: 16,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+}
+
+class _DetailRows extends StatelessWidget {
+  const _DetailRows({required this.rows});
+
+  final List<MapEntry<String, String>> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final row in rows.where((row) => row.value.trim().isNotEmpty))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 112,
+                  child: Text(
+                    row.key,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AtlasPalette.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    row.value,
+                    style: const TextStyle(
+                      color: AtlasPalette.ink,
+                      fontSize: 13,
+                      height: 1.28,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _CopyLinkTile extends StatelessWidget {
+  const _CopyLinkTile({required this.label, required this.url});
+
+  final String label;
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: const Icon(Icons.link, color: AtlasPalette.accent),
+      title: Text(label),
+      subtitle: Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: Tooltip(
+        message: 'Copy link',
+        child: IconButton(
+          onPressed: () {
+            unawaited(Clipboard.setData(ClipboardData(text: url)));
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('$label copied')));
+          },
+          icon: const Icon(Icons.copy, size: 18),
+        ),
       ),
     );
   }
@@ -1525,8 +2687,31 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               const SizedBox(height: 6),
               _SettingsValueRow(
                 label: 'Cached jobs',
-                value: controller.cachedJobCount.toString(),
+                value: _formatCount(controller.cachedJobCount),
               ),
+              const SizedBox(height: 6),
+              _SettingsValueRow(
+                label: 'Search total',
+                value: controller.resultCountLabel,
+              ),
+              if (controller.healthSummary?.openJobs != null) ...[
+                const SizedBox(height: 6),
+                _SettingsValueRow(
+                  label: 'Health open jobs',
+                  value: _formatCount(controller.healthSummary!.openJobs!),
+                ),
+              ],
+              if (controller.countReconciliationSummary != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  controller.countReconciliationSummary!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: AtlasPalette.muted,
+                  ),
+                ),
+              ],
               const SizedBox(height: 6),
               const _SettingsValueRow(label: 'Cached details', value: '0 / 0'),
               const SizedBox(height: 12),
