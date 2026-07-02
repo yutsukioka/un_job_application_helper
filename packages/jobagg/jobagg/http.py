@@ -8,6 +8,7 @@ import gzip
 import json
 import random
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -59,6 +60,8 @@ class JobAggHTTPClient:
         backoff_base_seconds: float = 1.0,
         jitter_ratio: float = 0.25,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        tls_verify: bool = True,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
@@ -67,13 +70,21 @@ class JobAggHTTPClient:
         self.backoff_base_seconds = backoff_base_seconds
         self.jitter_ratio = jitter_ratio
         self.max_response_bytes = int(max_response_bytes)
+        self.tls_verify = bool(tls_verify)
+        self.default_headers = dict(default_headers or {})
         # Per-host last-request timestamp. Robots policies promise "one
         # request per host every ``min_delay_seconds``" — a single shared
         # timestamp would over-throttle when the same client straddles
         # multiple hosts (e.g. listing API + CDN attachment fetch).
         self._last_request_at_by_host: dict[str, float] = {}
         self._cookie_jar = CookieJar()
-        self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._cookie_jar))
+        handlers = [urllib.request.HTTPCookieProcessor(self._cookie_jar)]
+        if not self.tls_verify:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        self._opener = urllib.request.build_opener(*handlers)
 
     def _request(
         self,
@@ -89,6 +100,7 @@ class JobAggHTTPClient:
             "Accept": "*/*",
             "Accept-Encoding": _default_accept_encoding(),
         }
+        request_headers.update(self.default_headers)
         request_headers.update(headers or {})
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()

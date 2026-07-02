@@ -219,6 +219,11 @@ domains:
     min_delay_seconds: 2.0
     override_reason: "Personal job-search aggregation; portal robots.txt blanket-blocks scrapers; 2.0s+ per-host delay enforced."
 
+  r.jina.ai:
+    honor_robots_txt: false
+    min_delay_seconds: 2.0
+    override_reason: "Source-specific IPU fallback when direct official page fetch is Cloudflare-blocked; reader output preserves official source URLs; 2.0s+ per-host delay enforced."
+
   jobs.itcilo.org:
     honor_robots_txt: false
     min_delay_seconds: 2.0

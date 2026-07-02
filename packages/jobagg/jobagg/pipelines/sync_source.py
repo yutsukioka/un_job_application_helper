@@ -11,9 +11,14 @@ from urllib.parse import urlsplit
 
 from jobagg.adapters.base import AdapterContext, get_adapter_class
 from jobagg.db import JobDatabase
+from jobagg.detail_quality import (
+    DETAIL_QUALITY_COMPLETE,
+    detail_quality_requeue_reason,
+    detail_quality_status,
+)
 from jobagg.hashing import ensure_job_hash
 from jobagg.http import JobAggHTTPClient
-from jobagg.models import OrganizationSource, SourceRunDiagnostics, SyncResult
+from jobagg.models import ChangeEvent, OrganizationSource, SourceRunDiagnostics, SyncResult
 from jobagg.observability.logging import get_logger
 from jobagg.robots import RobotsChecker, RobotsPolicy
 
@@ -53,6 +58,7 @@ UNSTABLE_DETAIL_POLICY_DEFAULTS = {
     "host_cooldown_seconds": 1800,
     "detail_breaker_probe_cooldown_seconds": 86400,
     "detail_permanent_failure_quarantine_days": 0,
+    "detail_none_is_transient": False,
 }
 UNSTABLE_DETAIL_SOURCE_IDS = {
     "unicef_pageup",
@@ -166,6 +172,7 @@ def sync_source(
         return _finish_result(db, result)
 
     result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
+    jobs = _exclude_configured_jobs(bounded_source, jobs)
     seen_job_keys = {job.identity_key() for job in jobs}
     jobs = _cap_jobs_for_policy(jobs, policy, result)
 
@@ -206,19 +213,23 @@ def sync_source(
     result.inserted = counts["inserted"]
     result.updated = counts["updated"]
     result.unchanged = counts["unchanged"]
-    result.diagnostics.missing_transition_allowed = _missing_transition_allowed(
+    transition_allowed = _missing_transition_allowed(
         close_missing=close_missing,
         jobs=jobs,
         diagnostics=result.diagnostics,
     )
-    if result.diagnostics.missing_transition_allowed:
+    result.diagnostics.missing_transition_allowed = transition_allowed
+    excluded_closed = _close_configured_excluded_jobs(db, bounded_source) if transition_allowed else 0
+    if transition_allowed:
         missing_counts = db.mark_missing(
             source.id,
             seen_job_keys,
             missing_run_threshold=missing_run_threshold,
         )
         result.missing = missing_counts["missing"]
-        result.closed = missing_counts["closed"]
+        result.closed = missing_counts["closed"] + excluded_closed
+    else:
+        result.closed = excluded_closed
     return _finish_result(db, result)
 
 
@@ -264,6 +275,7 @@ def sync_source_with_selective_details(
         return _finish_result(db, result)
 
     result.diagnostics = _diagnostics_from_adapter(adapter, bounded_source)
+    listing_jobs = _exclude_configured_jobs(bounded_source, listing_jobs)
     seen_job_keys = {job.identity_key() for job in listing_jobs}
     listing_jobs = _cap_jobs_for_policy(listing_jobs, policy, result)
 
@@ -320,6 +332,7 @@ def sync_source_with_selective_details(
     detail_aborted = False
     transient_detail_failures = 0
     detail_breaker_opened = False
+    listing_payload_detail_completions = 0
     failed_detail_items: list[tuple[str, str, str]] = []
     max_detail_pages = _optional_int(bounded_source.extra.get("max_detail_pages_per_run"))
     if max_detail_pages is None:
@@ -343,6 +356,9 @@ def sync_source_with_selective_details(
         failure_cooldown = _optional_int(bounded_source.extra.get("detail_failure_cooldown_seconds"))
     if failure_cooldown is None:
         failure_cooldown = _optional_int(bounded_source.extra.get("host_cooldown_seconds"))
+    detail_none_is_transient = _optional_bool(
+        bounded_source.extra.get("detail_none_is_transient")
+    )
     detail_breaker = _prepare_detail_breaker_for_run(db, bounded_source)
     if result.diagnostics is not None:
         result.diagnostics.detail_breaker_state = str(detail_breaker.get("state") or "closed")
@@ -371,6 +387,17 @@ def sync_source_with_selective_details(
             refresh_all_details=refresh_all_details,
         )
         if queue_reason is None:
+            jobs.append(job)
+            continue
+
+        if _listing_payload_satisfies_detail(bounded_source, job):
+            db.record_detail_backlog_attempt(
+                job_key=job_key,
+                source_id=source.id,
+                status="complete",
+                listing_hash=listing_hash,
+            )
+            listing_payload_detail_completions += 1
             jobs.append(job)
             continue
 
@@ -451,21 +478,116 @@ def sync_source_with_selective_details(
                 detail_failures += 1
                 error_text = f"{_job_detail_label(job)} detail refresh returned no detail"
                 detail_errors.append(error_text)
+                is_transient_none = detail_none_is_transient
+                attempt_cooldown = (
+                    datetime.now(tz=UTC) + timedelta(seconds=failure_cooldown)
+                    if is_transient_none and failure_cooldown
+                    else None
+                )
+                detail_status = "transient_failed" if is_transient_none else "permanent_failed"
                 db.record_detail_backlog_attempt(
                     job_key=job_key,
                     source_id=source.id,
-                    status="permanent_failed",
+                    status=detail_status,
                     listing_hash=listing_hash,
                     error=error_text,
+                    cooldown_until=attempt_cooldown,
                 )
                 failed_detail_items.append((job_key, listing_hash, error_text))
                 LOGGER.info(
-                    "%s detail %s/%s job=%s status=permanent_failed elapsed=%.2fs next_wait=0",
+                    "%s detail %s/%s job=%s status=%s elapsed=%.2fs next_wait=%.1fs",
                     source.id,
                     detail_attempts,
                     max_detail_pages or "?",
                     _job_detail_label(job),
+                    detail_status,
                     elapsed,
+                    detail_pacer.min_delay_seconds if is_transient_none else 0,
+                )
+                if is_transient_none:
+                    transient_detail_failures += 1
+                    if (
+                        transient_failure_limit is not None
+                        and transient_failure_limit > 0
+                        and transient_detail_failures >= transient_failure_limit
+                    ):
+                        detail_aborted = True
+                        host_cooldown_until = (
+                            datetime.now(tz=UTC) + timedelta(seconds=failure_cooldown)
+                            if failure_cooldown
+                            else None
+                        )
+                        cooldown_text = (
+                            f"; host cooldown recommended for {failure_cooldown}s"
+                            if failure_cooldown
+                            else ""
+                        )
+                        result.errors.append(
+                            f"detail refresh stopped for {source.id}: "
+                            f"{transient_detail_failures} transient failures reached "
+                            f"limit {transient_failure_limit}{cooldown_text}"
+                        )
+                        db.set_source_breaker(
+                            source_id=source.id,
+                            breaker_type="transient_detail",
+                            state="open",
+                            failure_count=transient_detail_failures,
+                            success_count=0,
+                            cooldown_until=host_cooldown_until,
+                            reason="no_detail_response",
+                        )
+                        LOGGER.info(
+                            "%s detail host cooldown reason=no_detail_response failures=%s cooldown_until=%s",
+                            source.id,
+                            transient_detail_failures,
+                            host_cooldown_until.isoformat() if host_cooldown_until else "",
+                        )
+                elif _should_open_detail_adapter_breaker(detail_attempts, detail_failures):
+                    detail_breaker_opened = True
+                    detail_aborted = True
+                    host_cooldown_until = _open_detail_adapter_breaker(
+                        db,
+                        bounded_source,
+                        failed_detail_items,
+                        reason=error_text,
+                    )
+                    result.errors.append(
+                        f"detail breaker opened for {source.id}: "
+                        f"{detail_failures}/{detail_attempts} detail attempts failed"
+                    )
+                jobs.append(job)
+                continue
+            quality_status = detail_quality_status(
+                title=detail_job.title,
+                description=detail_job.description,
+                raw=detail_job.raw,
+            )
+            if quality_status != DETAIL_QUALITY_COMPLETE:
+                detail_failures += 1
+                queue_reason = detail_quality_requeue_reason(quality_status) or "detail_quality_incomplete"
+                error_text = (
+                    f"{_job_detail_label(job)} detail content quality is "
+                    f"{quality_status}; leaving detail queued"
+                )
+                detail_errors.append(error_text)
+                db.update_detail_backlog_status(
+                    job_key=job_key,
+                    source_id=source.id,
+                    status="pending",
+                    listing_hash=listing_hash,
+                    reason=queue_reason,
+                    error=error_text,
+                )
+                failed_detail_items.append((job_key, listing_hash, error_text))
+                LOGGER.info(
+                    "%s detail %s/%s job=%s status=%s elapsed=%.2fs next_wait=%.1fs",
+                    source.id,
+                    detail_attempts,
+                    max_detail_pages or "?",
+                    _job_detail_label(job),
+                    queue_reason,
+                    elapsed,
+                    0,
                 )
                 if _should_open_detail_adapter_breaker(detail_attempts, detail_failures):
                     detail_breaker_opened = True
@@ -601,7 +723,23 @@ def sync_source_with_selective_details(
         detail_failures=detail_failures,
         opened=detail_breaker_opened,
     )
-    latest_detail_breaker = db.get_source_breaker(source.id, "detail")
+    if (
+        listing_payload_detail_completions > 0
+        and detail_attempts == 0
+        and not detail_breaker_opened
+    ):
+        db.set_source_breaker(
+            source_id=source.id,
+            breaker_type="detail",
+            state="closed",
+            failure_count=0,
+            success_count=1,
+            reason="listing payload satisfies detail",
+        )
+    latest_detail_breaker_type = str(detail_breaker.get("breaker_type") or "detail")
+    latest_detail_breaker = db.get_source_breaker(source.id, latest_detail_breaker_type)
+    if latest_detail_breaker is None and latest_detail_breaker_type != "detail":
+        latest_detail_breaker = db.get_source_breaker(source.id, "detail")
     if result.diagnostics is not None and latest_detail_breaker is not None:
         result.diagnostics.detail_breaker_state = str(latest_detail_breaker.get("state") or "closed")
     counts = db.upsert_jobs(jobs)
@@ -609,14 +747,21 @@ def sync_source_with_selective_details(
     result.updated = counts["updated"]
     result.unchanged = counts["unchanged"]
     result.diagnostics.missing_transition_allowed = list_missing_transition_allowed
-    if result.diagnostics.missing_transition_allowed:
+    excluded_closed = (
+        _close_configured_excluded_jobs(db, bounded_source)
+        if list_missing_transition_allowed
+        else 0
+    )
+    if list_missing_transition_allowed:
         missing_counts = db.mark_missing(
             source.id,
             seen_job_keys,
             missing_run_threshold=missing_run_threshold,
         )
         result.missing = missing_counts["missing"]
-        result.closed = missing_counts["closed"]
+        result.closed = missing_counts["closed"] + excluded_closed
+    else:
+        result.closed = excluded_closed
     return _finish_result(db, result)
 
 
@@ -661,11 +806,11 @@ def _detail_queue_reason(
     backlog = db.get_detail_backlog(job_key)
     backlog_status = str(backlog.get("detail_status") or "") if backlog else ""
     backlog_hash = str(backlog.get("listing_hash_at_detail_fetch") or "") if backlog else ""
-    if backlog_status == "complete" and backlog_hash == listing_hash and not _detail_record_stale(
-        backlog,
-        source,
+    current = db.get_job(job_key)
+    if backlog_status in {"adapter_failed", "blocked_by_circuit_breaker"} and (
+        _listing_payload_satisfies_detail(source, listing_job)
     ):
-        return None
+        return "listing_payload_detail_complete"
     if backlog_status == "permanent_failed" and backlog_hash == listing_hash:
         quarantine_days = _optional_int(source.extra.get("detail_permanent_failure_quarantine_days"))
         if quarantine_days is None or quarantine_days <= 0:
@@ -674,12 +819,30 @@ def _detail_queue_reason(
         if last_attempt and last_attempt > datetime.now(tz=UTC) - timedelta(days=quarantine_days):
             return None
         return "previous_permanent_failed_quarantine_expired"
+    if backlog_status == "skipped" and backlog_hash == listing_hash:
+        return None
+    if current is not None:
+        quality_status = detail_quality_status(
+            title=current.get("title"),
+            description=current.get("description"),
+            raw=current.get("raw") if isinstance(current.get("raw"), dict) else None,
+            detail_status=backlog_status or None,
+        )
+        quality_reason = detail_quality_requeue_reason(quality_status)
+        if quality_reason is not None:
+            return quality_reason
+    if backlog_status == "complete" and backlog_hash == listing_hash and not _detail_record_stale(
+        backlog,
+        source,
+    ):
+        return None
+    if backlog_status == "pending":
+        return "previous_pending"
     if backlog_status == "transient_failed":
         return "previous_transient_failed"
     if backlog_hash and backlog_hash != listing_hash:
         return "listing_hash_changed"
 
-    current = db.get_job(job_key)
     if current is None:
         return "new"
     if not current.get("description"):
@@ -695,6 +858,121 @@ def _detail_queue_reason(
     if _closing_needs_detail_refresh(current.get("closes_at"), cutoff):
         return "stale"
     return None
+
+
+def _listing_payload_satisfies_detail(source: OrganizationSource, job) -> bool:
+    if not _optional_bool(source.extra.get("listing_payload_is_detail_complete")):
+        return False
+    return (
+        detail_quality_status(
+            title=getattr(job, "title", None),
+            description=getattr(job, "description", None),
+            raw=getattr(job, "raw", None),
+        )
+        == DETAIL_QUALITY_COMPLETE
+    )
+
+
+def _exclude_configured_jobs(source: OrganizationSource, jobs: list) -> list:
+    excluded_ids = _configured_excluded_external_ids(source)
+    excluded_titles = _configured_excluded_titles(source)
+    if not excluded_ids and not excluded_titles:
+        return jobs
+    return [
+        job
+        for job in jobs
+        if str(getattr(job, "external_id", "") or "") not in excluded_ids
+        and str(getattr(job, "title", "") or "").strip().casefold() not in excluded_titles
+    ]
+
+
+def _configured_excluded_external_ids(source: OrganizationSource) -> set[str]:
+    return {
+        str(value)
+        for value in (
+            source.extra.get("exclude_external_ids")
+            or source.extra.get("excluded_external_ids")
+            or []
+        )
+        if value not in (None, "")
+    }
+
+
+def _configured_excluded_titles(source: OrganizationSource) -> set[str]:
+    return {
+        str(value).strip().casefold()
+        for value in (
+            source.extra.get("exclude_titles")
+            or source.extra.get("excluded_titles")
+            or []
+        )
+        if str(value).strip()
+    }
+
+
+def _close_configured_excluded_jobs(db: JobDatabase, source: OrganizationSource) -> int:
+    excluded_ids = {
+        str(value)
+        for value in (
+            source.extra.get("exclude_external_ids")
+            or source.extra.get("excluded_external_ids")
+            or []
+        )
+        if value not in (None, "")
+    }
+    excluded_titles = {
+        str(value).strip().casefold()
+        for value in (
+            source.extra.get("exclude_titles")
+            or source.extra.get("excluded_titles")
+            or []
+        )
+        if str(value).strip()
+    }
+    if not excluded_ids and not excluded_titles:
+        return 0
+    clauses = ["source_id = ?", "status IN ('open', 'missing')"]
+    params: list[object] = [source.id]
+    if excluded_ids:
+        placeholders = ", ".join("?" for _ in excluded_ids)
+        clauses.append(f"external_id IN ({placeholders})")
+        params.extend(sorted(excluded_ids))
+    if excluded_titles:
+        placeholders = ", ".join("?" for _ in excluded_titles)
+        clauses.append(f"LOWER(TRIM(title)) IN ({placeholders})")
+        params.extend(sorted(excluded_titles))
+    where = " AND (" + " OR ".join(clauses[2:]) + ")" if len(clauses) > 2 else ""
+    query = (
+        "SELECT job_key, normalized_hash FROM jobs "
+        "WHERE source_id = ? AND status IN ('open', 'missing')" + where
+    )
+    with db.connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+        if not rows:
+            return 0
+        job_keys = [row["job_key"] for row in rows]
+        placeholders = ", ".join("?" for _ in job_keys)
+        conn.execute(
+            f"""
+            UPDATE jobs
+            SET status = 'closed',
+                missing_run_count = 0
+            WHERE job_key IN ({placeholders})
+            """,
+            tuple(job_keys),
+        )
+        for row in rows:
+            db.add_change_event(
+                ChangeEvent(
+                    source_id=source.id,
+                    job_key=row["job_key"],
+                    change_type="closed",
+                    old_hash=row["normalized_hash"],
+                    new_hash=None,
+                ),
+                conn=conn,
+            )
+        return len(rows)
 
 
 def _detail_record_stale(backlog: dict | None, source: OrganizationSource) -> bool:
@@ -849,24 +1127,47 @@ def _list_failure_cooldown_minutes(source: OrganizationSource, *, repeated: bool
 
 
 def _prepare_detail_breaker_for_run(db: JobDatabase, source: OrganizationSource) -> dict[str, object]:
-    breaker = db.get_source_breaker(source.id, "detail") or {}
+    for breaker_type in ("detail", "transient_detail"):
+        breaker = db.get_source_breaker(source.id, breaker_type) or {}
+        state = str(breaker.get("state") or "closed")
+        if state in {"open", "half_open"}:
+            return _prepare_detail_breaker_state(db, source, breaker_type, breaker)
+    return {"state": "closed", "cooldown_until": None, "max_attempts": None, "breaker_type": "detail"}
+
+
+def _prepare_detail_breaker_state(
+    db: JobDatabase,
+    source: OrganizationSource,
+    breaker_type: str,
+    breaker: dict[str, object],
+) -> dict[str, object]:
     state = str(breaker.get("state") or "closed")
     cooldown_until = _parse_backlog_time(breaker.get("cooldown_until"))
     if state == "open" and _cooldown_active(cooldown_until):
-        return {"state": "open", "cooldown_until": cooldown_until, "max_attempts": 0}
+        return {
+            "state": "open",
+            "cooldown_until": cooldown_until,
+            "max_attempts": 0,
+            "breaker_type": breaker_type,
+        }
     if state == "open":
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="half_open",
             failure_count=int(breaker.get("failure_count") or 0),
             success_count=int(breaker.get("success_count") or 0),
-            reason="detail breaker probe",
+            reason=f"{breaker_type} breaker probe",
         )
-        return {"state": "half_open", "cooldown_until": None, "max_attempts": 1}
+        return {"state": "half_open", "cooldown_until": None, "max_attempts": 1, "breaker_type": breaker_type}
     if state == "half_open":
-        return {"state": "half_open", "cooldown_until": cooldown_until, "max_attempts": _DETAIL_BREAKER_HALF_OPEN_LIMIT}
-    return {"state": "closed", "cooldown_until": None, "max_attempts": None}
+        return {
+            "state": "half_open",
+            "cooldown_until": cooldown_until,
+            "max_attempts": _DETAIL_BREAKER_HALF_OPEN_LIMIT,
+            "breaker_type": breaker_type,
+        }
+    return {"state": "closed", "cooldown_until": None, "max_attempts": None, "breaker_type": breaker_type}
 
 
 def _should_open_detail_adapter_breaker(detail_attempts: int, detail_failures: int) -> bool:
@@ -919,12 +1220,13 @@ def _record_detail_breaker_after_run(
     state = str(breaker.get("state") or "closed")
     if opened:
         return
+    breaker_type = str(breaker.get("breaker_type") or "detail")
     if detail_attempts <= 0:
         return
     if state == "closed":
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed",
             failure_count=0 if detail_failures == 0 else detail_failures,
             success_count=1 if detail_failures == 0 else 0,
@@ -933,12 +1235,12 @@ def _record_detail_breaker_after_run(
         return
     ratio = detail_failures / detail_attempts
     if detail_failures == 0:
-        previous = db.get_source_breaker(source.id, "detail") or {}
+        previous = db.get_source_breaker(source.id, breaker_type) or {}
         success_count = int(previous.get("success_count") or 0) + 1
         should_close = state == "half_open" and success_count >= 2
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed" if should_close else "half_open",
             failure_count=0,
             success_count=success_count,
@@ -948,7 +1250,7 @@ def _record_detail_breaker_after_run(
     if ratio < 0.20:
         db.set_source_breaker(
             source_id=source.id,
-            breaker_type="detail",
+            breaker_type=breaker_type,
             state="closed",
             failure_count=0,
             success_count=1,
@@ -958,7 +1260,7 @@ def _record_detail_breaker_after_run(
     cooldown_until = datetime.now(tz=UTC) + timedelta(seconds=_detail_breaker_cooldown_seconds(source))
     db.set_source_breaker(
         source_id=source.id,
-        breaker_type="detail",
+        breaker_type=breaker_type,
         state="open",
         failure_count=detail_failures,
         success_count=0,
@@ -1000,12 +1302,20 @@ def _detail_refresh_priority(
         return 1
     if _classification_detail_required(db, current, job):
         return 2
-    if _short_description(current.get("description")):
+    quality_status = detail_quality_status(
+        title=current.get("title"),
+        description=current.get("description"),
+        raw=current.get("raw") if isinstance(current.get("raw"), dict) else None,
+        detail_status=None,
+    )
+    if detail_quality_requeue_reason(quality_status) is not None:
         return 3
-    if refresh_all_details:
+    if _short_description(current.get("description")):
         return 4
-    if _closing_needs_detail_refresh(current.get("closes_at"), cutoff):
+    if refresh_all_details:
         return 5
+    if _closing_needs_detail_refresh(current.get("closes_at"), cutoff):
+        return 6
     return 9
 
 
@@ -1141,12 +1451,19 @@ def _http_client_for_source(
     )
     max_retries = _optional_int(source.extra.get("max_retries"))
     backoff_base_seconds = _optional_float(source.extra.get("backoff_base_seconds"))
+    tls_verify = _optional_bool(source.extra.get("tls_verify"))
+    default_headers = {}
+    cookie_header = str(source.extra.get("cookie_header") or "").strip()
+    if cookie_header:
+        default_headers["Cookie"] = cookie_header
     return JobAggHTTPClient(
         user_agent=policy.user_agent,
         timeout_seconds=timeout_seconds,
         min_delay_seconds=policy.min_delay_for(source_host),
         max_retries=max_retries if max_retries is not None else 3,
         backoff_base_seconds=backoff_base_seconds if backoff_base_seconds is not None else 1.0,
+        tls_verify=True if tls_verify is None else tls_verify,
+        default_headers=default_headers,
     )
 
 
