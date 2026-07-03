@@ -37,6 +37,15 @@ Latest physical Pixel update:
     `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
   - After cached `Open only` deadline fix:
     `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
+  - Final refreshed physical Search top:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_top_final.png`
+  - Final refreshed physical Settings:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/settings_tab_final.png`
+  - Additional physical tab/filter evidence:
+    `search_scrolled_final.png`, `filter_sheet_final.png`, `sort_menu_final.png`,
+    `saved_tab_final.png`, `updates_tab_final.png`, and `sources_tab_final.png` in the same folder.
+  - Physical Job Detail recapture remains pending because the Pixel was detached before the
+    corrected detail capture could be taken.
 
 Latest icon/startup update: Android launcher mipmap assets now use the Apple Atlas iOS 1024px icon
 artwork instead of Flutter's default launcher artwork. A focused asset regression test covers the
@@ -106,15 +115,15 @@ requires unlocking the secured device.
 
 | Field | Value |
 | --- | --- |
-| `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,134` |
-| `android_displayed_total` | `2,134 searchable results` on the physical Pixel after the cached/offline open-only deadline fix. |
+| `health_open_jobs` | `2,452` |
+| `search_api_total` | `2,355` |
+| `android_displayed_total` | `2,355 searchable results` on the physical Pixel after tapping `Refresh Local Save Now`; this matches POST `/api/search` for the default open/searchable request. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `local_cache_timestamp` | Physical Pixel cache status line shows `Local save · updated 2026-07-...`; offline restart reused the persisted cache immediately. |
-| `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `286` |
+| `local_cache_timestamp` | Physical Pixel Settings shows `Last updated 2026-07-03 13:26`, `Cache status Fresh`, and `Cached jobs 2,355`. |
+| `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-03T04:17:28.239578+00:00`. |
+| `excluded_count` | `97` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,134` is the current correct Android default Search count because it matches POST `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. Cached/offline Search now applies the same exclusion rule as the API, so stale caches no longer display `Deadline passed` rows under `Open only`. |
+| `final_decision` | `2,355` is the current correct Android default Search count because it matches POST `/api/search`; `2,452` is the raw health open count. The difference is time-sensitive as deadlines pass. Cached/offline Search now applies the same exclusion rule as the API, so stale caches no longer display `Deadline passed` rows under `Open only`. |
 
 ## Verification
 
@@ -238,6 +247,15 @@ Commands run from `apps/atlas_flutter`:
   - Live backend reconciliation after the cached deadline fix:
     `/api/health open_jobs=2420`; POST `/api/search` with Android default open/searchable filters
     returned `total=2134`; the physical Pixel displayed `2,134 searchable results`.
+  - Final physical refresh reconciliation before the phone was detached:
+    `/api/health open_jobs=2452` with `last_sync_at=2026-07-03T04:17:28.239578+00:00`; POST
+    `/api/search` with Android default open/searchable filters returned `total=2355`; after tapping
+    `Refresh Local Save Now`, physical Settings displayed `2,355 searchable results`, `2,452`
+    health open jobs, and `97 deadline-past open rows hidden by Search`.
+  - Final physical screenshots captured before detach: Search top, Search scrolled, Filter sheet,
+    Sort menu, Saved tab, Updates tab, Sources tab, and Settings tab. Corrected physical Job Detail
+    recapture is still pending because the device was detached after an invalid launcher screenshot
+    was detected.
 
 Installed package evidence:
 
