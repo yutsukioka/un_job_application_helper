@@ -1711,74 +1711,108 @@ class AtlasSearchSkeleton extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
-        return ListView(
+        return ListView.builder(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          children: [
-            TextField(
-              textInputAction: TextInputAction.search,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(AtlasIcons.search),
-                labelText: 'Title, keyword, skill, or organization',
-              ),
-              onChanged: (value) {
-                controller.updateQuery(value);
-              },
-              onSubmitted: (_) {
-                controller.refreshLocalSave();
-              },
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 34,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount:
-                    controller.filters.activeChips.length +
-                    _quickFilters.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final activeChips = controller.filters.activeChips;
-                  if (index < activeChips.length) {
-                    final chip = activeChips[index];
+          itemCount: _searchListItemCount(controller),
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return TextField(
+                textInputAction: TextInputAction.search,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(AtlasIcons.search),
+                  labelText: 'Title, keyword, skill, or organization',
+                ),
+                onChanged: (value) {
+                  controller.updateQuery(value);
+                },
+                onSubmitted: (_) {
+                  controller.refreshLocalSave();
+                },
+              );
+            }
+            if (index == 1) {
+              return const SizedBox(height: 12);
+            }
+            if (index == 2) {
+              return SizedBox(
+                height: 34,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount:
+                      controller.filters.activeChips.length +
+                      _quickFilters.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final activeChips = controller.filters.activeChips;
+                    if (index < activeChips.length) {
+                      final chip = activeChips[index];
+                      return AtlasFilterChip(
+                        label: chip.title,
+                        icon: AtlasIcons.check,
+                        selected: true,
+                        onDeleted: () {
+                          controller.removeActiveFilter(chip.id);
+                        },
+                      );
+                    }
+                    final filter = _quickFilters[index - activeChips.length];
                     return AtlasFilterChip(
-                      label: chip.title,
-                      icon: AtlasIcons.check,
-                      selected: true,
-                      onDeleted: () {
-                        controller.removeActiveFilter(chip.id);
+                      label: filter.label,
+                      icon: filter.icon,
+                      selected: controller.isQuickFilterActive(filter.label),
+                      onTap: () {
+                        controller.toggleQuickFilter(filter.label);
                       },
                     );
-                  }
-                  final filter = _quickFilters[index - activeChips.length];
-                  return AtlasFilterChip(
-                    label: filter.label,
-                    icon: filter.icon,
-                    selected: controller.isQuickFilterActive(filter.label),
-                    onTap: () {
-                      controller.toggleQuickFilter(filter.label);
-                    },
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 14),
-            AtlasSearchStatusBar(controller: controller),
-            if (controller.connectionMessage != null &&
-                controller.connectionStatus != 'Connected') ...[
-              const SizedBox(height: 12),
-              AtlasStatusBanner(message: controller.connectionMessage!),
-            ],
-            const SizedBox(height: 10),
-            if (controller.results.isEmpty)
-              const AtlasEmptySearchState()
-            else
-              ...controller.results.map(
-                (job) => AtlasJobResultTile(job, controller: controller),
-              ),
-          ],
+                  },
+                ),
+              );
+            }
+            if (index == 3) {
+              return const SizedBox(height: 14);
+            }
+            if (index == 4) {
+              return AtlasSearchStatusBar(controller: controller);
+            }
+            if (index == 5 &&
+                controller.connectionMessage != null &&
+                controller.connectionStatus != 'Connected') {
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: AtlasStatusBanner(
+                  message: controller.connectionMessage!,
+                ),
+              );
+            }
+            if (index == _resultsStartIndex(controller) - 1) {
+              return const SizedBox(height: 10);
+            }
+            if (controller.results.isEmpty) {
+              return const AtlasEmptySearchState();
+            }
+            final resultIndex = index - _resultsStartIndex(controller);
+            return AtlasJobResultTile(
+              controller.results[resultIndex],
+              controller: controller,
+            );
+          },
         );
       },
     );
+  }
+
+  static int _resultsStartIndex(AtlasAppController controller) {
+    return controller.connectionMessage != null &&
+            controller.connectionStatus != 'Connected'
+        ? 7
+        : 6;
+  }
+
+  static int _searchListItemCount(AtlasAppController controller) {
+    final resultCount = controller.results.isEmpty
+        ? 1
+        : controller.results.length;
+    return _resultsStartIndex(controller) + resultCount;
   }
 }
 

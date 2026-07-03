@@ -131,6 +131,36 @@ void main() {
     },
   );
 
+  testWidgets('search results are lazily built for large result sets', (
+    tester,
+  ) async {
+    final controller = AtlasAppController();
+    addTearDown(controller.dispose);
+    controller.results = List.generate(300, _searchResultJob);
+    controller.total = controller.results.length;
+    controller.cacheSavedAt = DateTime.utc(2026, 7, 3, 12);
+    controller.connectionStatus = 'Offline (cached)';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasSearchSkeleton(controller: controller)),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Lazy result 0'), findsOneWidget);
+    expect(find.text('Lazy result 299'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('Lazy result 299'),
+      900,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Lazy result 299'), findsOneWidget);
+  });
+
   testWidgets('search tab keeps normal state compact but shows errors', (
     tester,
   ) async {
@@ -430,6 +460,25 @@ JobSearchResult _badgeJob({
     scoreReasons: const [],
     matchSummary: 'Matched',
     description: 'Description',
+  );
+}
+
+JobSearchResult _searchResultJob(int index) {
+  return JobSearchResult(
+    jobKey: 'fixture:$index',
+    title: 'Lazy result $index',
+    organization: 'UNDP',
+    sourceID: 'undp_oracle_hcm',
+    dutyStation: 'Tokyo, Japan',
+    gradeCode: 'P-3',
+    contractLabel: 'Staff',
+    workModality: 'Onsite',
+    closingDate: DateTime.utc(2026, 7, 30),
+    needsReview: false,
+    scoreReasons: const [],
+    matchSummary: 'Matched',
+    description: 'Description',
+    status: 'open',
   );
 }
 
