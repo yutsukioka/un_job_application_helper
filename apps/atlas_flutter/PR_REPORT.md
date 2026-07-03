@@ -4,69 +4,69 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `298f0f4`
+Latest branch head before this report update: `a8790ef`
 
 ## Summary
 
-The Android Flutter app has moved beyond the initial Search-only parity slice. It now includes a
-persistent local cache, offline startup behavior on emulator, an iOS-style Search screen, full
-filter groups, City/Country and Seniority/Grade cascades, multi-value City/Country filter support,
-compact result rows, populated and persistently cached Job Detail, Saved/Updates/Sources/Settings
-tabs, a Dart port of the Swift ATS detail formatter, a fresh iOS Simulator Search-top side-by-side,
-Android Search-top, filter-sheet top, Job Detail top, and implemented-tab goldens, and a reviewable
-Android screenshot package.
-The Android launcher icon also now uses the Apple Atlas app icon artwork instead of the default
-Flutter launcher icon.
+The Android Flutter app now includes persistent local cache, offline startup behavior, iOS-style
+Search, full filter groups, City/Country and Seniority/Grade cascades, multi-value location filters,
+compact result rows, Saved/Updates/Sources/Settings tabs, populated and cached Job Detail, a Dart
+port of the Swift ATS detail formatter, Apple Atlas Android launcher mipmaps, Android goldens, and
+source-rendered iOS Simulator reference captures.
 
-This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
-verification remain blocked by the connected phone being locked. Search, Filter sheet, Job Detail,
-Saved, Updates, Sources, and Settings now have source-rendered iOS Simulator references from the
-real Swift screens, but final pixel-paired review against the exact user-provided iOS screenshots
-remains blocked because those screenshots are not available as local files in this worktree.
+The latest physical Pixel pass found two real defects and both were fixed:
+
+- Search ANR: caused by eagerly building more than 2,000 result rows during controller rebuilds.
+  Fixed with lazy `ListView.builder` construction and covered by a widget regression test.
+- Cached `Open only` mismatch: cached/offline filtering showed past-deadline open rows that the
+  Search API excludes with `exclude_expired_open=true`. Fixed so cached filtering mirrors the API.
+
+This is still not a final completion claim. Physical screenshots exist for Search, scrolled Search,
+Filter sheet, Sort menu, Saved, Updates, Sources, and Settings, but corrected physical Job Detail
+capture and physical offline-restart verification remain pending because the Pixel was detached
+before recapture. Human G3 approval is also still pending.
 
 ## Scope Implemented
 
 - Search top area aligned with iOS structure: centered `Search`, grouped filter/bookmark controls,
-  search input, active chips, compact count/status row, and sort control.
-- Compact job rows hide diagnostic explanations from Search results.
-- Persistent file-backed local cache loads before network refresh and supports offline cached Search.
-- Fetched Job Detail payloads are persisted in the same local cache and can be reopened offline after
-  restart.
-- Search startup from cache no longer shows a large normal-state local-save banner; status is compact
-  under the result count.
-- Search result source badges now match Swift `SourceMonogram` treatment with deterministic
-  per-source color blocks and white initials.
-- Android launcher mipmaps now use the Apple Atlas iOS icon artwork across Android densities.
-- Settings exposes server URL, cache status, refresh, and clear-cache controls.
-- Filter sheet implements Status, Location, Scope, Contract, UN Volunteer Category, Seniority,
-  Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
-- City/Country filters support multiple values and OR matching within Location.
-- Seniority/Grade facets cascade from cached data using `standard_seniority_tier`.
-- Updates tab shows refresh status, count reconciliation, local save, backend snapshot, and recent runs.
-- Sources tab shows source health and allows source filtering.
+  search input, active chips, compact count/status row, sort control, and compact list rows.
+- Persistent file-backed cache loads before network refresh and keeps cached Search rows usable
+  offline.
+- Fetched Job Detail payloads persist in the local cache and can be reopened offline after restart.
+- Full filter sheet groups render: Status, Location, Scope, Contract, UN Volunteer Category,
+  Seniority, Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
+- City/Country and Seniority/Grade cascade behavior is implemented and tested.
+- Updates tab shows refresh status, count reconciliation, local save, backend snapshot, and recent
+  runs.
+- Sources tab shows source health and supports source filtering.
 - Job Detail shows core fields, full description, detail sections, apply/source links, save state,
   weak-detail state, and diagnostics behind an expansion panel.
-- Job Detail now formats ATS/PageUp sections instead of dumping raw section text: ATS chrome is
-  hidden, fact runs become compact rows, bullet/numbered lists become structured blocks, orphan
-  fragments are healed, and raw/source-data sections stay behind diagnostics.
+- ATS/PageUp detail text is formatted into structured content instead of dumping raw source payloads
+  into the main detail body.
+- Android launcher mipmaps now use `apps/apple/Design/AppIcon/AppIcon-iOS-1024.png`.
+- Source badges now match the Swift `SourceMonogram` treatment with deterministic source colors and
+  white initials.
 
 ## Data Count Reconciliation
 
-Last verified reconciliation from current app/API evidence:
+Last verified reconciliation from current app/API/physical Settings evidence:
 
-- `health_open_jobs`: `2,420`
-- `search_api_total`: `2,178`
-- Android displayed count after a live refresh should be `2,178 searchable results`; the latest
-  checked-in Android screenshots still show older time-stamped counts such as `2,266` because more
-  deadlines have passed since capture.
-- Difference: `242` deadline-past rows still counted by health as open but hidden by Search because
-  default Search uses `exclude_expired_open=true`.
+- `health_open_jobs`: `2,452`
+- `search_api_total`: `2,355`
+- `android_displayed_total`: `2,355 searchable results`
+- `active_filters`: default open/searchable Search, no text query, sort `closing_date_asc`,
+  Search API default `exclude_expired_open=true`
+- `local_cache_timestamp`: physical Settings showed `Last updated 2026-07-03 13:26`,
+  `Cache status Fresh`, and `Cached jobs 2,355`
+- `backend_snapshot_timestamp`: `/api/health last_sync_at=2026-07-03T04:17:28.239578+00:00`
+- `excluded_count`: `97`
+- `excluded_reason_breakdown`: rows still counted by health as open but with passed deadlines,
+  intentionally hidden by Search API `exclude_expired_open=true`
+- `final_decision`: `2,355` is the correct Android default Search count for this snapshot because
+  it matches POST `/api/search`; `2,452` is the raw health open count.
 
-Current live refresh status:
-
-- `curl http://10.253.1.43:8765/api/health` succeeded on 2026-07-03 and reported
-  `open_jobs=2420`.
-- Default POST `/api/search` with Android open/searchable filters reported `total=2178`.
+The count is time-sensitive because more deadlines can pass between refreshes. The app label remains
+`searchable results` to distinguish Search results from raw health `open_jobs`.
 
 ## Evidence
 
@@ -77,195 +77,115 @@ Primary review docs:
 - `apps/atlas_flutter/docs/loop/STATUS.jsonl`
 - `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`
 
-Screenshot evidence:
+Physical Pixel screenshots captured before detach:
 
-- Android contact sheet:
-  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/android_review_contact_sheet.png`
-- Search top side-by-side:
-  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/ios_android_search_top_side_by_side.png`
-- Offline cached startup:
-  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/offline_restart_cached.png`
-- Current no-banner/cache refresh evidence:
-  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703-current/`
-- Source badge parity evidence:
-  `apps/atlas_flutter/docs/loop/screenshots/source-badge-parity-20260703/search_badges_64bit.png`
-- Detail formatter evidence:
-  `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/job_detail_top_fixed.png`
-- Current live count evidence:
-  `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/settings_after_reload.png`
-- Android launcher icon evidence:
-  `apps/atlas_flutter/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png`
-- Fresh iOS Simulator Search-top side-by-side:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
-- Fresh iOS Simulator Search-top reference:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png`
-- Expanded source-rendered iOS Simulator references:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_search_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`
-- Source-rendered iOS filter-section/cascade references:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_contract_seniority.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_ccog.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_organizations_work_mode.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_capability_tags.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`
-- Generated iOS-vs-Android filter side-by-side review package:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_location_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_contract_seniority_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_ccog_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_organizations_work_mode_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_capability_tags_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_japan_selected_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`
-- Generated iOS-vs-Android primary-screen side-by-side review package:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/search_top_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/job_detail_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/saved_tab_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/updates_tab_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/sources_tab_ios_android_side_by_side.png`
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/settings_tab_ios_android_side_by_side.png`
-- Android Search-top golden:
-  `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
-- Android filter-sheet top golden:
-  `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`
-- Android keyboard-free location cascade goldens:
-  `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png`
-  `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`
-- Android Job Detail top golden:
-  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`
-- Android implemented-tab goldens:
-  `apps/atlas_flutter/test/goldens/android/saved_tab.png`
-  `apps/atlas_flutter/test/goldens/android/updates_tab.png`
-  `apps/atlas_flutter/test/goldens/android/sources_tab.png`
-  `apps/atlas_flutter/test/goldens/android/settings_tab.png`
-- Filter, cascade, detail, settings, saved, updates, and sources screenshots:
-  `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-emulator-20260703/`
-- Physical Pixel lock-screen evidence:
-  `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/resume_visibility_check.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_top_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_scrolled_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/filter_sheet_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/sort_menu_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/saved_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/updates_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/sources_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/settings_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_visible_latest.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
+
+The untracked `physical-pixel-20260703/job_detail_final.png` is not valid evidence because it is a
+launcher/app-drawer capture, not a Job Detail screen.
+
+iOS and side-by-side references:
+
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_search_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`
+- `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`
+
+Android golden baselines:
+
+- `apps/atlas_flutter/test/goldens/android/search_top_compact.png`
+- `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`
+- `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png`
+- `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`
+- `apps/atlas_flutter/test/goldens/android/job_detail_top.png`
+- `apps/atlas_flutter/test/goldens/android/saved_tab.png`
+- `apps/atlas_flutter/test/goldens/android/updates_tab.png`
+- `apps/atlas_flutter/test/goldens/android/sources_tab.png`
+- `apps/atlas_flutter/test/goldens/android/settings_tab.png`
 
 ## Verification Snapshot
 
-Latest app-code verification:
+Latest app-code verification after the ANR and cached deadline fixes:
+
+- `dart analyze` passed.
+- `flutter test test/widget_test.dart` passed with the lazy Search result-row regression.
+- `flutter test test/atlas_search_controller_test.dart` passed with cached expired-open filtering
+  coverage.
+- `flutter test --coverage` passed with 67 tests.
+- `flutter build apk --release` passed:
+  `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
+- `adb install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success` on Pixel 8 Pro
+  `38281FDJG001DJ` before the device was detached.
+- Physical sort interaction passed: `Sort: Closing soon` opened and no ANR dialog appeared after
+  waiting beyond Android's 5-second input timeout.
+- PR #10 checks were green after the latest push: `GitGuardian Security Checks` and `python` passed.
+- Thread-aware Copilot review query found no current non-outdated unresolved actionable threads.
+
+Previously verified and still relevant:
 
 - `dart format --set-exit-if-changed .` passed.
-- `dart analyze` passed.
-- `flutter test --coverage` passed with 65 tests: `3009/3262` lines, `92.24%`.
 - `flutter build apk --debug` passed.
-- `flutter build apk --release` passed.
-- `flutter build appbundle --release` passed.
-- `flutter test integration_test -d emulator-5554` passed after simplifying the device smoke test to
-  launch plus primary tab navigation. Filter/sort/modal behavior remains covered by widget tests.
-- `flutter test integration_test -d 38281FDJG001DJ` built and installed the debug test APK, but the
-  device-driven test did not complete after launch and was interrupted after `1:46`; the connected
-  Pixel still reports keyguard/doze state.
-- `swift build --scratch-path /private/tmp/atlas-previewhost-build` passed for
-  `apps/apple/PreviewHost`.
-- `xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost
-  -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
-  -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed.
-- `xcrun simctl` boot/install/launch/screenshot captured the fresh iOS Simulator Search reference.
-- `swift build --scratch-path /private/tmp/atlas-swift-build` passed after adding the
-  source-rendered reference capture harness.
-- `xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost
-  -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
-  -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed again.
-- `xcrun simctl` installed and launched `AtlasIOSHost` with `SIMCTL_CHILD_ATLAS_REFERENCE_CAPTURE`
-  modes for Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings; screenshots
-  were captured under `screenshots/ios-simulator-expanded-20260703/`.
-- `swift build --scratch-path /private/tmp/atlas-swift-build` passed after adding scroll-targeted
-  filter-section capture modes.
-- `xcodebuild -project apps/apple/AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost
-  -destination 'platform=iOS Simulator,id=0146410E-539C-43FF-BAE6-159D9E27006D'
-  -derivedDataPath /private/tmp/atlas-ioshost-derived CODE_SIGNING_ALLOWED=NO build` passed after
-  adding scroll-targeted filter-section capture modes.
-- `xcrun simctl` launched `AtlasIOSHost` with the new `SIMCTL_CHILD_ATLAS_REFERENCE_CAPTURE`
-  filter-section and cascade modes; nine 1206x2622 PNG screenshots were captured under
-  `screenshots/ios-simulator-filter-sections-20260703/`.
-- `/Users/yutsukioka2/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
-  /private/tmp/make_filter_side_by_side.py` generated nine iOS-vs-Android Filter side-by-side
-  screenshots plus a contact sheet under `screenshots/ios-android-filter-side-by-side-20260703/`.
-  The Japan/Tokyo Android panes are cropped above the keyboard for cleaner review.
-- `/Users/yutsukioka2/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
-  /private/tmp/make_primary_side_by_side.py` generated six iOS-vs-Android primary-screen
-  side-by-side screenshots plus a contact sheet under
-  `screenshots/ios-android-primary-side-by-side-20260703/`.
-- `flutter test test/search_golden_test.dart --name "filter sheet country cascade"` failed first
-  because `goldens/android/filter_country_jpn.png` did not exist.
-- `flutter test --update-goldens test/search_golden_test.dart --name "filter sheet (country|city)
-  cascade"` generated `filter_country_jpn.png` and `filter_city_tokyo.png`.
-- `flutter test test/search_golden_test.dart` passed with the new Country -> City and City ->
-  Country cascade golden tests.
-- `flutter test test/search_golden_test.dart` passed after generating
-  `test/goldens/android/search_top_compact.png`, `test/goldens/android/filter_sheet_top.png`, and
-  `test/goldens/android/job_detail_top.png`.
-- `flutter test test/tab_golden_test.dart` passed after generating `saved_tab.png`,
-  `updates_tab.png`, `sources_tab.png`, and `settings_tab.png`.
-- Current `flutter test --coverage` passed with 64 tests: `3002/3255` lines, `92.23%`.
+- `flutter build appbundle --release` passed:
+  `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`.
+- `flutter test integration_test -d emulator-5554` passed.
+- `swift build` and `xcodebuild` passed for the iOS reference capture harness.
 
-Latest artifacts:
+## Latest Artifacts
 
 - Release APK:
   `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk`
 - Release AAB:
   `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`
-
-Latest physical install evidence:
-
+- Installed package before detach: `com.yutsukioka.jobagg.atlas`
 - Device: Pixel 8 Pro `38281FDJG001DJ`
-- Package: `com.yutsukioka.jobagg.atlas`
-- Last installed release APK timestamp: `2026-07-03 04:58:56`
+- Package `lastUpdateTime`: `2026-07-03 04:58:56`
 
 ## Remaining Gaps
 
-- Physical Pixel in-app screenshots are missing because the device remains locked.
-- Physical offline restart with cached data visible is not yet human-verified.
-- Human G3 approval is pending.
-- Source-rendered iOS references now exist for primary screens and the major Filter
-  section/cascade states, and generated Filter plus primary-screen side-by-side comparisons exist.
-  Exact user-provided iOS screenshots are not available as local files for final pixel-paired
-  side-by-side review.
-- Additional Android scrolled-state or component goldens may still be useful after physical/iOS
-  review, but primary Search, filter-sheet, Job Detail, Saved, Updates, Sources, and Settings
-  baselines now exist.
+- Corrected physical Job Detail screenshot is pending.
+- Physical offline restart with cached data visible is pending after the final cache/deadline fix.
+- Human G3 physical-device approval is pending.
+- Exact user-provided iOS screenshots are not available as local files for final pixel-paired
+  comparison; source-rendered iOS Simulator references are available.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
-  should decide whether this is visually close enough to the iOS reference.
-- Existing source Android Japan/Tokyo cascade screenshots show the software keyboard because the
-  text fields are focused. The generated side-by-side review now crops those panes above the
-  keyboard, and keyboard-free cascade states are covered by Flutter goldens. Physical recapture
-  should still include full-screen non-keyboard states.
+  should decide whether this is visually close enough to iOS or should become a dedicated
+  selected-chip editor.
 - Backend does not expose full server-side cascade/facet metadata for City/Country or
   Grade/Seniority; Android computes those facets locally from cached rows.
 
 ## Required Closeout Actions
 
-1. Unlock Pixel 8 Pro `38281FDJG001DJ` and keep the screen awake.
+1. Reconnect and unlock Pixel 8 Pro `38281FDJG001DJ`.
 2. Start or restore the local API at `http://10.253.1.43:8765`.
 3. Follow `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`.
-4. Capture the required physical screenshots into
+4. Capture corrected physical Job Detail and offline-restart screenshots into
    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/`.
 5. Re-run live count reconciliation against `/api/health` and `/api/search`.
-6. Copy the user-provided iOS screenshots into the repo or provide accessible paths, then update
-   `IOS_ANDROID_VISUAL_REVIEW.md` with true iOS-vs-Android pairs against those exact images.
+6. Copy the user-provided iOS screenshots into the repo or provide accessible paths if exact
+   user-screenshot pairing is required.
 7. Post final report evidence as a PR comment and wait for `APPROVED: G3`.
 
 ## Honest Score
 
-Current strict score: `84/100`.
+Current strict score: `86/100`.
 
-The score improves because source-rendered iOS references now exist for the primary screens plus
-the major Filter section/cascade states, and Filter plus primary-screen side-by-side packages are
-generated. It is still capped below final parity because physical Pixel in-app evidence and exact
-user-provided iOS side-by-side review are still missing. Do not claim final Android parity
-completion until those gates are satisfied.
+The score reflects implemented cache/filter/icon/Search/data/detail/tab work, green automated
+verification, source-rendered iOS references, side-by-side packages, and partial physical Pixel
+evidence. It remains below final parity because corrected physical Job Detail, physical offline
+restart, exact user-provided iOS screenshot pairing, and human G3 approval are still incomplete.

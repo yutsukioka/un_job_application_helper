@@ -111,6 +111,8 @@ Current review documents:
 - `docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`
 - `docs/loop/STATUS.jsonl`
 
-Physical Pixel verification is not complete until the Pixel is unlocked, in-app screenshots are
-captured, offline restart is verified on-device, and PR #10 receives the human approval comment for
-the physical-device gate.
+Physical Pixel verification is not complete yet. The 2026-07-03 pass captured physical in-app
+screenshots for Search, scrolled Search, Filter sheet, Sort menu, Saved, Updates, Sources, and
+Settings after the ANR/cache fixes, but the corrected physical Job Detail screenshot and physical
+offline-restart check are still pending because the device was detached before recapture. PR #10
+still needs the human approval comment for the physical-device gate.

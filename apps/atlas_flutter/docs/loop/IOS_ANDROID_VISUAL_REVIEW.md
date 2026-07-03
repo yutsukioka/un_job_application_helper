@@ -17,6 +17,8 @@ Filter side-by-side review set:
 `screenshots/ios-android-filter-side-by-side-20260703/`
 Primary-screen side-by-side review set:
 `screenshots/ios-android-primary-side-by-side-20260703/`
+Physical Pixel evidence set:
+`screenshots/physical-pixel-20260703/`
 Android golden baseline:
 
 - `../../test/goldens/android/search_top_compact.png`
@@ -94,6 +96,20 @@ mock and are now suitable for local human review. The user-provided iOS screensh
 available as files in this worktree, so final pixel-paired review against those exact images remains
 pending.
 
+The latest physical Pixel pass also captured Android in-app evidence for Search, scrolled Search,
+Filter sheet, Sort menu, Saved, Updates, Sources, and Settings after the Search ANR and cached
+deadline filtering fixes. Corrected physical Job Detail and physical offline restart screenshots
+remain pending because the Pixel was detached before recapture:
+
+- `screenshots/physical-pixel-20260703/search_top_final.png`
+- `screenshots/physical-pixel-20260703/search_scrolled_final.png`
+- `screenshots/physical-pixel-20260703/filter_sheet_final.png`
+- `screenshots/physical-pixel-20260703/sort_menu_final.png`
+- `screenshots/physical-pixel-20260703/saved_tab_final.png`
+- `screenshots/physical-pixel-20260703/updates_tab_final.png`
+- `screenshots/physical-pixel-20260703/sources_tab_final.png`
+- `screenshots/physical-pixel-20260703/settings_tab_final.png`
+
 Swift source references used for non-screenshot review:
 
 - `apps/apple/Sources/AtlasUI/SearchScreen.swift`: iOS tab structure and Search navigation shell.
@@ -110,7 +126,7 @@ Expanded source-rendered iOS Search reference:
 
 Latest Android Search evidence:
 
-![Android Search evidence](screenshots/detail-formatter-20260703/search_after_relaunch.png)
+![Android Search evidence](screenshots/physical-pixel-20260703/search_top_final.png)
 
 Fresh iOS Simulator vs Android side-by-side image:
 
@@ -126,7 +142,7 @@ Earlier checked-in iOS reference side-by-side image:
 | Top-right filter/bookmark group | Pass with style note | Android uses a rounded pill with Cupertino-style sliders/bookmark. Fresh iOS has the same grouped control hierarchy with a filled filter glyph. |
 | Search box under header | Pass | Both place search field directly below the header controls. |
 | Compact filter chips | Pass | Android chips are compact and horizontally arranged. |
-| Result count and local-save text | Pass with label note | Committed screenshots show older time-stamped counts such as `2,266`; the live POST `/api/search` total is now `2,178`, so Android should show `2,178 searchable results` after refresh. The `searchable results` label documents the reconciled difference from health `open_jobs`. |
+| Result count and local-save text | Pass with label note | Final physical Settings/Search evidence shows `2,355 searchable results`, matching POST `/api/search`; `/api/health` reported `2,452` raw `open_jobs`, with `97` deadline-past open rows hidden by Search. The `searchable results` label documents this intentional difference. |
 | Sort link alignment | Pass | Android sort control is compact and right aligned. |
 | Normal-state banners | Pass | Expanded iOS Search reference and latest Android evidence both show compact local-save status and no large normal-state cache banner. |
 | Compact list rows | Pass against current product requirement | Android rows are substantially denser and hide diagnostic text. Fresh iOS Simulator still shows diagnostic explanation text in rows, which conflicts with the newer Android acceptance rule. |
@@ -148,7 +164,11 @@ Generated iOS-vs-Android primary-screen review contact sheet:
 
 | Screen / state | iOS local reference | Android evidence | Review result |
 | --- | --- | --- | --- |
-| Search top, expanded source-rendered reference | `screenshots/ios-simulator-expanded-20260703/ios_search_reference.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Human-reviewable paired paths now exist. Both show the centered title, grouped filter/bookmark control, search field, compact chips, count/status, sort, bottom tabs, and dense list hierarchy. |
+| Search top, physical Pixel final | `screenshots/ios-simulator-expanded-20260703/ios_search_reference.png` | `screenshots/physical-pixel-20260703/search_top_final.png` | Physical Android evidence now exists for the post-ANR/post-cache-fix Search top. Both show the centered title, grouped filter/bookmark control, search field, compact chips, count/status, sort, bottom tabs, and dense list hierarchy. |
+| Search scrolled, physical Pixel final | `screenshots/ios-simulator-expanded-20260703/ios_search_reference.png` | `screenshots/physical-pixel-20260703/search_scrolled_final.png` | Physical Android scrolled evidence shows compact lazy-built result rows rather than large verbose cards. |
+| Filter sheet, physical Pixel final | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/physical-pixel-20260703/filter_sheet_final.png` | Physical Android sheet evidence exists for the dark modal structure, title, Done, and sticky actions. |
+| Sort menu, physical Pixel final | Swift `Sort` control behavior | `screenshots/physical-pixel-20260703/sort_menu_final.png` | Physical Android evidence shows the sort menu opens without the previous input ANR. |
+| Saved/Updates/Sources/Settings, physical Pixel final | `screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`, `ios_updates_reference.png`, `ios_sources_reference.png`, `ios_settings_reference.png` | `screenshots/physical-pixel-20260703/saved_tab_final.png`, `updates_tab_final.png`, `sources_tab_final.png`, `settings_tab_final.png` | Physical Android evidence exists for the implemented non-placeholder tabs. Settings shows the final count reconciliation. |
 | Search top | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703/search_top_refreshed.png` | Human-reviewable side-by-side generated. |
 | Search top, fresh iOS Simulator | `screenshots/ios-simulator-reference-20260703/ios_search_top_simulator.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Fresh side-by-side generated at `screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`; Android matches the top hierarchy and intentionally hides normal-state banners/diagnostics. |
 | Search top golden | iOS references above | `../../test/goldens/android/search_top_compact.png` | Android Search-top layout is covered by a Flutter golden. It is useful for regression, not a substitute for human screenshots because Flutter tests use the test renderer/font behavior. |
@@ -158,7 +178,7 @@ Generated iOS-vs-Android primary-screen review contact sheet:
 | Saved/Updates/Sources/Settings tab goldens | `screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`, `ios_updates_reference.png`, `ios_sources_reference.png`, `ios_settings_reference.png` | `../../test/goldens/android/saved_tab.png`, `../../test/goldens/android/updates_tab.png`, `../../test/goldens/android/sources_tab.png`, `../../test/goldens/android/settings_tab.png` | Implemented tabs are covered by Flutter goldens with seeded saved jobs/searches, update runs, source health, cache status, and server controls. |
 | Search top, no-banner regression | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/filter-cache-icons-emulator-20260703-current/search_refreshed_no_banner.png` | Prior release evidence shows `2,269 searchable results`, compact local-save text, and no large normal-state cache banner. |
 | Search top, source badge parity | `apps/apple/Sources/AtlasUI/AtlasComponents.swift` `SourceMonogram` | `screenshots/source-badge-parity-20260703/search_badges_64bit.png` | Android source badges now use 34px rounded squares, Swift-style Unicode-scalar source colors, and white initials like Swift. |
-| Search top, latest checked-in count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Checked-in release screenshot shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. Live API count has since moved to `2,178` and needs a fresh physical/emulator capture after refresh. |
+| Search top, historical detail-formatter count | `screenshots/ios-reference/iteration-8/ios_search_top.png` | `screenshots/detail-formatter-20260703/search_after_relaunch.png` | Historical checked-in release screenshot shows `2,266 searchable results`, compact local-save text, and no large normal-state cache banner. It is superseded for current count review by physical `search_top_final.png` / `settings_tab_final.png`, which show the refreshed `2,355 searchable results` state. |
 | Search scrolled | `screenshots/ios-simulator-expanded-20260703/ios_search_reference.png` for top reference; no scrolled iOS capture yet | `screenshots/filter-cache-icons-emulator-20260703/search_scrolled.png` | Android scrolled evidence captured; top paired iOS reference exists. |
 | Filter sheet top | `screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | Both show dark filter sheet structure, title, Done, sticky Reset/Apply, and compact count pills. |
 | Filter Location | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_top.png` | iOS and Android both expose City, Country, and uncertain-match controls before Scope. |
@@ -172,8 +192,8 @@ Generated iOS-vs-Android primary-screen review contact sheet:
 | Seniority -> Grade cascade | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_entry_junior_selected.png` | Entry Junior selected; Grade options narrow in the reviewable cascade state. |
 | Grade selected | `screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png` | `screenshots/filter-cache-icons-emulator-20260703/filter_grade_selected.png` | Grade selected state now has local iOS and Android evidence. |
 | Offline restart | Not applicable | `screenshots/filter-cache-icons-emulator-20260703-current/offline_restart_no_banner.png` | Cached rows visible immediately after offline relaunch with no large normal-state cache banner. |
-| Settings cache status | `screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png` | `screenshots/detail-formatter-20260703/settings_after_reload.png` | Shows cache timestamp, freshness, cached/search/health counts, refresh and clear controls. Screenshot count is `2,266`; live API count is now `2,178` and should be recaptured after refresh. |
-| Job Detail | `screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png` | `screenshots/detail-formatter-20260703/job_detail_top_fixed.png` | Shows populated detail with ATS formatter output; raw source data is hidden from the main detail body and remains behind diagnostics. |
+| Settings cache status | `screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png` | `screenshots/physical-pixel-20260703/settings_tab_final.png` | Shows cache timestamp, freshness, cached/search/health counts, refresh and clear controls. Final physical evidence shows `2,355 searchable results`, `2,452` health open jobs, and `97` hidden deadline-past open rows. |
+| Job Detail | `screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png` | `screenshots/detail-formatter-20260703/job_detail_top_fixed.png` | Emulator evidence shows populated detail with ATS formatter output; raw source data is hidden from the main detail body and remains behind diagnostics. Corrected physical Job Detail capture is still pending. |
 | Saved tab | `screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/saved_tab.png` | Implemented screen captured with an iOS local reference. |
 | Updates tab | `screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/updates_tab.png` | Implemented screen captured with an iOS local reference. |
 | Sources tab | `screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png` | `screenshots/filter-cache-icons-emulator-20260703/sources_tab.png` | Implemented screen captured with an iOS local reference. |
@@ -209,7 +229,8 @@ Generated iOS-vs-Android primary-screen review contact sheet:
 - [x] Android Country -> City and City -> Country cascade states have keyboard-free golden
   regression baselines.
 - [x] Android Search-top, filter-sheet top, Job Detail top, and implemented tab layout goldens are checked in.
-- [ ] Physical Pixel screenshots are captured after unlock.
+- [x] Physical Pixel Search, scrolled Search, Filter sheet, Sort menu, Saved, Updates, Sources, and Settings screenshots are captured after the ANR/cache fixes.
+- [ ] Corrected physical Pixel Job Detail screenshot and physical offline-restart screenshot are captured.
 - [ ] User-provided iOS filter/detail screenshots are checked into or copied into the repo for true pixel-paired comparison.
 
 ## Remaining Visual Differences / Risks
@@ -226,14 +247,15 @@ Generated iOS-vs-Android primary-screen review contact sheet:
   keyboard so the cascade state is reviewable. The source emulator screenshots still include the
   keyboard because the location fields were focused; physical recapture should capture cleaner
   full-screen non-keyboard states for final review.
-- Physical Pixel rendering may differ from the emulator capture; the physical device must be
-  unlocked and reviewed before this can be treated as final.
+- Physical Pixel rendering is now partially captured for primary Search/tabs, but corrected physical
+  Job Detail and offline-restart screenshots are still missing because the device was detached
+  before recapture.
 
 ## Score Impact
 
 This package now satisfies the local source-rendered iOS evidence requirement for Search, Filter
 sheet, the major Filter subsections/cascade states, Job Detail, Saved, Updates, Sources, and
 Settings, and includes generated iOS-vs-Android side-by-side Filter and primary-screen comparisons.
-It still does not satisfy the final human gate because exact user-provided iOS screenshot files and
-physical Pixel screenshots are still blocked. The strict completion score remains below 85 until
-those two review gaps are closed.
+It still does not satisfy the final human gate because exact user-provided iOS screenshot files,
+corrected physical Job Detail capture, physical offline-restart evidence, and human G3 approval are
+still pending. The strict completion score is currently 86/100, below final parity.

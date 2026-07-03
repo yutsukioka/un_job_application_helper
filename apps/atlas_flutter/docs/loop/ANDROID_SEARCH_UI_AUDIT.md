@@ -13,12 +13,13 @@ controls. Job Detail now also uses a Dart port of the Swift ATS detail formatter
 raw source payloads no longer dominate the main detail screen.
 
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
-Pixel 8 Pro, and the device is now unlocked enough for physical in-app Search screenshots. Physical
-verification caught a real Search-screen input ANR and a cached `Open only` data bug; both are now
-fixed and covered by regression tests. Emulator screenshots from the release app still provide the
-broader human-reviewable evidence for cache, filter, cascade, icon, tab, and detail parity.
-Source-rendered iOS Simulator captures provide local references for Search, Filter sheet, Job
-Detail, Saved, Updates, Sources, and Settings.
+Pixel 8 Pro before the device was detached. Physical verification caught a real Search-screen input
+ANR and a cached `Open only` data bug; both are now fixed and covered by regression tests. Physical
+screenshots now cover Search, scrolled Search, Filter sheet, Sort menu, Saved, Updates, Sources, and
+Settings, while corrected physical Job Detail and offline-restart evidence remain pending. Emulator
+screenshots from the release app still provide the broader human-reviewable evidence for cache,
+filter, cascade, icon, tab, and detail parity. Source-rendered iOS Simulator captures provide local
+references for Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings.
 
 Latest physical Pixel update:
 
@@ -49,9 +50,9 @@ Latest physical Pixel update:
 
 Latest icon/startup update: Android launcher mipmap assets now use the Apple Atlas iOS 1024px icon
 artwork instead of Flutter's default launcher artwork. A focused asset regression test covers the
-expected Android density files. The debug APK with the new launcher icon and startup-cache
-first-frame fix was installed on the connected Pixel 8 Pro, but physical in-app capture still
-requires unlocking the secured device.
+expected Android density files. The current release APK with the launcher icon, startup-cache
+first-frame fix, lazy Search list, and cached-deadline fix was installed on the Pixel 8 Pro before
+the device was detached.
 
 ## Implemented This Slice
 
@@ -294,12 +295,23 @@ Latest actionable Copilot review clusters addressed:
 
 ## Screenshot Evidence
 
-Physical Pixel in-app screenshots are still blocked because the connected Pixel remained on the lock
-screen. Captured physical-device files show the lock state only:
+Physical Pixel in-app screenshots captured after the ANR/cache fixes:
 
-- `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/search_top.png`
-- `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/lock_check.png`
-- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/current_visibility_check.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_top_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_scrolled_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/filter_sheet_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/sort_menu_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/saved_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/updates_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/sources_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/settings_tab_final.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_visible_latest.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
+
+Corrected physical Job Detail and physical offline-restart screenshots are still pending. The
+untracked `physical-pixel-20260703/job_detail_final.png` is not valid evidence because it captured
+the launcher/app drawer, not Atlas Job Detail.
 
 The launcher icon asset itself can be reviewed at:
 
@@ -454,10 +466,10 @@ Previously generated evidence remains available for Search top comparison:
 - `apps/atlas_flutter/docs/loop/screenshots/ios-reference/iteration-8/ios_search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
 
-The remaining screenshot gaps are physical Pixel in-app evidence after the device is unlocked and
-exact user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS
-references now exist for the main review screens plus the major filter sections and cascade states,
-and generated side-by-side Filter plus primary-screen comparisons are available for human review.
+The remaining screenshot gaps are corrected physical Job Detail, physical offline restart, and exact
+user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS references
+now exist for the main review screens plus the major filter sections and cascade states, and
+generated side-by-side Filter plus primary-screen comparisons are available for human review.
 
 ## Manual Emulator Evidence
 
@@ -475,14 +487,13 @@ and generated side-by-side Filter plus primary-screen comparisons are available 
 
 ## Current Remaining Gaps
 
-- Physical in-app screenshots for the new cache/filter/icon slice are missing due to lock-screen
-  blocker, though emulator screenshots are now captured.
-- Fresh Pixel check on 2026-07-03 still shows the lock screen while Atlas is resumed underneath
-  keyguard.
+- Corrected physical Job Detail screenshot is still missing because the Pixel was detached before
+  recapture.
+- Physical offline restart with cached data visible is still pending after the final
+  cached-deadline fix.
 - Search, Filter sheet, the major Filter sections/cascade states, Job Detail, Saved, Updates,
   Sources, and Settings now have source-rendered iOS Simulator reference screenshots. True
-  pixel-paired human review still needs local copies of the user-provided iOS screenshots and
-  physical Android captures.
+  pixel-paired human review still needs local copies of the user-provided iOS screenshots.
 - Search-top, filter-sheet top, populated Job Detail top, and implemented Saved/Updates/Sources/
   Settings tabs now have Android golden regression tests. Physical Pixel and iOS reference review
   are still required.
@@ -507,29 +518,30 @@ and generated side-by-side Filter plus primary-screen comparisons are available 
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
-- Physical Pixel offline restart still needs human verification after the device is unlocked.
+- Human G3 approval is still pending.
 
 ## Scorecard
 
-Strict score under the new user caps: **84/100**.
+Strict score under the new user caps: **86/100**.
 
 The local iOS evidence gap is reduced because source-rendered iOS references now exist for Search,
 Filter sheet sections/cascades, Job Detail, Saved, Updates, Sources, and Settings, with generated
-iOS-vs-Android side-by-side Filter and primary-screen comparisons. The score remains below final
-completion because physical Pixel in-app screenshots/offline restart and exact user-provided iOS
-screenshot pairing are still not complete.
+iOS-vs-Android side-by-side Filter and primary-screen comparisons. Physical Search, filter, sort,
+and tab screenshots are now captured. The strict score remains below final completion because
+corrected physical Job Detail, physical offline restart, exact user-provided iOS screenshot pairing,
+and human G3 approval are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
+| Persistent cache | 19 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; cached/offline `Open only` now mirrors the Search API. Physical offline restart still pending. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
-| Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
-| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,178 due deadline timing. |
-| Tests/builds | 15 / 15 | Format, analyze, focused Search/filter golden tests, full Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
-| Evidence/human readiness | 7 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, Search/Filter/primary-screen side-by-side comparisons are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
+| Icon parity | 9 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; launcher mipmaps use the Apple Atlas icon; source monograms now match Swift color treatment. |
+| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; final physical Search count is 2,355 searchable results versus 2,452 raw health open jobs. |
+| Tests/builds | 15 / 15 | Format/analyze/full Flutter tests, focused ANR/cache regressions, debug APK, release APK, release AAB, and emulator integration have passed; latest release APK was installed on Pixel before detach. |
+| Evidence/human readiness | 8 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references, side-by-side comparisons, and physical Search/filter/sort/tab screenshots are captured; corrected physical Job Detail, physical offline restart, and exact user-provided iOS screenshot pairing still need final human review. |
 
 ## Next Required Human Action
 
-Unlock the connected Pixel 8 Pro, then rerun physical screenshot capture and offline-restart
-verification. Do not claim 80%+ completion until those screenshots prove the Android UI/behavior is
-close to the iOS reference.
+Reconnect and unlock the Pixel 8 Pro, then capture corrected Job Detail and physical offline-restart
+evidence. Do not claim final Android parity until those screenshots and the human G3 approval are
+complete.

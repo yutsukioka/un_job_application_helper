@@ -1,129 +1,71 @@
 # Next Slice
 
-Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
-City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
-The Android launcher icon now uses the Apple Atlas icon artwork across Android mipmap densities.
-Emulator release-app screenshots, source-rendered iOS Simulator references, filter-section/cascade
-iOS Simulator references, generated Filter and primary-screen side-by-side comparisons,
-keyboard-free location-cascade goldens, offline restart evidence, and Android
-Search/filter-sheet/Job Detail/tab golden baselines are captured. PR #10 remains below completion
-because physical Pixel in-app screenshots, physical offline-restart verification, and exact
-user-provided iOS screenshot pairing are still pending.
+Gate state: implementation for persistent cache, iOS-style filter groups, multi-value
+City/Country cascade, Seniority/Grade cascade, Cupertino-style icon mapping, Apple Atlas Android
+launcher icon, compact Search rows, Updates/Sources, and populated Job Detail is in place. The
+Search ANR reported on the physical Pixel was fixed by changing Search results to lazy row
+construction, and cached/offline `Open only` filtering now excludes past-deadline open rows like the
+Search API.
+
+PR #10 is still below final completion because corrected physical Job Detail capture, physical
+offline-restart verification, exact user-provided iOS screenshot pairing, and human G3 approval are
+pending. The Pixel 8 Pro was detached after the latest physical screenshot pass, so no further ADB
+verification is possible until it is reconnected.
 
 ## Intent
 
-Capture human-reviewable evidence on the unlocked Pixel 8 Pro, add local copies of the
-user-provided iOS screenshots if available, complete the final pixel-paired iOS-vs-Android review
-package, and fix any visible regressions found from that evidence. The latest debug APK is already
-installed on the connected Pixel with the updated Apple Atlas launcher icon and startup-cache
-first-frame fix. Do not start broad backend or JobAgg lifecycle work.
+When the Pixel is reconnected, finish the remaining physical review gaps without broad backend or
+JobAgg lifecycle work: recapture Job Detail correctly, run the offline restart/cache check on the
+phone, capture any missing filter-section states if human review needs them, and post the final
+evidence package for G3.
 
 ## Acceptance Tests
 
-- Unlock Pixel 8 Pro `38281FDJG001DJ`.
-- Confirm `mDreamingLockscreen=false`; the latest check still showed the lock screen while Atlas was
-  resumed underneath keyguard.
-- Launch installed release APK `com.yutsukioka.jobagg.atlas`.
-- With server available, refresh Search and confirm cached dataset is written.
-- Kill app, disable/stop server or make it unreachable, relaunch app, and confirm cached Search rows
-  appear immediately with `Offline (cached)`/stale state.
+- Reconnect and unlock Pixel 8 Pro `38281FDJG001DJ`.
+- Confirm the latest release APK still launches `com.yutsukioka.jobagg.atlas`.
+- With server `http://10.253.1.43:8765` available, refresh Search and confirm the displayed count
+  matches POST `/api/search` for default open/searchable filters.
+- Kill app, make the server unreachable, relaunch app, and confirm cached Search rows appear
+  immediately with stale/offline state.
 - Verify Search, filter sheet, filter chips, sort, saved state, Job Detail, Updates, Sources, and
   Settings still work from cached or live data as appropriate.
-- Capture physical Pixel screenshots:
-  - Search top and scrolled
-  - Filter sheet top
-  - Filter Location, Contract, Seniority, Grade, CCOG, Organizations, Work Mode, Capability Tags
-  - Filter sheet with Japan selected
-  - Filter sheet with Tokyo selected
-  - Filter sheet with Entry Junior selected
-  - Filter sheet with grade `P1` selected if present
-  - Offline restart with cached data visible
-  - Settings cache status
-  - Job Detail, Saved, Updates, Sources
-- Update `ANDROID_SEARCH_UI_AUDIT.md` with physical screenshot paths and human-visible differences.
-- Run `dart format --set-exit-if-changed .`, `dart analyze`, `flutter test --coverage`, and the
-  Android release build after any visual fixes.
+- Capture corrected physical screenshots for Job Detail and offline restart. Recapture filter
+  section/cascade states only if the human reviewer needs physical-device versions beyond the
+  existing emulator/iOS side-by-side evidence.
+- Update `ANDROID_SEARCH_UI_AUDIT.md` and `PR_REPORT.md` with final screenshot paths and any
+  human-visible differences.
+- After any app-code change, rerun `dart format --set-exit-if-changed .`, `dart analyze`,
+  `flutter test --coverage`, and the Android release build.
 
 ## Known Remaining Technical Gaps
 
 | Gap | Current state | Required next action |
 | --- | --- | --- |
-| Physical screenshot evidence | Emulator screenshots exist; Pixel capture still shows lock screen only. | Unlock device and capture post-fix app screenshots. |
-| Physical offline restart | Covered by controller/cache tests and emulator screenshot evidence, not physical screenshot evidence. | Perform manual USB Pixel restart/offline flow and capture screenshot. |
-| Physical capture runbook | Added `PHYSICAL_PIXEL_VERIFICATION.md` with commands, required screenshots, and pass/fail gates. | Use it after unlocking the Pixel. |
-| iOS side-by-side package | Source-rendered iOS Simulator references now exist for Search, Filter sheet, Filter section/cascade states, Job Detail, Saved, Updates, Sources, and Settings. Generated Filter and primary-screen side-by-side comparisons exist. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots, then build final side-by-side review package after physical Android captures. |
-| Android goldens | Search-top, filter-sheet top, populated Job Detail top, Saved, Updates, Sources, and Settings goldens exist under `test/goldens/android/`. | Use physical Pixel/iOS review to decide whether additional scrolled-state or component goldens are needed. |
-| Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
-| Cascade screenshot keyboard | Generated side-by-side comparisons now crop the Android Japan/Tokyo panes above the keyboard, and keyboard-free cascade goldens exist. Source emulator screenshots still include keyboard. | Recapture cleaner full-screen physical/emulator cascade states with keyboard dismissed after the Pixel is unlocked. |
-| Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
-| Coverage | 92.24% after launcher-icon, Search, filter-sheet, location-cascade, Job Detail, and tab golden coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
-| Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control; latest physical capture is blocked by lock screen, not by an app assertion. | Keep this green after any physical-review fixes. |
-| Launcher icon | Android launcher mipmaps now use the Apple Atlas icon and are covered by `test/android_launcher_icon_test.dart`. | Human-review the launcher icon on the unlocked Pixel home/app drawer after install. |
+| Physical screenshot evidence | Physical Search top/scrolled, Filter sheet, Sort menu, Saved, Updates, Sources, and Settings are captured. Corrected physical Job Detail was not captured before detach. | Reconnect Pixel and capture a real Job Detail screen. |
+| Physical offline restart | Covered by controller/cache tests and emulator evidence; not yet physically verified after the final cache/deadline fix. | Perform USB Pixel offline restart flow and capture screenshot. |
+| iOS side-by-side package | Source-rendered iOS Simulator references and generated side-by-side packages exist. Exact user-provided iOS screenshots are not available as local files. | Add/copy the user-provided iOS screenshots if available, then update the final comparison. |
+| Android goldens | Search-top, filter-sheet top, location cascade, populated Job Detail, Saved, Updates, Sources, and Settings goldens exist. | Add more only if human review finds a concrete visual regression. |
+| Multiple city/country selections | Android supports comma-separated text input plus multi-select pills; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether this display is close enough to iOS or should become a dedicated selected-chip editor. |
+| Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add API facet metadata only if server-side full-dataset counts become required. |
+| Human gate | PR checks were green and no current non-outdated unresolved actionable Copilot threads were found; G3 is still pending. | Post/refresh the evidence package and wait for explicit `APPROVED: G3`. |
 
 ## Last Verification Snapshot
 
-- Format: pass.
-- Analyze: pass.
-- Full tests: pass, 65 tests after launcher-icon, Search-top, filter-sheet, location-cascade,
-  Job Detail, and tab golden coverage.
-- Coverage: pass, `3009/3262` lines, `92.24%`.
-- Debug APK: pass.
-- Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
-- Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
-- USB Pixel install: pass, latest debug APK installed with updated launcher icon; release APK and
-  AAB were also rebuilt successfully.
-- Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
-- Emulator offline restart: pass, cached Search showed results immediately from local save.
-- Current live Android/Search API count evidence: POST `/api/search` now returns `2,178`
-  searchable results with `2,420` health `open_jobs`; checked-in screenshots still show older
-  counts and need recapture after the Pixel is unlocked/refreshed.
-- Fresh iOS Simulator Search side-by-side review:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`.
-- Expanded source-rendered iOS references:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_search_reference.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_filter_reference.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_detail_reference.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_saved_reference.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_updates_reference.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_sources_reference.png`, and
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-expanded-20260703/ios_settings_reference.png`.
-- Source-rendered iOS filter-section/cascade references:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_location.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_contract_seniority.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_ccog.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_organizations_work_mode.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_capability_tags.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_japan_selected.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_tokyo_selected.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_entry_junior_selected.png`, and
-  `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-filter-sections-20260703/ios_filter_grade_selected.png`.
-- Generated iOS-vs-Android Filter side-by-side package:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_side_by_side_contact_sheet.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_location_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_contract_seniority_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_ccog_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_organizations_work_mode_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_capability_tags_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_japan_selected_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_tokyo_selected_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_entry_junior_selected_ios_android_side_by_side.png`, and
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-filter-side-by-side-20260703/filter_grade_selected_ios_android_side_by_side.png`.
-- Generated iOS-vs-Android primary-screen side-by-side package:
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/primary_side_by_side_contact_sheet.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/search_top_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/job_detail_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/saved_tab_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/updates_tab_ios_android_side_by_side.png`,
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/sources_tab_ios_android_side_by_side.png`, and
-  `apps/atlas_flutter/docs/loop/screenshots/ios-android-primary-side-by-side-20260703/settings_tab_ios_android_side_by_side.png`.
-- Keyboard-free Android location-cascade goldens:
-  `apps/atlas_flutter/test/goldens/android/filter_country_jpn.png` and
-  `apps/atlas_flutter/test/goldens/android/filter_city_tokyo.png`.
-- Android golden baselines:
-  `apps/atlas_flutter/test/goldens/android/search_top_compact.png`,
-  `apps/atlas_flutter/test/goldens/android/filter_sheet_top.png`, and
-  `apps/atlas_flutter/test/goldens/android/job_detail_top.png`,
-  `apps/atlas_flutter/test/goldens/android/saved_tab.png`,
-  `apps/atlas_flutter/test/goldens/android/updates_tab.png`,
-  `apps/atlas_flutter/test/goldens/android/sources_tab.png`, and
-  `apps/atlas_flutter/test/goldens/android/settings_tab.png`.
+- Format/analyze/full tests: pass from the latest app-code verification.
+- Latest full Flutter suite after ANR/cache fixes: `flutter test --coverage`, 67 tests, passed.
+- Release APK: pass, `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk`.
+- Release AAB: pass, `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`.
+- Release APK install before detach: pass on Pixel 8 Pro `38281FDJG001DJ`.
+- Physical ANR fix check: pass; `Sort: Closing soon` opened without another ANR after the lazy-list
+  fix.
+- Current live reconciliation before detach: `/api/health open_jobs=2452`; POST `/api/search`
+  returned `total=2355`; physical Settings after `Refresh Local Save Now` displayed
+  `2,355 searchable results`, `2,452 health open jobs`, and `97 deadline-past open rows hidden by
+  Search`.
+- Physical screenshots captured:
+  `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_top_final.png`,
+  `search_scrolled_final.png`, `filter_sheet_final.png`, `sort_menu_final.png`,
+  `saved_tab_final.png`, `updates_tab_final.png`, `sources_tab_final.png`, and
+  `settings_tab_final.png`.
+- Corrected physical Job Detail screenshot: pending; the untracked `job_detail_final.png` is an
+  invalid launcher/app-drawer capture and is intentionally excluded from evidence.
