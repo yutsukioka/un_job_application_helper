@@ -2,6 +2,7 @@
 
 Gate state: implementation for persistent cache, full iOS-style filter groups, multi-value
 City/Country cascade, Seniority/Grade cascade, and core Cupertino-style icon mapping is in place.
+The Android launcher icon now uses the Apple Atlas icon artwork across Android mipmap densities.
 Emulator release-app screenshots, source-rendered iOS Simulator references, filter-section/cascade
 iOS Simulator references, generated Filter and primary-screen side-by-side comparisons,
 keyboard-free location-cascade goldens, offline restart evidence, and Android
@@ -13,8 +14,9 @@ user-provided iOS screenshot pairing are still pending.
 
 Capture human-reviewable evidence on the unlocked Pixel 8 Pro, add local copies of the
 user-provided iOS screenshots if available, complete the final pixel-paired iOS-vs-Android review
-package, and fix any visible regressions found from that evidence. Do not start broad backend or
-JobAgg lifecycle work.
+package, and fix any visible regressions found from that evidence. The latest debug APK is already
+installed on the connected Pixel with the updated Apple Atlas launcher icon and startup-cache
+first-frame fix. Do not start broad backend or JobAgg lifecycle work.
 
 ## Acceptance Tests
 
@@ -54,21 +56,22 @@ JobAgg lifecycle work.
 | Multiple city/country selections | Android now supports comma-separated text input plus multi-select pills for multiple cities/countries; values serialize to Search API list fields and filter cached rows as OR within Location. | Human-review whether the comma text display is visually close enough to iOS or should become a dedicated selected-chip editor. |
 | Cascade screenshot keyboard | Generated side-by-side comparisons now crop the Android Japan/Tokyo panes above the keyboard, and keyboard-free cascade goldens exist. Source emulator screenshots still include keyboard. | Recapture cleaner full-screen physical/emulator cascade states with keyboard dismissed after the Pixel is unlocked. |
 | Backend location/grade facet metadata | Android computes city/country and grade/seniority facets locally from cached rows. | Add smallest API facet metadata only if server-side full-dataset counts are required. |
-| Coverage | 92.23% after Search, filter-sheet, location-cascade, Job Detail, and tab golden coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
-| Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control. | Keep this green after any physical-review fixes. |
+| Coverage | 92.24% after launcher-icon, Search, filter-sheet, location-cascade, Job Detail, and tab golden coverage. | Add screenshot/widget tests for any follow-up UI fixes; do not claim completion from coverage alone. |
+| Integration test | Passed on `emulator-5554` after updating the smoke test for the new `Done` filter-sheet control; latest physical capture is blocked by lock screen, not by an app assertion. | Keep this green after any physical-review fixes. |
+| Launcher icon | Android launcher mipmaps now use the Apple Atlas icon and are covered by `test/android_launcher_icon_test.dart`. | Human-review the launcher icon on the unlocked Pixel home/app drawer after install. |
 
 ## Last Verification Snapshot
 
 - Format: pass.
 - Analyze: pass.
-- Full tests: pass, 64 tests after Search-top, filter-sheet, location-cascade, Job Detail, and tab
-  golden coverage.
-- Coverage: pass, `3002/3255` lines, `92.23%`.
+- Full tests: pass, 65 tests after launcher-icon, Search-top, filter-sheet, location-cascade,
+  Job Detail, and tab golden coverage.
+- Coverage: pass, `3009/3262` lines, `92.24%`.
 - Debug APK: pass.
 - Release AAB: pass, `build/app/outputs/bundle/release/app-release.aab`.
 - Release APK: pass, `build/app/outputs/flutter-apk/app-release.apk`.
-- USB Pixel install: pass, `lastUpdateTime=2026-07-03 04:58:56` after rebuilding and installing the
-  current branch release APK.
+- USB Pixel install: pass, latest debug APK installed with updated launcher icon; release APK and
+  AAB were also rebuilt successfully.
 - Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
 - Emulator offline restart: pass, cached Search showed results immediately from local save.
 - Current live Android/Search API count evidence: `2,266 searchable results` with `2,420`

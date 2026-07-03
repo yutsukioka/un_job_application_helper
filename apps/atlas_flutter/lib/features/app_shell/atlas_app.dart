@@ -1592,7 +1592,11 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
         AtlasAppController(localCacheStoreFactory: _defaultCacheStore);
     _ownsController = widget.controller == null;
     if (_ownsController) {
-      unawaited(_controller.loadPersistedCache());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(_controller.loadPersistedCache());
+        }
+      });
     }
   }
 

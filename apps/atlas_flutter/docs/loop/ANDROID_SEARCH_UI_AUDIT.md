@@ -19,6 +19,12 @@ evidence for the cache, filter, cascade, icon, tab, and detail slice. Source-ren
 captures now provide local references for Search, Filter sheet, Job Detail, Saved, Updates, Sources,
 and Settings.
 
+Latest icon/startup update: Android launcher mipmap assets now use the Apple Atlas iOS 1024px icon
+artwork instead of Flutter's default launcher artwork. A focused asset regression test covers the
+expected Android density files. The debug APK with the new launcher icon and startup-cache
+first-frame fix was installed on the connected Pixel 8 Pro, but physical in-app capture still
+requires unlocking the secured device.
+
 ## Implemented This Slice
 
 - Persistent file-backed cache in Android app-private storage through the native `filesDir` method
@@ -48,6 +54,8 @@ and Settings.
 - Core app icons now route through shared `AtlasIcons` using Cupertino-style symbols for Search,
   filters, bookmark, deadline, location, organization, contract, remote, updates, sources, settings,
   chevron, info/warning, copy/link, refresh, and delete.
+- Android launcher mipmaps now use `apps/apple/Design/AppIcon/AppIcon-iOS-1024.png` as their source
+  at mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi densities instead of the default Flutter launcher artwork.
 - Search result source badges now match the Swift `SourceMonogram` pattern: 34px rounded squares,
   deterministic per-source colors, and white source initials instead of pale cyan generic badges.
 - Job Detail now formats section payloads through `AtlasATSDetailFormatter`, matching Swift
@@ -178,6 +186,21 @@ Commands run from `apps/atlas_flutter`:
   installed the debug test APK, but the device-driven test did not complete after launch and was
   interrupted after `1:46`; the Pixel still reports keyguard/doze state, so this remains a physical
   automation blocker, not an app assertion failure.
+- Latest launcher/startup verification:
+  - `dart format --set-exit-if-changed .` passed after formatting the cache isolate patch.
+  - `dart analyze` passed with no issues.
+  - Focused cache/icon tests passed: `flutter test test/atlas_local_cache_test.dart
+    test/android_launcher_icon_test.dart`.
+  - Full Flutter suite passed: `flutter test --coverage`, 65 tests, `3009/3262` lines (`92.24%`).
+  - `flutter build apk --debug` passed and produced `build/app/outputs/flutter-apk/app-debug.apk`.
+  - `flutter build apk --release` passed and produced `build/app/outputs/flutter-apk/app-release.apk`
+    (`51.0MB`).
+  - `flutter build appbundle --release` passed and produced
+    `build/app/outputs/bundle/release/app-release.aab` (`49.9MB`).
+  - `adb install -r apps/atlas_flutter/build/app/outputs/flutter-apk/app-debug.apk` returned
+    `Success` on Pixel 8 Pro `38281FDJG001DJ`.
+  - `adb shell monkey -p com.yutsukioka.jobagg.atlas -c android.intent.category.LAUNCHER 1`
+    delivered a launch intent, but ADB screenshots still show the secured lock screen.
 
 Installed package evidence:
 
@@ -222,6 +245,10 @@ screen. Captured physical-device files show the lock state only:
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/filter-cache-icons-20260703/lock_check.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/current_visibility_check.png`
+
+The launcher icon asset itself can be reviewed at:
+
+- `apps/atlas_flutter/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png`
 
 Physical verification runbook:
 

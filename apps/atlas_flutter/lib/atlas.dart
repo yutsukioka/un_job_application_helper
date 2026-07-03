@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 enum DeadlineUrgency { neutral, soon, critical, passed, unknown }
 
@@ -1109,20 +1110,9 @@ final class AtlasLocalCacheStore {
       if (!await file.exists()) {
         return null;
       }
-      final decoded = jsonDecode(await file.readAsString());
-      final map = _map(decoded);
-      if (map == null) {
-        return null;
-      }
-      final snapshot = AtlasLocalCacheSnapshot.fromJson(map);
-      if (snapshot.schemaVersion !=
-          AtlasLocalCacheSnapshot.currentSchemaVersion) {
-        return null;
-      }
-      if (snapshot.isExpired(now: _now())) {
-        return null;
-      }
-      return snapshot;
+      final payload = await file.readAsString();
+      final now = _now();
+      return Isolate.run(() => _decodeLocalCacheSnapshot(payload, now: now));
     } catch (_) {
       return null;
     }
@@ -1131,10 +1121,9 @@ final class AtlasLocalCacheStore {
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
     await file.parent.create(recursive: true);
     final temporaryFile = File('${file.path}.tmp');
-    await temporaryFile.writeAsString(
-      jsonEncode(snapshot.toJson()),
-      flush: true,
-    );
+    final snapshotJson = snapshot.toJson();
+    final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
+    await temporaryFile.writeAsString(encoded, flush: true);
     await temporaryFile.rename(file.path);
   }
 
@@ -1146,6 +1135,30 @@ final class AtlasLocalCacheStore {
     if (await temporaryFile.exists()) {
       await temporaryFile.delete();
     }
+  }
+}
+
+AtlasLocalCacheSnapshot? _decodeLocalCacheSnapshot(
+  String payload, {
+  required DateTime now,
+}) {
+  try {
+    final decoded = jsonDecode(payload);
+    final map = _map(decoded);
+    if (map == null) {
+      return null;
+    }
+    final snapshot = AtlasLocalCacheSnapshot.fromJson(map);
+    if (snapshot.schemaVersion !=
+        AtlasLocalCacheSnapshot.currentSchemaVersion) {
+      return null;
+    }
+    if (snapshot.isExpired(now: now)) {
+      return null;
+    }
+    return snapshot;
+  } catch (_) {
+    return null;
   }
 }
 
