@@ -13,11 +13,30 @@ controls. Job Detail now also uses a Dart port of the Swift ATS detail formatter
 raw source payloads no longer dominate the main detail screen.
 
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
-Pixel 8 Pro, but post-fix physical in-app screenshots are blocked because the physical device
-remained on the lock screen. Emulator screenshots from the release app now provide human-reviewable
-evidence for the cache, filter, cascade, icon, tab, and detail slice. Source-rendered iOS Simulator
-captures now provide local references for Search, Filter sheet, Job Detail, Saved, Updates, Sources,
-and Settings.
+Pixel 8 Pro, and the device is now unlocked enough for physical in-app Search screenshots. Physical
+verification caught a real Search-screen input ANR and a cached `Open only` data bug; both are now
+fixed and covered by regression tests. Emulator screenshots from the release app still provide the
+broader human-reviewable evidence for cache, filter, cascade, icon, tab, and detail parity.
+Source-rendered iOS Simulator captures provide local references for Search, Filter sheet, Job
+Detail, Saved, Updates, Sources, and Settings.
+
+Latest physical Pixel update:
+
+- ANR root cause: Search used an eager `ListView` that built every cached result row during
+  controller rebuilds. With more than two thousand rows, sort/cache interactions could block input
+  dispatch long enough to trigger Android's "Atlas isn't responding" dialog.
+- ANR fix: Search now uses `ListView.builder` so only visible rows are built. Regression coverage
+  verifies off-screen rows are not instantiated until scrolled into view.
+- Data fix: cached/offline `Open only` filtering now mirrors the Search API's
+  `exclude_expired_open=true` rule by hiding rows whose closing date is already past while keeping
+  unknown-deadline open rows visible.
+- Physical evidence:
+  - Before ANR screenshot:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_visible_latest.png`
+  - After ANR fix / Sort menu screenshot:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
+  - After cached `Open only` deadline fix:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
 
 Latest icon/startup update: Android launcher mipmap assets now use the Apple Atlas iOS 1024px icon
 artwork instead of Flutter's default launcher artwork. A focused asset regression test covers the
@@ -88,14 +107,14 @@ requires unlocking the secured device.
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,178` |
-| `android_displayed_total` | Expected after a live refresh: `2,178 searchable results`. The latest checked-in Android screenshots still show older time-stamped counts such as `2,266`, `2,268`, `2,269`, or `2,271` because more deadlines have passed since capture. Physical Pixel refresh is still blocked by the secured lock screen. |
+| `search_api_total` | `2,134` |
+| `android_displayed_total` | `2,134 searchable results` on the physical Pixel after the cached/offline open-only deadline fix. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `local_cache_timestamp` | `2026-07-03 04:06` on the latest emulator refresh; offline restart reused the persisted cache immediately. |
+| `local_cache_timestamp` | Physical Pixel cache status line shows `Local save · updated 2026-07-...`; offline restart reused the persisted cache immediately. |
 | `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `242` |
+| `excluded_count` | `286` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,178` is the current correct Android default Search count because it matches POST `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
+| `final_decision` | `2,134` is the current correct Android default Search count because it matches POST `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. Cached/offline Search now applies the same exclusion rule as the API, so stale caches no longer display `Deadline passed` rows under `Open only`. |
 
 ## Verification
 
@@ -201,6 +220,24 @@ Commands run from `apps/atlas_flutter`:
     `Success` on Pixel 8 Pro `38281FDJG001DJ`.
   - `adb shell monkey -p com.yutsukioka.jobagg.atlas -c android.intent.category.LAUNCHER 1`
     delivered a launch intent, but ADB screenshots still show the secured lock screen.
+- Physical Pixel ANR and cached deadline verification:
+  - `adb shell dumpsys window lastanr` confirmed the user-visible dialog was an input-dispatch ANR
+    on `com.yutsukioka.jobagg.atlas/.MainActivity` at `2026-07-03 12:51:40`, after the Search
+    window was drawn.
+  - `flutter test test/widget_test.dart` passed after adding the lazy Search list regression.
+  - `dart analyze` passed with no issues.
+  - `flutter test --coverage` passed with 67 tests.
+  - `flutter build apk --release` passed and produced
+    `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
+  - `adb install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success`.
+  - Physical Pixel verification passed: tapping `Sort: Closing soon` opened the sort menu and no
+    ANR dialog appeared after waiting beyond Android's 5-second input timeout.
+  - Focused cached deadline test passed: `flutter test test/atlas_search_controller_test.dart`.
+  - Full current verification passed after the cached deadline fix: `dart analyze` and
+    `flutter test --coverage`.
+  - Live backend reconciliation after the cached deadline fix:
+    `/api/health open_jobs=2420`; POST `/api/search` with Android default open/searchable filters
+    returned `total=2134`; the physical Pixel displayed `2,134 searchable results`.
 
 Installed package evidence:
 

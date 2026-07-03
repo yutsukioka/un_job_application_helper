@@ -42,6 +42,7 @@ class AtlasAppController extends ChangeNotifier {
     AtlasClientFactory? clientFactory,
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
+    DateTime Function()? now,
   }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
        _clientFactory =
            clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL)),
@@ -49,7 +50,8 @@ class AtlasAppController extends ChangeNotifier {
        // ignore: prefer_initializing_formals
        _localCacheStore = localCacheStore,
        // ignore: prefer_initializing_formals
-       _localCacheStoreFactory = localCacheStoreFactory;
+       _localCacheStoreFactory = localCacheStoreFactory,
+       _now = now ?? DateTime.now;
 
   Uri baseURL;
   final AtlasClientFactory _clientFactory;
@@ -83,6 +85,7 @@ class AtlasAppController extends ChangeNotifier {
   int _savedSearchSequence = 0;
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
+  final DateTime Function() _now;
 
   void clearConnectionMessage() {
     if (connectionMessage == null) {
@@ -127,7 +130,7 @@ class AtlasAppController extends ChangeNotifier {
     if (savedAt == null) {
       return 'Empty';
     }
-    final age = DateTime.now().difference(savedAt);
+    final age = _now().difference(savedAt);
     return age > AtlasLocalCacheSnapshot.staleAfter ? 'Stale' : 'Fresh';
   }
 
@@ -472,7 +475,7 @@ class AtlasAppController extends ChangeNotifier {
       cachedJobCount = _cachedAllJobs.isEmpty
           ? response.results.length
           : _cachedAllJobs.length;
-      cacheSavedAt = DateTime.now();
+      cacheSavedAt = _now();
       return cachedJobCount;
     } finally {
       isSearching = false;
@@ -564,7 +567,7 @@ class AtlasAppController extends ChangeNotifier {
     } catch (_) {
       // Saved-job persistence is independent from Search refresh.
     }
-    operationalDataLoadedAt = DateTime.now();
+    operationalDataLoadedAt = _now();
   }
 
   Future<void> _refreshHealthIfAvailable(AtlasAPIClient client) async {
@@ -689,8 +692,13 @@ class AtlasAppController extends ChangeNotifier {
 
     return rows
         .where((job) {
-          if (filters.openOnly && job.status.toLowerCase() != 'open') {
-            return false;
+          if (filters.openOnly) {
+            if (job.status.toLowerCase() != 'open') {
+              return false;
+            }
+            if (_isDeadlinePast(job, now: _now())) {
+              return false;
+            }
           }
           if (filters.closingSoon && !_isClosingSoon(job)) {
             return false;
@@ -1225,6 +1233,11 @@ bool _isClosingSoon(JobSearchResult job) {
   final now = DateTime.now();
   final soon = now.add(const Duration(days: 7));
   return !closing.isBefore(now) && !closing.isAfter(soon);
+}
+
+bool _isDeadlinePast(JobSearchResult job, {required DateTime now}) {
+  final closing = job.closingDate;
+  return closing != null && closing.isBefore(now);
 }
 
 bool _isUnknownGrade(String value) {

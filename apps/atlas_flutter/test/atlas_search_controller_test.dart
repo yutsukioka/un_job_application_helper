@@ -395,6 +395,109 @@ void main() {
     },
   );
 
+  test(
+    'controller excludes deadline-past open rows from cached open-only search',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_controller_deadline_cache_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+      );
+      final cachedJobs = [
+        _facetJob(
+          jobKey: 'job:future',
+          title: 'Future open role',
+          city: 'Tokyo',
+          countryISO3: 'JPN',
+          gradeCode: 'P-2',
+          standardSeniorityTier: 'T1_ENTRY_SUPPORT',
+          closingDate: DateTime.utc(2026, 7, 10, 23, 59),
+        ),
+        _facetJob(
+          jobKey: 'job:unknown',
+          title: 'Unknown deadline open role',
+          city: 'Geneva',
+          countryISO3: 'CHE',
+          gradeCode: 'P-3',
+          standardSeniorityTier: 'T3_MID_LEVEL',
+          hasClosingDate: false,
+        ),
+        _facetJob(
+          jobKey: 'job:expired',
+          title: 'Expired open role',
+          city: 'Nairobi',
+          countryISO3: 'KEN',
+          gradeCode: 'P-4',
+          standardSeniorityTier: 'T4_SENIOR_PROFESSIONAL',
+          closingDate: DateTime.utc(2026, 7, 1, 23, 59),
+        ),
+        _facetJob(
+          jobKey: 'job:closed',
+          title: 'Closed future role',
+          city: 'Osaka',
+          countryISO3: 'JPN',
+          gradeCode: 'G-5',
+          standardSeniorityTier: 'T2_JUNIOR_PROFESSIONAL',
+          closingDate: DateTime.utc(2026, 7, 15, 23, 59),
+          status: 'closed',
+        ),
+      ];
+      await store.write(
+        AtlasLocalCacheSnapshot(
+          schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+          baseURL: Uri.parse('http://atlas.cached:8765'),
+          savedAt: DateTime.utc(2026, 7, 2, 12),
+          searchRequest: const AtlasSearchRequest(),
+          searchResponse: AtlasSearchResponse(
+            total: cachedJobs.length,
+            limit: cachedJobs.length,
+            offset: 0,
+            results: cachedJobs,
+            facets: const {},
+            facetLabels: const {},
+            unclassifiedCount: 0,
+          ),
+          cachedAllJobs: cachedJobs,
+        ),
+      );
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        now: () => DateTime.utc(2026, 7, 3, 12),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.loadPersistedCache();
+
+      expect(controller.connectionStatus, 'Offline (cached)');
+      expect(controller.filters.openOnly, isTrue);
+      expect(controller.total, 2);
+      expect(
+        controller.results.map((job) => job.jobKey),
+        containsAll(['job:future', 'job:unknown']),
+      );
+      expect(
+        controller.results.map((job) => job.jobKey),
+        isNot(contains('job:expired')),
+      );
+      expect(
+        controller.results.map((job) => job.jobKey),
+        isNot(contains('job:closed')),
+      );
+      expect(
+        controller.facetOptions('cities').map((option) => option.id),
+        isNot(contains('Nairobi')),
+      );
+    },
+  );
+
   test('controller persists and serves cached job details offline', () async {
     final tempDir = await Directory.systemTemp.createTemp(
       'atlas_controller_detail_cache_test_',
@@ -804,6 +907,9 @@ JobSearchResult _facetJob({
   required String countryISO3,
   required String gradeCode,
   required String standardSeniorityTier,
+  DateTime? closingDate,
+  bool hasClosingDate = true,
+  String status = 'open',
 }) {
   return JobSearchResult(
     jobKey: jobKey,
@@ -818,12 +924,14 @@ JobSearchResult _facetJob({
     contractGroup: 'staff',
     contractLabel: 'Staff',
     workModality: 'Onsite',
-    closingDate: DateTime.utc(2026, 8, 30, 23, 59),
+    closingDate: hasClosingDate
+        ? closingDate ?? DateTime.utc(2026, 8, 30, 23, 59)
+        : null,
     needsReview: false,
     scoreReasons: const [],
     matchSummary: 'Cached facet row',
     description: 'Cached description',
-    status: 'open',
+    status: status,
   );
 }
 
