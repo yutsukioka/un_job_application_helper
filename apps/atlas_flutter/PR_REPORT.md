@@ -4,7 +4,8 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `a8790ef`
+Latest app-code head covered: `12f0599`
+Latest evidence/docs head covered before the completion audit: `a21b2d2`
 
 ## Summary
 

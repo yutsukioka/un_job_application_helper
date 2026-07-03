@@ -1,6 +1,7 @@
 ### Android Atlas parity status update
 
-Latest pushed head: `4d936f5`
+Latest app-code head covered: `12f0599`
+Latest evidence/docs head covered before the completion audit: `a21b2d2`
 Status: not final; strict score `86/100`
 
 #### What is now fixed
