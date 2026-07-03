@@ -210,14 +210,11 @@ void main() {
         ],
       );
 
-      expect(
-        formatted.sections.map((section) => section.kind),
-        [
-          AtlasDetailSectionKind.languages,
-          AtlasDetailSectionKind.compensation,
-          AtlasDetailSectionKind.application,
-        ],
-      );
+      expect(formatted.sections.map((section) => section.kind), [
+        AtlasDetailSectionKind.languages,
+        AtlasDetailSectionKind.compensation,
+        AtlasDetailSectionKind.application,
+      ]);
     });
   });
 }

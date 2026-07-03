@@ -151,7 +151,11 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  if (!window_handle_) {
+    return false;
+  }
+  ShowWindow(window_handle_, SW_SHOWNORMAL);
+  return true;
 }
 
 // static
@@ -222,13 +226,14 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
   }
 
-  return DefWindowProc(window_handle_, message, wparam, lparam);
+  return DefWindowProc(hwnd, message, wparam, lparam);
 }
 
 void Win32Window::Destroy() {
   if (window_handle_) {
-    DestroyWindow(window_handle_);
+    HWND window = window_handle_;
     window_handle_ = nullptr;
+    DestroyWindow(window);
   }
   if (g_active_window_count == 0) {
     WindowClassRegistrar::GetInstance()->UnregisterWindowClass();

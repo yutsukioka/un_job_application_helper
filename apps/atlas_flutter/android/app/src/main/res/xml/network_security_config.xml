@@ -5,6 +5,8 @@
             <certificates src="system"/>
         </trust-anchors>
     </base-config>
+
+    <!-- Cleartext is deny-by-default; only operator-run local job-api hosts are allowed. -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">10.253.1.43</domain>
         <domain includeSubdomains="false">10.0.2.2</domain>
