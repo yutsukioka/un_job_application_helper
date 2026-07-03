@@ -7,20 +7,29 @@ Server: `http://10.253.1.43:8765`
 
 ## Current Gate State
 
-Physical-device verification is still blocked by the device lock screen. ADB confirms Atlas is the
-resumed activity underneath keyguard, but the visible screenshot is the lock screen:
+Physical-device verification is partially complete but the G3 gate is still open.
 
-- `screenshots/physical-pixel-20260703/current_visibility_check.png`
+Completed physical evidence after the ANR/cache fixes:
 
-Observed state:
+- `screenshots/physical-pixel-20260703/search_top_final.png`
+- `screenshots/physical-pixel-20260703/search_scrolled_final.png`
+- `screenshots/physical-pixel-20260703/filter_sheet_final.png`
+- `screenshots/physical-pixel-20260703/sort_menu_final.png`
+- `screenshots/physical-pixel-20260703/saved_tab_final.png`
+- `screenshots/physical-pixel-20260703/updates_tab_final.png`
+- `screenshots/physical-pixel-20260703/sources_tab_final.png`
+- `screenshots/physical-pixel-20260703/settings_tab_final.png`
 
-- `mCurrentFocus=Window{... NotificationShade}`
-- `mDreamingLockscreen=true`
-- Atlas activity resumed underneath keyguard:
-  `com.yutsukioka.jobagg.atlas/.MainActivity`
+Still pending:
 
-No physical in-app screenshot should be treated as complete until the Pixel is unlocked and the app
-surface is visible.
+- Corrected physical Job Detail screenshot.
+- Physical offline restart screenshot after the final cached-deadline fix.
+- Human `APPROVED: G3` comment on PR #10.
+
+The Pixel was detached before the corrected Job Detail/offline-restart recapture. No further ADB
+verification is possible until it is reconnected. The untracked `job_detail_final.png` in this
+folder is not valid evidence because it captured the launcher/app drawer instead of Atlas Job
+Detail.
 
 ## Pre-Flight
 
@@ -52,7 +61,24 @@ adb -s 38281FDJG001DJ shell screencap -p /sdcard/<name>.png
 adb -s 38281FDJG001DJ pull /sdcard/<name>.png apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/<name>.png
 ```
 
-Required physical screenshots:
+Already captured:
+
+- `search_top_final.png`
+- `search_scrolled_final.png`
+- `filter_sheet_final.png`
+- `sort_menu_final.png`
+- `saved_tab_final.png`
+- `updates_tab_final.png`
+- `sources_tab_final.png`
+- `settings_tab_final.png`
+
+Still required before G3:
+
+- `job_detail_final.png` or `job_detail.png`, showing an actual Atlas Job Detail screen.
+- `offline_restart_cached.png`, showing cached Search rows after app relaunch with the server
+  unreachable.
+
+Optional recaptures if human review requests full physical coverage:
 
 - `search_top.png`
 - `search_scrolled.png`
@@ -66,12 +92,7 @@ Required physical screenshots:
 - `filter_tokyo_selected.png`
 - `filter_entry_junior_selected.png`
 - `filter_grade_selected.png`
-- `offline_restart_cached.png`
 - `settings_cache_status.png`
-- `job_detail.png`
-- `saved_tab.png`
-- `updates_tab.png`
-- `sources_tab.png`
 
 ## Manual Flow
 
@@ -98,8 +119,9 @@ Required physical screenshots:
     - Reset.
     - Select a visible grade such as `P-1` if present.
     - Capture `filter_grade_selected.png`.
-12. Open a result row and capture `job_detail.png`.
-13. Capture Saved, Updates, Sources, and Settings tabs.
+12. Open a result row and capture `job_detail.png` or `job_detail_final.png`.
+13. Capture Saved, Updates, Sources, and Settings tabs only if recapture is requested; final
+    physical versions already exist.
 
 ## Offline Restart Flow
 
