@@ -1,20 +1,27 @@
-# Atlas Flutter Android
+# Atlas Flutter
 
-Flutter Android client for the Atlas / UN job application helper product. The Swift app in
-`apps/apple/` is the product reference; this app targets Android parity for Search, filters, saved
-jobs/searches, updates, sources, settings, local cache, and job detail.
+Flutter client for the Atlas / UN job application helper product. The Swift app in `apps/apple/`
+is the product reference; this app targets Windows desktop validation plus Android parity for
+Search, filters, saved jobs/searches, updates, sources, settings, local cache, and job detail.
 
 ## Local Server
 
 Run or connect to `services/job-api` before refreshing Search data.
 
-Default physical-device URL used in this parity loop:
+Windows desktop from a Parallels VM should use the Mac LAN URL while `job-api` is running on the
+Mac with `--host 0.0.0.0`:
 
 ```text
-http://10.253.1.43:8765
+http://<mac-lan-ip>:8765
 ```
 
-Emulator URL when the server runs on the host machine:
+Optional build-time default override:
+
+```sh
+flutter build windows --release --dart-define=ATLAS_API_BASE_URL=http://<mac-lan-ip>:8765
+```
+
+Android emulator URL when the server runs on the host machine:
 
 ```text
 http://10.0.2.2:8765

@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
-    'settings tab exposes server status local save and Android setup controls',
+    'settings tab exposes server status local save and local API setup controls',
     (tester) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -24,7 +24,7 @@ void main() {
       expect(find.text('Server'), findsOneWidget);
       expect(find.widgetWithText(TextField, 'API base URL'), findsOneWidget);
       expect(find.text('Saved server'), findsOneWidget);
-      expect(find.text('http://10.253.1.43:8765'), findsWidgets);
+      expect(find.text('http://127.0.0.1:8765'), findsWidgets);
       expect(find.text('Test'), findsOneWidget);
       expect(find.text('Save and Reload'), findsOneWidget);
       expect(find.text('Status'), findsOneWidget);
@@ -37,11 +37,8 @@ void main() {
       expect(find.text('Cached details'), findsOneWidget);
       expect(find.text('Auto refresh'), findsOneWidget);
       expect(find.text('Refresh Local Save Now'), findsOneWidget);
-      expect(find.text('Android Setup'), findsOneWidget);
-      expect(
-        find.textContaining('Use http://10.253.1.43:8765'),
-        findsOneWidget,
-      );
+      expect(find.text('Local API Setup'), findsOneWidget);
+      expect(find.textContaining('Use your Mac LAN URL'), findsOneWidget);
       expect(find.textContaining('Use http://10.0.2.2:8765'), findsOneWidget);
     },
   );

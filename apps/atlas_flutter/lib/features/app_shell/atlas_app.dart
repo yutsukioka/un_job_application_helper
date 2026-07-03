@@ -11,6 +11,34 @@ typedef AtlasCacheStoreFactory = Future<AtlasLocalCacheStore?> Function();
 
 const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 
+File _cacheFileInDirectory(Directory directory) {
+  final separator = Platform.pathSeparator;
+  final directoryPath = directory.path.endsWith(separator)
+      ? directory.path
+      : '${directory.path}$separator';
+  return File('${directoryPath}atlas-local-cache-v1.json');
+}
+
+Directory? _windowsCacheDirectory() {
+  final appDataPath = Platform.environment['APPDATA']?.trim();
+  final localAppDataPath = Platform.environment['LOCALAPPDATA']?.trim();
+  final basePath = appDataPath != null && appDataPath.isNotEmpty
+      ? appDataPath
+      : localAppDataPath != null && localAppDataPath.isNotEmpty
+      ? localAppDataPath
+      : null;
+  if (basePath == null) {
+    return null;
+  }
+  return Directory('$basePath${Platform.pathSeparator}Atlas');
+}
+
+Uri _defaultControllerBaseURL() {
+  const configuredBaseURL = String.fromEnvironment('ATLAS_API_BASE_URL');
+  return AtlasAPIClient.normalizedBaseURL(configuredBaseURL) ??
+      AtlasAPIClient.defaultBaseURL();
+}
+
 Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
   try {
     if (Platform.isAndroid) {
@@ -20,7 +48,7 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
       );
       if (directoryPath != null && directoryPath.trim().isNotEmpty) {
         return AtlasLocalCacheStore(
-          file: File('${directoryPath.trim()}/atlas-local-cache-v1.json'),
+          file: _cacheFileInDirectory(Directory(directoryPath.trim())),
         );
       }
       // coverage:ignore-end
@@ -28,12 +56,15 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
   } catch (_) {
     // Fall through to a local development/test fallback.
   }
-  final fallbackDirectory = Directory(
-    '${Directory.systemTemp.path}/atlas_flutter',
-  );
-  return AtlasLocalCacheStore(
-    file: File('${fallbackDirectory.path}/atlas-local-cache-v1.json'),
-  );
+  final fallbackDirectory = Platform.isWindows
+      ? _windowsCacheDirectory()
+      : null;
+  final cacheDirectory =
+      fallbackDirectory ??
+      Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}atlas_flutter',
+      );
+  return AtlasLocalCacheStore(file: _cacheFileInDirectory(cacheDirectory));
 }
 
 class AtlasAppController extends ChangeNotifier {
@@ -43,7 +74,7 @@ class AtlasAppController extends ChangeNotifier {
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
     DateTime Function()? now,
-  }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
+  }) : baseURL = initialBaseURL ?? _defaultControllerBaseURL(),
        _clientFactory =
            clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL)),
        // Keep public constructor parameter names stable while storing privately.
@@ -4911,10 +4942,10 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
             ],
           ),
           const _SettingsSection(
-            title: 'Android Setup',
+            title: 'Local API Setup',
             children: [
               Text(
-                'Use http://10.253.1.43:8765 on the physical Pixel while job-api is running. Use http://10.0.2.2:8765 only on the Android emulator.',
+                'Use your Mac LAN URL, for example http://<mac-lan-ip>:8765, while job-api is running with --host 0.0.0.0. Use http://10.0.2.2:8765 only on the Android emulator.',
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.35,

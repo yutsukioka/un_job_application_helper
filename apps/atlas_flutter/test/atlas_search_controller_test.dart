@@ -59,7 +59,7 @@ void main() {
     expect(controller.healthSummary?.openJobs, 128);
     expect(controller.updateRuns.single.sourceID, 'undp_oracle_hcm');
     expect(controller.sources.single.openJobs, 1);
-    expect(controller.statusSubtitle, 'Connected to http://10.253.1.43:8765');
+    expect(controller.statusSubtitle, 'Connected to http://127.0.0.1:8765');
 
     await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
     expect(controller.baseURL.toString(), 'http://atlas.test:8765');
@@ -143,10 +143,7 @@ void main() {
     );
 
     controller.isSearching = true;
-    expect(
-      controller.statusSubtitle,
-      'Refreshing from http://10.253.1.43:8765',
-    );
+    expect(controller.statusSubtitle, 'Refreshing from http://127.0.0.1:8765');
   });
 
   test(
