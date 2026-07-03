@@ -88,14 +88,14 @@ requires unlocking the secured device.
 | Field | Value |
 | --- | --- |
 | `health_open_jobs` | `2,420` |
-| `search_api_total` | `2,266` |
-| `android_displayed_total` | `2,266 searchable results` after the current detail-formatter screenshot refresh; older screenshots show `2,268`, `2,269`, or `2,271` from prior cache timestamps. |
+| `search_api_total` | `2,178` |
+| `android_displayed_total` | Expected after a live refresh: `2,178 searchable results`. The latest checked-in Android screenshots still show older time-stamped counts such as `2,266`, `2,268`, `2,269`, or `2,271` because more deadlines have passed since capture. Physical Pixel refresh is still blocked by the secured lock screen. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
 | `local_cache_timestamp` | `2026-07-03 04:06` on the latest emulator refresh; offline restart reused the persisted cache immediately. |
 | `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-02T02:38:47.964722+00:00`. |
-| `excluded_count` | `154` |
+| `excluded_count` | `242` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,266` is correct for Android default Search at this capture time because it matches `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
+| `final_decision` | `2,178` is the current correct Android default Search count because it matches POST `/api/search`; `2,420` is the raw health open count. The difference is time-sensitive as deadlines pass. |
 
 ## Verification
 
@@ -469,7 +469,7 @@ screenshot pairing are still not complete.
 | Persistent cache | 18 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; physical offline restart still pending. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 8 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; source monograms now match Swift color treatment; human iOS screenshot comparison still pending. |
-| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,266 due deadline timing. |
+| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; live Search count moved to 2,178 due deadline timing. |
 | Tests/builds | 15 / 15 | Format, analyze, focused Search/filter golden tests, full Flutter tests with coverage, debug APK, release APK, release AAB, and current emulator integration pass; Pixel integration was attempted but blocked by device state. |
 | Evidence/human readiness | 7 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references for primary screens and Filter subsections/cascade states, Search/Filter/primary-screen side-by-side comparisons are captured; physical Pixel app screenshots and exact user-provided iOS screenshot pairing still need final human review. |
 

@@ -74,8 +74,9 @@ first-frame fix. Do not start broad backend or JobAgg lifecycle work.
   AAB were also rebuilt successfully.
 - Emulator integration: pass, `flutter test integration_test -d emulator-5554`.
 - Emulator offline restart: pass, cached Search showed results immediately from local save.
-- Current live Android/Search API count evidence: `2,266 searchable results` with `2,420`
-  health `open_jobs`.
+- Current live Android/Search API count evidence: POST `/api/search` now returns `2,178`
+  searchable results with `2,420` health `open_jobs`; checked-in screenshots still show older
+  counts and need recapture after the Pixel is unlocked/refreshed.
 - Fresh iOS Simulator Search side-by-side review:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`.
 - Expanded source-rendered iOS references:

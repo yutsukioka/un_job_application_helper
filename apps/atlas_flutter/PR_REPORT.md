@@ -4,7 +4,7 @@ Status: draft current-state report, not final completion.
 
 Branch: `codex/atlas-flutter-android-parity`  
 Latest report update: 2026-07-03  
-Latest branch head before this report update: `22114fa`
+Latest branch head before this report update: `298f0f4`
 
 ## Summary
 
@@ -15,6 +15,8 @@ compact result rows, populated and persistently cached Job Detail, Saved/Updates
 tabs, a Dart port of the Swift ATS detail formatter, a fresh iOS Simulator Search-top side-by-side,
 Android Search-top, filter-sheet top, Job Detail top, and implemented-tab goldens, and a reviewable
 Android screenshot package.
+The Android launcher icon also now uses the Apple Atlas app icon artwork instead of the default
+Flutter launcher icon.
 
 This is still not a completion claim. Physical Pixel 8 Pro in-app screenshots and offline restart
 verification remain blocked by the connected phone being locked. Search, Filter sheet, Job Detail,
@@ -34,6 +36,7 @@ remains blocked because those screenshots are not available as local files in th
   under the result count.
 - Search result source badges now match Swift `SourceMonogram` treatment with deterministic
   per-source color blocks and white initials.
+- Android launcher mipmaps now use the Apple Atlas iOS icon artwork across Android densities.
 - Settings exposes server URL, cache status, refresh, and clear-cache controls.
 - Filter sheet implements Status, Location, Scope, Contract, UN Volunteer Category, Seniority,
   Grade, CCOG Family, Organizations, Work Mode, and Capability Tags.
@@ -52,16 +55,18 @@ remains blocked because those screenshots are not available as local files in th
 Last verified reconciliation from current app/API evidence:
 
 - `health_open_jobs`: `2,420`
-- `search_api_total`: `2,266`
-- Android displayed count after current refresh: `2,266 searchable results`
-- Difference: `154` deadline-past rows still counted by health as open but hidden by Search because
+- `search_api_total`: `2,178`
+- Android displayed count after a live refresh should be `2,178 searchable results`; the latest
+  checked-in Android screenshots still show older time-stamped counts such as `2,266` because more
+  deadlines have passed since capture.
+- Difference: `242` deadline-past rows still counted by health as open but hidden by Search because
   default Search uses `exclude_expired_open=true`.
 
 Current live refresh status:
 
 - `curl http://10.253.1.43:8765/api/health` succeeded on 2026-07-03 and reported
   `open_jobs=2420`.
-- Default `/api/search` with Android open/searchable filters reported `total=2266`.
+- Default POST `/api/search` with Android open/searchable filters reported `total=2178`.
 
 ## Evidence
 
@@ -88,6 +93,8 @@ Screenshot evidence:
   `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/job_detail_top_fixed.png`
 - Current live count evidence:
   `apps/atlas_flutter/docs/loop/screenshots/detail-formatter-20260703/settings_after_reload.png`
+- Android launcher icon evidence:
+  `apps/atlas_flutter/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png`
 - Fresh iOS Simulator Search-top side-by-side:
   `apps/atlas_flutter/docs/loop/screenshots/ios-simulator-reference-20260703/ios_simulator_android_search_side_by_side.png`
 - Fresh iOS Simulator Search-top reference:
@@ -154,7 +161,7 @@ Latest app-code verification:
 
 - `dart format --set-exit-if-changed .` passed.
 - `dart analyze` passed.
-- `flutter test --coverage` passed with 55 tests: `2956/3255` lines, `90.81%`.
+- `flutter test --coverage` passed with 65 tests: `3009/3262` lines, `92.24%`.
 - `flutter build apk --debug` passed.
 - `flutter build apk --release` passed.
 - `flutter build appbundle --release` passed.
