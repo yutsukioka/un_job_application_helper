@@ -38,7 +38,7 @@ The Windows VM is ready for Flutter Windows desktop build, test, and launch vali
 - Git top level: `C:/src/un_job_application_helper`
 - `core.autocrlf=false`
 - `core.longpaths=true`
-- Initial status: no tracked changes; existing untracked `apps/atlas_flutter/test/failures/`
+- Initial status: no tracked changes; `apps/atlas_flutter/test/failures/` existed as generated golden failure output and is now ignored.
 - Checkpoints:
   - `8e185c0 checkpoint: before windows flutter environment verification`
   - `f5c7500 checkpoint: before windows golden test policy`
