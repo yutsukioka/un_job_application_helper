@@ -8,7 +8,7 @@ void main() {
 
   testWidgets('app launches and navigates primary Atlas tabs', (tester) async {
     await tester.pumpWidget(const MyApp());
-    await _pumpAtlas(tester);
+    await _pumpAtlas(tester, ready: _hasSearchResultState);
 
     expect(
       find.descendant(of: find.byType(AppBar), matching: find.text('Search')),
@@ -23,7 +23,10 @@ void main() {
 
     for (final tab in ['Saved', 'Updates', 'Sources', 'Settings', 'Search']) {
       await tester.tap(find.text(tab).last);
-      await _pumpAtlas(tester);
+      await _pumpAtlas(
+        tester,
+        ready: () => find.text(tab).evaluate().isNotEmpty,
+      );
       expect(find.text(tab), findsWidgets);
     }
 
@@ -31,9 +34,18 @@ void main() {
   });
 }
 
-Future<void> _pumpAtlas(WidgetTester tester) async {
-  await tester.pump(const Duration(milliseconds: 250));
-  await tester.pump(const Duration(milliseconds: 750));
+Future<void> _pumpAtlas(
+  WidgetTester tester, {
+  required bool Function() ready,
+}) async {
+  for (var attempt = 0; attempt < 80; attempt += 1) {
+    await tester.pump();
+    if (ready()) {
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  fail('Atlas UI did not reach the expected state.');
 }
 
 bool _hasSearchResultState() {
