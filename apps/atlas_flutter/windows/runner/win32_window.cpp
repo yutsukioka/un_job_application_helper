@@ -185,6 +185,8 @@ Win32Window::MessageHandler(HWND hwnd,
                             LPARAM const lparam) noexcept {
   switch (message) {
     case WM_DESTROY:
+      // Destroy() only requests DestroyWindow; subclass cleanup is centralized
+      // here so re-entrant destroy delivery cannot run OnDestroy twice.
       window_handle_ = nullptr;
       if (!destroy_handled_) {
         destroy_handled_ = true;

@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- Global cleartext is disabled; network_security_config allowlists local job-api hosts only. -->
     <application
         android:label="Atlas"
         android:name="${applicationName}"

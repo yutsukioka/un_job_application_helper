@@ -19,6 +19,7 @@ void main() {
       manifest,
       contains('android:networkSecurityConfig="@xml/network_security_config"'),
     );
+    expect(manifest, contains('android:usesCleartextTraffic="false"'));
     expect(manifest, isNot(contains('android:usesCleartextTraffic="true"')));
     expect(
       networkConfig,
