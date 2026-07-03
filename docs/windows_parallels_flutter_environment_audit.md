@@ -12,6 +12,33 @@ Status: mostly ready.
 
 The Windows VM is ready for Flutter Windows desktop build, test, and launch validation when Flutter commands are run outside the Codex sandbox. The remaining blockers are not the Visual Studio or Flutter Windows toolchain: they are API availability from the VM, Codex sandbox profile/path behavior, and production packaging/signing decisions.
 
+## Definition Of Done Matrix
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Windows updated enough for development | Pass | Windows 11 Pro `10.0.26200.8457`, 25H2; `flutter doctor -v` Windows version check passed. |
+| Repo cloned into Windows-native path | Pass | Repo path `C:\src\un_job_application_helper`; not under `\\Mac`, `Z:\`, or `Y:\`. |
+| Git works and is configured safely | Pass | Git `2.55.0.windows.1`; `core.autocrlf=false`; `core.longpaths=true`; commits created successfully. |
+| Flutter works from PowerShell | Pass with caveat | Flutter works unsandboxed from PowerShell; sandboxed `flutter.bat` hangs because SDK/profile paths are not writable by the sandbox user. |
+| `flutter doctor -v` has no critical Windows blockers | Pass | Flutter, Windows version, Visual Studio, Windows device, and network resources passed; Android SDK and Chrome missing but not Windows desktop blockers. |
+| Visual Studio C++ toolchain detected | Pass | Visual Studio Community 2026 `18.7.3`, MSVC `14.51.36231`, Windows SDK `10.0.26100.0`, CMake, Ninja, MSBuild present. |
+| Windows desktop target enabled and visible | Pass | `flutter devices` lists `Windows (desktop) - windows-x64`. |
+| `apps/atlas_flutter` exists with `pubspec.yaml` | Pass | `apps\atlas_flutter\pubspec.yaml` exists; project name is `atlas`. |
+| `flutter pub get` succeeds | Pass | Final unsandboxed run passed. |
+| `flutter analyze` succeeds | Pass | Final unsandboxed run: no issues found. |
+| `flutter test` succeeds or is documented | Pass | Final unsandboxed run passed: 55 passed, 9 Android renderer goldens skipped on Windows. |
+| Debug Windows build succeeds | Pass | `flutter build windows --debug` built `build\windows\x64\runner\Debug\atlas.exe`. |
+| Release Windows build succeeds | Pass | `flutter build windows --release` built `build\windows\x64\runner\Release\atlas.exe`. |
+| Generated executable path identified | Pass | Release path documented as `C:\src\un_job_application_helper\apps\atlas_flutter\build\windows\x64\runner\Release\atlas.exe`. |
+| Build output architecture identified | Pass | PE header reports `8664 machine (x64)`. |
+| App launched at least once | Pass | `Start-Process` launch check started `atlas`, process responded, and `CloseMainWindow()` exited it. |
+| Mac-hosted `job-api` connectivity tested or documented | Pass with external action | Windows can ping `10.253.1.43`, but TCP `8765` fails. Report documents likely causes and exact Mac command/IP check needed. |
+| VS Code Flutter development ready | Pass | VS Code `1.126.0` arm64; `dart-code.dart-code` and `dart-code.flutter` installed. |
+| Codex Windows environment ready | Partial | Codex app installed and workspace accessible. Full sandboxed Flutter commands require unsandboxed approval or writable access to `C:\src\tools\flutter`; direct metadata commands work with scoped env. |
+| Production packaging readiness assessed | Pass | MSIX, Store/self-hosted installer, signing, icon, crash logging, update strategy, architecture, and x64 validation needs are assessed; implementation remains a product decision. |
+| Cross-platform safety searched | Pass | Requested broad `rg` and narrowed searches completed; findings classified. |
+| Final audit report created | Pass | This file: `docs/windows_parallels_flutter_environment_audit.md`. |
+
 ## Environment Summary
 
 - Hostname: `YUTSUKIOKA2BA5`
