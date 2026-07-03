@@ -61,6 +61,17 @@ Important Codex sandbox finding:
 - Sandboxed Flutter commands hang or fail because the process runs as `CodexSandboxOffline` while `%USERPROFILE%`, `%APPDATA%`, and `%LOCALAPPDATA%` point to `C:\Users\yutsukioka2`.
 - Direct Flutter snapshot invocation failed with: unable to write `C:\Users\yutsukioka2\AppData\Roaming\.flutter_tool_state`.
 - `C:\src\tools\flutter` also appears as a dubious-ownership Git repo to the sandbox user.
+- A scoped sandbox environment can run direct Flutter metadata commands when all of the following are set:
+  - `USERPROFILE=C:\Users\CodexSandboxOffline`
+  - `APPDATA=C:\Users\CodexSandboxOffline\AppData\Roaming`
+  - `LOCALAPPDATA=C:\Users\CodexSandboxOffline\AppData\Local`
+  - `GIT_CONFIG_COUNT=1`
+  - `GIT_CONFIG_KEY_0=safe.directory`
+  - `GIT_CONFIG_VALUE_0=C:/src/tools/flutter`
+  - `FLUTTER_ALREADY_LOCKED=true`
+- With that scoped environment, direct `dart.exe ... flutter_tools.snapshot --version` and `config --list` pass in the sandbox.
+- The normal `flutter.bat` wrapper still hangs in the sandbox.
+- Real Flutter development commands such as `doctor -v`, `analyze`, `test`, and `build` still require writing SDK cache/stamp files under `C:\src\tools\flutter\bin\cache`, which is outside the current workspace writable root.
 - Unsandboxed Flutter commands run correctly as `yutsukioka2`.
 
 ## Flutter Doctor Summary
@@ -116,7 +127,7 @@ Plain PowerShell PATH note:
   - Install location: `C:\Program Files\WindowsApps\OpenAI.Codex_26.623.13972.0_arm64__2p2nqsd0c76g0`
 - `codex --version` fails with access denied from this shell, even unsandboxed.
 - This thread is running in Windows PowerShell mode, not WSL2.
-- Codex workspace access is correctly limited to the repo and temp paths, but that sandbox profile is too constrained/misconfigured for Flutter CLI execution without unsandboxed approval.
+- Codex workspace access is correctly limited to the repo and temp paths, but the sandbox cannot run full Flutter development commands without unsandboxed approval unless the Flutter SDK is moved under a writable root or the Codex workspace writable roots include `C:\src\tools\flutter`.
 
 ## Repo Structure Summary
 
@@ -341,6 +352,9 @@ VS Code and Codex:
 - `code --list-extensions` (unsandboxed)
 - `where.exe codex`
 - `Get-AppxPackage -Name OpenAI.Codex | Select-Object Name, Version, Architecture, InstallLocation, PackageFullName` (unsandboxed)
+- Direct sandbox Flutter metadata check with scoped profile/Git/lock environment:
+  - `dart.exe ... flutter_tools.snapshot --version`
+  - `dart.exe ... flutter_tools.snapshot config --list`
 
 Flutter app:
 
@@ -383,6 +397,8 @@ API and safety:
 - `flutter --version` in sandbox: hung; stopped its PowerShell wrapper.
 - Direct Flutter snapshot in sandbox: failed writing `C:\Users\yutsukioka2\AppData\Roaming\.flutter_tool_state`.
 - `git -C 'C:\src\tools\flutter' rev-parse HEAD` in sandbox: dubious ownership.
+- Direct `flutter_tools.snapshot doctor -v` with scoped sandbox profile/Git/lock environment still failed writing `C:\src\tools\flutter\bin\cache\libimobiledevice.stamp`.
+- `flutter.bat --version` with scoped sandbox profile/Git/lock environment still hung; direct `dart.exe ... flutter_tools.snapshot --version` passed.
 - `where.exe cl`: not found in plain PowerShell PATH.
 - `where.exe cmake`: not found in plain PowerShell PATH.
 - `where.exe ninja`: not found in plain PowerShell PATH.
@@ -405,6 +421,9 @@ API and safety:
 5. Decide packaging channel: MSIX Store, MSIX self-hosted, or another installer.
 6. Define certificate/signing/publisher identity.
 7. Add Windows-specific golden baselines if Windows visual regression coverage is needed.
-8. Fix Codex sandbox profile environment if Flutter should run without unsandboxed approvals.
+8. Fix Codex sandbox Flutter execution if unsandboxed approvals should not be required. Viable options:
+   - Add `C:\src\tools\flutter` to the Codex workspace writable roots and correct the sandbox user profile environment.
+   - Move or clone the Flutter SDK under a writable workspace/tool root and point PATH at that SDK.
+   - Continue using unsandboxed approvals for Flutter commands.
 9. Investigate why `codex --version` cannot execute the Store app binary from PowerShell.
 10. Verify/customize the Windows icon visually.
