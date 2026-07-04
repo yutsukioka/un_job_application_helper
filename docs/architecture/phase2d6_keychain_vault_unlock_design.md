@@ -101,9 +101,11 @@ writes, non-sensitive vault identity, and lock/unlock events.
 Outputs: in-memory saved searches, saved jobs, notes, profile snippets, draft
 metadata, and non-sensitive unlock state for SwiftUI.
 
-Must not store or log: vault keys, passphrases, recovery keys, derived keys,
-decrypted payloads, saved-search text, job keys, notes, generated document
-references, or raw private record JSON.
+May hold decrypted private records in memory while unlocked. Must not persist or
+log: vault keys, passphrases, recovery keys, derived keys, decrypted payloads,
+saved-search text, job keys, notes, generated document references, or raw
+private record JSON. It should not retain vault keys or derived keys after
+unlock has produced the session.
 
 Lifetime: process memory only. It clears on lock, failed unlock reset,
 explicit sign-out/account switch, vault corruption, key revocation, and app
@@ -171,8 +173,9 @@ that encode private payload meaning.
 Lifetime: persistent Keychain item plus short-lived returned bytes.
 
 Testing strategy: first implementation should use a mock Keychain adapter, not
-the real Keychain, so unit tests can prove item labels, access groups, and access
-controls without storing real secrets.
+the real Keychain, so unit tests can verify requested item labels, access
+groups, and access-control flags without storing real secrets. OS enforcement of
+those flags belongs in later integration or device tests.
 
 ### `AtlasVaultUnlockService`
 
