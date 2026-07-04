@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter (Windows) — Atlas",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "apps/atlas_flutter",
+      "program": "lib/main.dart",
+      "deviceId": "windows",
+      "toolArgs": [
+        "--dart-define=ATLAS_API_BASE_URL=http://10.253.1.43:8765"
+      ]
+    }
+  ]
+}

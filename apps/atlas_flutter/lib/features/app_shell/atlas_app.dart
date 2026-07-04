@@ -1639,8 +1639,28 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           unawaited(_controller.loadPersistedCache());
+          const debugHealthProbe = String.fromEnvironment(
+            'ATLAS_WINDOWS_DEBUG_HEALTH_PROBE',
+          );
+          if (debugHealthProbe == '1' || debugHealthProbe == 'true') {
+            unawaited(_logDebugHealthProbe());
+          }
         }
       });
+    }
+  }
+
+  Future<void> _logDebugHealthProbe() async {
+    final client = AtlasAPIClient(baseURL: _controller.baseURL);
+    try {
+      await client.health();
+      stdout.writeln(
+        'GET /api/health 200 ${_formatBaseURL(_controller.baseURL)}',
+      );
+    } catch (error) {
+      stdout.writeln(
+        'GET /api/health ERROR ${_formatBaseURL(_controller.baseURL)} $error',
+      );
     }
   }
 

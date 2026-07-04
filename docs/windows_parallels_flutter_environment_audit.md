@@ -269,6 +269,23 @@ Interpretation:
 - Recommended Mac-side command from repo root:
   - `uv run --with-editable ./packages/jobagg --with-editable ./services/job-api --module uvicorn job_api.app:app --host 0.0.0.0 --port 8765`
 
+### Confirmed 2026-07-03
+
+Mac-side service health was user-confirmed from other Macs on the LAN, iOS, Android, and a Parallels VM on another Mac before this Windows VM loop. From `YUTSUKIOKA2BA5`, the final Windows validation now also reaches `http://10.253.1.43:8765/api/health` over TCP and HTTP.
+
+Root cause classification: no H1-H4 remediation was proven in this loop because Stage A unexpectedly succeeded before any firewall, proxy, Parallels adapter, or macOS firewall change was made. Final evidence does not indicate H1 or H2: Windows firewall profiles were enabled with outbound `NotConfigured`, no enabled outbound block rule mentioned `8765`, Dart, Flutter, Atlas, or Python, WinHTTP reported direct access, HKCU `ProxyEnable` was `0`, and `Invoke-WebRequest` returned HTTP `200`. H3/H4 were therefore not exercised; the previous TCP failure remains classified as an externally cleared VM network-path condition rather than a reproduced Windows firewall/proxy defect.
+
+Exact successful command sequence:
+
+- `ipconfig`
+- `ping.exe -n 4 10.253.1.43`
+- `Test-NetConnection -ComputerName 10.253.1.43 -Port 8765`
+- `Invoke-WebRequest -Uri http://10.253.1.43:8765/api/health -UseBasicParsing -TimeoutSec 5`
+- `curl.exe -sS -i --connect-timeout 5 http://10.253.1.43:8765/api/health`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\win_network_probe.ps1`
+- `flutter test --dart-define=RUN_WINDOWS_SMOKE=1 --dart-define=ATLAS_API_BASE_URL=http://10.253.1.43:8765 test/windows_api_reachability_smoke_test.dart`
+- `flutter run -d windows --dart-define=ATLAS_API_BASE_URL=http://10.253.1.43:8765 --dart-define=ATLAS_WINDOWS_DEBUG_HEALTH_PROBE=1`
+
 ## Production Packaging Readiness
 
 Current state:
