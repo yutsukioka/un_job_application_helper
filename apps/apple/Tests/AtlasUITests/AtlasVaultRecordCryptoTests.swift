@@ -41,6 +41,28 @@ final class AtlasVaultRecordCryptoTests: XCTestCase {
         }
     }
 
+    func testStableAADUsesPythonJSONRulesForSlashAndNonASCII() throws {
+        let record = AtlasVaultEncryptedRecordEnvelope(
+            id: "record/\u{00E9}",
+            schemaVersion: 1,
+            revision: "revision/\u{00E9}",
+            parentRevision: nil,
+            deleted: false,
+            keyID: "recovery/key-\u{00E9}",
+            nonce: Data(repeating: 1, count: AtlasVaultRecordCrypto.nonceByteCount).base64EncodedString(),
+            ciphertext: Data(repeating: 2, count: AtlasVaultRecordCrypto.gcmTagByteCount + 1).base64EncodedString()
+        )
+        let aad = try AtlasVaultRecordAAD.data(vaultID: "vault/\u{00E9}", record: record)
+        let aadText = try XCTUnwrap(String(data: aad, encoding: .utf8))
+
+        XCTAssertEqual(
+            aadText,
+            #"{"deleted":false,"key_id":"recovery/key-\u00e9","parent_revision":null,"record_id":"record/\u00e9","record_schema_version":1,"revision":"revision/\u00e9","vault_format":"atlas-vault","vault_id":"vault/\u00e9","vault_version":1}"#
+        )
+        XCTAssertFalse(aadText.contains("\\/"))
+        XCTAssertFalse(aadText.contains("\u{00E9}"))
+    }
+
     func testOpensPythonGeneratedEncryptedRecord() throws {
         for vector in try vectors() {
             let record = try recordEnvelope(vector)

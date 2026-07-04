@@ -106,15 +106,73 @@ public enum AtlasVaultRecordAAD {
         vaultFormat: String = AtlasVaultRecordCrypto.vaultFormat,
         vaultVersion: Int = AtlasVaultRecordCrypto.vaultVersion
     ) throws -> Data {
-        try JSONSerialization.data(
-            withJSONObject: jsonObject(
-                vaultID: vaultID,
-                record: record,
-                vaultFormat: vaultFormat,
-                vaultVersion: vaultVersion
-            ),
-            options: [.sortedKeys]
+        try Data(
+            stableJSONString(
+                jsonObject(
+                    vaultID: vaultID,
+                    record: record,
+                    vaultFormat: vaultFormat,
+                    vaultVersion: vaultVersion
+                )
+            ).utf8
         )
+    }
+
+    private static func stableJSONString(_ value: Any) throws -> String {
+        if value is NSNull {
+            return "null"
+        }
+        if let bool = value as? Bool {
+            return bool ? "true" : "false"
+        }
+        if let int = value as? Int {
+            return String(int)
+        }
+        if let string = value as? String {
+            return stableJSONStringLiteral(string)
+        }
+        if let dictionary = value as? [String: Any] {
+            let fields = try dictionary.keys.sorted().map { key in
+                try "\(stableJSONStringLiteral(key)):\(stableJSONString(dictionary[key]!))"
+            }
+            return "{\(fields.joined(separator: ","))}"
+        }
+        throw AtlasVaultCryptoError.invalidEnvelope
+    }
+
+    private static func stableJSONStringLiteral(_ value: String) -> String {
+        var result = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x08:
+                result += "\\b"
+            case 0x09:
+                result += "\\t"
+            case 0x0A:
+                result += "\\n"
+            case 0x0C:
+                result += "\\f"
+            case 0x0D:
+                result += "\\r"
+            case 0x22:
+                result += "\\\""
+            case 0x5C:
+                result += "\\\\"
+            case 0x00..<0x20:
+                result += String(format: "\\u%04x", scalar.value)
+            case 0x20...0x7E:
+                result.unicodeScalars.append(scalar)
+            case 0x7F...0xFFFF:
+                result += String(format: "\\u%04x", scalar.value)
+            default:
+                let value = scalar.value - 0x10000
+                let high = 0xD800 + (value >> 10)
+                let low = 0xDC00 + (value & 0x3FF)
+                result += String(format: "\\u%04x\\u%04x", high, low)
+            }
+        }
+        result += "\""
+        return result
     }
 }
 
