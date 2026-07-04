@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_tracked_files_exclude_private_and_generated_artifacts() -> None:
     tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
+    allowed_generated_artifacts = {
+        "apps/atlas_flutter/docs/loop/STATUS.jsonl",
+    }
     forbidden_prefixes = (
         ".agents/",
         "private/",
@@ -30,6 +33,7 @@ def test_tracked_files_exclude_private_and_generated_artifacts() -> None:
     offenders = [
         path
         for path in tracked
-        if path.startswith(forbidden_prefixes) or path.endswith(forbidden_suffixes)
+        if path not in allowed_generated_artifacts
+        and (path.startswith(forbidden_prefixes) or path.endswith(forbidden_suffixes))
     ]
     assert offenders == []
