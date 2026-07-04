@@ -55,6 +55,8 @@ work must preserve:
 - HKDF info is `record:<record_id>`;
 - record encryption uses AES-256-GCM with a 12-byte nonce;
 - AAD is UTF-8 JSON with sorted keys and compact separators;
+- `plaintext_json_b64` is the exact stable JSON plaintext byte sequence sealed
+  by Python and Swift;
 - encrypted record `ciphertext` is base64 for `ciphertext || 16-byte GCM tag`;
 - the nonce is base64 in the separate encrypted-record `nonce` field.
 
@@ -70,6 +72,8 @@ JSON does not expose record type strings or fake private sentinels.
 Swift tests load the same crypto vector file, derive the same record key with
 CryptoKit `HKDF<SHA256>`, split Python's ciphertext/tag layout for
 `AES.GCM.SealedBox`, authenticate the same AAD bytes, and decrypt the ciphertext
-back to the source payload vector. Swift CryptoKit usage is test-only in this
+back to the source payload vector. They also seal `plaintext_json_b64` with the
+same key, nonce, and AAD and assert CryptoKit produces the same
+`ciphertext || tag` bytes as Python. Swift CryptoKit usage is test-only in this
 phase; Keychain, runtime vault file I/O, migration execution, and cloud sync are
 deferred.

@@ -45,6 +45,54 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
         }
     }
 
+    func testSwiftCryptoKitSealsCanonicalPlaintextToPythonCiphertext() throws {
+        let root = try loadCryptoVectorRoot()
+
+        for vector in try vectors(in: root) {
+            let vaultKey = try data(base64: string(vector["test_only_vault_key_b64"], context: "test_only_vault_key_b64"))
+            let vault = try dictionary(vector["vault"], context: "vault")
+            let record = try dictionary(vector["record"], context: "record")
+            let recordKey = deriveRecordKey(
+                vaultKey: vaultKey,
+                vaultID: try string(vault["vault_id"], context: "vault.vault_id"),
+                recordID: try string(record["id"], context: "record.id")
+            )
+            let nonce = try AES.GCM.Nonce(data: data(base64: string(record["nonce"], context: "record.nonce")))
+            let plaintext = try data(
+                base64: string(vector["plaintext_json_b64"], context: "plaintext_json_b64")
+            )
+            let sealed = try AES.GCM.seal(
+                plaintext,
+                using: SymmetricKey(data: recordKey),
+                nonce: nonce,
+                authenticating: aadData(vault: vault, record: record)
+            )
+            let combinedCiphertextAndTag = sealed.ciphertext + sealed.tag
+
+            XCTAssertEqual(
+                combinedCiphertextAndTag.base64EncodedString(),
+                try string(record["ciphertext"], context: "record.ciphertext")
+            )
+        }
+    }
+
+    func testCanonicalPlaintextBytesMatchSourcePayloadVector() throws {
+        let cryptoRoot = try loadCryptoVectorRoot()
+        let payloadRoot = try loadPayloadVectorRoot()
+        let payloads = try dictionary(payloadRoot["payloads"], context: "payloads")
+
+        for vector in try vectors(in: cryptoRoot) {
+            let sourcePayloadName = try string(vector["source_payload_vector"], context: "source_payload_vector")
+            let expectedPayload = try XCTUnwrap(payloads[sourcePayloadName], sourcePayloadName)
+            let plaintext = try data(
+                base64: string(vector["plaintext_json_b64"], context: "plaintext_json_b64")
+            )
+            let plaintextObject = try JSONSerialization.jsonObject(with: plaintext)
+
+            try assertJSONObjectsEqual(plaintextObject, expectedPayload)
+        }
+    }
+
     func testAADBytesMatchStableJSON() throws {
         let root = try loadCryptoVectorRoot()
 
@@ -97,6 +145,9 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
                 try data(base64: string(vector["test_only_vault_key_b64"], context: "test_only_vault_key_b64")).count,
                 32
             )
+            XCTAssertFalse(try data(
+                base64: string(vector["plaintext_json_b64"], context: "plaintext_json_b64")
+            ).isEmpty)
             let record = try dictionary(vector["record"], context: "record")
             XCTAssertEqual(try data(base64: string(record["nonce"], context: "record.nonce")).count, 12)
         }

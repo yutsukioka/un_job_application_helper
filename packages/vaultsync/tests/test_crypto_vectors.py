@@ -91,6 +91,8 @@ def validate_vector(vector: Mapping[str, Any]) -> None:
         raise CryptoVectorValidationError("source payload vector is unsupported")
     if len(b64decode(vector.get("test_only_vault_key_b64"), "test_only_vault_key_b64")) != 32:
         raise CryptoVectorValidationError("test-only vault key must be 32 bytes")
+    if not b64decode(vector.get("plaintext_json_b64"), "plaintext_json_b64"):
+        raise CryptoVectorValidationError("plaintext JSON bytes must be present")
     if len(b64decode(vector.get("record", {}).get("nonce"), "record.nonce")) != 12:
         raise CryptoVectorValidationError("record nonce must be 12 bytes")
     if len(b64decode(vector.get("record", {}).get("ciphertext"), "record.ciphertext")) <= 16:
@@ -110,6 +112,10 @@ def plaintext_from_payload_vector(vector: Mapping[str, Any]) -> PlaintextRecord:
     payload_vectors = load_json(PAYLOAD_VECTOR_PATH)
     payload = payload_vectors["payloads"][vector["source_payload_vector"]]
     return PlaintextRecord.from_dict(payload)
+
+
+def plaintext_bytes_from_payload_vector(vector: Mapping[str, Any]) -> bytes:
+    return _stable_json_bytes(plaintext_from_payload_vector(vector).to_dict())
 
 
 def serialized_vector_text() -> str:
@@ -137,6 +143,7 @@ def test_crypto_vectors_recompute_python_reference_outputs() -> None:
         vault_key = b64decode(vector["test_only_vault_key_b64"], "test_only_vault_key_b64")
         metadata = metadata_from_vector(vector)
         plaintext = plaintext_from_payload_vector(vector)
+        plaintext_bytes = plaintext_bytes_from_payload_vector(vector)
         encrypted = EncryptedRecord.from_dict(vector["record"])
 
         recomputed_record_key = derive_record_key(vault_key, metadata.vault_id, encrypted.id)
@@ -154,9 +161,24 @@ def test_crypto_vectors_recompute_python_reference_outputs() -> None:
         )
 
         assert base64.b64encode(recomputed_record_key).decode("ascii") == vector["record_key_b64"]
+        assert base64.b64encode(plaintext_bytes).decode("ascii") == vector["plaintext_json_b64"]
         assert json.loads(recomputed_aad.decode("utf-8")) == vector["aad_json"]
         assert base64.b64encode(recomputed_aad).decode("ascii") == vector["aad_b64"]
         assert recomputed_encrypted.to_dict() == encrypted.to_dict()
+
+
+def test_crypto_vectors_plaintext_bytes_match_source_payload_vectors() -> None:
+    data = load_json(CRYPTO_VECTOR_PATH)
+    validate_crypto_vectors(data)
+
+    for vector in data["vectors"]:
+        plaintext_bytes = b64decode(vector["plaintext_json_b64"], "plaintext_json_b64")
+        expected_bytes = plaintext_bytes_from_payload_vector(vector)
+
+        assert plaintext_bytes == expected_bytes
+        assert json.loads(plaintext_bytes.decode("utf-8")) == plaintext_from_payload_vector(
+            vector
+        ).to_dict()
 
 
 def test_crypto_vectors_decrypt_to_source_payload_vectors() -> None:
