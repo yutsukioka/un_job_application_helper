@@ -210,20 +210,10 @@ public final class AtlasSearchViewModel: ObservableObject {
             let health = try await client.health()
             let fetchedSnapshot = try await fetchSnapshot(health: health)
             let snapshot = snapshotWithCurrentSavedAt(fetchedSnapshot)
-            let updateSummary = try await replaceLocalSaveWhenComplete(snapshot)
+            try AtlasLocalCache.commitSnapshot(snapshot, replacingDetailsWith: nil)
             applyCachedSnapshot(snapshot)
-            startDetailCacheWarmupIfNeeded(snapshot)
-            if updateSummary.failed > 0 {
-                detailCacheFailed = updateSummary.failed
-                if updateSummary.missing > 0 {
-                    detailCacheMessage = "Local save refreshed; \(updateSummary.failed.formatted()) detail requests failed, \(updateSummary.reused.formatted()) reused from the previous cache, \(updateSummary.missing.formatted()) still missing and will retry later"
-                } else {
-                    detailCacheMessage = "Local save refreshed; \(updateSummary.failed.formatted()) detail requests failed but previous cached details were reused"
-                }
-                userMessage = "Local save refreshed with \(updateSummary.missing.formatted()) missing details"
-            } else {
-                userMessage = "Local save refreshed"
-            }
+            startDetailCacheWarmupIfNeeded(snapshot, force: true)
+            userMessage = "Local save refreshed"
         } catch {
             applyOfflineFallback(error)
         }
@@ -408,7 +398,6 @@ public final class AtlasSearchViewModel: ObservableObject {
         if !forceServer {
             if let snapshot = cachedSnapshot ?? AtlasLocalCache.loadSnapshot() {
                 applyCachedSnapshot(snapshot)
-                return
             }
         }
         do {
@@ -612,10 +601,6 @@ public final class AtlasSearchViewModel: ObservableObject {
     }
 
     private func applySidebarData(_ snapshot: AtlasLocalSnapshot) {
-        savedSearches = snapshot.savedSearches
-        savedJobs = snapshot.savedJobs.sorted { lhs, rhs in
-            (lhs.updatedAt ?? "") > (rhs.updatedAt ?? "")
-        }
         sources = snapshot.sources
         recentRuns = snapshot.recentRuns
     }
@@ -638,9 +623,6 @@ public final class AtlasSearchViewModel: ObservableObject {
         var output: [String] = []
         for job in snapshot.searchResponse.results where seen.insert(job.jobKey).inserted {
             output.append(job.jobKey)
-        }
-        for record in snapshot.savedJobs where seen.insert(record.jobKey).inserted {
-            output.append(record.jobKey)
         }
         return output
     }
@@ -943,14 +925,10 @@ public final class AtlasSearchViewModel: ObservableObject {
         let openJobs = health.openJobs ?? 10_000
         let limit = max(openJobs + 250, 10_000)
         async let searchResponse = client.search(cacheSearchRequest(limit: limit))
-        async let loadedSavedSearches = client.savedSearches()
-        async let loadedSavedJobs = client.trackerRecords()
         async let loadedSources = client.sources()
         async let loadedUpdates = client.updates()
 
         let search = try await searchResponse
-        let saved = try await loadedSavedSearches
-        let tracker = try await loadedSavedJobs
         let sourceResponse = try await loadedSources
         let updateResponse = try await loadedUpdates
 
@@ -959,8 +937,6 @@ public final class AtlasSearchViewModel: ObservableObject {
             baseURL: client.baseURL,
             health: health,
             searchResponse: search,
-            savedSearches: saved,
-            savedJobs: tracker,
             sources: sourceResponse.sources,
             recentRuns: updateResponse.recentSourceRuns
         )
@@ -972,8 +948,6 @@ public final class AtlasSearchViewModel: ObservableObject {
             baseURL: snapshot.baseURL,
             health: snapshot.health,
             searchResponse: snapshot.searchResponse,
-            savedSearches: snapshot.savedSearches,
-            savedJobs: snapshot.savedJobs,
             sources: snapshot.sources,
             recentRuns: snapshot.recentRuns
         )

@@ -22,10 +22,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "packages/jobagg[dev]"
           python -m pip install -e "services/job-api[dev]"
+          python -m pip install -e "packages/vaultsync[dev]"
 
       - name: Run tests
         run: |
           (cd packages/jobagg && pytest tests)
+          pytest packages/vaultsync/tests
           pytest tests
 
       - name: Validate JSON contracts
