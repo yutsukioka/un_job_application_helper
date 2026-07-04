@@ -28,12 +28,12 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
             let vaultKey = try data(base64: string(vector["test_only_vault_key_b64"], context: "test_only_vault_key_b64"))
             let vault = try dictionary(vector["vault"], context: "vault")
             let record = try dictionary(vector["record"], context: "record")
-            let aad = try data(base64: string(vector["aad_b64"], context: "aad_b64"))
             let recordKey = deriveRecordKey(
                 vaultKey: vaultKey,
                 vaultID: try string(vault["vault_id"], context: "vault.vault_id"),
                 recordID: try string(record["id"], context: "record.id")
             )
+            let aad = try aadData(vault: vault, record: record)
             let sealedBox = try sealedBox(record: record)
 
             let plaintext = try AES.GCM.open(sealedBox, using: SymmetricKey(data: recordKey), authenticating: aad)
@@ -49,9 +49,12 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
         let root = try loadCryptoVectorRoot()
 
         for vector in try vectors(in: root) {
-            let aadJSON = try dictionary(vector["aad_json"], context: "aad_json")
-            let aadData = try JSONSerialization.data(withJSONObject: aadJSON, options: [.sortedKeys])
+            let vault = try dictionary(vector["vault"], context: "vault")
+            let record = try dictionary(vector["record"], context: "record")
+            let aadJSON = try aadJSONObject(vault: vault, record: record)
+            let aadData = try aadData(vault: vault, record: record)
 
+            try assertJSONObjectsEqual(aadJSON, try dictionary(vector["aad_json"], context: "aad_json"))
             XCTAssertEqual(aadData.base64EncodedString(), try string(vector["aad_b64"], context: "aad_b64"))
         }
     }
@@ -111,6 +114,24 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
             outputByteCount: 32
         )
         return derived.withUnsafeBytes { Data($0) }
+    }
+
+    private func aadJSONObject(vault: [String: Any], record: [String: Any]) throws -> [String: Any] {
+        [
+            "deleted": try bool(record["deleted"], context: "record.deleted"),
+            "key_id": try string(record["key_id"], context: "record.key_id"),
+            "parent_revision": try nullableString(record["parent_revision"], context: "record.parent_revision"),
+            "record_id": try string(record["id"], context: "record.id"),
+            "record_schema_version": try int(record["schema_version"], context: "record.schema_version"),
+            "revision": try string(record["revision"], context: "record.revision"),
+            "vault_format": try string(vault["format"], context: "vault.format"),
+            "vault_id": try string(vault["vault_id"], context: "vault.vault_id"),
+            "vault_version": try int(vault["version"], context: "vault.version"),
+        ]
+    }
+
+    private func aadData(vault: [String: Any], record: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: aadJSONObject(vault: vault, record: record), options: [.sortedKeys])
     }
 
     private func sealedBox(record: [String: Any]) throws -> AES.GCM.SealedBox {
@@ -190,6 +211,20 @@ final class AtlasVaultCryptoVectorTests: XCTestCase {
             throw testError("\(context) must be an integer")
         }
         return int
+    }
+
+    private func bool(_ value: Any?, context: String) throws -> Bool {
+        guard let bool = value as? Bool else {
+            throw testError("\(context) must be a boolean")
+        }
+        return bool
+    }
+
+    private func nullableString(_ value: Any?, context: String) throws -> Any {
+        if value == nil || value is NSNull {
+            return NSNull()
+        }
+        return try string(value, context: context)
     }
 
     private func data(base64 value: String) throws -> Data {
