@@ -231,7 +231,7 @@ final class AtlasVaultCompatibilityVectorTests: XCTestCase {
         if let dictionary = value as? [String: Any] {
             return dictionary.flatMap { key, child -> [String] in
                 var values = timestampValues(in: child)
-                if key.hasSuffix("_at") || key == "closing_date_to", let timestamp = child as? String {
+                if key.hasSuffix("_at"), let timestamp = child as? String {
                     values.append(timestamp)
                 }
                 return values

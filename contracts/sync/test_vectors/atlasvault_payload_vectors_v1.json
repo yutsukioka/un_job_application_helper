@@ -16,7 +16,7 @@
     "client_created_at",
     "client_updated_at"
   ],
-  "timestamp_convention": "ISO-8601 UTC strings without fractional seconds, ending in Z.",
+  "timestamp_convention": "Timestamp fields use ISO-8601 UTC strings without fractional seconds, ending in Z. Date-only filter fields remain YYYY-MM-DD.",
   "optional_field_convention": "omit_absent_optional_fields",
   "payloads": {
     "saved_search": {
@@ -66,7 +66,7 @@
           "volunteer_kinds": [],
           "unv_categories": [],
           "unv_volunteer_types": [],
-          "closing_date_to": "2026-02-03T00:00:00Z",
+          "closing_date_to": "2026-02-03",
           "include_low_confidence": false,
           "include_facets": true,
           "limit": 50,

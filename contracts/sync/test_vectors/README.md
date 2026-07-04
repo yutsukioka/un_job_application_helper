@@ -22,8 +22,9 @@ sync.
 - Common envelope keys are `type`, `payload_schema`, `payload`,
   `client_created_at`, and `client_updated_at`.
 - Cross-platform payload keys use snake_case.
-- Timestamps are ISO-8601 UTC strings without fractional seconds and ending in
-  `Z`.
+- Timestamp fields are ISO-8601 UTC strings without fractional seconds and
+  ending in `Z`.
+- Date-only filter fields such as `closing_date_to` remain `YYYY-MM-DD`.
 - Absent optional fields are omitted, not encoded as explicit `null`.
 - Array ordering is meaningful for test vectors.
 - Object key ordering is not semantically meaningful; tests may sort keys for

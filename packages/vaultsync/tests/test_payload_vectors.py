@@ -77,7 +77,7 @@ def timestamp_values(value: Any) -> list[str]:
     if isinstance(value, dict):
         values: list[str] = []
         for key, child in value.items():
-            if key.endswith("_at") or key == "closing_date_to":
+            if key.endswith("_at"):
                 if not isinstance(child, str):
                     raise VectorValidationError(f"{key} must be text")
                 values.append(child)
@@ -105,7 +105,8 @@ def assert_no_nulls(value: Any) -> None:
 def plaintext_records(data: Mapping[str, Any]) -> dict[str, PlaintextRecord]:
     validate_vector_file(data)
     records = {}
-    for record_type, vector in data["payloads"].items():
+    for record_type in REQUIRED_RECORD_TYPES:
+        vector = data["payloads"][record_type]
         assert set(vector) == COMMON_ENVELOPE_KEYS
         assert vector["type"] == record_type
         assert vector["payload_schema"] == 1
@@ -124,7 +125,8 @@ def test_payload_vector_file_format_and_required_payloads() -> None:
 
     assert set(data["payloads"]) == set(REQUIRED_RECORD_TYPES)
     assert data["description"].startswith("Fake pre-encryption")
-    assert data["timestamp_convention"].endswith("ending in Z.")
+    assert "ending in Z" in data["timestamp_convention"]
+    assert "YYYY-MM-DD" in data["timestamp_convention"]
     assert data["optional_field_convention"] == "omit_absent_optional_fields"
 
 
