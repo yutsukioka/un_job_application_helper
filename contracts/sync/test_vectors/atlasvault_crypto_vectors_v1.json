@@ -1,0 +1,74 @@
+{
+  "format": "atlasvault-crypto-vectors",
+  "version": 1,
+  "description": "Fake test-only deterministic encrypted-record vectors for Python/Swift compatibility.",
+  "warning": "TEST ONLY. Not real user data. Not a production vault. Do not use keys/nonces in production.",
+  "source_payload_file": "atlasvault_payload_vectors_v1.json",
+  "suite": {
+    "record_aead": "AES-256-GCM",
+    "subkey_kdf": "HKDF-SHA256",
+    "aad_json": "UTF-8 JSON with sorted keys, compact separators, and ASCII escaping",
+    "ciphertext_layout": "base64(ciphertext || 16-byte-gcm-tag); nonce is stored separately"
+  },
+  "encrypted_record_plaintext_metadata_allowlist": [
+    "id",
+    "schema_version",
+    "revision",
+    "parent_revision",
+    "deleted",
+    "key_id",
+    "nonce",
+    "ciphertext"
+  ],
+  "vectors": [
+    {
+      "name": "saved_search_v1",
+      "source_payload_vector": "saved_search",
+      "test_only_vault_key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "vault": {
+        "format": "atlas-vault",
+        "version": 1,
+        "vault_id": "00000000-0000-4000-8000-000000000200"
+      },
+      "record": {
+        "id": "00000000-0000-4000-8000-000000000201",
+        "schema_version": 1,
+        "revision": "00000000-0000-4000-8001-000000000201",
+        "parent_revision": null,
+        "deleted": false,
+        "key_id": "primary-passphrase",
+        "nonce": "djJkMy0wMDAwMDAx",
+        "ciphertext": "aU6wW8LWk5RJAekbac96bJ6o34PYgiTzrQsHfFmhjmwqCEKw6fEo+gCYGtxDhudk04hqQeR3yesNsO5KXZPzoCciy2DlpmBZl913nzlT3Hen51lRxvUh11RxQQjj2JZF9jc2giIN+CqEHkbCXL33a8GFUnmgO9JhUp4/oy0rj4bnlUrR41ITu43TgwgLGINCbXSJ10mtuBUkrmmRaWR4jQdTTjUVv+siiuyFTJasZ+jiuncQqdVetRzL7qsfy7uraGcn2SVdbjBJgfp+vfiV/7U9xCW5i7fPUjMbWt/5+N5EhVPtJL7aELTBElgnbCZPGSksFvFPsTHEq16W5fcBfaF7YEIzo8v4DhcUbFk9ngFPkqTJ36QCjtvFn1dETK4WtIaxNLknBYYUg/bm0gPcRlcZs5/qJk43A/IClph2D/GA3PwoKDKw1u0rKyCxZcsZXIGenlhPFa/716D0eo7H2CPNqM5xIzi7qzdbrLB1+O2oyRxmOvTL1KSoJUGysG4Tzndin55cvxgCyT17TSsRpZh7CFkTGQKhKzTaLN7sUTj+N1tWnqOCQPBzzycn43Ge11a5OQbmMPhNICIBcv010YSYZ7Xu/TUcVhc0XYmVpBlqLOOHx85dv4XZZk4lAXOrZYB9IPbFQ6ZulT9UfUAG95eZTbwX9qFnK42fwPDBw3AHTvEPetRDDv/KrFPBwT5RbxHsT8S9S1CH3UIfGEWE/fS0Nk5gt4+0IEajJxUnAwhbx/KBR80y7/g+9TQ5e/P4m2q4Yo7A8KNaE4DUYuuXOWPMP1rQLjD6n1qxe89Eu53+msV/655DFkIrmifvrmhBbkA3Wc6Qbfbd8kn9VVbd4I/+4ZYfc+4SVz/RxCvrepGSLFJ0IGMhA1oTsXVo2KB10g63wo6Mjt3jpquHxU7xY/uifQgPd2CY2XfcTbQL5BLy8X/dFw9D7/zZ2f22oe6JQe+pexlNV4StaZiHXE7S/30tblS7uwH3CCSKRVOiHihaolQAhKrCKYHs6Sc6eMCLTjPFwDFtunUSjexeVtDRhLOdMoniU/j6MUDDlR3NfWcbXYBQEgfh3D2R9jGy1CnPU9Ba6bKiC3r8gbujldMNXVse71xtgcT2f2N4ntfkmG590FUXadZUCFRSJ/75Y1W3GRe5kTO1dnxSJelv2IaCUL3Jb0PHE0UU9p8skxyVEO1CeDGi37KiLKOBW0Fs5CAWnbqmHeGwgBUNdO2IEa8GVIRHl2mLmJ9YWbI2Bn4xtBubOiyFLcOgUcnJK6W3Uo0I1n4StRi+yxgFV0DTZFm8InkcQrND5nE5rvFFZtfPcKZfdIrmARX8"
+      },
+      "aad_json": {
+        "deleted": false,
+        "key_id": "primary-passphrase",
+        "parent_revision": null,
+        "record_id": "00000000-0000-4000-8000-000000000201",
+        "record_schema_version": 1,
+        "revision": "00000000-0000-4000-8001-000000000201",
+        "vault_format": "atlas-vault",
+        "vault_id": "00000000-0000-4000-8000-000000000200",
+        "vault_version": 1
+      },
+      "aad_b64": "eyJkZWxldGVkIjpmYWxzZSwia2V5X2lkIjoicHJpbWFyeS1wYXNzcGhyYXNlIiwicGFyZW50X3JldmlzaW9uIjpudWxsLCJyZWNvcmRfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAyMDEiLCJyZWNvcmRfc2NoZW1hX3ZlcnNpb24iOjEsInJldmlzaW9uIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDEtMDAwMDAwMDAwMjAxIiwidmF1bHRfZm9ybWF0IjoiYXRsYXMtdmF1bHQiLCJ2YXVsdF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDIwMCIsInZhdWx0X3ZlcnNpb24iOjF9",
+      "record_key_b64": "/Kj6cujzsrV5xgLocIwlCNu6sq4Gn9GwpZkye7oAs5s=",
+      "forbidden_plaintext_strings": [
+        "saved_search",
+        "saved_job",
+        "application_note",
+        "profile_snippet",
+        "draft_metadata",
+        "FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK",
+        "FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK",
+        "FAKE_PRIVATE_FILTER_DO_NOT_LEAK",
+        "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK",
+        "FAKE_SAVED_JOB_STATUS_DO_NOT_LEAK",
+        "FAKE_PRIVATE_NOTE_DO_NOT_LEAK",
+        "FAKE_PROFILE_SNIPPET_DO_NOT_LEAK",
+        "FAKE_GENERATED_DOC_REFERENCE_DO_NOT_LEAK",
+        "TOP_SECRET_SENTINEL_DO_NOT_LEAK"
+      ]
+    }
+  ]
+}
