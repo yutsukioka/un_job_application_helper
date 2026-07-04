@@ -40,3 +40,36 @@ allowlist.
 Swift tests load the same vector file, decode each envelope into the
 corresponding `AtlasVaultPayloads.swift` Codable type, re-encode it, and compare
 JSON objects semantically.
+
+## Crypto Vectors
+
+`atlasvault_crypto_vectors_v1.json` contains fake, test-only deterministic
+encrypted-record fixtures derived from the payload vectors. They are not real
+user data, not production vault files, and not `.atlasvault` exports.
+
+The crypto vectors document the Python reference behavior that future Swift
+work must preserve:
+
+- record keys are derived with HKDF-SHA256 from the 32-byte vault key;
+- HKDF salt is `atlas-vault:v1:<vault_id>`;
+- HKDF info is `record:<record_id>`;
+- record encryption uses AES-256-GCM with a 12-byte nonce;
+- AAD is UTF-8 JSON with sorted keys and compact separators;
+- encrypted record `ciphertext` is base64 for `ciphertext || 16-byte GCM tag`;
+- the nonce is base64 in the separate encrypted-record `nonce` field.
+
+The raw `test_only_vault_key_b64` values in these vectors are deliberately fake
+and exist only so Python and Swift tests can derive identical deterministic
+record keys. Production code must never use these keys, fixed nonces, or vector
+records.
+
+Python tests load the crypto vectors, recompute the record key, AAD, and
+ciphertext through `vaultsync`, decrypt the record, and assert encrypted-record
+JSON does not expose record type strings or fake private sentinels.
+
+Swift tests load the same crypto vector file, derive the same record key with
+CryptoKit `HKDF<SHA256>`, split Python's ciphertext/tag layout for
+`AES.GCM.SealedBox`, authenticate the same AAD bytes, and decrypt the ciphertext
+back to the source payload vector. Swift CryptoKit usage is test-only in this
+phase; Keychain, runtime vault file I/O, migration execution, and cloud sync are
+deferred.
