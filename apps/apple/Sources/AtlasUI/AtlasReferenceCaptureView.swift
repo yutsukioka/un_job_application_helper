@@ -190,8 +190,6 @@ private enum AtlasReferenceCaptureData {
                 facetLabels: facetLabels(),
                 unclassifiedCount: jobs.filter { $0.gradeCode == "UG" || $0.gradeCode == "Unknown" }.count
             ),
-            savedSearches: savedSearches(),
-            savedJobs: savedJobs(),
             sources: sources(),
             recentRuns: recentRuns()
         )

@@ -1,0 +1,176 @@
+{
+  "format": "atlasvault-payload-vectors",
+  "version": 1,
+  "description": "Fake pre-encryption AtlasVault payload vectors for Swift/Python compatibility tests. These are test-only payloads, not real user data, not serialized vault records, and not .atlasvault exports.",
+  "record_types": [
+    "saved_search",
+    "saved_job",
+    "application_note",
+    "profile_snippet",
+    "draft_metadata"
+  ],
+  "common_envelope_keys": [
+    "type",
+    "payload_schema",
+    "payload",
+    "client_created_at",
+    "client_updated_at"
+  ],
+  "timestamp_convention": "ISO-8601 UTC strings without fractional seconds, ending in Z.",
+  "optional_field_convention": "omit_absent_optional_fields",
+  "payloads": {
+    "saved_search": {
+      "type": "saved_search",
+      "payload_schema": 1,
+      "payload": {
+        "name": "FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK",
+        "summary": "TOP_SECRET_SENTINEL_DO_NOT_LEAK saved search summary",
+        "request": {
+          "text": "FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK",
+          "status": [
+            "open"
+          ],
+          "organizations": [
+            "FAKE_PRIVATE_FILTER_DO_NOT_LEAK"
+          ],
+          "source_ids": [
+            "FAKE_PRIVATE_FILTER_DO_NOT_LEAK"
+          ],
+          "cities": [
+            "FAKE_PRIVATE_FILTER_DO_NOT_LEAK"
+          ],
+          "countries_iso3": [
+            "JPN"
+          ],
+          "national_international": [
+            "international"
+          ],
+          "grade_codes": [
+            "P-3"
+          ],
+          "ccog_families": [
+            "Programme"
+          ],
+          "capability_tags": [
+            "monitoring"
+          ],
+          "contract_groups": [
+            "fixed_term"
+          ],
+          "seniority_groups": [
+            "mid"
+          ],
+          "work_modalities": [
+            "onsite"
+          ],
+          "volunteer_kinds": [],
+          "unv_categories": [],
+          "unv_volunteer_types": [],
+          "closing_date_to": "2026-02-03T00:00:00Z",
+          "include_low_confidence": false,
+          "include_facets": true,
+          "limit": 50,
+          "offset": 0,
+          "sort": "closing_date_asc"
+        },
+        "created_at": "2026-01-02T03:04:05Z",
+        "updated_at": "2026-01-02T04:05:06Z"
+      },
+      "client_created_at": "2026-01-02T03:04:05Z",
+      "client_updated_at": "2026-01-02T04:05:06Z"
+    },
+    "saved_job": {
+      "type": "saved_job",
+      "payload_schema": 1,
+      "payload": {
+        "job_key": "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK",
+        "status": "FAKE_SAVED_JOB_STATUS_DO_NOT_LEAK",
+        "notes": "FAKE_PRIVATE_NOTE_DO_NOT_LEAK",
+        "applied_at": "2026-01-03T05:06:07Z",
+        "updated_at": "2026-01-03T06:07:08Z"
+      },
+      "client_created_at": "2026-01-03T05:06:07Z",
+      "client_updated_at": "2026-01-03T06:07:08Z"
+    },
+    "application_note": {
+      "type": "application_note",
+      "payload_schema": 1,
+      "payload": {
+        "title": "TOP_SECRET_SENTINEL_DO_NOT_LEAK application note",
+        "body": "FAKE_PRIVATE_NOTE_DO_NOT_LEAK",
+        "note_kind": "screening",
+        "linked_job_key": "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK",
+        "created_at": "2026-01-04T07:08:09Z",
+        "updated_at": "2026-01-04T08:09:10Z",
+        "is_pinned": true,
+        "sort_order": 10
+      },
+      "client_created_at": "2026-01-04T07:08:09Z",
+      "client_updated_at": "2026-01-04T08:09:10Z"
+    },
+    "profile_snippet": {
+      "type": "profile_snippet",
+      "payload_schema": 1,
+      "payload": {
+        "title": "Reusable profile snippet",
+        "body": "FAKE_PROFILE_SNIPPET_DO_NOT_LEAK",
+        "target_system": "INSPIRA",
+        "field_hint": "summary",
+        "tags": [
+          "programme",
+          "monitoring"
+        ],
+        "provenance_notes": "TOP_SECRET_SENTINEL_DO_NOT_LEAK provenance",
+        "created_at": "2026-01-05T09:10:11Z",
+        "updated_at": "2026-01-05T10:11:12Z"
+      },
+      "client_created_at": "2026-01-05T09:10:11Z",
+      "client_updated_at": "2026-01-05T10:11:12Z"
+    },
+    "draft_metadata": {
+      "type": "draft_metadata",
+      "payload_schema": 1,
+      "payload": {
+        "linked_job_key": "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK",
+        "target_system": "INSPIRA",
+        "document_type": "cover_letter",
+        "generated_document_reference": "FAKE_GENERATED_DOC_REFERENCE_DO_NOT_LEAK",
+        "draft_status": "draft",
+        "generated_at": "2026-01-06T11:12:13Z",
+        "reviewed_at": "2026-01-06T12:13:14Z",
+        "personal_context_reference": "TOP_SECRET_SENTINEL_DO_NOT_LEAK context",
+        "context_summary": "FAKE_PROFILE_SNIPPET_DO_NOT_LEAK"
+      },
+      "client_created_at": "2026-01-06T11:12:13Z",
+      "client_updated_at": "2026-01-06T12:13:14Z"
+    }
+  },
+  "encrypted_record_expectations": {
+    "plaintext_metadata_allowlist": [
+      "id",
+      "schema_version",
+      "revision",
+      "parent_revision",
+      "deleted",
+      "key_id",
+      "nonce",
+      "ciphertext"
+    ],
+    "forbidden_plaintext_strings": [
+      "saved_search",
+      "saved_job",
+      "application_note",
+      "profile_snippet",
+      "draft_metadata",
+      "FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK",
+      "FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK",
+      "FAKE_PRIVATE_FILTER_DO_NOT_LEAK",
+      "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK",
+      "FAKE_SAVED_JOB_STATUS_DO_NOT_LEAK",
+      "FAKE_PRIVATE_NOTE_DO_NOT_LEAK",
+      "FAKE_PROFILE_SNIPPET_DO_NOT_LEAK",
+      "FAKE_GENERATED_DOC_REFERENCE_DO_NOT_LEAK",
+      "TOP_SECRET_SENTINEL_DO_NOT_LEAK"
+    ]
+  }
+}
