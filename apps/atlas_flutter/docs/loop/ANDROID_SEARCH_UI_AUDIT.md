@@ -1,6 +1,6 @@
 # Android Search UI Audit
 
-Date: 2026-07-03
+Date: 2026-07-04
 Branch: `codex/atlas-flutter-android-parity`
 Slice: persistent cache, full filters/cascades, icon parity
 
@@ -13,13 +13,13 @@ controls. Job Detail now also uses a Dart port of the Swift ATS detail formatter
 raw source payloads no longer dominate the main detail screen.
 
 This is not a final completion claim. The latest release APK was rebuilt and installed on the USB
-Pixel 8 Pro before the device was detached. Physical verification caught a real Search-screen input
-ANR and a cached `Open only` data bug; both are now fixed and covered by regression tests. Physical
-screenshots now cover Search, scrolled Search, Filter sheet, Sort menu, Saved, Updates, Sources, and
-Settings, while corrected physical Job Detail and offline-restart evidence remain pending. Emulator
-screenshots from the release app still provide the broader human-reviewable evidence for cache,
-filter, cascade, icon, tab, and detail parity. Source-rendered iOS Simulator captures provide local
-references for Search, Filter sheet, Job Detail, Saved, Updates, Sources, and Settings.
+Pixel 8 Pro. Physical verification caught a real Search-screen input ANR and a cached `Open only`
+data bug; both are now fixed and covered by regression tests. Physical screenshots now cover Search,
+scrolled Search, Filter sheet, Sort menu, Saved, Updates, Sources, Settings, corrected Job Detail,
+and offline restart with cached rows visible. Emulator screenshots from the release app still
+provide the broader human-reviewable evidence for cache, filter, cascade, icon, tab, and detail
+parity. Source-rendered iOS Simulator captures provide local references for Search, Filter sheet,
+Job Detail, Saved, Updates, Sources, and Settings.
 
 Latest physical Pixel update:
 
@@ -45,14 +45,20 @@ Latest physical Pixel update:
   - Additional physical tab/filter evidence:
     `search_scrolled_final.png`, `filter_sheet_final.png`, `sort_menu_final.png`,
     `saved_tab_final.png`, `updates_tab_final.png`, and `sources_tab_final.png` in the same folder.
-  - Physical Job Detail recapture remains pending because the Pixel was detached before the
-    corrected detail capture could be taken.
+  - 2026-07-04 refreshed Search and Settings:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/search_top_after_refresh.png`
+    and
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/settings_after_refresh.png`.
+  - 2026-07-04 offline restart with cached rows:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/offline_restart_cached.png`.
+  - 2026-07-04 corrected Job Detail:
+    `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/job_detail_corrected_clean.png`.
 
 Latest icon/startup update: Android launcher mipmap assets now use the Apple Atlas iOS 1024px icon
 artwork instead of Flutter's default launcher artwork. A focused asset regression test covers the
 expected Android density files. The current release APK with the launcher icon, startup-cache
-first-frame fix, lazy Search list, and cached-deadline fix was installed on the Pixel 8 Pro before
-the device was detached.
+first-frame fix, lazy Search list, and cached-deadline fix is the build used for the physical Pixel
+evidence.
 
 ## Implemented This Slice
 
@@ -116,15 +122,15 @@ the device was detached.
 
 | Field | Value |
 | --- | --- |
-| `health_open_jobs` | `2,452` |
-| `search_api_total` | `2,355` |
-| `android_displayed_total` | `2,355 searchable results` on the physical Pixel after tapping `Refresh Local Save Now`; this matches POST `/api/search` for the default open/searchable request. |
+| `health_open_jobs` | `2,392` |
+| `search_api_total` | `2,304` |
+| `android_displayed_total` | `2,304 searchable results` on the physical Pixel after tapping `Refresh Local Save Now`; this matches POST `/api/search` for the default open/searchable request. |
 | `active_filters` | Default Search: `status=["open"]`, no text query, no source/org filters, sort `closing_date_asc`; Search API default `exclude_expired_open=true`. |
-| `local_cache_timestamp` | Physical Pixel Settings shows `Last updated 2026-07-03 13:26`, `Cache status Fresh`, and `Cached jobs 2,355`. |
-| `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-03T04:17:28.239578+00:00`. |
-| `excluded_count` | `97` |
+| `local_cache_timestamp` | Physical Pixel Settings shows `Last updated 2026-07-04 09:58`, `Cache status Fresh`, and `Cached jobs 2,304`. |
+| `backend_snapshot_timestamp` | `/api/health last_sync_at=2026-07-04T00:52:18.058256+00:00`. |
+| `excluded_count` | `88` |
 | `excluded_reason_breakdown` | Rows still marked `status='open'` in health but with passed deadlines, hidden by Search API `exclude_expired_open=true`. |
-| `final_decision` | `2,355` is the current correct Android default Search count because it matches POST `/api/search`; `2,452` is the raw health open count. The difference is time-sensitive as deadlines pass. Cached/offline Search now applies the same exclusion rule as the API, so stale caches no longer display `Deadline passed` rows under `Open only`. |
+| `final_decision` | `2,304` is the current correct Android default Search count because it matches POST `/api/search`; `2,392` is the raw health open count. The difference is time-sensitive as deadlines pass. Cached/offline Search applies the same exclusion rule as the API, so stale caches do not display `Deadline passed` rows under `Open only`. |
 
 ## Verification
 
@@ -248,15 +254,14 @@ Commands run from `apps/atlas_flutter`:
   - Live backend reconciliation after the cached deadline fix:
     `/api/health open_jobs=2420`; POST `/api/search` with Android default open/searchable filters
     returned `total=2134`; the physical Pixel displayed `2,134 searchable results`.
-  - Final physical refresh reconciliation before the phone was detached:
-    `/api/health open_jobs=2452` with `last_sync_at=2026-07-03T04:17:28.239578+00:00`; POST
-    `/api/search` with Android default open/searchable filters returned `total=2355`; after tapping
-    `Refresh Local Save Now`, physical Settings displayed `2,355 searchable results`, `2,452`
-    health open jobs, and `97 deadline-past open rows hidden by Search`.
-  - Final physical screenshots captured before detach: Search top, Search scrolled, Filter sheet,
-    Sort menu, Saved tab, Updates tab, Sources tab, and Settings tab. Corrected physical Job Detail
-    recapture is still pending because the device was detached after an invalid launcher screenshot
-    was detected.
+  - Latest physical refresh reconciliation:
+    `/api/health open_jobs=2392` with `last_sync_at=2026-07-04T00:52:18.058256+00:00`; POST
+    `/api/search` with Android default open/searchable filters returned `total=2304`; after tapping
+    `Refresh Local Save Now`, physical Settings displayed `2,304 searchable results`, `2,392`
+    health open jobs, and `88 deadline-past open rows hidden by Search`.
+  - Latest physical screenshots captured: refreshed Search top, refreshed Settings, offline restart
+    with cached rows, and corrected Job Detail. Earlier physical Search scrolled, Filter sheet, Sort
+    menu, Saved tab, Updates tab, and Sources tab remain available in the 2026-07-03 folder.
 
 Installed package evidence:
 
@@ -308,10 +313,14 @@ Physical Pixel in-app screenshots captured after the ANR/cache fixes:
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_visible_latest.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/settings_after_refresh.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/search_top_after_refresh.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/offline_restart_cached.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/job_detail_corrected_clean.png`
 
-Corrected physical Job Detail and physical offline-restart screenshots are still pending. The
-untracked `physical-pixel-20260703/job_detail_final.png` is not valid evidence because it captured
-the launcher/app drawer, not Atlas Job Detail.
+The untracked `physical-pixel-20260703/job_detail_final.png` is not valid evidence because it
+captured the launcher/app drawer, not Atlas Job Detail. It is superseded by
+`physical-pixel-20260704/job_detail_corrected_clean.png`.
 
 The launcher icon asset itself can be reviewed at:
 
@@ -466,10 +475,10 @@ Previously generated evidence remains available for Search top comparison:
 - `apps/atlas_flutter/docs/loop/screenshots/ios-reference/iteration-8/ios_search_top.png`
 - `apps/atlas_flutter/docs/loop/screenshots/iteration-8/search_top_ios_android_side_by_side.png`
 
-The remaining screenshot gaps are corrected physical Job Detail, physical offline restart, and exact
-user-provided iOS screenshot files for pixel-paired comparison. Local source-rendered iOS references
-now exist for the main review screens plus the major filter sections and cascade states, and
-generated side-by-side Filter plus primary-screen comparisons are available for human review.
+The remaining screenshot gap is exact user-provided iOS screenshot files for pixel-paired
+comparison. Local source-rendered iOS references now exist for the main review screens plus the
+major filter sections and cascade states, and generated side-by-side Filter plus primary-screen
+comparisons are available for human review.
 
 ## Manual Emulator Evidence
 
@@ -487,10 +496,6 @@ generated side-by-side Filter plus primary-screen comparisons are available for 
 
 ## Current Remaining Gaps
 
-- Corrected physical Job Detail screenshot is still missing because the Pixel was detached before
-  recapture.
-- Physical offline restart with cached data visible is still pending after the final
-  cached-deadline fix.
 - Search, Filter sheet, the major Filter sections/cascade states, Job Detail, Saved, Updates,
   Sources, and Settings now have source-rendered iOS Simulator reference screenshots. True
   pixel-paired human review still needs local copies of the user-provided iOS screenshots.
@@ -503,10 +508,10 @@ generated side-by-side Filter plus primary-screen comparisons are available for 
 - The generated Filter side-by-side contact sheet makes the current Android cascade behavior
   reviewable against local iOS references. The Japan/Tokyo side-by-side panes are cropped above the
   keyboard, and the keyboard-free selected states are also covered by Flutter golden baselines.
-  Physical recapture should still include full-screen non-keyboard states.
+  Human review can still request full-screen non-keyboard physical recaptures.
 - The generated primary-screen side-by-side contact sheet now pairs Search, Job Detail, Saved,
   Updates, Sources, and Settings against local source-rendered iOS references. This improves local
-  reviewability but still does not replace physical Pixel screenshots.
+  reviewability and is supplemented by physical Pixel screenshots.
 - Backend facets still do not expose city/country or grade-to-seniority metadata. Android computes
   those facets locally from cached Search rows.
 - Normal cache-load banner was removed after screenshot review found `Loaded local save from this
@@ -518,30 +523,31 @@ generated side-by-side Filter plus primary-screen comparisons are available for 
 - The Tokyo reverse-cascade screenshot shows selected `TOKYO` with zero same-group count and `JPN`
   visible as the matching country option. This matches the "selected values remain visible" rule but
   should be reviewed for whether the displayed same-group count is the desired product copy.
-- Human G3 approval is still pending.
+- G3 physical-device approval is complete: `APPROVED: G3` was posted by `yutsukioka` on PR #10 at
+  `2026-07-04T01:07:37Z`.
+- Exact `APPROVED: G2` design-review approval is not present on PR #10.
 
 ## Scorecard
 
-Strict score under the new user caps: **86/100**.
+Strict score under the new user caps: **91/100**.
 
 The local iOS evidence gap is reduced because source-rendered iOS references now exist for Search,
 Filter sheet sections/cascades, Job Detail, Saved, Updates, Sources, and Settings, with generated
 iOS-vs-Android side-by-side Filter and primary-screen comparisons. Physical Search, filter, sort,
-and tab screenshots are now captured. The strict score remains below final completion because
-corrected physical Job Detail, physical offline restart, exact user-provided iOS screenshot pairing,
-and human G3 approval are still not complete.
+tab, offline restart, and Job Detail screenshots are now captured, and G3 is approved. The strict
+score remains below final completion because exact G2 design-review approval and exact
+user-provided iOS screenshot pairing are still not complete.
 
 | Category | Score | Notes |
 | --- | ---: | --- |
-| Persistent cache | 19 / 20 | File cache persists broad Search rows; emulator offline restart shows cached results immediately; cached/offline `Open only` now mirrors the Search API. Physical offline restart still pending. |
+| Persistent cache | 20 / 20 | File cache persists broad Search rows; emulator and physical offline restart show cached results immediately; cached/offline `Open only` mirrors the Search API. |
 | Filter parity | 26 / 30 | All iOS groups render in a dark sheet with counts/dimming and sticky actions; multiple City/Country values now serialize and filter locally as OR selections. |
 | Icon parity | 9 / 10 | Visible controls route through shared Cupertino-style `AtlasIcons`; launcher mipmaps use the Apple Atlas icon; source monograms now match Swift color treatment. |
-| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; final physical Search count is 2,355 searchable results versus 2,452 raw health open jobs. |
-| Tests/builds | 15 / 15 | Format/analyze/full Flutter tests, focused ANR/cache regressions, debug APK, release APK, release AAB, and emulator integration have passed; latest release APK was installed on Pixel before detach. |
-| Evidence/human readiness | 8 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references, side-by-side comparisons, and physical Search/filter/sort/tab screenshots are captured; corrected physical Job Detail, physical offline restart, and exact user-provided iOS screenshot pairing still need final human review. |
+| Existing Search/data/detail/tabs | 14 / 15 | Count reconciliation, compact rows, Updates/Sources, Saved, populated Detail, persistent cached details, and formatted ATS details remain intact; latest physical Search count is 2,304 searchable results versus 2,392 raw health open jobs. |
+| Tests/builds | 15 / 15 | Format/analyze/full Flutter tests, focused ANR/cache regressions, debug APK, release APK, release AAB, and emulator integration have passed; latest release APK was installed and verified on Pixel. |
+| Evidence/human readiness | 9 / 10 | Emulator evidence, Android contact sheet, source-rendered iOS references, side-by-side comparisons, and physical Search/filter/sort/tab/offline/detail screenshots are captured; exact user-provided iOS screenshot pairing still needs final human review. |
 
 ## Next Required Human Action
 
-Reconnect and unlock the Pixel 8 Pro, then capture corrected Job Detail and physical offline-restart
-evidence. Do not claim final Android parity until those screenshots and the human G3 approval are
-complete.
+Post the 2026-07-04 evidence update and wait for exact human `APPROVED: G2`, unless the reviewer
+explicitly waives that gate. Do not claim final merge readiness until that approval state is clear.

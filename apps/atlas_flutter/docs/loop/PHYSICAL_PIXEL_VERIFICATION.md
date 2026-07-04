@@ -1,15 +1,16 @@
 # Physical Pixel Verification Runbook
 
-Date: 2026-07-03
+Date: 2026-07-04
 Device: Pixel 8 Pro `38281FDJG001DJ`
 App package: `com.yutsukioka.jobagg.atlas`
 Server: `http://10.253.1.43:8765`
 
 ## Current Gate State
 
-Physical-device verification is partially complete but the G3 gate is still open.
+Physical-device screenshot verification is complete for the current release APK, and the G3 human
+approval gate is approved.
 
-Completed physical evidence after the ANR/cache fixes:
+Completed physical evidence after the ANR/cache fixes and 2026-07-04 recapture:
 
 - `screenshots/physical-pixel-20260703/search_top_final.png`
 - `screenshots/physical-pixel-20260703/search_scrolled_final.png`
@@ -19,17 +20,50 @@ Completed physical evidence after the ANR/cache fixes:
 - `screenshots/physical-pixel-20260703/updates_tab_final.png`
 - `screenshots/physical-pixel-20260703/sources_tab_final.png`
 - `screenshots/physical-pixel-20260703/settings_tab_final.png`
+- `screenshots/physical-pixel-20260704/settings_after_refresh.png`
+- `screenshots/physical-pixel-20260704/search_top_after_refresh.png`
+- `screenshots/physical-pixel-20260704/offline_restart_cached.png`
+- `screenshots/physical-pixel-20260704/job_detail_corrected_clean.png`
 
-Still pending:
+Gate evidence:
 
-- Corrected physical Job Detail screenshot.
-- Physical offline restart screenshot after the final cached-deadline fix.
-- Human `APPROVED: G3` comment on PR #10.
+- `APPROVED: G3` posted by `yutsukioka` on PR #10 at `2026-07-04T01:07:37Z`:
+  `https://github.com/yutsukioka/un_job_application_helper/pull/10#issuecomment-4880106432`
 
-The Pixel was detached before the corrected Job Detail/offline-restart recapture. No further ADB
-verification is possible until it is reconnected. The untracked `job_detail_final.png` in this
-folder is not valid evidence because it captured the launcher/app drawer instead of Atlas Job
-Detail.
+The untracked `screenshots/physical-pixel-20260703/job_detail_final.png` remains invalid evidence
+because it captured the launcher/app drawer instead of Atlas Job Detail. The valid replacement is
+`screenshots/physical-pixel-20260704/job_detail_corrected_clean.png`.
+
+## 2026-07-04 Physical Pass
+
+Device state:
+
+- `adb devices -l` showed Pixel 8 Pro `38281FDJG001DJ` connected and authorized.
+- Atlas was already installed and launchable as `com.yutsukioka.jobagg.atlas/.MainActivity`.
+- Settings refresh against `http://10.253.1.43:8765` succeeded.
+
+Current data reconciliation after tapping `Refresh Local Save Now`:
+
+- `/api/health open_jobs=2392`
+- `/api/health last_sync_at=2026-07-04T00:52:18.058256+00:00`
+- POST `/api/search` with Android default open/searchable filters returned `total=2304`.
+- Physical Settings displayed `2,304 searchable results`, `2,392` health open jobs, and
+  `88 deadline-past open rows hidden by Search`.
+
+Offline restart test:
+
+- Wi-Fi was temporarily disabled on the Pixel with `adb shell svc wifi disable`.
+- Atlas was force-stopped and relaunched while the server was unreachable from the device.
+- `screenshots/physical-pixel-20260704/offline_restart_cached.png` shows cached Search rows and
+  `2,304 searchable results` immediately on startup with an offline indicator.
+- Wi-Fi was restored with `adb shell svc wifi enable`.
+
+Corrected Job Detail test:
+
+- Tapping the first visible Search result opened Atlas Job Detail.
+- `screenshots/physical-pixel-20260704/job_detail_corrected_clean.png` shows the real detail screen
+  with title, bookmark control, metadata chips, weak-detail state, full description, and core
+  fields.
 
 ## Pre-Flight
 
@@ -50,9 +84,9 @@ Pass condition:
 
 ## Screenshot Capture Commands
 
-Use this directory for the next physical pass:
+Use this directory for the current physical pass:
 
-`apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/`
+`apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/`
 
 Capture command pattern:
 
@@ -61,7 +95,7 @@ adb -s 38281FDJG001DJ shell screencap -p /sdcard/<name>.png
 adb -s 38281FDJG001DJ pull /sdcard/<name>.png apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/<name>.png
 ```
 
-Already captured:
+Already captured in the 2026-07-03 bundle:
 
 - `search_top_final.png`
 - `search_scrolled_final.png`
@@ -72,11 +106,16 @@ Already captured:
 - `sources_tab_final.png`
 - `settings_tab_final.png`
 
-Still required before G3:
+Captured in the 2026-07-04 bundle:
 
-- `job_detail_final.png` or `job_detail.png`, showing an actual Atlas Job Detail screen.
-- `offline_restart_cached.png`, showing cached Search rows after app relaunch with the server
-  unreachable.
+- `settings_after_refresh.png`
+- `search_top_after_refresh.png`
+- `offline_restart_cached.png`
+- `job_detail_corrected_clean.png`
+
+Still required before merge:
+
+- Exact `APPROVED: G2` design-review PR comment, unless the reviewer explicitly waives that gate.
 
 Optional recaptures if human review requests full physical coverage:
 
@@ -151,7 +190,9 @@ Pass condition:
 
 Physical Pixel verification is complete only when:
 
-- All required screenshots above exist and show the app, not lock screen.
-- Offline restart screenshot shows cached rows, not an empty state.
+- All required screenshots above exist and show the app, not lock screen. Complete as of the
+  2026-07-04 bundle.
+- Offline restart screenshot shows cached rows, not an empty state. Complete as of
+  `offline_restart_cached.png`.
 - The screenshots are linked from `ANDROID_SEARCH_UI_AUDIT.md`.
-- Human review comments `APPROVED: G3` or equivalent on PR #10.
+- Human review comments `APPROVED: G3` or equivalent on PR #10. Complete.

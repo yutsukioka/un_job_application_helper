@@ -2,8 +2,8 @@
 
 Status: draft current-state report, not final completion.
 
-Branch: `codex/atlas-flutter-android-parity`  
-Latest report update: 2026-07-03  
+Branch: `codex/atlas-flutter-android-parity`
+Latest report update: 2026-07-04
 Latest app-code head covered: `12f0599`
 Completion audit: `apps/atlas_flutter/docs/loop/COMPLETION_AUDIT.md`
 
@@ -22,10 +22,10 @@ The latest physical Pixel pass found two real defects and both were fixed:
 - Cached `Open only` mismatch: cached/offline filtering showed past-deadline open rows that the
   Search API excludes with `exclude_expired_open=true`. Fixed so cached filtering mirrors the API.
 
-This is still not a final completion claim. Physical screenshots exist for Search, scrolled Search,
-Filter sheet, Sort menu, Saved, Updates, Sources, and Settings, but corrected physical Job Detail
-capture and physical offline-restart verification remain pending because the Pixel was detached
-before recapture. Human G3 approval is also still pending.
+This is still not a final merge claim. Physical screenshots now exist for Search, scrolled
+Search, Filter sheet, Sort menu, Saved, Updates, Sources, Settings, corrected Job Detail, and
+offline restart with cached rows visible. Human G3 approval is recorded on PR #10. The exact G2
+design-review approval comment is still missing.
 
 ## Scope Implemented
 
@@ -52,19 +52,19 @@ before recapture. Human G3 approval is also still pending.
 
 Last verified reconciliation from current app/API/physical Settings evidence:
 
-- `health_open_jobs`: `2,452`
-- `search_api_total`: `2,355`
-- `android_displayed_total`: `2,355 searchable results`
+- `health_open_jobs`: `2,392`
+- `search_api_total`: `2,304`
+- `android_displayed_total`: `2,304 searchable results`
 - `active_filters`: default open/searchable Search, no text query, sort `closing_date_asc`,
   Search API default `exclude_expired_open=true`
-- `local_cache_timestamp`: physical Settings showed `Last updated 2026-07-03 13:26`,
-  `Cache status Fresh`, and `Cached jobs 2,355`
-- `backend_snapshot_timestamp`: `/api/health last_sync_at=2026-07-03T04:17:28.239578+00:00`
-- `excluded_count`: `97`
+- `local_cache_timestamp`: physical Settings showed `Last updated 2026-07-04 09:58`,
+  `Cache status Fresh`, and `Cached jobs 2,304`
+- `backend_snapshot_timestamp`: `/api/health last_sync_at=2026-07-04T00:52:18.058256+00:00`
+- `excluded_count`: `88`
 - `excluded_reason_breakdown`: rows still counted by health as open but with passed deadlines,
   intentionally hidden by Search API `exclude_expired_open=true`
-- `final_decision`: `2,355` is the correct Android default Search count for this snapshot because
-  it matches POST `/api/search`; `2,452` is the raw health open count.
+- `final_decision`: `2,304` is the correct Android default Search count for this snapshot because
+  it matches POST `/api/search`; `2,392` is the raw health open count.
 
 The count is time-sensitive because more deadlines can pass between refreshes. The app label remains
 `searchable results` to distinguish Search results from raw health `open_jobs`.
@@ -78,7 +78,7 @@ Primary review docs:
 - `apps/atlas_flutter/docs/loop/STATUS.jsonl`
 - `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`
 
-Physical Pixel screenshots captured before detach:
+Physical Pixel screenshots:
 
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_top_final.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/search_scrolled_final.png`
@@ -91,9 +91,14 @@ Physical Pixel screenshots captured before detach:
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_visible_latest.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/anr_fix_sort_check.png`
 - `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/open_only_cache_deadline_fix.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/settings_after_refresh.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/search_top_after_refresh.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/offline_restart_cached.png`
+- `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260704/job_detail_corrected_clean.png`
 
 The untracked `physical-pixel-20260703/job_detail_final.png` is not valid evidence because it is a
-launcher/app-drawer capture, not a Job Detail screen.
+launcher/app-drawer capture, not a Job Detail screen. The valid replacement is
+`physical-pixel-20260704/job_detail_corrected_clean.png`.
 
 iOS and side-by-side references:
 
@@ -132,11 +137,19 @@ Latest app-code verification after the ANR and cached deadline fixes:
 - `flutter build apk --release` passed:
   `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk` (`50.8MB`).
 - `adb install -r build/app/outputs/flutter-apk/app-release.apk` returned `Success` on Pixel 8 Pro
-  `38281FDJG001DJ` before the device was detached.
+  `38281FDJG001DJ`.
 - Physical sort interaction passed: `Sort: Closing soon` opened and no ANR dialog appeared after
   waiting beyond Android's 5-second input timeout.
 - PR #10 checks were green after the latest push: `GitGuardian Security Checks` and `python` passed.
 - Thread-aware Copilot review query found no current non-outdated unresolved actionable threads.
+- Physical 2026-07-04 refresh passed: Settings displayed `2,304 searchable results`, `2,392` health
+  open jobs, and `88 deadline-past open rows hidden by Search`.
+- Physical 2026-07-04 offline restart passed: after disabling Pixel Wi-Fi, force-stopping, and
+  relaunching Atlas, Search rendered cached rows immediately with `2,304 searchable results`.
+- Physical 2026-07-04 Job Detail passed: tapping a Search row opened the real Job Detail screen with
+  title, metadata chips, weak-detail state, full description, and core fields.
+- G3 physical-device gate passed: `APPROVED: G3` was posted by `yutsukioka` at
+  `2026-07-04T01:07:37Z`.
 
 Previously verified and still relevant:
 
@@ -153,15 +166,13 @@ Previously verified and still relevant:
   `apps/atlas_flutter/build/app/outputs/flutter-apk/app-release.apk`
 - Release AAB:
   `apps/atlas_flutter/build/app/outputs/bundle/release/app-release.aab`
-- Installed package before detach: `com.yutsukioka.jobagg.atlas`
+- Installed package: `com.yutsukioka.jobagg.atlas`
 - Device: Pixel 8 Pro `38281FDJG001DJ`
 - Package `lastUpdateTime`: `2026-07-03 04:58:56`
 
 ## Remaining Gaps
 
-- Corrected physical Job Detail screenshot is pending.
-- Physical offline restart with cached data visible is pending after the final cache/deadline fix.
-- Human G3 physical-device approval is pending.
+- Exact `APPROVED: G2` design-review approval is not present on PR #10.
 - Exact user-provided iOS screenshots are not available as local files for final pixel-paired
   comparison; source-rendered iOS Simulator references are available.
 - Android multi-location filter display uses comma-separated text plus selected pills; human review
@@ -172,21 +183,18 @@ Previously verified and still relevant:
 
 ## Required Closeout Actions
 
-1. Reconnect and unlock Pixel 8 Pro `38281FDJG001DJ`.
-2. Start or restore the local API at `http://10.253.1.43:8765`.
-3. Follow `apps/atlas_flutter/docs/loop/PHYSICAL_PIXEL_VERIFICATION.md`.
-4. Capture corrected physical Job Detail and offline-restart screenshots into
-   `apps/atlas_flutter/docs/loop/screenshots/physical-pixel-20260703/`.
-5. Re-run live count reconciliation against `/api/health` and `/api/search`.
-6. Copy the user-provided iOS screenshots into the repo or provide accessible paths if exact
+1. Post the 2026-07-04 evidence update to PR #10.
+2. Recheck PR checks and unresolved Copilot/human review threads after the push.
+3. Obtain exact human `APPROVED: G2` or an explicit reviewer waiver of that gate.
+4. Copy the user-provided iOS screenshots into the repo or provide accessible paths if exact
    user-screenshot pairing is required.
-7. Post final report evidence as a PR comment and wait for `APPROVED: G3`.
 
 ## Honest Score
 
-Current strict score: `86/100`.
+Current strict score: `91/100`.
 
 The score reflects implemented cache/filter/icon/Search/data/detail/tab work, green automated
-verification, source-rendered iOS references, side-by-side packages, and partial physical Pixel
-evidence. It remains below final parity because corrected physical Job Detail, physical offline
-restart, exact user-provided iOS screenshot pairing, and human G3 approval are still incomplete.
+verification, source-rendered iOS references, side-by-side packages, physical Pixel evidence for
+Search, Settings, offline restart, and Job Detail, and the `APPROVED: G3` comment. It remains below
+final merge readiness because exact G2 design approval and exact user-provided iOS screenshot
+pairing are still incomplete.
