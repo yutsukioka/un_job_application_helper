@@ -187,7 +187,8 @@ public enum AtlasVaultRecordCrypto {
     public static func deriveRecordKey(
         vaultKey: Data,
         vaultID: String,
-        recordID: String
+        recordID: String,
+        vaultFormat: String = AtlasVaultRecordCrypto.vaultFormat
     ) throws -> SymmetricKey {
         guard vaultKey.count == vaultKeyByteCount else {
             throw AtlasVaultCryptoError.invalidVaultKeyLength
@@ -211,7 +212,12 @@ public enum AtlasVaultRecordCrypto {
         vaultVersion: Int = AtlasVaultRecordCrypto.vaultVersion
     ) throws -> Data {
         try requireSupported(record)
-        let recordKey = try deriveRecordKey(vaultKey: vaultKey, vaultID: vaultID, recordID: record.id)
+        let recordKey = try deriveRecordKey(
+            vaultKey: vaultKey,
+            vaultID: vaultID,
+            recordID: record.id,
+            vaultFormat: vaultFormat
+        )
         let sealedBox = try sealedBox(record)
         let aad = try AtlasVaultRecordAAD.data(
             vaultID: vaultID,
@@ -235,7 +241,12 @@ public enum AtlasVaultRecordCrypto {
         vaultVersion: Int = AtlasVaultRecordCrypto.vaultVersion
     ) throws -> AtlasVaultEncryptedRecordEnvelope {
         try requireSupported(record)
-        let recordKey = try deriveRecordKey(vaultKey: vaultKey, vaultID: vaultID, recordID: record.id)
+        let recordKey = try deriveRecordKey(
+            vaultKey: vaultKey,
+            vaultID: vaultID,
+            recordID: record.id,
+            vaultFormat: vaultFormat
+        )
         let nonce = try nonceData(record.nonce)
         let aad = try AtlasVaultRecordAAD.data(
             vaultID: vaultID,
@@ -274,7 +285,7 @@ public enum AtlasVaultRecordCrypto {
     private static func sealedBox(_ record: AtlasVaultEncryptedRecordEnvelope) throws -> AES.GCM.SealedBox {
         let nonce = try nonceData(record.nonce)
         let combinedCiphertextAndTag = try base64Data(record.ciphertext, fieldName: "ciphertext")
-        guard combinedCiphertextAndTag.count > gcmTagByteCount else {
+        guard combinedCiphertextAndTag.count >= gcmTagByteCount else {
             throw AtlasVaultCryptoError.invalidEnvelope
         }
         return try AES.GCM.SealedBox(

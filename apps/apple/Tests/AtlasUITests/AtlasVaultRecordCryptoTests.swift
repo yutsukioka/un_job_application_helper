@@ -22,6 +22,47 @@ final class AtlasVaultRecordCryptoTests: XCTestCase {
         }
     }
 
+    func testCustomVaultFormatFeedsKeyDerivationAndAADConsistently() throws {
+        let vector = try firstVector()
+        let record = try recordEnvelope(vector)
+        let vault = try dictionary(vector["vault"], context: "vault")
+        let vaultKey = try data(base64: string(vector["test_only_vault_key_b64"], context: "test_only_vault_key_b64"))
+        let vaultID = try string(vault["vault_id"], context: "vault.vault_id")
+        let customVaultFormat = "atlas-vault-test-format"
+        let plaintext = Data("test-only plaintext".utf8)
+        let sealed = try AtlasVaultRecordCrypto.seal(
+            plaintext: plaintext,
+            vaultKey: vaultKey,
+            vaultID: vaultID,
+            record: record,
+            vaultFormat: customVaultFormat
+        )
+
+        XCTAssertNotEqual(
+            symmetricKeyData(try AtlasVaultRecordCrypto.deriveRecordKey(
+                vaultKey: vaultKey,
+                vaultID: vaultID,
+                recordID: record.id
+            )),
+            symmetricKeyData(try AtlasVaultRecordCrypto.deriveRecordKey(
+                vaultKey: vaultKey,
+                vaultID: vaultID,
+                recordID: record.id,
+                vaultFormat: customVaultFormat
+            ))
+        )
+        XCTAssertEqual(
+            try AtlasVaultRecordCrypto.open(
+                record: sealed,
+                vaultKey: vaultKey,
+                vaultID: vaultID,
+                vaultFormat: customVaultFormat
+            ),
+            plaintext
+        )
+        try assertOpenFailsAuthentication(record: sealed, vector: vector)
+    }
+
     func testBuildsStableAADFromSharedVector() throws {
         for vector in try vectors() {
             let record = try recordEnvelope(vector)
@@ -158,6 +199,26 @@ final class AtlasVaultRecordCryptoTests: XCTestCase {
         try assertOpenFailsAuthentication(record: tamperedRecord, vector: vector)
     }
 
+    func testEmptyPlaintextRoundTripAllowsTagOnlyCiphertext() throws {
+        let vector = try firstVector()
+        let record = try recordEnvelope(vector)
+        let vault = try dictionary(vector["vault"], context: "vault")
+        let vaultKey = try data(base64: string(vector["test_only_vault_key_b64"], context: "test_only_vault_key_b64"))
+        let vaultID = try string(vault["vault_id"], context: "vault.vault_id")
+        let sealed = try AtlasVaultRecordCrypto.seal(
+            plaintext: Data(),
+            vaultKey: vaultKey,
+            vaultID: vaultID,
+            record: record
+        )
+
+        XCTAssertEqual(try data(base64: sealed.ciphertext).count, AtlasVaultRecordCrypto.gcmTagByteCount)
+        XCTAssertEqual(
+            try AtlasVaultRecordCrypto.open(record: sealed, vaultKey: vaultKey, vaultID: vaultID),
+            Data()
+        )
+    }
+
     func testInvalidVaultKeyLengthFails() throws {
         XCTAssertThrowsError(try AtlasVaultRecordCrypto.deriveRecordKey(
             vaultKey: Data(repeating: 0, count: AtlasVaultRecordCrypto.vaultKeyByteCount - 1),
@@ -222,6 +283,45 @@ final class AtlasVaultRecordCryptoTests: XCTestCase {
 
         XCTAssertThrowsError(try open(record: invalidRecord, vector: vector)) { error in
             XCTAssertEqual(error as? AtlasVaultCryptoError, .invalidBase64("nonce"))
+        }
+    }
+
+    func testInvalidCiphertextBase64FailsClosed() throws {
+        let vector = try firstVector()
+        let record = try recordEnvelope(vector)
+        let invalidRecord = AtlasVaultEncryptedRecordEnvelope(
+            id: record.id,
+            schemaVersion: record.schemaVersion,
+            revision: record.revision,
+            parentRevision: record.parentRevision,
+            deleted: record.deleted,
+            keyID: record.keyID,
+            nonce: record.nonce,
+            ciphertext: "not base64"
+        )
+
+        XCTAssertThrowsError(try open(record: invalidRecord, vector: vector)) { error in
+            XCTAssertEqual(error as? AtlasVaultCryptoError, .invalidBase64("ciphertext"))
+        }
+    }
+
+    func testTooShortCiphertextAndTagEnvelopeFailsClosed() throws {
+        let vector = try firstVector()
+        let record = try recordEnvelope(vector)
+        let invalidRecord = AtlasVaultEncryptedRecordEnvelope(
+            id: record.id,
+            schemaVersion: record.schemaVersion,
+            revision: record.revision,
+            parentRevision: record.parentRevision,
+            deleted: record.deleted,
+            keyID: record.keyID,
+            nonce: record.nonce,
+            ciphertext: Data(repeating: 2, count: AtlasVaultRecordCrypto.gcmTagByteCount - 1)
+                .base64EncodedString()
+        )
+
+        XCTAssertThrowsError(try open(record: invalidRecord, vector: vector)) { error in
+            XCTAssertEqual(error as? AtlasVaultCryptoError, .invalidEnvelope)
         }
     }
 
