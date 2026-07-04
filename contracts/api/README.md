@@ -38,6 +38,11 @@ are mirrored here for app/client planning:
 - `AssistantRunResult`
 - `LLMProviderConfig`
 
-The service owns persistence. Native clients may cache summaries for display,
-but the server remains the source of truth for jobs, saved searches, tracker
-records, strategy scores, and assistant run artifacts.
+For the current MVP, the service owns persistence. Native clients may cache
+summaries for display, but the server remains the source of truth for jobs,
+saved searches, tracker records, strategy scores, and assistant run artifacts.
+
+Phase 2 changes the target design for private user state: saved searches,
+tracker records, future notes, profile snippets, and draft metadata should move
+behind encrypted AtlasVault records instead of treating plaintext local JSON as
+a sync source. See `docs/architecture/phase2_local_encrypted_vault_integration.md`.

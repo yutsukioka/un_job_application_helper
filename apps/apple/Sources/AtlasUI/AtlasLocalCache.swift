@@ -1,12 +1,10 @@
 import Foundation
 
-public struct AtlasLocalSnapshot: Codable, Sendable {
+public struct AtlasPublicLocalSnapshot: Codable, Sendable {
     public let savedAt: Date
     public let baseURL: URL
     public let health: AtlasHealthSummary
     public let searchResponse: AtlasSearchResponse
-    public let savedSearches: [AtlasSavedSearch]
-    public let savedJobs: [AtlasApplicationRecord]
     public let sources: [AtlasSourceSummary]
     public let recentRuns: [AtlasSourceRun]
 
@@ -14,6 +12,8 @@ public struct AtlasLocalSnapshot: Codable, Sendable {
         searchResponse.results.count
     }
 }
+
+public typealias AtlasLocalSnapshot = AtlasPublicLocalSnapshot
 
 public enum AtlasLocalCache {
     public static let refreshIntervalHoursKey = "atlas.cache.refreshIntervalHours"
@@ -40,8 +40,17 @@ public enum AtlasLocalCache {
 
     public static func saveSnapshot(_ snapshot: AtlasLocalSnapshot) throws {
         try ensureCacheDirectory()
-        let data = try encoder.encode(snapshot)
+        let data = try encodedSnapshotData(snapshot)
         try data.write(to: snapshotURL(), options: [.atomic])
+    }
+
+    static func saveSnapshot(_ snapshot: AtlasLocalSnapshot, to url: URL) throws {
+        let data = try encodedSnapshotData(snapshot)
+        try data.write(to: url, options: [.atomic])
+    }
+
+    static func encodedSnapshotData(_ snapshot: AtlasLocalSnapshot) throws -> Data {
+        try encoder.encode(snapshot)
     }
 
     public static func prepareDetailStagingDirectory() throws -> URL {
