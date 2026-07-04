@@ -77,3 +77,10 @@ same key, nonce, and AAD and assert CryptoKit produces the same
 `ciphertext || tag` bytes as Python. Swift CryptoKit usage is test-only in this
 phase; Keychain, runtime vault file I/O, migration execution, and cloud sync are
 deferred.
+
+Phase 2D-5 Swift encrypted-record helpers consume the same vectors through
+tests. Those helpers encapsulate record-key derivation, AAD construction, and
+AES-GCM seal/open behavior, but they still do not store vault keys, call
+Keychain, read or write vault files, run migrations, or perform sync. The fixed
+keys, nonces, and encrypted records in this directory remain fake test fixtures
+only.
