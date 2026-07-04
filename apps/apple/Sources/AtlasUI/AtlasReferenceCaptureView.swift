@@ -190,8 +190,6 @@ private enum AtlasReferenceCaptureData {
                 facetLabels: facetLabels(),
                 unclassifiedCount: jobs.filter { $0.gradeCode == "UG" || $0.gradeCode == "Unknown" }.count
             ),
-            savedSearches: savedSearches(),
-            savedJobs: savedJobs(),
             sources: sources(),
             recentRuns: recentRuns()
         )
@@ -489,46 +487,6 @@ private enum AtlasReferenceCaptureData {
                 "hybrid": "Hybrid",
                 "multiple_locations": "Multiple Locations",
             ],
-        ]
-    }
-
-    private static func savedSearches() -> [AtlasSavedSearch] {
-        [
-            AtlasSavedSearch(
-                name: "Tokyo programme roles",
-                description: "Open programme and operations jobs with Japan location signals.",
-                request: AtlasSearchRequest(text: "programme", countriesISO3: ["JPN"], limit: 200),
-                createdAt: observedAt,
-                updatedAt: observedAt
-            ),
-            AtlasSavedSearch(
-                name: "Remote data roles",
-                description: "Online remote data, dashboard, and analysis assignments.",
-                request: AtlasSearchRequest(text: "data", workModalities: ["online_remote"], limit: 200),
-                createdAt: observedAt,
-                updatedAt: observedAt
-            ),
-        ]
-    }
-
-    private static func savedJobs() -> [AtlasApplicationRecord] {
-        [
-            AtlasApplicationRecord(
-                id: "saved-unicef-reference-0",
-                jobKey: "unicef_pageup:reference-0",
-                status: "saved",
-                notes: "Review emergency data scope.",
-                appliedAt: nil,
-                updatedAt: observedAt
-            ),
-            AtlasApplicationRecord(
-                id: "saved-undp-reference-4",
-                jobKey: "undp:reference-4",
-                status: "saved",
-                notes: "Strong procurement match.",
-                appliedAt: nil,
-                updatedAt: observedAt
-            ),
         ]
     }
 
