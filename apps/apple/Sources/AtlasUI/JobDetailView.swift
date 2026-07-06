@@ -56,7 +56,9 @@ public struct JobDetailView: View {
                     rawRecordDisclosure
                     detailSection("Source and History") {
                         VStack(alignment: .leading, spacing: 8) {
-                            if let sourceURL = detail?.sourceURL ?? job.sourceURL {
+                            if let sourceURL = AtlasExternalURLPolicy.safeURL(
+                                detail?.sourceURL ?? job.sourceURL
+                            ) {
                                 Link(destination: sourceURL) {
                                     Label("Open source vacancy", systemImage: "arrow.up.right.square")
                                 }
@@ -285,7 +287,8 @@ public struct JobDetailView: View {
 
     private var applyButton: some View {
         Group {
-            if let applyURL = detail?.applyURL ?? job.applyURL, !isClosedOrExpired {
+            if let applyURL = AtlasExternalURLPolicy.safeURL(detail?.applyURL ?? job.applyURL),
+               !isClosedOrExpired {
                 Link(destination: applyURL) {
                     Label("Apply", systemImage: "paperplane")
                 }
@@ -306,7 +309,9 @@ public struct JobDetailView: View {
 
     private var sourceButton: some View {
         Group {
-            if let sourceURL = detail?.sourceURL ?? job.sourceURL {
+            if let sourceURL = AtlasExternalURLPolicy.safeURL(
+                detail?.sourceURL ?? job.sourceURL
+            ) {
                 Link(destination: sourceURL) {
                     Label("Source", systemImage: "arrow.up.right.square")
                 }

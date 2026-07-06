@@ -4172,8 +4172,8 @@ class _AtlasJobDetailBody extends StatelessWidget {
         job.needsReview ||
         (qualityStatus != null && qualityStatus.toLowerCase() != 'complete') ||
         (!isLoading && fullDescription.isEmpty && contentSections.isEmpty);
-    final applyURL = detail?.applyURL ?? job.applyURL;
-    final sourceURL = detail?.sourceURL ?? job.sourceURL;
+    final applyURL = safeAtlasExternalURL(detail?.applyURL ?? job.applyURL);
+    final sourceURL = safeAtlasExternalURL(detail?.sourceURL ?? job.sourceURL);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),

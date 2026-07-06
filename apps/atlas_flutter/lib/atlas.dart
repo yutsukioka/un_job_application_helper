@@ -2365,6 +2365,23 @@ Uri? _uri(Object? value) {
   return Uri.tryParse(string);
 }
 
+const Set<String> atlasAllowedExternalURLSchemes = <String>{
+  'http',
+  'https',
+  'mailto',
+};
+
+bool isAllowedAtlasExternalURL(Uri uri) {
+  return atlasAllowedExternalURLSchemes.contains(uri.scheme.toLowerCase());
+}
+
+Uri? safeAtlasExternalURL(Uri? uri) {
+  if (uri == null || !isAllowedAtlasExternalURL(uri)) {
+    return null;
+  }
+  return uri;
+}
+
 double? _normalizedScore(double? value) {
   if (value == null) {
     return null;
