@@ -297,6 +297,8 @@ public struct AtlasJobDetail: Codable, Sendable {
     public let closesTimezone: String?
     public let applyURL: URL?
     public let sourceURL: URL?
+    public let applyURLTrust: AtlasURLTrust?
+    public let sourceURLTrust: AtlasURLTrust?
     public let deadlineInfo: AtlasDeadlineInfo?
     public let displaySections: [AtlasDetailSection]
 
@@ -310,8 +312,40 @@ public struct AtlasJobDetail: Codable, Sendable {
         case closesTimezone = "closes_tz"
         case applyURL = "apply_url"
         case sourceURL = "source_url"
+        case applyURLTrust = "apply_url_trust"
+        case sourceURLTrust = "source_url_trust"
         case deadlineInfo = "deadline_info"
         case displaySections = "display_sections"
+    }
+
+    public init(
+        jobKey: String,
+        title: String? = nil,
+        description: String? = nil,
+        status: String? = nil,
+        closingDate: String? = nil,
+        closesAtLocal: String? = nil,
+        closesTimezone: String? = nil,
+        applyURL: URL? = nil,
+        sourceURL: URL? = nil,
+        applyURLTrust: AtlasURLTrust? = nil,
+        sourceURLTrust: AtlasURLTrust? = nil,
+        deadlineInfo: AtlasDeadlineInfo? = nil,
+        displaySections: [AtlasDetailSection] = []
+    ) {
+        self.jobKey = jobKey
+        self.title = title
+        self.description = description
+        self.status = status
+        self.closingDate = closingDate
+        self.closesAtLocal = closesAtLocal
+        self.closesTimezone = closesTimezone
+        self.applyURL = applyURL
+        self.sourceURL = sourceURL
+        self.applyURLTrust = applyURLTrust
+        self.sourceURLTrust = sourceURLTrust
+        self.deadlineInfo = deadlineInfo
+        self.displaySections = displaySections
     }
 }
 
@@ -588,6 +622,8 @@ private struct AtlasJobResultDTO: Decodable, Sendable {
     let status: String?
     let applyURL: String?
     let sourceURL: String?
+    let applyURLTrust: AtlasURLTrust?
+    let sourceURLTrust: AtlasURLTrust?
     let needsReview: Bool?
     let score: Double?
     let scoreReasons: [String]?
@@ -616,6 +652,8 @@ private struct AtlasJobResultDTO: Decodable, Sendable {
         case status
         case applyURL = "apply_url"
         case sourceURL = "source_url"
+        case applyURLTrust = "apply_url_trust"
+        case sourceURLTrust = "source_url_trust"
         case needsReview = "needs_review"
         case score
         case scoreReasons = "score_reasons"
@@ -675,7 +713,9 @@ private struct AtlasJobResultDTO: Decodable, Sendable {
             status: status ?? "unknown",
             postedDate: parseAPIDate(postedDate),
             applyURL: url(applyURL),
-            sourceURL: url(sourceURL)
+            sourceURL: url(sourceURL),
+            applyURLTrust: applyURLTrust,
+            sourceURLTrust: sourceURLTrust
         )
     }
 

@@ -56,6 +56,87 @@ final class AtlasAPIClientTests: XCTestCase {
         XCTAssertEqual(response.results.first?.gradeCode, "IPSA-9")
     }
 
+    func testDecodesAPIURLTrustAnnotations() throws {
+        let json = """
+        {
+          "total": 1,
+          "limit": 50,
+          "offset": 0,
+          "facets": {},
+          "facet_labels": {},
+          "unclassified_count": 0,
+          "results": [
+            {
+              "job_key": "unicef_pageup:593420",
+              "title": "Emergency Specialist, P-3",
+              "organization": "UNICEF PageUp",
+              "source_id": "unicef_pageup",
+              "duty_station": "Nairobi, Kenya",
+              "grade_code": "p3",
+              "contract_group": "fixed_term",
+              "work_modality": "onsite",
+              "closing_date": "2026-07-05T23:59:00Z",
+              "status": "open",
+              "apply_url": "https://apply.vendor.example/jobs/593420",
+              "source_url": "https://careers.unicef.org/jobs/593420",
+              "apply_url_trust": {
+                "origin_host": "apply.vendor.example",
+                "matches_source_org": false
+              },
+              "source_url_trust": {
+                "origin_host": "careers.unicef.org",
+                "matches_source_org": true
+              },
+              "needs_review": false,
+              "score_reasons": []
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let response = try decoder.decode(AtlasSearchResponse.self, from: json)
+        let job = try XCTUnwrap(response.results.first)
+
+        XCTAssertEqual(job.applyURLTrust?.originHost, "apply.vendor.example")
+        XCTAssertEqual(job.applyURLTrust?.matchesSourceOrg, false)
+        XCTAssertEqual(job.sourceURLTrust?.originHost, "careers.unicef.org")
+        XCTAssertEqual(job.sourceURLTrust?.matchesSourceOrg, true)
+    }
+
+    func testDecodesDetailURLTrustAnnotations() throws {
+        let json = """
+        {
+          "job_key": "unicef_pageup:593420",
+          "title": "Emergency Specialist, P-3",
+          "status": "open",
+          "apply_url": "https://apply.vendor.example/jobs/593420",
+          "source_url": "https://careers.unicef.org/jobs/593420",
+          "apply_url_trust": {
+            "origin_host": "apply.vendor.example",
+            "matches_source_org": false
+          },
+          "source_url_trust": {
+            "origin_host": "careers.unicef.org",
+            "matches_source_org": true
+          },
+          "display_sections": []
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let detail = try decoder.decode(AtlasJobDetail.self, from: json)
+
+        XCTAssertEqual(detail.applyURLTrust?.originHost, "apply.vendor.example")
+        XCTAssertEqual(detail.applyURLTrust?.matchesSourceOrg, false)
+        XCTAssertEqual(detail.sourceURLTrust?.originHost, "careers.unicef.org")
+        XCTAssertEqual(detail.sourceURLTrust?.matchesSourceOrg, true)
+    }
+
     func testTransportErrorMessageExplainsLocalNetworkPermission() throws {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
         let url = try XCTUnwrap(URL(string: "http://192.168.50.22:8765/api/health"))

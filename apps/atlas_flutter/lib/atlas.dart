@@ -140,6 +140,31 @@ const atlasUNVCategoryInfo = <AtlasUNVCategoryInfo>[
   ),
 ];
 
+final class AtlasURLTrust {
+  const AtlasURLTrust({this.originHost, required this.matchesSourceOrg});
+
+  factory AtlasURLTrust.fromJson(Map<String, Object?> json) {
+    return AtlasURLTrust(
+      originHost: _string(json['origin_host']) ?? _string(json['originHost']),
+      matchesSourceOrg:
+          _bool(json['matches_source_org']) ??
+          _bool(json['matchesSourceOrg']) ??
+          false,
+    );
+  }
+
+  final String? originHost;
+  final bool matchesSourceOrg;
+
+  Map<String, Object?> toJson() {
+    return {'originHost': originHost, 'matchesSourceOrg': matchesSourceOrg};
+  }
+
+  Map<String, Object?> toAPIJson() {
+    return {'origin_host': originHost, 'matches_source_org': matchesSourceOrg};
+  }
+}
+
 final class JobSearchResult {
   JobSearchResult({
     required this.jobKey,
@@ -174,6 +199,8 @@ final class JobSearchResult {
     this.postedDate,
     this.applyURL,
     this.sourceURL,
+    this.applyURLTrust,
+    this.sourceURLTrust,
   });
 
   factory JobSearchResult.fromJson(Map<String, Object?> json) {
@@ -215,6 +242,12 @@ final class JobSearchResult {
       postedDate: _date(json['postedDate']),
       applyURL: _uri(json['applyURL']),
       sourceURL: _uri(json['sourceURL']),
+      applyURLTrust: _map(json['applyURLTrust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['applyURLTrust'])!),
+      sourceURLTrust: _map(json['sourceURLTrust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['sourceURLTrust'])!),
     );
   }
 
@@ -299,6 +332,12 @@ final class JobSearchResult {
       postedDate: _date(json['posted_date']),
       applyURL: _uri(json['apply_url']),
       sourceURL: _uri(json['source_url']),
+      applyURLTrust: _map(json['apply_url_trust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['apply_url_trust'])!),
+      sourceURLTrust: _map(json['source_url_trust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['source_url_trust'])!),
     );
   }
 
@@ -334,6 +373,8 @@ final class JobSearchResult {
   final DateTime? postedDate;
   final Uri? applyURL;
   final Uri? sourceURL;
+  final AtlasURLTrust? applyURLTrust;
+  final AtlasURLTrust? sourceURLTrust;
 
   Map<String, Object?> toJson() {
     return {
@@ -369,6 +410,8 @@ final class JobSearchResult {
       'postedDate': postedDate?.toIso8601String(),
       'applyURL': applyURL?.toString(),
       'sourceURL': sourceURL?.toString(),
+      'applyURLTrust': applyURLTrust?.toJson(),
+      'sourceURLTrust': sourceURLTrust?.toJson(),
     };
   }
 
@@ -1391,6 +1434,8 @@ final class AtlasJobDetail {
     this.closesTimezone,
     this.applyURL,
     this.sourceURL,
+    this.applyURLTrust,
+    this.sourceURLTrust,
     this.deadlineInfo,
     required this.displaySections,
   });
@@ -1406,6 +1451,12 @@ final class AtlasJobDetail {
       closesTimezone: _string(json['closes_tz']),
       applyURL: _uri(json['apply_url']),
       sourceURL: _uri(json['source_url']),
+      applyURLTrust: _map(json['apply_url_trust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['apply_url_trust'])!),
+      sourceURLTrust: _map(json['source_url_trust']) == null
+          ? null
+          : AtlasURLTrust.fromJson(_map(json['source_url_trust'])!),
       deadlineInfo: _map(json['deadline_info']) == null
           ? null
           : AtlasDeadlineInfo.fromJson(_map(json['deadline_info'])!),
@@ -1424,6 +1475,8 @@ final class AtlasJobDetail {
   final String? closesTimezone;
   final Uri? applyURL;
   final Uri? sourceURL;
+  final AtlasURLTrust? applyURLTrust;
+  final AtlasURLTrust? sourceURLTrust;
   final AtlasDeadlineInfo? deadlineInfo;
   final List<AtlasDetailSection> displaySections;
 
@@ -1438,6 +1491,8 @@ final class AtlasJobDetail {
       'closes_tz': closesTimezone,
       'apply_url': applyURL?.toString(),
       'source_url': sourceURL?.toString(),
+      'apply_url_trust': applyURLTrust?.toAPIJson(),
+      'source_url_trust': sourceURLTrust?.toAPIJson(),
       'deadline_info': deadlineInfo?.toJson(),
       'display_sections': displaySections
           .map((section) => section.toJson())

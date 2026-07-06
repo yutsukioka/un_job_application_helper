@@ -1493,6 +1493,23 @@ String? _detailQualityStatus(AtlasJobDetail? detail) {
   return null;
 }
 
+List<String> _linkTrustWarningHosts(
+  JobSearchResult job,
+  AtlasJobDetail? detail,
+) {
+  final hosts = <String>{};
+  final trusts = <AtlasURLTrust?>[
+    detail?.applyURLTrust ?? job.applyURLTrust,
+    detail?.sourceURLTrust ?? job.sourceURLTrust,
+  ];
+  for (final trust in trusts) {
+    if (trust != null && !trust.matchesSourceOrg) {
+      hosts.add(trust.originHost ?? 'unknown host');
+    }
+  }
+  return hosts.toList(growable: false)..sort();
+}
+
 String _displayScope(String? value) {
   final raw = value?.trim();
   if (raw == null || raw.isEmpty) {
@@ -4174,6 +4191,7 @@ class _AtlasJobDetailBody extends StatelessWidget {
         (!isLoading && fullDescription.isEmpty && contentSections.isEmpty);
     final applyURL = safeAtlasExternalURL(detail?.applyURL ?? job.applyURL);
     final sourceURL = safeAtlasExternalURL(detail?.sourceURL ?? job.sourceURL);
+    final linkTrustWarningHosts = _linkTrustWarningHosts(job, detail);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -4242,6 +4260,15 @@ class _AtlasJobDetailBody extends StatelessWidget {
             title: 'Weak detail state',
             body:
                 'This posting has limited structured detail. Use the source or apply link for the authoritative vacancy text.',
+          ),
+        ],
+        if (linkTrustWarningHosts.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          AtlasInfoStrip(
+            icon: AtlasIcons.warning,
+            title: 'External link warning',
+            body:
+                'Link host differs from the source organization: ${linkTrustWarningHosts.join(', ')}.',
           ),
         ],
         const SizedBox(height: 20),

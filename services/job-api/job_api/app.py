@@ -10,7 +10,7 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException
 from jobagg.db import JobDatabase
@@ -104,6 +104,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 results = [row for row in results if row.get("score", 0) >= request.min_score]
                 payload["total"] = len(results)
             payload["results"] = results
+        _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
 
     @app.get("/api/job-detail")
@@ -164,6 +165,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         response = search_collected_jobs(db(), saved.request, include_facets=True)
         payload = asdict(response)
         payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
+        _annotate_result_url_trust(payload)
         return SearchResponse(**payload)
 
     @app.delete("/api/saved-searches/{name}")
@@ -248,7 +250,39 @@ def _job_detail_payload(db_path: Path, database: JobDatabase, job_key: str) -> d
     job["source_features"] = _job_source_features(db_path, job_key)
     job["deadline_info"] = _deadline_info(job)
     job["display_sections"] = _job_display_sections(job)
-    return job
+    return _annotate_url_trust(job)
+
+
+def _annotate_result_url_trust(payload: dict[str, Any]) -> None:
+    payload["results"] = [
+        _annotate_url_trust(dict(row)) if isinstance(row, dict) else row
+        for row in payload.get("results") or []
+    ]
+
+
+def _annotate_url_trust(row: dict[str, Any]) -> dict[str, Any]:
+    source_origin_host = _url_origin_host(row.get("source_url")) or _url_origin_host(row.get("apply_url"))
+    row["apply_url_trust"] = _url_trust(row.get("apply_url"), source_origin_host)
+    row["source_url_trust"] = _url_trust(row.get("source_url"), source_origin_host)
+    return row
+
+
+def _url_trust(value: object, source_origin_host: str | None) -> dict[str, Any]:
+    origin_host = _url_origin_host(value)
+    return {
+        "origin_host": origin_host,
+        "matches_source_org": bool(origin_host and source_origin_host and origin_host == source_origin_host),
+    }
+
+
+def _url_origin_host(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        host = urlsplit(value.strip()).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
 
 
 def _scalar(conn: sqlite3.Connection, query: str) -> Any:

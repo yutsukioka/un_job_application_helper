@@ -359,8 +359,33 @@ public struct JobDetailView: View {
                     .font(.caption)
                     .foregroundStyle(AtlasTheme.warning)
             }
+            if let linkTrustWarningText {
+                Label(linkTrustWarningText, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(AtlasTheme.warning)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var linkTrustWarningText: String? {
+        let hosts = linkTrustWarningHosts
+        guard !hosts.isEmpty else { return nil }
+        return "External link host differs from source organization: \(hosts.joined(separator: ", "))"
+    }
+
+    private var linkTrustWarningHosts: [String] {
+        let trusts = [
+            detail?.applyURLTrust ?? job.applyURLTrust,
+            detail?.sourceURLTrust ?? job.sourceURLTrust,
+        ]
+        return Set(
+            trusts.compactMap { trust -> String? in
+                guard let trust, !trust.matchesSourceOrg else { return nil }
+                return trust.originHost ?? "unknown host"
+            }
+        )
+        .sorted()
     }
 
     @MainActor
