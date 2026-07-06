@@ -13,6 +13,7 @@ from jobagg.filters.schemas import VacancySearchRequest
 
 
 STORE_VERSION = 1
+MAX_SAVED_SEARCH_NAME_LENGTH = 128
 
 
 @dataclass(slots=True)
@@ -56,6 +57,7 @@ def save_search(
     description: str | None = None,
     overwrite: bool = False,
 ) -> SavedSearch:
+    name = validate_saved_search_name(name)
     store_path = Path(path)
     with locked_path(store_path):
         data = _load_store(store_path)
@@ -77,6 +79,7 @@ def save_search(
 
 
 def get_saved_search(path: str | Path, name: str) -> SavedSearch:
+    name = validate_saved_search_name(name)
     searches = load_saved_searches(path)
     try:
         return searches[name]
@@ -85,6 +88,7 @@ def get_saved_search(path: str | Path, name: str) -> SavedSearch:
 
 
 def remove_saved_search(path: str | Path, name: str) -> bool:
+    name = validate_saved_search_name(name)
     store_path = Path(path)
     with locked_path(store_path):
         data = _load_store(store_path)
@@ -94,6 +98,21 @@ def remove_saved_search(path: str | Path, name: str) -> bool:
         del searches[name]
         _write_store(store_path, data)
         return True
+
+
+def validate_saved_search_name(name: str) -> str:
+    value = str(name).strip()
+    if not value:
+        raise ValueError("Saved search name is required")
+    if len(value) > MAX_SAVED_SEARCH_NAME_LENGTH:
+        raise ValueError(
+            f"Saved search name must be {MAX_SAVED_SEARCH_NAME_LENGTH} characters or fewer"
+        )
+    if "/" in value or "\\" in value:
+        raise ValueError("Saved search name must not contain path separators")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Saved search name must not contain control characters")
+    return value
 
 
 def request_to_dict(request: VacancySearchRequest) -> dict[str, Any]:

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, conint, conlist, constr
+from pydantic import BaseModel, Field, conint, conlist, constr, field_validator
+from jobagg.filters.saved_searches import validate_saved_search_name
 
 
 ShortText = constr(strip_whitespace=True, max_length=256)
@@ -84,6 +85,11 @@ class SavedSearchModel(BaseModel):
     summary: LongText = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return validate_saved_search_name(value)
 
 
 class ApplicationRecord(BaseModel):

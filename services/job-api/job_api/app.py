@@ -21,6 +21,7 @@ from jobagg.filters.saved_searches import (
     list_saved_searches,
     remove_saved_search,
     save_search,
+    validate_saved_search_name,
 )
 from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import (
@@ -159,6 +160,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.post("/api/saved-searches/{name}/run", response_model=SearchResponse)
     def run_saved_search(name: str) -> SearchResponse:
         _require_db(settings.db_path, settings.repo_root)
+        name = _saved_search_name_or_400(name)
         try:
             saved = get_saved_search(settings.saved_searches_path, name)
         except KeyError as exc:
@@ -171,6 +173,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.delete("/api/saved-searches/{name}")
     def delete_saved_search(name: str) -> dict[str, bool]:
+        name = _saved_search_name_or_400(name)
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
     @app.get("/api/updates")
@@ -233,6 +236,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 def _to_jobagg_request(request: SearchRequest) -> VacancySearchRequest:
     data = request.model_dump(exclude={"include_facets", "include_explain", "score_against", "min_score"})
     return VacancySearchRequest(**data)
+
+
+def _saved_search_name_or_400(name: str) -> str:
+    try:
+        return validate_saved_search_name(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _require_db(path: Path, repo_root: Path) -> None:
