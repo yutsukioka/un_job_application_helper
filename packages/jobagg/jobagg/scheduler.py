@@ -46,6 +46,7 @@ from jobagg.pipelines.bundles import (
     write_source_bundle,
     write_summary,
 )
+from jobagg.pipelines.bundle_verify import DEFAULT_MAX_BUNDLE_BYTES, verify_bundle_path
 from jobagg.pipelines.consolidation import (
     consolidate_bundle_databases,
     write_organization_summary,
@@ -78,6 +79,13 @@ def _non_negative_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid integer value: {value}") from exc
     if parsed < 0:
         raise argparse.ArgumentTypeError("value must be 0 or greater")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = _non_negative_int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than 0")
     return parsed
 
 
@@ -313,6 +321,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional CSV path for per-organization current/history counts.",
     )
     consolidate.set_defaults(handler=handle_consolidate_bundles)
+
+    bundle = subcommands.add_parser("bundle", help="Inspect and validate local bundle artifacts.")
+    bundle_subcommands = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_verify = bundle_subcommands.add_parser(
+        "verify",
+        help="Validate a bundle SQLite database or directory before import.",
+    )
+    bundle_verify.add_argument("path", help="Path to a *_jobs.sqlite3 database or bundle directory.")
+    bundle_verify.add_argument(
+        "--max-bytes",
+        type=_positive_int,
+        default=DEFAULT_MAX_BUNDLE_BYTES,
+        help="Maximum total bundle bytes allowed before any file is opened.",
+    )
+    bundle_verify.set_defaults(handler=handle_bundle_verify)
 
     export = subcommands.add_parser("export", help="Export persisted jobs.")
     export.add_argument("--format", choices=["json", "csv"], default="json", help="Export format.")
@@ -805,6 +828,19 @@ def handle_sync_bundles(args: argparse.Namespace) -> int:
             ", ".join(item["source_id"] for item in health_report["sources"] if item["warning"]),
         )
     return exit_code
+
+
+def handle_bundle_verify(args: argparse.Namespace) -> int:
+    result = verify_bundle_path(args.path, max_bytes=args.max_bytes)
+    if result.ok:
+        print(
+            f"OK: verified {len(result.checked_files)} file(s), {result.total_bytes} bytes",
+            file=sys.stdout,
+        )
+        return 0
+    for error in result.errors:
+        print(f"ERROR: {error}", file=sys.stderr)
+    return 1
 
 
 def _write_source_bundle_for_sync_bundles(
