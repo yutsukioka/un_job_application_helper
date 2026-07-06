@@ -66,6 +66,42 @@ final class AtlasVaultKeyStoreTests: XCTestCase {
         XCTAssertNil(service.session)
     }
 
+    func testDeletingActiveVaultKeyLocksAndClearsSession() throws {
+        let store = MockVaultKeyStore()
+        try store.saveVaultKey(Self.testOnlyVaultKey, for: Self.vaultID)
+        var service = AtlasVaultUnlockService(keyStore: store)
+        XCTAssertEqual(service.unlockWithStoredKey(for: Self.vaultID), .unlocked)
+
+        try service.deleteVaultKey(for: Self.vaultID)
+
+        XCTAssertEqual(service.state, .locked)
+        XCTAssertNil(service.session)
+        XCTAssertNil(try store.loadVaultKey(for: Self.vaultID))
+        XCTAssertEqual(store.deleteCalls, [Self.vaultID])
+    }
+
+    func testDeletingDifferentVaultKeyDoesNotClearActiveSession() throws {
+        let store = MockVaultKeyStore()
+        try store.saveVaultKey(Self.testOnlyVaultKey, for: Self.vaultID)
+        var service = AtlasVaultUnlockService(keyStore: store)
+        XCTAssertEqual(service.unlockWithStoredKey(for: Self.vaultID), .unlocked)
+
+        try service.deleteVaultKey(for: "TEST_ONLY_OTHER_VAULT_ID")
+
+        XCTAssertEqual(service.state, .unlocked)
+        XCTAssertNotNil(service.session)
+    }
+
+    func testSessionBestEffortWipeClearsVaultKeyBytes() throws {
+        var session = try AtlasVaultSession(vaultID: Self.vaultID, vaultKey: Self.testOnlyVaultKey)
+        XCTAssertEqual(session.withVaultKey { $0 }, Self.testOnlyVaultKey)
+
+        session.wipeVaultKey()
+
+        XCTAssertEqual(session.vaultKeyByteCount, 0)
+        XCTAssertEqual(session.withVaultKey { $0 }, Data())
+    }
+
     func testUnavailableOrDeletedKeyLeavesNoSession() throws {
         let store = MockVaultKeyStore()
         var service = AtlasVaultUnlockService(keyStore: store)
@@ -112,9 +148,12 @@ final class AtlasVaultKeyStoreTests: XCTestCase {
             "AtlasLocalCache",
             "SearchViewModel",
             "AtlasAPIClient",
+            "Data(vaultKey)",
+            "Data(key)",
         ] {
             XCTAssertFalse(source.contains(forbidden), forbidden)
         }
+        XCTAssertTrue(source.contains("wipeVaultKey()"))
     }
 
     private static let vaultID = "TEST_ONLY_VAULT_ID"

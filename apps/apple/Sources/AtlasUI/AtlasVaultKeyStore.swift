@@ -21,14 +21,14 @@ public enum AtlasVaultUnlockState: Equatable, Sendable {
 
 public struct AtlasVaultSession: Sendable {
     public let vaultID: String
-    private let vaultKey: Data
+    private var vaultKey: Data
 
     public init(vaultID: String, vaultKey: Data) throws {
         guard vaultKey.count == AtlasVaultRecordCrypto.vaultKeyByteCount else {
             throw AtlasVaultUnlockError.invalidVaultKeyLength
         }
         self.vaultID = vaultID
-        self.vaultKey = Data(vaultKey)
+        self.vaultKey = vaultKey
     }
 
     public var vaultKeyByteCount: Int {
@@ -36,7 +36,13 @@ public struct AtlasVaultSession: Sendable {
     }
 
     public func withVaultKey<Result>(_ operation: (Data) throws -> Result) rethrows -> Result {
-        try operation(Data(vaultKey))
+        try operation(vaultKey)
+    }
+
+    public mutating func wipeVaultKey() {
+        guard !vaultKey.isEmpty else { return }
+        vaultKey.resetBytes(in: vaultKey.startIndex..<vaultKey.endIndex)
+        vaultKey.removeAll(keepingCapacity: false)
     }
 }
 
@@ -53,11 +59,14 @@ public struct AtlasVaultUnlockService<KeyStore: AtlasVaultKeyStore>: Sendable {
 
     public func saveVaultKey(_ key: Data, for vaultID: String) throws {
         try Self.requireValidVaultKey(key)
-        try keyStore.saveVaultKey(Data(key), for: vaultID)
+        try keyStore.saveVaultKey(key, for: vaultID)
     }
 
-    public func deleteVaultKey(for vaultID: String) throws {
+    public mutating func deleteVaultKey(for vaultID: String) throws {
         try keyStore.deleteVaultKey(for: vaultID)
+        if session?.vaultID == vaultID {
+            clearSession(state: .locked)
+        }
     }
 
     @discardableResult
@@ -106,6 +115,7 @@ public struct AtlasVaultUnlockService<KeyStore: AtlasVaultKeyStore>: Sendable {
     }
 
     private mutating func clearSession(state: AtlasVaultUnlockState) {
+        session?.wipeVaultKey()
         session = nil
         self.state = state
     }

@@ -80,10 +80,13 @@ files, parse vault metadata, or decrypt records.
 ## Memory And Lifetime Rules
 
 The raw vault key is held only by the unlocked session object in this phase.
-Locking clears the session reference. The service and session must not log,
-serialize, or persist vault keys, passphrases, recovery keys, decrypted payloads,
-record plaintext, saved-search text, saved-job keys, notes, snippets, draft
-metadata, or generated document references.
+Locking calls a best-effort in-memory wipe before clearing the session
+reference. Deleting the local unlock material for the currently unlocked vault
+also locks the session so revocation does not leave private state accessible.
+The service and session must not log, serialize, or persist vault keys,
+passphrases, recovery keys, decrypted payloads, record plaintext,
+saved-search text, saved-job keys, notes, snippets, draft metadata, or
+generated document references.
 
 The service accepts caller-provided key bytes and validates length before
 creating a session. Invalid or unavailable keys must not hydrate partial private
@@ -110,6 +113,8 @@ Phase 2D-7 tests cover:
 - unlock with a valid fake 32-byte key;
 - invalid key rejection;
 - lock clearing the in-memory session;
+- active-vault key deletion clearing the in-memory session;
+- best-effort session key wipe;
 - deleted or unavailable keys leaving no session;
 - public snapshot JSON remaining public-only after a mock unlock;
 - source-level checks that the abstraction does not call platform storage,
