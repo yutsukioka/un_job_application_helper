@@ -15,6 +15,7 @@ import webbrowser
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from jobagg.classification import classify_database
 from jobagg.classification.audit import audit_classification, audit_to_markdown
@@ -903,6 +904,12 @@ def _apply_browser_cookie_assist(
             )
             webbrowser.open(cookie_url)
         cookie_header = _read_browser_cookie_header(args, source)
+        if not _cookie_header_matches_target(cookie_header, cookie_url):
+            LOGGER.warning(
+                "%s declared cookie domain does not match target host; not attaching cookie header",
+                source.id,
+            )
+            continue
         source.extra = {
             **source.extra,
             "cookie_header": cookie_header,
@@ -965,6 +972,31 @@ def _normalize_cookie_header(value: str) -> str:
     if "=" not in text:
         raise RuntimeError("Cookie header does not look like name=value cookies")
     return text
+
+
+def _cookie_header_matches_target(cookie_header: str, cookie_url: str) -> bool:
+    target_host = (urlsplit(cookie_url).hostname or "").casefold()
+    if not target_host:
+        return False
+    return all(
+        _cookie_domain_matches(target_host, domain)
+        for domain in _declared_cookie_domains(cookie_header)
+    )
+
+
+def _declared_cookie_domains(cookie_header: str) -> list[str]:
+    domains: list[str] = []
+    for part in cookie_header.split(";"):
+        name, separator, value = part.strip().partition("=")
+        if separator and name.casefold() == "domain":
+            domains.append(value.strip().lstrip(".").casefold())
+    return domains
+
+
+def _cookie_domain_matches(target_host: str, declared_domain: str) -> bool:
+    if not declared_domain:
+        return False
+    return target_host == declared_domain or target_host.endswith(f".{declared_domain}")
 
 
 def _truthy(value: object) -> bool:
