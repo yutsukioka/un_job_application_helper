@@ -22,7 +22,12 @@ from jobagg.filters.saved_searches import (
     save_search,
 )
 from jobagg.filters.schemas import VacancySearchRequest
-from jobagg.scoring import load_strategy_signals, score_jobs
+from jobagg.scoring import (
+    StrategyPathError,
+    load_strategy_signals,
+    resolve_strategy_signals_path,
+    score_jobs,
+)
 
 from job_api.config import ApiSettings, load_settings
 from job_api.auth import FailedAuthLimiter, require_lan_auth
@@ -85,7 +90,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         payload = asdict(response)
         payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
         if request.score_against:
-            signals = load_strategy_signals(request.score_against)
+            try:
+                signals_path = resolve_strategy_signals_path(
+                    request.score_against,
+                    root=settings.scoring_root,
+                    max_bytes=settings.scoring_max_bytes,
+                )
+            except StrategyPathError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            signals = load_strategy_signals(signals_path)
             results = score_jobs(payload["results"], signals)
             if request.min_score is not None:
                 results = [row for row in results if row.get("score", 0) >= request.min_score]

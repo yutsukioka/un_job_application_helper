@@ -28,6 +28,11 @@ unless the operator sets `JOB_API_ALLOW_LAN=1` and configures either
 `JOB_API_TOKEN` for the `X-Job-Api-Token` shared-secret header or
 `JOB_API_UNIX_SOCKET` for Unix-socket mode.
 
+`score_against` files are confined to `JOB_API_SCORING_ROOT`, which defaults
+to the repository `strategies/` directory. Files must be regular files under
+that root after symlink resolution and must not exceed
+`JOB_API_SCORING_MAX_BYTES` (default: 2097152).
+
 ## Endpoint Status
 
 Implemented for MVP:

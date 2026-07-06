@@ -1897,11 +1897,15 @@ def handle_search(args: argparse.Namespace) -> int:
     score_path = getattr(args, "score_against", None)
     min_score = getattr(args, "min_score", None)
     if score_path or min_score is not None:
-        from jobagg.scoring import load_strategy_signals, score_jobs
+        from jobagg.scoring import StrategyPathError, load_strategy_signals, resolve_strategy_signals_path, score_jobs
 
         if not score_path:
             raise SystemExit("--min-score requires --score-against")
-        signals = load_strategy_signals(score_path)
+        try:
+            signals_path = resolve_strategy_signals_path(score_path)
+        except StrategyPathError as exc:
+            raise SystemExit(str(exc)) from exc
+        signals = load_strategy_signals(signals_path)
         scored = score_jobs(response.results, signals)
         if min_score is not None:
             scored = [job for job in scored if job["score"] >= min_score]

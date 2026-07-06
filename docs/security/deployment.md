@@ -29,3 +29,5 @@ mode must send the token in the `X-Job-Api-Token` header.
 | `JOB_API_ALLOW_LAN` | Must be exactly `1` to permit binding to `0.0.0.0`. |
 | `JOB_API_TOKEN` | Shared secret expected in the `X-Job-Api-Token` header. |
 | `JOB_API_UNIX_SOCKET` | Unix domain socket path for local socket mode. |
+| `JOB_API_SCORING_ROOT` | Allowlist root for `score_against` strategy files. Defaults to `<repo>/strategies`. |
+| `JOB_API_SCORING_MAX_BYTES` | Maximum `score_against` file size. Defaults to `2097152` bytes. |
