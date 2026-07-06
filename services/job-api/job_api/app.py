@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs
 from jobagg.filters.saved_searches import (
@@ -25,6 +25,7 @@ from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
 
 from job_api.config import ApiSettings, load_settings
+from job_api.auth import FailedAuthLimiter, require_lan_auth
 from job_api.models import (
     ApplicationRecord,
     AssistantRunRequest,
@@ -42,7 +43,12 @@ LAN_BIND_HOSTS = {"0.0.0.0", "::", "[::]"}  # nosec B104
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+    auth_limiter = FailedAuthLimiter()
+    app = FastAPI(
+        title="UN Job Application Helper API",
+        version="0.1.0",
+        dependencies=[Depends(require_lan_auth(settings, auth_limiter))],
+    )
 
     def db() -> JobDatabase:
         return JobDatabase(settings.db_path)
