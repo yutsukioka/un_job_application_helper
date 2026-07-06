@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import urllib.robotparser
 from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -91,6 +92,52 @@ def validate_policy(policy: RobotsPolicy) -> list[str]:
                 f"domain {host!r} disables honor_robots_txt without override_reason"
             )
     return warnings
+
+
+def explicit_robots_stance_gaps(
+    organizations_config: Mapping[str, Any],
+    policy_config: Mapping[str, Any],
+) -> list[str]:
+    """Return sources whose URL hosts lack an explicit robots.txt stance."""
+
+    domain_configs = {
+        str(host).lower(): config or {}
+        for host, config in (policy_config.get("domains") or {}).items()
+    }
+    gaps: list[str] = []
+    for source in organizations_config.get("sources") or []:
+        if not isinstance(source, Mapping):
+            continue
+        source_id = str(source.get("id") or "<unknown>")
+        for host in sorted(set(_url_hosts(source))):
+            config = domain_configs.get(host) or domain_configs.get(host.split(":", 1)[0])
+            if not isinstance(config, Mapping) or not isinstance(
+                config.get("honor_robots_txt"), bool
+            ):
+                gaps.append(
+                    f"{source_id}: host {host!r} lacks explicit honor_robots_txt"
+                )
+    return gaps
+
+
+def _url_hosts(value: object) -> Iterable[str]:
+    if isinstance(value, Mapping):
+        for item in value.values():
+            yield from _url_hosts(item)
+        return
+    if isinstance(value, list | tuple | set):
+        for item in value:
+            yield from _url_hosts(item)
+        return
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        parts = urlsplit(value)
+        host = parts.hostname.lower() if parts.hostname else ""
+        if not host:
+            return
+        if parts.port is None:
+            yield host
+        else:
+            yield f"{host}:{parts.port}"
 
 
 class RobotsChecker:
