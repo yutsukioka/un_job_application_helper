@@ -59,6 +59,14 @@ job-api
 The API defaults to `http://127.0.0.1:8765` and reads
 `private/jobagg/output/all_jobs.sqlite3`.
 
+## Security
+
+The local API is loopback-only by default. Binding it to all interfaces with
+`--host 0.0.0.0` requires `JOB_API_ALLOW_LAN=1` plus either `JOB_API_TOKEN`
+for the `X-Job-Api-Token` shared-secret header or `JOB_API_UNIX_SOCKET` for
+Unix-socket mode. See `docs/security/deployment.md` for the deployment
+decision tree and hardening audit.
+
 ## Private Data
 
 Never commit personal histories, generated application documents, SQLite job

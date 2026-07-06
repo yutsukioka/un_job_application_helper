@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sqlite3
-from dataclasses import asdict
+import sys
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -32,6 +34,10 @@ from job_api.models import (
     SearchResponse,
 )
 from job_api.tracker import create_record, delete_record, list_records, upsert_record
+
+
+# Denylist values for startup validation, not bind targets.
+LAN_BIND_HOSTS = {"0.0.0.0", "::", "[::]"}  # nosec B104
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
@@ -724,11 +730,51 @@ def _unv_volunteer_type_labels() -> dict[str, str]:
 app = create_app()
 
 
-def main() -> None:
+def validate_bind_settings(host: str, settings: ApiSettings) -> None:
+    if host not in LAN_BIND_HOSTS:
+        return
+    if settings.allow_lan and (settings.api_token or settings.unix_socket):
+        return
+    raise ValueError(
+        "Refusing to bind job-api to 0.0.0.0 without explicit LAN hardening. "
+        "Set JOB_API_ALLOW_LAN=1 and configure either JOB_API_TOKEN for the "
+        "X-Job-Api-Token header or JOB_API_UNIX_SOCKET for Unix-socket mode."
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
-    uvicorn.run("job_api.app:app", host="127.0.0.1", port=8765, reload=False)
+    parser = argparse.ArgumentParser(description="Run the local job API service.")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to 127.0.0.1.")
+    parser.add_argument("--port", type=int, default=8765, help="Bind TCP port. Defaults to 8765.")
+    parser.add_argument(
+        "--unix-socket",
+        dest="unix_socket",
+        help="Bind uvicorn to a Unix domain socket instead of exposing a TCP port.",
+    )
+    parser.add_argument(
+        "--check-startup",
+        action="store_true",
+        help="Validate startup configuration and exit without starting uvicorn.",
+    )
+    args = parser.parse_args(argv)
+    settings = load_settings()
+    if args.unix_socket:
+        settings = replace(settings, unix_socket=Path(args.unix_socket))
+    try:
+        validate_bind_settings(args.host, settings)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.check_startup:
+        return 0
+    if settings.unix_socket:
+        uvicorn.run("job_api.app:app", uds=str(settings.unix_socket), reload=False)
+    else:
+        uvicorn.run("job_api.app:app", host=args.host, port=args.port, reload=False)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

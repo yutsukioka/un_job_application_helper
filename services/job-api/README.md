@@ -21,6 +21,13 @@ Defaults:
 Override paths with `JOB_API_DB`, `JOB_API_SAVED_SEARCHES`, and
 `JOB_API_TRACKER`.
 
+## LAN Exposure
+
+The service is loopback-only by default. Startup refuses `--host 0.0.0.0`
+unless the operator sets `JOB_API_ALLOW_LAN=1` and configures either
+`JOB_API_TOKEN` for the `X-Job-Api-Token` shared-secret header or
+`JOB_API_UNIX_SOCKET` for Unix-socket mode.
+
 ## Endpoint Status
 
 Implemented for MVP:
