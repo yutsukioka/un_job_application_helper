@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from vaultsync.format import VaultFormatError, VaultMetadata
+from vaultsync.format import (
+    MAX_VAULT_IMPORT_BYTES,
+    VaultFormatError,
+    VaultMetadata,
+    read_vault_import_bytes,
+)
 from vaultsync.records import EncryptedRecord, RecordFormatError
 
 LOCAL_STORE_FORMAT = "atlasvault-local-store"
@@ -171,5 +176,9 @@ def write_local_store(store: LocalVaultStore, path: str | Path) -> None:
     Path(path).write_bytes(serialize_local_store_bytes(store))
 
 
-def read_local_store(path: str | Path) -> LocalVaultStore:
-    return deserialize_local_store(Path(path).read_bytes())
+def read_local_store(
+    path: str | Path,
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> LocalVaultStore:
+    return deserialize_local_store(read_vault_import_bytes(path, max_bytes=max_bytes))
