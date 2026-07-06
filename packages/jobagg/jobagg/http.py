@@ -20,11 +20,6 @@ from typing import Any
 
 from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError
 
-try:  # pragma: no cover - optional dependency
-    import brotli  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - exercised only when brotli is missing
-    brotli = None
-
 
 @dataclass(slots=True)
 class HttpResponse:
@@ -50,6 +45,7 @@ class ResponseTooLargeError(HTTPError):
 # under 5 MiB; this cap exists to prevent a misconfigured detail URL from
 # pulling a large binary into memory and persisting it as ``description``.
 _DEFAULT_MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+_RESPONSE_READ_CHUNK_BYTES = 64 * 1024
 
 
 class JobAggHTTPClient:
@@ -125,13 +121,11 @@ class JobAggHTTPClient:
                                 )
                         except ValueError:
                             pass
-                    # Read at most max_response_bytes + 1 so we can detect
-                    # over-cap responses that omitted Content-Length.
-                    raw_bytes = response.read(self.max_response_bytes + 1)
-                    if len(raw_bytes) > self.max_response_bytes:
-                        raise ResponseTooLargeError(
-                            f"Response from {url} exceeded cap of {self.max_response_bytes} bytes"
-                        )
+                    raw_bytes = _read_capped_body(
+                        response,
+                        url=url,
+                        max_bytes=self.max_response_bytes,
+                    )
                     decoded_bytes = _decode_content_encoding(
                         raw_bytes,
                         response.headers.get("Content-Encoding"),
@@ -152,7 +146,7 @@ class JobAggHTTPClient:
             except urllib.error.HTTPError as exc:
                 self._mark_request(host)
                 error_bytes = _decode_content_encoding(
-                    exc.read(),
+                    _read_capped_body(exc, url=url, max_bytes=self.max_response_bytes),
                     exc.headers.get("Content-Encoding") if exc.headers else None,
                     max_bytes=self.max_response_bytes,
                 )
@@ -324,10 +318,23 @@ def _is_transient_url_error(exc: urllib.error.URLError) -> bool:
 
 
 def _default_accept_encoding() -> str:
-    encodings = ["gzip", "deflate"]
-    if brotli is not None:
-        encodings.append("br")
-    return ", ".join(encodings)
+    return "gzip, deflate"
+
+
+def _read_capped_body(stream: Any, *, url: str, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(_RESPONSE_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise ResponseTooLargeError(
+                f"Response from {url} exceeded cap of {max_bytes} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _decode_content_encoding(data: bytes, encoding: str | None, *, max_bytes: int | None = None) -> bytes:
@@ -346,17 +353,61 @@ def _decode_content_encoding(data: bytes, encoding: str | None, *, max_bytes: in
         return _ensure_decoded_size(data, max_bytes)
     try:
         if encoding == "gzip":
-            return _ensure_decoded_size(gzip.decompress(data), max_bytes)
+            return _decode_zlib_content(data, 16 + zlib.MAX_WBITS, max_bytes=max_bytes)
         if encoding == "deflate":
             try:
-                return _ensure_decoded_size(zlib.decompress(data), max_bytes)
+                return _decode_zlib_content(data, zlib.MAX_WBITS, max_bytes=max_bytes)
             except zlib.error:
-                return _ensure_decoded_size(zlib.decompress(data, -zlib.MAX_WBITS), max_bytes)
-        if encoding == "br" and brotli is not None:
-            return _ensure_decoded_size(brotli.decompress(data), max_bytes)
-    except (OSError, zlib.error, ValueError):
+                return _decode_zlib_content(data, -zlib.MAX_WBITS, max_bytes=max_bytes)
+    except (gzip.BadGzipFile, OSError, zlib.error, ValueError):
         return _ensure_decoded_size(data, max_bytes)
     return _ensure_decoded_size(data, max_bytes)
+
+
+def _decode_zlib_content(data: bytes, wbits: int, *, max_bytes: int | None) -> bytes:
+    decoder = zlib.decompressobj(wbits)
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in _iter_bytes_chunks(data):
+        pending = chunk
+        while pending:
+            decoded = decoder.decompress(
+                pending,
+                _remaining_output_limit(total, max_bytes),
+            )
+            total = _append_decoded_chunk(chunks, total, decoded, max_bytes)
+            pending = decoder.unconsumed_tail
+    decoded = decoder.flush(_remaining_output_limit(total, max_bytes))
+    _append_decoded_chunk(chunks, total, decoded, max_bytes)
+    return b"".join(chunks)
+
+
+def _iter_bytes_chunks(data: bytes) -> list[bytes]:
+    return [
+        data[index : index + _RESPONSE_READ_CHUNK_BYTES]
+        for index in range(0, len(data), _RESPONSE_READ_CHUNK_BYTES)
+    ]
+
+
+def _remaining_output_limit(total: int, max_bytes: int | None) -> int:
+    if max_bytes is None:
+        return 0
+    return max(1, max_bytes - total + 1)
+
+
+def _append_decoded_chunk(
+    chunks: list[bytes],
+    total: int,
+    chunk: bytes,
+    max_bytes: int | None,
+) -> int:
+    if not chunk:
+        return total
+    total += len(chunk)
+    if max_bytes is not None and total > max_bytes:
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
+    chunks.append(chunk)
+    return total
 
 
 def _ensure_decoded_size(data: bytes, max_bytes: int | None) -> bytes:

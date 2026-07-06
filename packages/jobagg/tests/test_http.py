@@ -15,6 +15,9 @@ class FakeResponse:
     status = 200
     headers = FakeHeaders({"Content-Type": "text/plain"})
 
+    def __init__(self):
+        self._body = io.BytesIO(b"ok")
+
     def __enter__(self):
         return self
 
@@ -22,7 +25,7 @@ class FakeResponse:
         return False
 
     def read(self, amt=-1):
-        return b"ok"
+        return self._body.read(amt)
 
     def geturl(self):
         return "https://example.org"
