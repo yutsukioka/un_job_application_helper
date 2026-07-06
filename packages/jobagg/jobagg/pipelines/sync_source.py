@@ -18,6 +18,7 @@ from jobagg.detail_quality import (
 )
 from jobagg.hashing import ensure_job_hash
 from jobagg.http import JobAggHTTPClient
+from jobagg.http_safe import SafeHTTPPolicy, allowed_hosts_for_source
 from jobagg.models import ChangeEvent, OrganizationSource, SourceRunDiagnostics, SyncResult
 from jobagg.observability.logging import get_logger
 from jobagg.robots import RobotsChecker, RobotsPolicy
@@ -1464,6 +1465,7 @@ def _http_client_for_source(
         backoff_base_seconds=backoff_base_seconds if backoff_base_seconds is not None else 1.0,
         tls_verify=True if tls_verify is None else tls_verify,
         default_headers=default_headers,
+        safe_policy=SafeHTTPPolicy(allowed_hosts=allowed_hosts_for_source(source)),
     )
 
 

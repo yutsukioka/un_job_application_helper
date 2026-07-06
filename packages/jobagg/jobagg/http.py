@@ -18,6 +18,8 @@ from http.cookiejar import CookieJar
 from dataclasses import dataclass
 from typing import Any
 
+from jobagg.http_safe import SafeHTTPPolicy, SSRFProtectionError
+
 try:  # pragma: no cover - optional dependency
     import brotli  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - exercised only when brotli is missing
@@ -30,6 +32,7 @@ class HttpResponse:
     status_code: int
     headers: dict[str, str]
     text: str
+    content: bytes = b""
 
     def json(self) -> Any:
         return json.loads(self.text)
@@ -62,6 +65,7 @@ class JobAggHTTPClient:
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
         tls_verify: bool = True,
         default_headers: dict[str, str] | None = None,
+        safe_policy: SafeHTTPPolicy | None = None,
     ) -> None:
         self.user_agent = user_agent
         self.timeout_seconds = timeout_seconds
@@ -72,6 +76,7 @@ class JobAggHTTPClient:
         self.max_response_bytes = int(max_response_bytes)
         self.tls_verify = bool(tls_verify)
         self.default_headers = dict(default_headers or {})
+        self.safe_policy = safe_policy
         # Per-host last-request timestamp. Robots policies promise "one
         # request per host every ``min_delay_seconds``" — a single shared
         # timestamp would over-throttle when the same client straddles
@@ -102,6 +107,8 @@ class JobAggHTTPClient:
         }
         request_headers.update(self.default_headers)
         request_headers.update(headers or {})
+        if self.safe_policy is not None:
+            self.safe_policy.validate_url(url)
         request = urllib.request.Request(url, data=body, headers=request_headers, method=method)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
@@ -128,7 +135,10 @@ class JobAggHTTPClient:
                     decoded_bytes = _decode_content_encoding(
                         raw_bytes,
                         response.headers.get("Content-Encoding"),
+                        max_bytes=self.max_response_bytes,
                     )
+                    if self.safe_policy is not None:
+                        self.safe_policy.validate_url(response.geturl())
                     charset = response.headers.get_content_charset() or "utf-8"
                     text = decoded_bytes.decode(charset, errors="replace")
                     self._mark_request(host)
@@ -137,12 +147,14 @@ class JobAggHTTPClient:
                         status_code=response.status,
                         headers=dict(response.headers.items()),
                         text=text,
+                        content=decoded_bytes,
                     )
             except urllib.error.HTTPError as exc:
                 self._mark_request(host)
                 error_bytes = _decode_content_encoding(
                     exc.read(),
                     exc.headers.get("Content-Encoding") if exc.headers else None,
+                    max_bytes=self.max_response_bytes,
                 )
                 response_body = error_bytes.decode("utf-8", errors="replace")
                 if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
@@ -156,6 +168,8 @@ class JobAggHTTPClient:
                 ) from exc
             except urllib.error.URLError as exc:
                 self._mark_request(host)
+                if isinstance(exc.reason, SSRFProtectionError):
+                    raise HTTPError(f"{method} {url} blocked by safe HTTP policy: {exc.reason}") from exc
                 if _is_transient_url_error(exc) and attempt < self.max_retries:
                     delay = self.backoff_base_seconds * (2**attempt)
                     if delay > 0:
@@ -316,7 +330,7 @@ def _default_accept_encoding() -> str:
     return ", ".join(encodings)
 
 
-def _decode_content_encoding(data: bytes, encoding: str | None) -> bytes:
+def _decode_content_encoding(data: bytes, encoding: str | None, *, max_bytes: int | None = None) -> bytes:
     """Decode an HTTP response body according to its Content-Encoding header.
 
     Returns the original bytes when the encoding is missing, ``identity``, or
@@ -326,20 +340,26 @@ def _decode_content_encoding(data: bytes, encoding: str | None) -> bytes:
     """
 
     if not data or not encoding:
-        return data
+        return _ensure_decoded_size(data, max_bytes)
     encoding = encoding.strip().lower()
     if encoding in {"", "identity"}:
-        return data
+        return _ensure_decoded_size(data, max_bytes)
     try:
         if encoding == "gzip":
-            return gzip.decompress(data)
+            return _ensure_decoded_size(gzip.decompress(data), max_bytes)
         if encoding == "deflate":
             try:
-                return zlib.decompress(data)
+                return _ensure_decoded_size(zlib.decompress(data), max_bytes)
             except zlib.error:
-                return zlib.decompress(data, -zlib.MAX_WBITS)
+                return _ensure_decoded_size(zlib.decompress(data, -zlib.MAX_WBITS), max_bytes)
         if encoding == "br" and brotli is not None:
-            return brotli.decompress(data)
+            return _ensure_decoded_size(brotli.decompress(data), max_bytes)
     except (OSError, zlib.error, ValueError):
-        return data
+        return _ensure_decoded_size(data, max_bytes)
+    return _ensure_decoded_size(data, max_bytes)
+
+
+def _ensure_decoded_size(data: bytes, max_bytes: int | None) -> bytes:
+    if max_bytes is not None and len(data) > max_bytes:
+        raise ResponseTooLargeError(f"Decoded response exceeded cap of {max_bytes} bytes")
     return data
