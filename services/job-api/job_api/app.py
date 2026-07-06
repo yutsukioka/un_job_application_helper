@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sqlite3
@@ -63,7 +64,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if not settings.db_path.exists():
             return {
                 "status": "missing_db",
-                "db_path": str(settings.db_path),
+                "db_path": _scrub_path(settings.db_path, settings.repo_root),
                 "schema_version": "unknown",
                 "open_jobs": 0,
                 "enabled_sources": 0,
@@ -75,7 +76,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             last_sync_at = _scalar(conn, "SELECT MAX(observed_at) FROM source_runs")
         return {
             "status": "ok",
-            "db_path": str(settings.db_path),
+            "db_path": _scrub_path(settings.db_path, settings.repo_root),
             "schema_version": "jobagg-sqlite",
             "open_jobs": open_jobs,
             "enabled_sources": enabled_sources,
@@ -84,7 +85,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.post("/api/search", response_model=SearchResponse)
     def search(request: SearchRequest) -> SearchResponse:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         job_request = _to_jobagg_request(request)
         response = search_collected_jobs(db(), job_request, include_facets=request.include_facets)
         payload = asdict(response)
@@ -109,35 +110,35 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/job-detail")
     def job_detail_query(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, db(), job_key)
+        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
 
     @app.get("/api/jobs/by-key")
     def job_detail_by_key(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, db(), job_key)
+        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
 
     @app.get("/api/jobs/{job_key}")
     def job_detail(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, db(), job_key)
+        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
 
     @app.get("/api/jobs/path/{job_key:path}")
     def job_detail_path(job_key: str) -> dict[str, Any]:
-        return _job_detail_payload(settings.db_path, db(), job_key)
+        return _job_detail_payload(settings.db_path, settings.repo_root, db(), job_key)
 
     @app.get("/api/facets")
     def facets() -> dict[str, dict[str, int]]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         response = search_collected_jobs(db(), VacancySearchRequest(limit=0), include_facets=True)
         return response.facets
 
     @app.post("/api/facets")
     def filtered_facets(request: SearchRequest) -> dict[str, dict[str, int]]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         response = search_collected_jobs(db(), _to_jobagg_request(request), include_facets=True)
         return response.facets
 
     @app.get("/api/taxonomies")
     def taxonomies() -> dict[str, Any]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         return _taxonomy_metadata(settings.db_path)
 
     @app.get("/api/saved-searches")
@@ -157,7 +158,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.post("/api/saved-searches/{name}/run", response_model=SearchResponse)
     def run_saved_search(name: str) -> SearchResponse:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         try:
             saved = get_saved_search(settings.saved_searches_path, name)
         except KeyError as exc:
@@ -174,7 +175,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/updates")
     def updates() -> dict[str, Any]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         with sqlite3.connect(settings.db_path) as conn:
             conn.row_factory = sqlite3.Row
             recent_runs = [dict(row) for row in conn.execute(
@@ -189,7 +190,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         return {"sources": _source_summaries(settings.db_path)}
 
     @app.post("/api/sync/run")
@@ -198,7 +199,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/sync/runs")
     def sync_runs() -> list[dict[str, Any]]:
-        _require_db(settings.db_path)
+        _require_db(settings.db_path, settings.repo_root)
         return list(db().iter_source_runs())
 
     @app.get("/api/tracker", response_model=list[ApplicationRecord])
@@ -234,13 +235,21 @@ def _to_jobagg_request(request: SearchRequest) -> VacancySearchRequest:
     return VacancySearchRequest(**data)
 
 
-def _require_db(path: Path) -> None:
+def _require_db(path: Path, repo_root: Path) -> None:
     if not path.exists():
-        raise HTTPException(status_code=503, detail=f"Job database does not exist: {path}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Job database does not exist: {_scrub_path(path, repo_root)}",
+        )
 
 
-def _job_detail_payload(db_path: Path, database: JobDatabase, job_key: str) -> dict[str, Any]:
-    _require_db(db_path)
+def _job_detail_payload(
+    db_path: Path,
+    repo_root: Path,
+    database: JobDatabase,
+    job_key: str,
+) -> dict[str, Any]:
+    _require_db(db_path, repo_root)
     job_key = unquote(job_key)
     job = database.get_job(job_key)
     if job is None:
@@ -283,6 +292,26 @@ def _url_origin_host(value: object) -> str | None:
     except ValueError:
         return None
     return host.lower() if host else None
+
+
+def _scrub_path(path: Path, repo_root: Path) -> str:
+    try:
+        resolved_path = path.expanduser().resolve(strict=False)
+        resolved_root = repo_root.expanduser().resolve(strict=False)
+    except (OSError, RuntimeError):
+        return _opaque_path_id(path)
+    try:
+        relative = resolved_path.relative_to(resolved_root)
+    except ValueError:
+        return _opaque_path_id(resolved_path)
+    if relative == Path("."):
+        return "<repo>"
+    return f"<repo>/{relative.as_posix()}"
+
+
+def _opaque_path_id(path: Path) -> str:
+    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12]
+    return f"<path:{digest}>"
 
 
 def _scalar(conn: sqlite3.Connection, query: str) -> Any:
