@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from jobagg.atomic_files import atomic_write_text, locked_path
 from jobagg.filters.schemas import VacancySearchRequest
 
 
@@ -56,22 +57,23 @@ def save_search(
     overwrite: bool = False,
 ) -> SavedSearch:
     store_path = Path(path)
-    data = _load_store(store_path)
-    searches = data.setdefault("saved_searches", {})
-    if name in searches and not overwrite:
-        raise ValueError(f"Saved search {name!r} already exists; use --overwrite to replace it")
-    now = datetime.now(tz=UTC).isoformat()
-    created_at = searches.get(name, {}).get("created_at", now) if isinstance(searches.get(name), dict) else now
-    search = SavedSearch(
-        name=name,
-        description=description,
-        request=request,
-        created_at=created_at,
-        updated_at=now,
-    )
-    searches[name] = search.to_dict()
-    _write_store(store_path, data)
-    return search
+    with locked_path(store_path):
+        data = _load_store(store_path)
+        searches = data.setdefault("saved_searches", {})
+        if name in searches and not overwrite:
+            raise ValueError(f"Saved search {name!r} already exists; use --overwrite to replace it")
+        now = datetime.now(tz=UTC).isoformat()
+        created_at = searches.get(name, {}).get("created_at", now) if isinstance(searches.get(name), dict) else now
+        search = SavedSearch(
+            name=name,
+            description=description,
+            request=request,
+            created_at=created_at,
+            updated_at=now,
+        )
+        searches[name] = search.to_dict()
+        _write_store(store_path, data)
+        return search
 
 
 def get_saved_search(path: str | Path, name: str) -> SavedSearch:
@@ -84,13 +86,14 @@ def get_saved_search(path: str | Path, name: str) -> SavedSearch:
 
 def remove_saved_search(path: str | Path, name: str) -> bool:
     store_path = Path(path)
-    data = _load_store(store_path)
-    searches = data.setdefault("saved_searches", {})
-    if name not in searches:
-        return False
-    del searches[name]
-    _write_store(store_path, data)
-    return True
+    with locked_path(store_path):
+        data = _load_store(store_path)
+        searches = data.setdefault("saved_searches", {})
+        if name not in searches:
+            return False
+        del searches[name]
+        _write_store(store_path, data)
+        return True
 
 
 def request_to_dict(request: VacancySearchRequest) -> dict[str, Any]:
@@ -129,8 +132,8 @@ def _load_store(path: Path) -> dict[str, Any]:
 
 
 def _write_store(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
