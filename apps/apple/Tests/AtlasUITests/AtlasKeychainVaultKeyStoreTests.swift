@@ -100,6 +100,19 @@ final class AtlasKeychainVaultKeyStoreTests: XCTestCase {
         XCTAssertTrue(client.deletedQueries.isEmpty)
     }
 
+    func testTrimsVaultIDBeforeUsingKeychainAccount() throws {
+        let client = FakeKeychainClient()
+        let store = AtlasKeychainVaultKeyStore(client: client, service: Self.service)
+
+        try store.saveVaultKey(Self.testOnlyVaultKey, for: "  \(Self.vaultID) \n")
+
+        XCTAssertEqual(client.addedItems.first?.account, Self.vaultID)
+        XCTAssertEqual(try store.loadVaultKey(for: "\t\(Self.vaultID)  "), Self.testOnlyVaultKey)
+        XCTAssertEqual(client.copiedQueries, [
+            AtlasKeychainQuery(service: Self.service, account: Self.vaultID),
+        ])
+    }
+
     func testRejectsLoadedKeyWithUnexpectedLength() throws {
         let client = FakeKeychainClient()
         client.setRawValue(Data(repeating: 2, count: 16), for: Self.vaultID, service: Self.service)

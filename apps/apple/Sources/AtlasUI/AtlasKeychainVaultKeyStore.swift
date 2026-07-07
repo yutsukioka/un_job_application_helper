@@ -200,7 +200,7 @@ public struct AtlasKeychainVaultKeyStore<Client: AtlasKeychainClient>: AtlasVaul
         guard !trimmedVaultID.isEmpty else {
             throw AtlasKeychainVaultKeyStoreError.invalidVaultID
         }
-        return vaultID
+        return trimmedVaultID
     }
 
     private func requireValidVaultKey(_ key: Data) throws {
