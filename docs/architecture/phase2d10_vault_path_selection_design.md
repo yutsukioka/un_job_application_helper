@@ -71,7 +71,7 @@ Future path selection should satisfy these goals:
 - use a deterministic per-app encrypted vault location;
 - support dependency injection so tests can use temporary directories;
 - keep public cache files separate from private encrypted vault files;
-- avoid plaintext private payloads in every directory name and file name;
+- avoid plaintext private payloads in any directory name or file name;
 - avoid saved-search names, search text, filters, job keys, notes, profile
   snippets, draft metadata, generated document references, and record type
   strings in paths;
@@ -92,6 +92,9 @@ Application Support/Atlas/Vaults/<vaultID>/atlasvault-local-store.json
 Rules:
 
 - `<vaultID>` must be random, stable for the vault, and non-semantic.
+- `<vaultID>` must use a filesystem-safe canonical encoding such as lowercase
+  hex, base32, or URL-safe base64 without padding. It must be bounded in length
+  and must reject whitespace, path separators, `.`, `..`, `+`, and `/`.
 - The vault ID must not be derived from saved-search names, job keys, email
   addresses, organization names, profile text, or other private payloads.
 - Directory and file names must remain fixed or random/non-semantic.
@@ -195,8 +198,10 @@ Rules:
   paths could reveal user-specific private metadata;
 - if a public config needs the current `vaultID`, that ID must be random and
   non-semantic;
-- public detail-cache warmup should avoid using saved-only job keys while the
-  vault is locked.
+- public detail-cache warmup must not write saved-only job detail files into the
+  public `Atlas/JobDetails` cache. If saved-only details are fetched after
+  unlock, they must use a private/vault-backed path or remain in memory until a
+  reviewed private-detail storage design exists.
 
 The encrypted vault path should be treated as private operational configuration
 unless the stored value is proven non-sensitive.
