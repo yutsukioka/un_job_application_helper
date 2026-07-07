@@ -9,6 +9,7 @@ public enum AtlasVaultStoreError: Error, Equatable, Sendable {
     case readFailed
     case writeFailed
     case invalidJSON
+    case invalidFileURL
 }
 
 public indirect enum AtlasJSONValue: Codable, Equatable, Sendable {
@@ -128,9 +129,9 @@ public enum AtlasVaultLocalStoreIO {
         try rejectLegacyPrivateFields(in: data)
         let store: AtlasVaultLocalStoreEnvelope
         do {
-            store = try decoder.decode(AtlasVaultLocalStoreEnvelope.self, from: data)
+            store = try makeDecoder().decode(AtlasVaultLocalStoreEnvelope.self, from: data)
         } catch {
-            throw AtlasVaultStoreError.invalidJSON
+            throw AtlasVaultStoreError.invalidEnvelope
         }
         try validate(store)
         return store
@@ -139,13 +140,14 @@ public enum AtlasVaultLocalStoreIO {
     public static func encode(_ store: AtlasVaultLocalStoreEnvelope) throws -> Data {
         try validate(store)
         do {
-            return try encoder.encode(store)
+            return try makeEncoder().encode(store)
         } catch {
             throw AtlasVaultStoreError.invalidEnvelope
         }
     }
 
     public static func read(from url: URL) throws -> AtlasVaultLocalStoreEnvelope {
+        try validateFileURL(url)
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -160,6 +162,7 @@ public enum AtlasVaultLocalStoreIO {
         to url: URL,
         overwrite: Bool = false
     ) throws {
+        try validateFileURL(url)
         if !overwrite && fileExists(at: url) {
             throw AtlasVaultStoreError.fileExists
         }
@@ -194,9 +197,9 @@ public enum AtlasVaultLocalStoreIO {
             !record.id.isEmpty,
             !record.revision.isEmpty,
             !record.keyID.isEmpty,
-            let nonce = Data(base64Encoded: record.nonce),
+            let nonce = strictBase64Decoded(record.nonce),
             nonce.count == AtlasVaultRecordCrypto.nonceByteCount,
-            let ciphertext = Data(base64Encoded: record.ciphertext),
+            let ciphertext = strictBase64Decoded(record.ciphertext),
             ciphertext.count >= AtlasVaultRecordCrypto.gcmTagByteCount
         else {
             throw AtlasVaultStoreError.invalidRecord
@@ -220,17 +223,32 @@ public enum AtlasVaultLocalStoreIO {
         }
     }
 
+    private static func validateFileURL(_ url: URL) throws {
+        guard url.isFileURL else {
+            throw AtlasVaultStoreError.invalidFileURL
+        }
+    }
+
     private static func fileExists(at url: URL) -> Bool {
         (try? url.checkResourceIsReachable()) == true
     }
 
-    private static let encoder: JSONEncoder = {
+    private static func strictBase64Decoded(_ value: String) -> Data? {
+        guard let data = Data(base64Encoded: value) else {
+            return nil
+        }
+        return data.base64EncodedString() == value ? data : nil
+    }
+
+    private static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return encoder
-    }()
+    }
 
-    private static let decoder = JSONDecoder()
+    private static func makeDecoder() -> JSONDecoder {
+        JSONDecoder()
+    }
 }
 
 private struct DynamicCodingKey: CodingKey {

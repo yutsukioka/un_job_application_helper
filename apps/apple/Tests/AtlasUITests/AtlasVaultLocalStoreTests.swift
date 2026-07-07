@@ -67,6 +67,32 @@ final class AtlasVaultLocalStoreTests: XCTestCase {
         }
     }
 
+    func testSchemaInvalidJSONFailsAsInvalidEnvelope() throws {
+        var object = try jsonObject(for: localStore(records: [vectorRecord()]))
+        object.removeValue(forKey: "store_id")
+
+        XCTAssertThrowsError(try AtlasVaultLocalStoreIO.decode(jsonData(from: object))) { error in
+            XCTAssertEqual(error as? AtlasVaultStoreError, .invalidEnvelope)
+        }
+    }
+
+    func testReadRejectsNonFileURL() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/atlasvault-local-store.json"))
+
+        XCTAssertThrowsError(try AtlasVaultLocalStoreIO.read(from: url)) { error in
+            XCTAssertEqual(error as? AtlasVaultStoreError, .invalidFileURL)
+        }
+    }
+
+    func testWriteRejectsNonFileURL() throws {
+        let store = try localStore(records: [vectorRecord()])
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/atlasvault-local-store.json"))
+
+        XCTAssertThrowsError(try AtlasVaultLocalStoreIO.write(store, to: url)) { error in
+            XCTAssertEqual(error as? AtlasVaultStoreError, .invalidFileURL)
+        }
+    }
+
     func testStoreWithEncryptedVectorRecordRoundTrips() throws {
         let record = try vectorRecord()
         let store = try localStore(records: [record])
@@ -143,6 +169,25 @@ final class AtlasVaultLocalStoreTests: XCTestCase {
             deleted: record.deleted,
             keyID: record.keyID,
             nonce: "not-base64",
+            ciphertext: record.ciphertext
+        )
+        let store = try localStore(records: [invalidRecord])
+
+        XCTAssertThrowsError(try AtlasVaultLocalStoreIO.encode(store)) { error in
+            XCTAssertEqual(error as? AtlasVaultStoreError, .invalidRecord)
+        }
+    }
+
+    func testRecordBase64WithExcessPaddingFails() throws {
+        let record = try vectorRecord()
+        let invalidRecord = AtlasVaultEncryptedRecordEnvelope(
+            id: record.id,
+            schemaVersion: record.schemaVersion,
+            revision: record.revision,
+            parentRevision: record.parentRevision,
+            deleted: record.deleted,
+            keyID: record.keyID,
+            nonce: "\(record.nonce)====",
             ciphertext: record.ciphertext
         )
         let store = try localStore(records: [invalidRecord])
