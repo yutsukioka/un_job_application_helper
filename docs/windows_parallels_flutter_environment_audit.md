@@ -139,6 +139,57 @@ Release bundle contents observed:
 - `native_assets.json`
 - `data\`
 
+### Follow-up: Windows Metadata Casing — RESOLVED 2026-07-06
+
+The "Important metadata note" under Verification Results (2026-07-06)
+documented a discrepancy: current master emitted lowercase `atlas` in
+Windows VersionInfo, while the 2026-07-03 audit recorded uppercase
+`Atlas` as the product naming target.
+
+Resolution applied 2026-07-06:
+- apps/atlas_flutter/windows/runner/Runner.rc: FileDescription,
+  InternalName, and ProductName values updated to `Atlas` (uppercase).
+- apps/atlas_flutter/windows/runner/main.cpp: window title updated to
+  `L"Atlas"` (wide-string literal required by Win32 CreateWindowExW
+  and the FlutterWindow::Create(const std::wstring&, ...) signature).
+- Executable filename intentionally preserved as `atlas.exe` (matches
+  apps/atlas_flutter/pubspec.yaml `name: atlas`).
+
+Verified via release rebuild:
+
+| Field            | Value       |
+|------------------|-------------|
+| ProductName      | Atlas       |
+| FileDescription  | Atlas       |
+| InternalName     | Atlas       |
+| OriginalFilename | atlas.exe   |
+| FileVersion      | 1.0.0+1     |
+| Artifact path    | apps/atlas_flutter/build/windows/x64/runner/Release/atlas.exe |
+
+`git diff --check` passed; only the two expected Windows runner files
+were modified.
+
+Casing convention going forward (Windows target):
+- Display name in metadata and runtime window title: `Atlas` (uppercase).
+- Executable filename: `atlas.exe` (lowercase; matches pubspec name).
+- Any future Windows runner strings (menu items, dialog captions, etc.)
+  should use the same casing conventions and, in main.cpp, use
+  wide-string literals (`L"..."`) per the FlutterWindow/Win32 API
+  contract.
+
+Wide-string rationale (recorded for future maintainers): Flutter's
+Windows runner uses the Win32 W-suffixed API family (CreateWindowExW,
+etc.), which requires UTF-16 (`wchar_t*`) strings. The C++ `L"..."`
+prefix produces a `const wchar_t[]` that constructs a `std::wstring`
+directly; narrow `"..."` literals would fail to compile against the
+FlutterWindow::Create signature, and even where they'd compile they
+would not correctly render non-ASCII app titles. This is not merely
+a style choice: it is required by the Flutter Windows template and
+by correct Unicode handling for international users.
+
+The "atlas vs Atlas" drift noted in the Verification Results table
+above is closed as of this subsection.
+
 ## Split-Role Collaboration Contract
 
 See `docs/collaboration_pattern.md` when that document is added.
