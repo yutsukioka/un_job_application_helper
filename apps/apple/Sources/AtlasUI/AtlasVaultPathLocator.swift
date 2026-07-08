@@ -44,8 +44,7 @@ public struct AtlasInjectedRootVaultPathLocator: AtlasVaultPathLocator {
             throw AtlasVaultPathLocatorError.invalidVaultID
         }
 
-        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
-        guard vaultID.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }) else {
+        guard vaultID.unicodeScalars.allSatisfy(Self.isAllowedASCIIPathScalar) else {
             throw AtlasVaultPathLocatorError.invalidVaultID
         }
 
@@ -61,5 +60,16 @@ public struct AtlasInjectedRootVaultPathLocator: AtlasVaultPathLocator {
         }
 
         return vaultID
+    }
+
+    private static func isAllowedASCIIPathScalar(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 48...57, 65...90, 97...122:
+            return true
+        case UnicodeScalar("_").value, UnicodeScalar("-").value:
+            return true
+        default:
+            return false
+        }
     }
 }
