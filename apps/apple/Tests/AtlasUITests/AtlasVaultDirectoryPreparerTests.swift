@@ -118,6 +118,8 @@ final class AtlasVaultDirectoryPreparerTests: XCTestCase {
             "LocalAuthentication",
             "UserDefaults",
             "ApplicationSupport",
+            "applicationSupportDirectory",
+            "FileManager.default.url",
             "AtlasLocalCache",
             "SearchViewModel",
             "URLSession",
@@ -141,6 +143,27 @@ final class AtlasVaultDirectoryPreparerTests: XCTestCase {
             XCTAssertEqual(error as? AtlasVaultDirectoryError, .unsupportedSymlink)
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: outsideRoot.appendingPathComponent("Vaults").path))
+    }
+
+    func testResolvesSymlinkedRootAncestorBeforeCreatingDirectories() throws {
+        let targetContainer = try temporaryDirectory(named: "atlasvault-directory-preparer-real-root")
+        let realRootURL = targetContainer.appendingPathComponent("root", isDirectory: true)
+        try FileManager.default.createDirectory(at: realRootURL, withIntermediateDirectories: true)
+        let linkContainer = try temporaryDirectory(named: "atlasvault-directory-preparer-root-link")
+        let linkURL = linkContainer.appendingPathComponent("link", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: targetContainer)
+        } catch {
+            throw XCTSkip("Symlink creation is unavailable in this test environment: \(error)")
+        }
+        let rootThroughSymlink = linkURL.appendingPathComponent("root", isDirectory: true)
+        let storeURL = localStoreURL(under: rootThroughSymlink)
+        let expectedParentURL = localStoreURL(under: realRootURL).deletingLastPathComponent()
+
+        try preparer.prepareParentDirectory(for: storeURL, under: rootThroughSymlink)
+
+        XCTAssertTrue(FileManager.default.directoryExists(at: expectedParentURL))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localStoreURL(under: realRootURL).path))
     }
 
     private let preparer = AtlasFileManagerVaultDirectoryPreparer()

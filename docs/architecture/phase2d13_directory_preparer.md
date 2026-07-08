@@ -62,13 +62,15 @@ It does not:
 
 ## Symlink Policy
 
-The first implementation is conservative: existing symlink components from the
-root through the target parent path are rejected with `unsupportedSymlink`.
+The first implementation is conservative: symlinked ancestors of the injected
+root are resolved before containment and creation, and existing symlink
+components below the injected root through the target parent path are rejected
+with `unsupportedSymlink`.
 
 This avoids accepting a lexical path under the root that would be followed by
 FileManager into another location during directory creation. A future reviewed
-policy may resolve symlink targets and perform target containment checks, but
-that is not part of this phase.
+policy may allow selected symlink targets below the root after target
+containment checks, but that is not part of this phase.
 
 ## Error Handling
 

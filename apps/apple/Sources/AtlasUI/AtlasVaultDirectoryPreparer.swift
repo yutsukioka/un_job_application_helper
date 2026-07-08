@@ -21,15 +21,21 @@ public struct AtlasFileManagerVaultDirectoryPreparer: AtlasVaultDirectoryPrepare
             throw AtlasVaultDirectoryError.invalidURL
         }
 
-        let rootURL = rootDirectory.standardizedFileURL
-        let parentURL = storeURL.deletingLastPathComponent().standardizedFileURL
+        let inputRootURL = rootDirectory.standardizedFileURL
+        let inputParentURL = storeURL.deletingLastPathComponent().standardizedFileURL
+        let rootURL = inputRootURL.resolvingSymlinksInPath().standardizedFileURL
         let fileManager = FileManager.default
+
+        guard let relativeParentComponents = Self.relativePathComponents(from: inputRootURL, to: inputParentURL) else {
+            throw AtlasVaultDirectoryError.pathEscapesRoot
+        }
+        let parentURL = Self.appending(relativeParentComponents, to: rootURL)
 
         try Self.validateExistingRoot(rootURL, fileManager: fileManager)
         guard Self.isContained(parentURL, in: rootURL) else {
             throw AtlasVaultDirectoryError.pathEscapesRoot
         }
-        try Self.validateExistingParentComponents(from: rootURL, to: parentURL, fileManager: fileManager)
+        try Self.validateExistingParentComponents(from: inputRootURL, to: inputParentURL, fileManager: fileManager)
 
         do {
             try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
@@ -39,6 +45,26 @@ public struct AtlasFileManagerVaultDirectoryPreparer: AtlasVaultDirectoryPrepare
             }
             throw AtlasVaultDirectoryError.createDirectoryFailed
         }
+    }
+
+    private static func relativePathComponents(from rootURL: URL, to candidateURL: URL) -> ArraySlice<String>? {
+        let rootComponents = rootURL.pathComponents
+        let candidateComponents = candidateURL.pathComponents
+        guard candidateComponents.count >= rootComponents.count else {
+            return nil
+        }
+        guard zip(rootComponents, candidateComponents).allSatisfy({ $0.0 == $0.1 }) else {
+            return nil
+        }
+        return candidateComponents.dropFirst(rootComponents.count)
+    }
+
+    private static func appending(_ components: ArraySlice<String>, to rootURL: URL) -> URL {
+        var url = rootURL
+        for component in components {
+            url.appendPathComponent(component, isDirectory: true)
+        }
+        return url.standardizedFileURL
     }
 
     private static func validateExistingRoot(_ rootURL: URL, fileManager: FileManager) throws {
@@ -58,6 +84,12 @@ public struct AtlasFileManagerVaultDirectoryPreparer: AtlasVaultDirectoryPrepare
     ) throws {
         let rootComponents = rootURL.pathComponents
         let parentComponents = parentURL.pathComponents
+        guard parentComponents.count >= rootComponents.count else {
+            throw AtlasVaultDirectoryError.pathEscapesRoot
+        }
+        guard zip(rootComponents, parentComponents).allSatisfy({ $0.0 == $0.1 }) else {
+            throw AtlasVaultDirectoryError.pathEscapesRoot
+        }
         let relativeComponents = parentComponents.dropFirst(rootComponents.count)
         var currentURL = rootURL
 
