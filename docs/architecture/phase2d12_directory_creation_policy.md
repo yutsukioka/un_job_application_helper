@@ -88,6 +88,10 @@ Rules:
 
 - standardize and resolve the injected root before comparison;
 - standardize the local-store URL before comparison;
+- before creating directories, either reject existing symlink components in the
+  target parent path or resolve the final parent target through existing
+  filesystem components and compare that resolved path against the resolved
+  injected root;
 - ensure the local-store parent directory is equal to or nested below the
   injected root;
 - reject path traversal through `.` or `..`;
@@ -97,12 +101,12 @@ Rules:
 - do not follow user-controlled symbolic links unless a later review defines a
   safe policy.
 
-Symlink handling is intentionally deferred. A future implementation should test
-and document whether symlinks are rejected, resolved with containment checks, or
-unsupported in production roots. Until then, directory creation should avoid
-following untrusted symlink paths.
+Symlink handling is intentionally conservative. A future implementation should
+test and document whether symlinks are rejected outright or resolved with
+containment checks. A lexical path prefix check is not enough because a symlink
+inside the injected root can point outside that root.
 
-## iOS And macOS Platform Notes
+## iOS and macOS Platform Notes
 
 iOS and macOS should share the same layered policy:
 
@@ -150,8 +154,11 @@ Candidate errors:
 - parent component exists as file;
 - permission denied;
 - directory creation failed;
-- existing directory accepted;
-- disk full or resource unavailable surfaced generically.
+- disk full or resource unavailable, reported generically.
+
+Non-error outcome:
+
+- existing directory is accepted as success.
 
 Errors must not include vault keys, passphrases, recovery keys, decrypted
 payloads, saved-search names, job keys, notes, snippets, generated document
@@ -174,7 +181,7 @@ Cleanup of legacy plaintext snapshots remains a future explicit,
 user-confirmed flow. It should happen only after encrypted-vault validation and
 after the user understands what will be removed.
 
-## Privacy And Logging
+## Privacy and Logging
 
 Directory and file names must remain fixed or random/non-semantic. Paths must
 not include saved-search names, job keys, record types, notes, profile snippets,
