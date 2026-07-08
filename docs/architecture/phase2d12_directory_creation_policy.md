@@ -87,13 +87,14 @@ the injected root.
 Rules:
 
 - standardize and resolve the injected root before comparison;
-- standardize the local-store URL before comparison;
+- standardize the local-store URL only as a preliminary step, not as proof of
+  containment;
 - before creating directories, either reject existing symlink components in the
   target parent path or resolve the final parent target through existing
   filesystem components and compare that resolved path against the resolved
   injected root;
-- ensure the local-store parent directory is equal to or nested below the
-  injected root;
+- ensure the local-store parent directory, after the reviewed symlink policy is
+  applied, is equal to or nested below the injected root;
 - reject path traversal through `.` or `..`;
 - reject paths that escape the root after normalization;
 - reject non-file URLs;
