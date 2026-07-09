@@ -225,6 +225,25 @@ final class AtlasVaultRecordSaverTests: XCTestCase {
         }
     }
 
+    func testMismatchedPayloadCaseAndEnvelopeTypeFailsBeforeSealing() throws {
+        let envelope = AtlasSavedSearchVaultRecordPayload(
+            type: .savedJob,
+            payload: try savedSearchEnvelope().payload,
+            clientCreatedAt: "2026-01-02T03:04:05Z",
+            clientUpdatedAt: "2026-01-02T04:05:06Z"
+        )
+
+        XCTAssertThrowsError(try AtlasVaultRecordSaver().save(
+            mutations: AtlasVaultMutationSet(creates: [
+                AtlasVaultCreateMutation(payload: .savedSearch(envelope), keyID: Self.keyID),
+            ]),
+            session: session()
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultSaveError, .unsupportedPayloadType)
+            assertErrorIsNonSensitive(error)
+        }
+    }
+
     func testSaveErrorStringAndDebugOutputDoNotContainPrivateSentinels() throws {
         for error in [
             AtlasVaultSaveError.invalidSession,

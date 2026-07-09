@@ -93,16 +93,33 @@ public enum AtlasVaultSavePayload: Equatable, Sendable {
         do {
             switch self {
             case .savedSearch(let envelope):
+                guard envelope.type == .savedSearch else {
+                    throw AtlasVaultSaveError.unsupportedPayloadType
+                }
                 return try Self.encoder.encode(envelope)
             case .savedJob(let envelope):
+                guard envelope.type == .savedJob else {
+                    throw AtlasVaultSaveError.unsupportedPayloadType
+                }
                 return try Self.encoder.encode(envelope)
             case .applicationNote(let envelope):
+                guard envelope.type == .applicationNote else {
+                    throw AtlasVaultSaveError.unsupportedPayloadType
+                }
                 return try Self.encoder.encode(envelope)
             case .profileSnippet(let envelope):
+                guard envelope.type == .profileSnippet else {
+                    throw AtlasVaultSaveError.unsupportedPayloadType
+                }
                 return try Self.encoder.encode(envelope)
             case .draftMetadata(let envelope):
+                guard envelope.type == .draftMetadata else {
+                    throw AtlasVaultSaveError.unsupportedPayloadType
+                }
                 return try Self.encoder.encode(envelope)
             }
+        } catch let error as AtlasVaultSaveError {
+            throw error
         } catch {
             throw AtlasVaultSaveError.encodingFailed
         }
