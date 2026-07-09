@@ -389,8 +389,11 @@ final class AtlasVaultRecordSaverTests: XCTestCase {
     private func serialized(records: [AtlasVaultEncryptedRecordEnvelope]) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return try records.map { record in
-            String(data: try encoder.encode(record), encoding: .utf8) ?? ""
+        return try records.map { record throws -> String in
+            guard let text = String(data: try encoder.encode(record), encoding: .utf8) else {
+                throw testError("Expected UTF-8 encoded encrypted record")
+            }
+            return text
         }.joined(separator: "\n")
     }
 

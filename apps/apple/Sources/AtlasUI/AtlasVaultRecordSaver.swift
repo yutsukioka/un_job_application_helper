@@ -87,34 +87,46 @@ public enum AtlasVaultSavePayload: Equatable, Sendable {
     }
 
     func encodedPayloadEnvelope() throws -> Data {
-        guard payloadSchema == AtlasSavedSearchVaultRecordPayload.payloadSchema else {
-            throw AtlasVaultSaveError.unsupportedPayloadSchema
-        }
         do {
             switch self {
             case .savedSearch(let envelope):
                 guard envelope.type == .savedSearch else {
                     throw AtlasVaultSaveError.unsupportedPayloadType
                 }
+                guard envelope.payloadSchema == AtlasSavedSearchVaultRecordPayload.payloadSchema else {
+                    throw AtlasVaultSaveError.unsupportedPayloadSchema
+                }
                 return try Self.encoder.encode(envelope)
             case .savedJob(let envelope):
                 guard envelope.type == .savedJob else {
                     throw AtlasVaultSaveError.unsupportedPayloadType
+                }
+                guard envelope.payloadSchema == AtlasSavedJobVaultRecordPayload.payloadSchema else {
+                    throw AtlasVaultSaveError.unsupportedPayloadSchema
                 }
                 return try Self.encoder.encode(envelope)
             case .applicationNote(let envelope):
                 guard envelope.type == .applicationNote else {
                     throw AtlasVaultSaveError.unsupportedPayloadType
                 }
+                guard envelope.payloadSchema == AtlasApplicationNoteVaultRecordPayload.payloadSchema else {
+                    throw AtlasVaultSaveError.unsupportedPayloadSchema
+                }
                 return try Self.encoder.encode(envelope)
             case .profileSnippet(let envelope):
                 guard envelope.type == .profileSnippet else {
                     throw AtlasVaultSaveError.unsupportedPayloadType
                 }
+                guard envelope.payloadSchema == AtlasProfileSnippetVaultRecordPayload.payloadSchema else {
+                    throw AtlasVaultSaveError.unsupportedPayloadSchema
+                }
                 return try Self.encoder.encode(envelope)
             case .draftMetadata(let envelope):
                 guard envelope.type == .draftMetadata else {
                     throw AtlasVaultSaveError.unsupportedPayloadType
+                }
+                guard envelope.payloadSchema == AtlasDraftMetadataVaultRecordPayload.payloadSchema else {
+                    throw AtlasVaultSaveError.unsupportedPayloadSchema
                 }
                 return try Self.encoder.encode(envelope)
             }
@@ -154,9 +166,11 @@ public struct AtlasVaultRecordSaver: AtlasVaultRecordSaving {
             recordIDGenerator: { UUID().uuidString.lowercased() },
             revisionIDGenerator: { UUID().uuidString.lowercased() },
             nonceGenerator: {
-                Data((0..<AtlasVaultRecordCrypto.nonceByteCount).map { _ in
-                    UInt8.random(in: UInt8.min...UInt8.max)
-                })
+                var nonce = Data(count: AtlasVaultRecordCrypto.nonceByteCount)
+                for index in nonce.indices {
+                    nonce[index] = UInt8.random(in: UInt8.min...UInt8.max)
+                }
+                return nonce
             }
         )
     }
@@ -225,7 +239,7 @@ public struct AtlasVaultRecordSaver: AtlasVaultRecordSaving {
         }
         let revisionID = revisionIDGenerator()
         guard isValidIdentifier(revisionID) else {
-            throw AtlasVaultSaveError.staleRevision
+            throw AtlasVaultSaveError.invalidMutation
         }
         return try encryptedRecord(
             id: mutation.recordID,
@@ -248,7 +262,7 @@ public struct AtlasVaultRecordSaver: AtlasVaultRecordSaving {
         }
         let revisionID = revisionIDGenerator()
         guard isValidIdentifier(revisionID) else {
-            throw AtlasVaultSaveError.staleRevision
+            throw AtlasVaultSaveError.invalidMutation
         }
         return try encryptedRecord(
             id: mutation.recordID,
