@@ -19,6 +19,30 @@ final class AtlasVaultPersistenceCoordinatorTests: XCTestCase {
         XCTAssertFalse(directoryExists(at: rootURL.appendingPathComponent("Atlas", isDirectory: true)))
     }
 
+    func testLoadRejectsSymlinkedParentBeforeReading() throws {
+        let rootURL = try temporaryDirectory()
+        let outsideRootURL = try temporaryDirectory(named: "atlasvault-persistence-coordinator-outside")
+        let outsideAtlasURL = outsideRootURL.appendingPathComponent("Atlas", isDirectory: true)
+        let outsideVaultDirectory = outsideAtlasURL
+            .appendingPathComponent("Vaults", isDirectory: true)
+            .appendingPathComponent(Self.vaultID, isDirectory: true)
+        let outsideStoreURL = outsideVaultDirectory
+            .appendingPathComponent(AtlasInjectedRootVaultPathLocator.localStoreFileName, isDirectory: false)
+        let symlinkURL = rootURL.appendingPathComponent("Atlas", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: outsideVaultDirectory, withIntermediateDirectories: true)
+        try AtlasVaultLocalStoreIO.write(
+            try localStore(records: [vectorRecord()]),
+            to: outsideStoreURL,
+            overwrite: false
+        )
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: outsideAtlasURL)
+
+        XCTAssertThrowsError(try coordinator(rootURL: rootURL).loadEncryptedStore(for: session())) { error in
+            XCTAssertEqual(error as? AtlasVaultPersistenceError, .readFailed)
+        }
+    }
+
     func testSaveEncryptedStoreCreatesParentDirectoriesThroughPreparer() throws {
         let rootURL = try temporaryDirectory()
         let coordinator = try coordinator(rootURL: rootURL)

@@ -2,7 +2,7 @@ import Foundation
 
 public struct AtlasVaultUnlockedSession: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let vaultID: String
-    private var vaultKey: Data
+    private let vaultKey: Data
 
     public init(vaultID: String, vaultKey: Data) throws {
         guard vaultKey.count == AtlasVaultRecordCrypto.vaultKeyByteCount else {
@@ -121,6 +121,15 @@ public struct AtlasVaultPersistenceCoordinator<
             return nil
         }
         do {
+            try environment.directoryPreparer.prepareParentDirectory(
+                for: storeURL,
+                under: environment.rootDirectory
+            )
+            try rejectSymbolicLink(at: storeURL)
+        } catch {
+            throw AtlasVaultPersistenceError.readFailed
+        }
+        do {
             return try environment.localStoreIO.read(from: storeURL)
         } catch {
             throw Self.persistenceError(for: error, operation: .read)
@@ -157,7 +166,13 @@ public struct AtlasVaultPersistenceCoordinator<
     }
 
     private func fileExists(at url: URL) -> Bool {
-        (try? url.checkResourceIsReachable()) == true
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private func rejectSymbolicLink(at url: URL) throws {
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            throw AtlasVaultPersistenceError.readFailed
+        }
     }
 
     private enum StoreOperation {
