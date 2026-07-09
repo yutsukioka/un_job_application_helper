@@ -57,8 +57,9 @@ and record ID. It encrypts and decrypts record payload bytes while keeping
 record type and private payload fields inside ciphertext.
 
 `AtlasVaultLocalStoreIO` encodes, decodes, reads, and writes
-`atlasvault-local-store` envelopes at explicit caller-provided URLs. It preserves
-encrypted record envelopes and does not decrypt records or choose paths.
+`atlasvault-local-store` envelopes at explicit caller-provided file URLs. It
+preserves encrypted record envelopes and does not decrypt records or choose
+paths.
 
 `AtlasVaultPathLocator` computes
 `<root>/Atlas/Vaults/<vaultID>/atlasvault-local-store.json` from an injected
@@ -147,7 +148,7 @@ Future save sequence:
    encrypted record envelopes and non-sensitive vault metadata.
 5. The path locator computes the local-store URL.
 6. The directory preparer prepares only the parent directory.
-7. `AtlasVaultLocalStoreIO` writes encrypted JSON at the explicit URL.
+7. `AtlasVaultLocalStoreIO` writes encrypted JSON at the explicit file URL.
 
 Overwrite behavior must remain explicit. Atomic replacement, staging names, and
 recovery from partial writes require a separate reviewed policy before runtime
