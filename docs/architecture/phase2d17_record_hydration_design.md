@@ -33,7 +33,7 @@ runtime state hydration.
 
 `AtlasVaultEncryptedRecordEnvelope` is the persisted encrypted record envelope.
 Its plaintext metadata contains random record IDs, revisions, parent revisions,
-delete markers, key IDs, nonces, and ciphertext only. Record type, job keys,
+the `deleted` flag, key IDs, nonces, and ciphertext only. Record type, job keys,
 saved-search names, notes, snippets, and document references remain inside the
 ciphertext.
 
@@ -71,7 +71,7 @@ The hydrator should:
 - dispatch by `AtlasVaultPayloadType`;
 - decode the typed payload only after the type is known;
 - preserve record ID, revision, parent revision, deleted flag, and key ID in
-  in-memory metadata needed for later save or merge;
+  metadata needed for later save or merge;
 - produce in-memory private models only;
 - never write decrypted payload bytes, decoded payloads, or derived private
   state to disk;
@@ -181,6 +181,8 @@ metadata.
 Hydration errors should be non-sensitive:
 
 - `authenticationFailed`: wrong key or AEAD authentication failure;
+- `unsupportedRecordVersion`: encrypted record `schema_version` is not
+  supported;
 - `corruptCiphertext`: malformed nonce, base64, tag, or ciphertext envelope;
 - `malformedPlaintextJSON`: decrypted bytes are not valid JSON;
 - `unsupportedPayloadSchema`: payload schema is not supported;
