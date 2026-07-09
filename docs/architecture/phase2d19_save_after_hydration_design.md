@@ -53,7 +53,7 @@ metadata.
 
 ## 4. Save Boundary
 
-Future types, names subject to implementation review:
+Candidate future type names, subject to implementation review:
 
 - `AtlasVaultRecordSaver`;
 - `AtlasVaultSavePlanner`;
@@ -112,10 +112,11 @@ was edited. If the parent revision is missing, the first implementation should
 fail or mark the save as conflict-prone rather than silently overwriting.
 
 Deletes should create tombstones with the same record ID, a fresh revision, the
-previous revision as `parent_revision`, `deleted: true`, and no active payload in
-hydrated state. Whether a tombstone ciphertext contains an empty envelope or a
-minimal authenticated placeholder should be decided in the implementation phase,
-but it must not contain user-private plaintext after encryption.
+previous revision as `parent_revision`, and `deleted: true`. Tombstones should
+not appear as active payload records in hydrated state. Whether a tombstone
+ciphertext contains an empty envelope or a minimal authenticated placeholder
+should be decided in the implementation phase, but it must not contain
+user-private plaintext after encryption.
 
 Revision IDs should be random or otherwise non-semantic. They must not encode
 record type, job key, search name, or user text. Conflict siblings remain future
@@ -151,9 +152,12 @@ job key or saved-job record ID, target system, document type, generated document
 reference, draft status, workflow timestamps, personal context reference, and
 context summary.
 
-Canonical encoding should be deterministic for tests and compatible with the
-existing shared payload-vector expectations. Optional absent fields should follow
-the established payload convention.
+Canonical payload content should be compatible with the existing shared
+payload-vector expectations. JSON object key ordering is not semantically
+important for payload compatibility checks, but tests may still use stable
+encoding for repeatable fixtures. Optional absent fields should follow the
+established payload convention: omit absent optionals rather than encoding
+`null`.
 
 ## 8. Encryption
 
@@ -165,8 +169,8 @@ Encryption requirements:
 - use the unlocked vault key and vault ID from the session;
 - derive the per-record key from vault key, vault ID, and record ID;
 - generate a fresh 96-bit nonce for every encrypted record save;
-- bind record ID, schema version, revision, parent revision, deleted flag, key
-  ID, vault format, vault version, and vault ID with AAD;
+- bind record ID, encrypted record `schema_version`, revision, parent revision,
+  deleted flag, key ID, vault format, vault version, and vault ID with AAD;
 - never reuse a nonce with the same derived record key;
 - never log plaintext, nonce-generation inputs, vault keys, record keys, or
   decrypted payload bytes.
@@ -210,7 +214,8 @@ Future save errors should be typed and non-sensitive:
 - `conflictDetected`: concurrent sibling revisions require later conflict
   handling;
 - `localStoreMergeFailed`: encrypted envelope merge failed;
-- `persistenceFailed`: local-store write failure surfaced by the coordinator.
+- `persistenceFailed`: local-store write failure surfaced by the persistence
+  coordinator after the saver has returned encrypted state.
 
 Error values and messages must not include saved-search names, search text,
 filters, job keys, notes, snippets, generated document references, plaintext
