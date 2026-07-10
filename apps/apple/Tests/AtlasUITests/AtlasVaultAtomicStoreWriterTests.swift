@@ -228,6 +228,48 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
         }
     }
 
+    func testRemoteHostFileURLFailsAcrossWriterAndFilesystemClientEntryPoints() throws {
+        let destinationURL = try XCTUnwrap(
+            URL(string: "file://example.invalid/private/tmp/vault-store.json")
+        )
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
+    func testPercentEncodedSlashFailsBeforeDescriptorTraversal() throws {
+        let destinationURL = try XCTUnwrap(
+            URL(string: "file:///private/tmp/safe%2Fescape/vault-store.json")
+        )
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
     func testMissingPreparedParentFailsBeforeTemporaryCreation() throws {
         let destinationURL = fakeDestinationURL()
         let fileSystem = FakeAtomicFileSystemClient(
