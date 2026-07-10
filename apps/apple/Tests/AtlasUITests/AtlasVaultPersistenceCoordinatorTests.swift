@@ -2,6 +2,12 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultPersistenceCoordinatorTests: XCTestCase {
+    func testBasePersistenceProtocolAllowsNonAtomicConformer() {
+        let coordinator: any AtlasVaultPersistenceCoordinating = NonAtomicPersistenceCoordinator()
+
+        XCTAssertFalse(coordinator is any AtlasVaultAtomicPersistenceCoordinating)
+    }
+
     func testInvalidSessionKeyLengthFails() {
         XCTAssertThrowsError(try AtlasVaultUnlockedSession(
             vaultID: Self.vaultID,
@@ -432,4 +438,16 @@ private final class RecordingLocalStoreIO: AtlasVaultLocalStoreProviding, @unche
         writtenURL = url
         writtenOverwrite = overwrite
     }
+}
+
+private struct NonAtomicPersistenceCoordinator: AtlasVaultPersistenceCoordinating {
+    func loadEncryptedStore(for session: AtlasVaultUnlockedSession) throws -> AtlasVaultLocalStoreEnvelope? {
+        nil
+    }
+
+    func saveEncryptedStore(
+        _ store: AtlasVaultLocalStoreEnvelope,
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool
+    ) throws {}
 }

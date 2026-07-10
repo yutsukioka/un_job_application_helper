@@ -134,6 +134,51 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
         XCTAssertEqual(atomicWriter.callCount, 1)
     }
 
+    func testAtomicSaveCanonicalizesAcceptedSymlinkedRootBeforeWriterInvocation() throws {
+        let roots = try symlinkedRoot()
+        let atomicWriter = RecordingAtomicStoreWriter()
+
+        _ = try coordinator(rootURL: roots.injected, atomicWriter: atomicWriter)
+            .saveEncryptedStoreAtomically(
+                localStore(records: []),
+                for: session(),
+                overwrite: false
+            )
+
+        XCTAssertEqual(atomicWriter.destinationURL, try localStoreURL(rootURL: roots.canonical))
+    }
+
+    func testAtomicSaveDoesNotResolveDestinationSymlink() throws {
+        let roots = try symlinkedRoot()
+        let storeURL = try localStoreURL(rootURL: roots.injected)
+        try AtlasFileManagerVaultDirectoryPreparer().prepareParentDirectory(
+            for: storeURL,
+            under: roots.injected
+        )
+        let canonicalStoreURL = try localStoreURL(rootURL: roots.canonical)
+        let outsideURL = try temporaryDirectory().appendingPathComponent("outside-store.json")
+        let outsideData = Data("OUTSIDE_ATOMIC_COORDINATOR_SENTINEL".utf8)
+        try outsideData.write(to: outsideURL)
+        do {
+            try FileManager.default.createSymbolicLink(
+                at: canonicalStoreURL,
+                withDestinationURL: outsideURL
+            )
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this environment")
+        }
+
+        XCTAssertThrowsError(try realCoordinator(rootURL: roots.injected)
+            .saveEncryptedStoreAtomically(
+                localStore(records: []),
+                for: session(),
+                overwrite: true
+            )) { error in
+                XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .unsafePath)
+            }
+        XCTAssertEqual(try Data(contentsOf: outsideURL), outsideData)
+    }
+
     func testSuccessfulAtomicSaveCanBeReloaded() throws {
         let rootURL = try temporaryDirectory()
         let coordinator = try realCoordinator(rootURL: rootURL)
@@ -364,6 +409,23 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
         AtlasVaultLocalStoreMerger(updatedAtProvider: { Self.mergedAt })
     }
 
+    private func symlinkedRoot() throws -> (injected: URL, canonical: URL) {
+        let targetContainer = try temporaryDirectory()
+        let canonicalRoot = targetContainer.appendingPathComponent("root", isDirectory: true)
+        try FileManager.default.createDirectory(at: canonicalRoot, withIntermediateDirectories: true)
+        let linkContainer = try temporaryDirectory()
+        let linkURL = linkContainer.appendingPathComponent("root-link", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: targetContainer)
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this environment")
+        }
+        return (
+            injected: linkURL.appendingPathComponent("root", isDirectory: true),
+            canonical: canonicalRoot
+        )
+    }
+
     private func localStore(records: [AtlasVaultEncryptedRecordEnvelope]) -> AtlasVaultLocalStoreEnvelope {
         AtlasVaultLocalStoreEnvelope(
             storeID: Self.storeID,
@@ -428,7 +490,7 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        let url = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
             .appendingPathComponent("atlasvault-atomic-coordinator-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

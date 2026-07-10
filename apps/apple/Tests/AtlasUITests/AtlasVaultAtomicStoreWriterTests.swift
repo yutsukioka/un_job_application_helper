@@ -194,6 +194,100 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
         XCTAssertTrue(fileSystem.calls.isEmpty)
     }
 
+    func testRelativeFileURLFailsBeforeStandardizationOrFilesystemMutation() throws {
+        let destinationURL = try XCTUnwrap(URL(string: "file:relative/vault-store.json"))
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+    }
+
+    func testDestinationContainingNULFailsBeforeFilesystemMutation() throws {
+        let destinationURL = URL(fileURLWithPath: "/private/tmp/vault\0store.json")
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
+    func testRemoteHostFileURLFailsAcrossWriterAndFilesystemClientEntryPoints() throws {
+        let destinationURL = try XCTUnwrap(
+            URL(string: "file://example.invalid/private/tmp/vault-store.json")
+        )
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
+    func testPercentEncodedSlashFailsBeforeDescriptorTraversal() throws {
+        let destinationURL = try XCTUnwrap(
+            URL(string: "file:///private/tmp/safe%2Fescape/vault-store.json")
+        )
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
+    func testDotSegmentsFailBeforeStandardizationAcrossEntryPoints() throws {
+        let destinationURL = URL(fileURLWithPath: "/private/tmp/vault/../outside/store.json")
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
     func testMissingPreparedParentFailsBeforeTemporaryCreation() throws {
         let destinationURL = fakeDestinationURL()
         let fileSystem = FakeAtomicFileSystemClient(
@@ -261,6 +355,61 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
             XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .unsafePath)
         }
         XCTAssertEqual(try Data(contentsOf: outsideURL), originalData)
+    }
+
+    func testRemoveItemIfExistsTreatsMissingParentAsNoOp() throws {
+        let rootURL = try temporaryDirectory()
+        let stagedURL = rootURL
+            .appendingPathComponent("missing-parent", isDirectory: true)
+            .appendingPathComponent("staged.tmp")
+
+        XCTAssertNoThrow(
+            try AtlasFoundationAtomicFileSystemClient().removeItemIfExists(at: stagedURL)
+        )
+        XCTAssertEqual(try directoryEntryNames(rootURL), [])
+    }
+
+    func testRemoveItemIfExistsStillRejectsSymbolicLinkParent() throws {
+        let rootURL = try temporaryDirectory()
+        let outsideURL = try temporaryDirectory()
+        let redirectedURL = rootURL.appendingPathComponent("redirected", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: redirectedURL, withDestinationURL: outsideURL)
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this environment")
+        }
+        let stagedURL = redirectedURL.appendingPathComponent("staged.tmp")
+
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().removeItemIfExists(at: stagedURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
+    func testRealWriterRejectsIntermediateSymbolicLinkAncestorBeforeStagingBytes() throws {
+        let rootURL = try temporaryDirectory()
+        let outsideURL = try temporaryDirectory()
+        let outsideNestedURL = outsideURL.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: outsideNestedURL, withIntermediateDirectories: false)
+        let redirectedURL = rootURL.appendingPathComponent("redirected", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: redirectedURL, withDestinationURL: outsideURL)
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this test environment")
+        }
+        let destinationURL = redirectedURL
+            .appendingPathComponent("nested", isDirectory: true)
+            .appendingPathComponent("vault-store.json", isDirectory: false)
+
+        XCTAssertThrowsError(try AtlasVaultAtomicStoreWriter().write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .unsafePath)
+        }
+        XCTAssertEqual(try directoryEntryNames(outsideNestedURL), [])
     }
 
     func testEncryptedOutputContainsNoPrivateSentinelsOrPlaintextRecordTypes() throws {
@@ -448,7 +597,7 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        let url = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
             .appendingPathComponent("atlasvault-atomic-writer-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

@@ -42,10 +42,15 @@ this phase.
 For a complete store, `saveEncryptedStoreAtomically`:
 
 1. computes the explicit store URL from the injected path locator;
-2. prepares only the parent directory;
-3. passes the complete encrypted envelope and explicit overwrite policy to the
-   injected atomic writer;
-4. returns the writer's commit state unchanged.
+2. resolves symlinked ancestors in the injected root, then appends the validated
+   root-relative store path without resolving below-root components or the
+   destination file;
+3. prepares only the parent directory using that canonical root and store URL;
+4. passes the same canonical store URL, complete encrypted envelope, and
+   explicit overwrite policy to the
+   injected atomic writer, whose no-follow traversal still rejects below-root
+   symlinks and symbolic-link destinations;
+5. returns the writer's commit state unchanged.
 
 For encrypted record mutations, `saveEncryptedRecordsAtomically`:
 
@@ -85,6 +90,8 @@ Tests cover:
 - duplicate and stale-revision rejection before writer invocation;
 - old-destination preservation for representative pre-commit writer failures;
 - committed-durability-unconfirmed propagation;
+- accepted symlinked-root canonicalization without following a symbolic-link
+  destination;
 - successful reload, untouched-record preservation, and tombstones;
 - no private sentinel or plaintext record type leakage;
 - no public snapshot mutation or `.atlasvault` artifacts;

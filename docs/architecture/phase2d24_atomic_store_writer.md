@@ -44,14 +44,20 @@ failure tests. `AtlasFoundationAtomicFileSystemClient` uses Darwin operations
 to:
 
 - require an existing ordinary parent directory;
-- reject symbolic-link or non-file destinations;
+- reject relative, remote-host, NUL-bearing, or encoded-slash file URLs before
+  standardization or filesystem access;
+- walk from the filesystem root with descriptor-relative, no-follow directory
+  opens so symbolic-link ancestors are rejected;
+- reject symbolic-link or non-file destinations with descriptor-relative
+  metadata checks;
 - create the temporary file with exclusive, no-follow flags and mode `0600`;
 - verify mode `0600` before writing;
 - write all encoded bytes;
 - read staged bytes without following a symbolic link;
 - synchronize the staged file;
-- use same-directory `renameatx_np(..., RENAME_EXCL)` for first writes;
-- use same-directory `rename` for explicit overwrite;
+- use same-directory descriptor-relative `renameatx_np(..., RENAME_EXCL)` for
+  first writes;
+- use same-directory descriptor-relative `renameat` for explicit overwrite;
 - synchronize the parent directory after commit;
 - remove only the temporary path after pre-commit failure.
 
