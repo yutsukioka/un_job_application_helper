@@ -169,10 +169,12 @@ distinct from a thrown Keychain/key-store failure.
 
 ## 21. Filesystem And Path Failure
 
-Root lookup, root validation, per-vault construction, path binding, encrypted
-load, or directory-policy failure maps to `vaultUnavailable` without exposing
-the path. If key material has already been selected, wipe/release it before
-publishing failure.
+Root lookup, root validation, per-vault construction, path binding,
+directory-policy failure, or transport/I/O failure while loading an existing
+encrypted store maps to `vaultUnavailable` without exposing the path. A missing
+store remains `storeMissing`; malformed or unsupported store content retains
+the dedicated `corruptStore` or `unsupportedVersion` category. If key material
+has already been selected, wipe/release it before publishing failure.
 
 ## 22. Cancellation Behavior
 
