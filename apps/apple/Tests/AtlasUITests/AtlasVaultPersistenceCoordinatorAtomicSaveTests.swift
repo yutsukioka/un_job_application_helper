@@ -428,7 +428,7 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("atlasvault-atomic-coordinator-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

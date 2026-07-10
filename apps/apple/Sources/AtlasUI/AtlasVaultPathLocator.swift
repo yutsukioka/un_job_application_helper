@@ -21,7 +21,7 @@ public struct AtlasInjectedRootVaultPathLocator: AtlasVaultPathLocator {
         guard rootURL.isFileURL else {
             throw AtlasVaultPathLocatorError.invalidRootURL
         }
-        self.rootURL = rootURL.standardizedFileURL
+        self.rootURL = rootURL.standardized
     }
 
     public func localStoreURL(vaultID: String) throws -> URL {

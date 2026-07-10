@@ -107,6 +107,9 @@ public protocol AtlasVaultPersistenceCoordinating: Sendable {
         for session: AtlasVaultUnlockedSession,
         overwrite: Bool
     ) throws
+}
+
+public protocol AtlasVaultAtomicPersistenceCoordinating: AtlasVaultPersistenceCoordinating {
     func saveEncryptedStoreAtomically(
         _ store: AtlasVaultLocalStoreEnvelope,
         for session: AtlasVaultUnlockedSession,
@@ -118,7 +121,7 @@ public struct AtlasVaultPersistenceCoordinator<
     PathLocator: AtlasVaultPathLocator,
     DirectoryPreparer: AtlasVaultDirectoryPreparer,
     LocalStoreIO: AtlasVaultLocalStoreProviding
->: AtlasVaultPersistenceCoordinating {
+>: AtlasVaultAtomicPersistenceCoordinating {
     private let environment: AtlasVaultPersistenceEnvironment<PathLocator, DirectoryPreparer, LocalStoreIO>
 
     public init(environment: AtlasVaultPersistenceEnvironment<PathLocator, DirectoryPreparer, LocalStoreIO>) {

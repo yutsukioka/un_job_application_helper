@@ -21,8 +21,8 @@ public struct AtlasFileManagerVaultDirectoryPreparer: AtlasVaultDirectoryPrepare
             throw AtlasVaultDirectoryError.invalidURL
         }
 
-        let inputRootURL = rootDirectory.standardizedFileURL
-        let inputParentURL = storeURL.deletingLastPathComponent().standardizedFileURL
+        let inputRootURL = rootDirectory.standardized
+        let inputParentURL = storeURL.deletingLastPathComponent().standardized
         let rootURL = inputRootURL.resolvingSymlinksInPath().standardizedFileURL
         let fileManager = FileManager.default
 

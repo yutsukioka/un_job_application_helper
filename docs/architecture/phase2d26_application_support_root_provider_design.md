@@ -77,7 +77,7 @@ The provider should reject:
 - no Application Support result;
 - a non-file URL;
 - a relative or otherwise malformed file URL under the selected policy;
-- an empty or root-only path that cannot safely represent an app support base;
+- an empty or root-only path that cannot safely represent an Application Support base;
 - an environment the adapter does not support.
 
 The returned URL should be absolute and standardized. Standardization is not a
@@ -144,7 +144,7 @@ configuration boundary and review.
 
 Phase 2D-27 may implement and test the provider, but neither this design nor
 that implementation should connect it to app startup, SwiftUI,
-`SearchViewModel`, `AtlasLocalCache`, or the persistence coordinator. Runtime
+`AtlasSearchViewModel`, `AtlasLocalCache`, or the persistence coordinator. Runtime
 composition remains a later phase.
 
 ## 16. Test Injection Strategy

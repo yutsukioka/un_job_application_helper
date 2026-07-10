@@ -207,7 +207,7 @@ public struct AtlasVaultAtomicStoreWriter: AtlasVaultAtomicStoreWriting {
         guard url.isFileURL, !url.hasDirectoryPath else {
             throw AtlasVaultAtomicWriteError.invalidDestination
         }
-        let standardizedURL = url.standardizedFileURL
+        let standardizedURL = url.standardized
         guard !standardizedURL.lastPathComponent.isEmpty,
               standardizedURL.lastPathComponent != ".",
               standardizedURL.lastPathComponent != ".."
@@ -222,10 +222,10 @@ public struct AtlasVaultAtomicStoreWriter: AtlasVaultAtomicStoreWriting {
         guard Self.isValidTemporaryToken(token) else {
             throw AtlasVaultAtomicWriteError.invalidTemporaryFileName
         }
-        let parentURL = destinationURL.deletingLastPathComponent().standardizedFileURL
+        let parentURL = destinationURL.deletingLastPathComponent().standardized
         let temporaryURL = parentURL
             .appendingPathComponent(".\(token).tmp", isDirectory: false)
-            .standardizedFileURL
+            .standardized
         guard temporaryURL != destinationURL,
               temporaryURL.deletingLastPathComponent() == parentURL
         else {
@@ -269,24 +269,25 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         guard destinationURL.isFileURL else {
             throw AtlasVaultAtomicFileSystemError.unsafePath
         }
-        let parentURL = destinationURL.deletingLastPathComponent().standardizedFileURL
-        guard try pathType(at: parentURL) == .directory else {
-            throw AtlasVaultAtomicFileSystemError.parentUnavailable
-        }
-        switch try pathType(at: destinationURL) {
-        case .missing, .regularFile:
-            return
-        case .symbolicLink, .directory, .other:
-            throw AtlasVaultAtomicFileSystemError.unsafePath
+        try withParentDirectoryDescriptor(for: destinationURL) { parentDescriptor, fileName in
+            switch try pathType(named: fileName, relativeTo: parentDescriptor) {
+            case .missing, .regularFile:
+                return
+            case .symbolicLink, .directory, .other:
+                throw AtlasVaultAtomicFileSystemError.unsafePath
+            }
         }
     }
 
     public func createTemporaryFile(at url: URL) throws {
-        let descriptor = fileDescriptor(
-            at: url,
-            flags: O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-            mode: mode_t(S_IRUSR | S_IWUSR)
-        )
+        let descriptor = try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            fileDescriptor(
+                named: fileName,
+                relativeTo: parentDescriptor,
+                flags: O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                mode: mode_t(S_IRUSR | S_IWUSR)
+            )
+        }
         guard descriptor >= 0 else {
             throw AtlasVaultAtomicFileSystemError.temporaryCreationFailed
         }
@@ -297,7 +298,13 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func protectTemporaryFile(at url: URL) throws {
-        let descriptor = fileDescriptor(at: url, flags: O_WRONLY | O_NOFOLLOW)
+        let descriptor = try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            fileDescriptor(
+                named: fileName,
+                relativeTo: parentDescriptor,
+                flags: O_WRONLY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
         guard descriptor >= 0 else {
             throw AtlasVaultAtomicFileSystemError.protectionFailed
         }
@@ -309,7 +316,13 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func write(_ data: Data, to url: URL) throws {
-        let descriptor = fileDescriptor(at: url, flags: O_WRONLY | O_NOFOLLOW)
+        let descriptor = try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            fileDescriptor(
+                named: fileName,
+                relativeTo: parentDescriptor,
+                flags: O_WRONLY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
         guard descriptor >= 0 else {
             throw AtlasVaultAtomicFileSystemError.writeFailed
         }
@@ -344,7 +357,13 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func read(from url: URL) throws -> Data {
-        let descriptor = fileDescriptor(at: url, flags: O_RDONLY | O_NOFOLLOW)
+        let descriptor = try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            fileDescriptor(
+                named: fileName,
+                relativeTo: parentDescriptor,
+                flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
         guard descriptor >= 0 else {
             throw AtlasVaultAtomicFileSystemError.readFailed
         }
@@ -377,7 +396,13 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func synchronizeFile(at url: URL) throws {
-        let descriptor = fileDescriptor(at: url, flags: O_RDONLY | O_NOFOLLOW)
+        let descriptor = try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            fileDescriptor(
+                named: fileName,
+                relativeTo: parentDescriptor,
+                flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
         guard descriptor >= 0 else {
             throw AtlasVaultAtomicFileSystemError.synchronizationFailed
         }
@@ -393,47 +418,61 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         to destinationURL: URL,
         overwrite: Bool
     ) throws {
-        try validatePreparedParent(for: destinationURL)
-        let temporaryParent = temporaryURL.deletingLastPathComponent().standardizedFileURL
-        let destinationParent = destinationURL.deletingLastPathComponent().standardizedFileURL
-        guard temporaryParent == destinationParent,
-              try pathType(at: temporaryURL) == .regularFile
-        else {
+        let temporaryParent = temporaryURL.deletingLastPathComponent().standardized
+        let destinationParent = destinationURL.deletingLastPathComponent().standardized
+        guard temporaryParent == destinationParent else {
             throw AtlasVaultAtomicFileSystemError.unsafePath
         }
 
-        let result: Int32 = temporaryURL.withUnsafeFileSystemRepresentation { sourcePath in
-            destinationURL.withUnsafeFileSystemRepresentation { destinationPath in
-                guard let sourcePath, let destinationPath else {
-                    return -1
-                }
-                if overwrite {
-                    return Darwin.rename(sourcePath, destinationPath)
-                }
-                return renameatx_np(
-                    AT_FDCWD,
-                    sourcePath,
-                    AT_FDCWD,
-                    destinationPath,
-                    UInt32(RENAME_EXCL)
-                )
+        try withParentDirectoryDescriptor(for: destinationURL) { parentDescriptor, destinationName in
+            let temporaryName = temporaryURL.lastPathComponent
+            guard try pathType(named: temporaryName, relativeTo: parentDescriptor) == .regularFile else {
+                throw AtlasVaultAtomicFileSystemError.unsafePath
             }
-        }
+            switch try pathType(named: destinationName, relativeTo: parentDescriptor) {
+            case .missing, .regularFile:
+                break
+            case .symbolicLink, .directory, .other:
+                throw AtlasVaultAtomicFileSystemError.unsafePath
+            }
 
-        guard result == 0 else {
-            if !overwrite, errno == EEXIST {
-                throw AtlasVaultAtomicFileSystemError.destinationExists
+            let result: Int32 = temporaryName.withCString { sourcePath in
+                destinationName.withCString { destinationPath in
+                    if overwrite {
+                        return Darwin.renameat(
+                            parentDescriptor,
+                            sourcePath,
+                            parentDescriptor,
+                            destinationPath
+                        )
+                    }
+                    return renameatx_np(
+                        parentDescriptor,
+                        sourcePath,
+                        parentDescriptor,
+                        destinationPath,
+                        UInt32(RENAME_EXCL)
+                    )
+                }
             }
-            throw AtlasVaultAtomicFileSystemError.replacementFailed
+
+            guard result == 0 else {
+                if overwrite {
+                    throw AtlasVaultAtomicFileSystemError.replacementFailed
+                }
+                if errno == EEXIST {
+                    throw AtlasVaultAtomicFileSystemError.destinationExists
+                }
+                throw AtlasVaultAtomicFileSystemError.replacementFailed
+            }
         }
     }
 
     public func synchronizeDirectory(at url: URL) throws {
-        guard try pathType(at: url) == .directory else {
-            throw AtlasVaultAtomicFileSystemError.synchronizationFailed
-        }
-        let descriptor = fileDescriptor(at: url, flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-        guard descriptor >= 0 else {
+        let descriptor: Int32
+        do {
+            descriptor = try openDirectoryDescriptor(at: url)
+        } catch {
             throw AtlasVaultAtomicFileSystemError.synchronizationFailed
         }
         let synchronized = fsync(descriptor) == 0
@@ -444,17 +483,16 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func removeItemIfExists(at url: URL) throws {
-        if try pathType(at: url) == .missing {
-            return
-        }
-        let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else {
-                return Int32(-1)
+        try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+            if try pathType(named: fileName, relativeTo: parentDescriptor) == .missing {
+                return
             }
-            return Darwin.unlink(path)
-        }
-        guard result == 0 else {
-            throw AtlasVaultAtomicFileSystemError.cleanupFailed
+            let result = fileName.withCString { path in
+                Darwin.unlinkat(parentDescriptor, path, 0)
+            }
+            if result != 0, errno != ENOENT {
+                throw AtlasVaultAtomicFileSystemError.cleanupFailed
+            }
         }
     }
 
@@ -466,13 +504,10 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         case other
     }
 
-    private func pathType(at url: URL) throws -> PathType {
+    private func pathType(named fileName: String, relativeTo directoryDescriptor: Int32) throws -> PathType {
         var information = stat()
-        let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else {
-                return Int32(-1)
-            }
-            return lstat(path, &information)
+        let result = fileName.withCString { path in
+            fstatat(directoryDescriptor, path, &information, AT_SYMLINK_NOFOLLOW)
         }
         if result != 0 {
             if errno == ENOENT {
@@ -493,15 +528,93 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         }
     }
 
-    private func fileDescriptor(at url: URL, flags: Int32, mode: mode_t? = nil) -> Int32 {
-        url.withUnsafeFileSystemRepresentation { path in
-            guard let path else {
-                return -1
+    private func withParentDirectoryDescriptor<Result>(
+        for url: URL,
+        _ operation: (Int32, String) throws -> Result
+    ) throws -> Result {
+        let standardizedURL = url.standardized
+        guard standardizedURL.isFileURL,
+              standardizedURL.path.hasPrefix("/"),
+              !standardizedURL.lastPathComponent.isEmpty
+        else {
+            throw AtlasVaultAtomicFileSystemError.unsafePath
+        }
+        let parentDescriptor = try openDirectoryDescriptor(
+            at: standardizedURL.deletingLastPathComponent()
+        )
+        defer { _ = Darwin.close(parentDescriptor) }
+        return try operation(parentDescriptor, standardizedURL.lastPathComponent)
+    }
+
+    private func openDirectoryDescriptor(at url: URL) throws -> Int32 {
+        let standardizedURL = url.standardized
+        guard standardizedURL.isFileURL, standardizedURL.path.hasPrefix("/") else {
+            throw AtlasVaultAtomicFileSystemError.unsafePath
+        }
+
+        var descriptor = Darwin.open(
+            "/",
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw AtlasVaultAtomicFileSystemError.unsafePath
+        }
+
+        for component in standardizedURL.pathComponents.dropFirst() {
+            guard !component.isEmpty, component != ".", component != ".." else {
+                _ = Darwin.close(descriptor)
+                throw AtlasVaultAtomicFileSystemError.unsafePath
             }
+
+            let nextDescriptor = component.withCString { path in
+                Darwin.openat(
+                    descriptor,
+                    path,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+            }
+            guard nextDescriptor >= 0 else {
+                let traversalError = directoryTraversalError(
+                    component: component,
+                    relativeTo: descriptor
+                )
+                _ = Darwin.close(descriptor)
+                throw traversalError
+            }
+            _ = Darwin.close(descriptor)
+            descriptor = nextDescriptor
+        }
+        return descriptor
+    }
+
+    private func directoryTraversalError(
+        component: String,
+        relativeTo directoryDescriptor: Int32
+    ) -> AtlasVaultAtomicFileSystemError {
+        var information = stat()
+        let result = component.withCString { path in
+            fstatat(directoryDescriptor, path, &information, AT_SYMLINK_NOFOLLOW)
+        }
+        if result == 0, information.st_mode & S_IFMT == S_IFLNK {
+            return .unsafePath
+        }
+        if result == 0 || errno == ENOENT || errno == ENOTDIR {
+            return .parentUnavailable
+        }
+        return .unsafePath
+    }
+
+    private func fileDescriptor(
+        named fileName: String,
+        relativeTo directoryDescriptor: Int32,
+        flags: Int32,
+        mode: mode_t? = nil
+    ) -> Int32 {
+        fileName.withCString { path in
             if let mode {
-                return Darwin.open(path, flags, mode)
+                return Darwin.openat(directoryDescriptor, path, flags, mode)
             }
-            return Darwin.open(path, flags)
+            return Darwin.openat(directoryDescriptor, path, flags)
         }
     }
 }

@@ -263,6 +263,31 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: outsideURL), originalData)
     }
 
+    func testRealWriterRejectsIntermediateSymbolicLinkAncestorBeforeStagingBytes() throws {
+        let rootURL = try temporaryDirectory()
+        let outsideURL = try temporaryDirectory()
+        let outsideNestedURL = outsideURL.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: outsideNestedURL, withIntermediateDirectories: false)
+        let redirectedURL = rootURL.appendingPathComponent("redirected", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: redirectedURL, withDestinationURL: outsideURL)
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this test environment")
+        }
+        let destinationURL = redirectedURL
+            .appendingPathComponent("nested", isDirectory: true)
+            .appendingPathComponent("vault-store.json", isDirectory: false)
+
+        XCTAssertThrowsError(try AtlasVaultAtomicStoreWriter().write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .unsafePath)
+        }
+        XCTAssertEqual(try directoryEntryNames(outsideNestedURL), [])
+    }
+
     func testEncryptedOutputContainsNoPrivateSentinelsOrPlaintextRecordTypes() throws {
         let rootURL = try temporaryDirectory()
         let destinationURL = rootURL.appendingPathComponent("vault-store.json")
@@ -448,7 +473,7 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("atlasvault-atomic-writer-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
