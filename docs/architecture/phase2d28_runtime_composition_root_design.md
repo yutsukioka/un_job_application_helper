@@ -298,8 +298,8 @@ Future composition tests should verify:
   key-loading seam;
 - explicit activation orders key retrieval, root lookup, path construction,
   encrypted load, and hydration;
-- root lookup and path/coordinator construction failures after key retrieval
-  invoke the key-wipe/release boundary;
+- root lookup, path/coordinator construction, encrypted-store load, and hydration
+  failures after key retrieval each invoke the key-wipe/release boundary;
 - every activation failure publishes no session or partial private state;
 - lock clears session/private state and invokes the selected wipe boundary;
 - atomic saves serialize per vault and propagate both commit states;
