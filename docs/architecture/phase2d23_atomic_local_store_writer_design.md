@@ -97,11 +97,14 @@ The first implementation should use this sequence:
    before any filesystem mutation.
 4. Generate a random, non-semantic temporary filename in the destination
    directory.
-5. Create the temporary file exclusively and reject symbolic-link traversal.
-6. Write all bytes, handling short writes rather than assuming one operation
+5. Create the temporary file exclusively with an initial mode and protection
+   no weaker than the reviewed destination policy, and reject symbolic-link
+   traversal.
+6. Apply or verify the final reviewed permissions and file-protection policy
+   before writing the first payload byte. Fail closed if the required
+   protection cannot be established.
+7. Write all bytes, handling short writes rather than assuming one operation
    consumed the complete buffer.
-7. Apply the reviewed permissions and file-protection policy; the temporary
-   file must never be less protected than the destination.
 8. Read and decode the staged bytes as an encrypted local-store envelope,
    without opening or decrypting any record, when validation is enabled.
 9. Synchronize the temporary file according to the reviewed durability policy.
@@ -235,6 +238,7 @@ replacement, or cleanup failed.
 | Failure stage | Destination expectation | Temporary-file expectation |
 | --- | --- | --- |
 | Temporary creation | Existing destination unchanged; no destination created | No temp, or remove any partially created encrypted temp |
+| Protection or permissions | Existing destination unchanged | Remove the empty protected temp when possible; write no store bytes under weaker protection |
 | Byte write | Existing destination unchanged | Close and remove temp when possible |
 | Staged validation | Existing destination unchanged | Remove invalid encrypted temp when possible |
 | File synchronization | Existing destination unchanged | Remove temp when possible |
@@ -292,6 +296,8 @@ Phase 2D-24 should use injected roots and an injected filesystem client to test:
 - overwrite false refusing an existing destination;
 - temporary file creation in the destination directory;
 - temporary creation failure leaving the destination unchanged;
+- permission or protection failure occurring before any store bytes are written
+  and leaving the destination unchanged;
 - byte-write failure leaving the destination unchanged;
 - validation failure leaving the destination unchanged;
 - file-synchronization failure leaving the destination unchanged;
