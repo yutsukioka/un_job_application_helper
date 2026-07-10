@@ -165,7 +165,9 @@ no private state, and wipe/release provisional key ownership.
 
 When no explicit key is supplied and `loadVaultKey` returns `nil`, report
 `keyUnavailable`. Do not resolve the root or inspect the filesystem. This is
-distinct from a thrown Keychain/key-store failure.
+distinct from a thrown Keychain/key-store error, which maps to the stable,
+non-sensitive `keyStoreFailure` category and likewise performs no root or
+filesystem operation.
 
 ## 21. Filesystem And Path Failure
 
