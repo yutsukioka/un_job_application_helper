@@ -536,6 +536,9 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         for url: URL,
         _ operation: (Int32, String) throws -> Result
     ) throws -> Result {
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(url) else {
+            throw AtlasVaultAtomicFileSystemError.unsafePath
+        }
         let standardizedURL = url.standardized
         guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedURL),
               !standardizedURL.lastPathComponent.isEmpty
@@ -550,6 +553,9 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     private func openDirectoryDescriptor(at url: URL) throws -> Int32 {
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(url) else {
+            throw AtlasVaultAtomicFileSystemError.unsafePath
+        }
         let standardizedURL = url.standardized
         guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedURL)
         else {

@@ -442,16 +442,26 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
     private func canonicalTemporaryRoot() throws -> URL {
         var resolvedPath = [CChar](repeating: 0, count: Int(PATH_MAX))
         let temporaryRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let resolved = temporaryRoot.withUnsafeFileSystemRepresentation { path in
+        let resolutionError = temporaryRoot.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else {
-                return false
+                return EINVAL
             }
-            return resolvedPath.withUnsafeMutableBufferPointer { buffer in
-                realpath(path, buffer.baseAddress) != nil
+            return resolvedPath.withUnsafeMutableBufferPointer { buffer -> Int32 in
+                guard realpath(path, buffer.baseAddress) != nil else {
+                    return errno
+                }
+                return 0
             }
         }
-        guard resolved else {
-            throw NSError(domain: "AtlasVaultPersistenceCoordinatorAtomicSaveTests", code: 2)
+        guard resolutionError == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(resolutionError),
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Unable to resolve the test temporary directory: \(String(cString: strerror(resolutionError)))"
+                ]
+            )
         }
         let path = String(
             decoding: resolvedPath.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
