@@ -50,6 +50,10 @@ different vault before path or filesystem work. Construction does not query the
 root provider, retrieve a key, compute a store URL, prepare a directory, read or
 write a store, or hydrate records.
 
+The explicit root must be a safe absolute local file URL and must not be the
+filesystem root `/`. It is standardized once and the identical value is passed
+to both the bound locator and persistence environment.
+
 Directory preparation, local-store IO, atomic writing, merging, saving, and
 hydration dependencies are intentionally shared when they are stateless or
 injected service seams. Each per-vault scope receives a fresh locator and

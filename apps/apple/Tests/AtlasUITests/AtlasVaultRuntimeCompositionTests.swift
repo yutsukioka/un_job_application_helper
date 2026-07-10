@@ -154,6 +154,20 @@ final class AtlasVaultRuntimeCompositionTests: XCTestCase {
         XCTAssertEqual(graph.recorder.events, [])
     }
 
+    func testPerVaultFactoryRejectsFilesystemRootBeforeAnyOperation() {
+        let graph = makeInjectedGraph()
+
+        XCTAssertThrowsError(
+            try graph.services.perVaultFactory.makeServices(
+                rootURL: URL(fileURLWithPath: "/", isDirectory: true),
+                vaultID: Self.vaultIDOne
+            )
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultPathLocatorError, .invalidRootURL)
+        }
+        XCTAssertEqual(graph.recorder.events, [])
+    }
+
     func testCompositionValuesAreSendable() throws {
         let graph = makeInjectedGraph()
         let perVault = try graph.services.perVaultFactory.makeServices(

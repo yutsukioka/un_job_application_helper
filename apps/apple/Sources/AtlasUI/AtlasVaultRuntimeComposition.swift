@@ -159,13 +159,24 @@ public struct AtlasVaultPerVaultServiceFactory<
         vaultID: String
     ) throws -> AtlasVaultPerVaultServices<DirectoryPreparer, LocalStoreIO> {
         let vaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(vaultID)
-        let baseLocator = try AtlasInjectedRootVaultPathLocator(rootURL: rootURL)
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(rootURL) else {
+            throw AtlasVaultPathLocatorError.invalidRootURL
+        }
+        let standardizedRootURL = rootURL.standardizedFileURL
+        guard standardizedRootURL.path != "/",
+              AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedRootURL)
+        else {
+            throw AtlasVaultPathLocatorError.invalidRootURL
+        }
+        let baseLocator = try AtlasInjectedRootVaultPathLocator(
+            rootURL: standardizedRootURL
+        )
         let pathLocator = AtlasVaultBoundPathLocator(
             vaultID: vaultID,
             baseLocator: baseLocator
         )
         let environment = AtlasVaultPersistenceEnvironment(
-            rootDirectory: rootURL,
+            rootDirectory: standardizedRootURL,
             pathLocator: pathLocator,
             directoryPreparer: directoryPreparer,
             localStoreIO: localStoreIO,
