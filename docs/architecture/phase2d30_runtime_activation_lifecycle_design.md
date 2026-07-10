@@ -74,7 +74,7 @@ For a valid vault ID, key selection order is:
 
 1. an explicitly supplied, already unwrapped passphrase/recovery key;
 2. the local `AtlasVaultKeyStore` item;
-3. a non-sensitive key-unavailable result.
+3. a non-sensitive `keyUnavailable` result.
 
 The controller does not obtain passphrases, unwrap recovery material, prompt
 for user presence, or persist an explicitly supplied key unless a separate
