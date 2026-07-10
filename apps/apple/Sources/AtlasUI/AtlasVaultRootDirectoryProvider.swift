@@ -4,7 +4,6 @@ public enum AtlasVaultRootDirectoryError: Error, Equatable, Sendable {
     case applicationSupportUnavailable
     case invalidFileURL
     case malformedURL
-    case unsupportedEnvironment
 }
 
 public protocol AtlasVaultRootDirectoryProviding: Sendable {
