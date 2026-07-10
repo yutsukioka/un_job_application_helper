@@ -135,6 +135,25 @@ final class AtlasVaultRuntimeCompositionTests: XCTestCase {
         XCTAssertEqual(graph.recorder.events, [])
     }
 
+    func testPerVaultCoordinatorRejectsMismatchedSessionBeforeAnyOperation() throws {
+        let graph = makeInjectedGraph()
+        let perVault = try graph.services.perVaultFactory.makeServices(
+            rootURL: temporaryCandidateRoot(component: "mismatched-session"),
+            vaultID: Self.vaultIDOne
+        )
+        let mismatchedSession = try AtlasVaultUnlockedSession(
+            vaultID: Self.vaultIDTwo,
+            vaultKey: Data(repeating: 0x29, count: AtlasVaultRecordCrypto.vaultKeyByteCount)
+        )
+
+        XCTAssertThrowsError(
+            try perVault.persistenceCoordinator.loadEncryptedStore(for: mismatchedSession)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultPersistenceError, .invalidSession)
+        }
+        XCTAssertEqual(graph.recorder.events, [])
+    }
+
     func testCompositionValuesAreSendable() throws {
         let graph = makeInjectedGraph()
         let perVault = try graph.services.perVaultFactory.makeServices(
@@ -209,7 +228,6 @@ final class AtlasVaultRuntimeCompositionTests: XCTestCase {
             ".saveVaultKey(",
             ".deleteVaultKey(",
             ".prepareParentDirectory(",
-            ".localStoreURL(",
             ".read(",
             ".write(",
             ".hydrate(",

@@ -44,10 +44,11 @@ types does not call those clients during construction.
 
 `AtlasVaultPerVaultServiceFactory.makeServices(rootURL:vaultID:)` is a separate
 explicit pure construction step. It validates a caller-supplied non-semantic
-vault ID, validates an explicit root URL, and creates a fresh path locator and
-persistence coordinator. It does not query the root provider, retrieve a key,
-compute a store URL, prepare a directory, read or write a store, or hydrate
-records.
+vault ID, validates an explicit root URL, and creates a fresh vault-bound path
+locator and persistence coordinator. The bound locator rejects a session for a
+different vault before path or filesystem work. Construction does not query the
+root provider, retrieve a key, compute a store URL, prepare a directory, read or
+write a store, or hydrate records.
 
 Directory preparation, local-store IO, atomic writing, merging, saving, and
 hydration dependencies are intentionally shared when they are stateless or

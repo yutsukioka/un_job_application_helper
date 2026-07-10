@@ -95,6 +95,38 @@ public struct AtlasVaultRuntimeServices<
     }
 }
 
+public struct AtlasVaultBoundPathLocator:
+    AtlasVaultPathLocator,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private let boundVaultID: String
+    private let baseLocator: AtlasInjectedRootVaultPathLocator
+
+    init(
+        vaultID: String,
+        baseLocator: AtlasInjectedRootVaultPathLocator
+    ) {
+        self.boundVaultID = vaultID
+        self.baseLocator = baseLocator
+    }
+
+    public func localStoreURL(vaultID: String) throws -> URL {
+        guard vaultID == boundVaultID else {
+            throw AtlasVaultPathLocatorError.invalidVaultID
+        }
+        return try baseLocator.localStoreURL(vaultID: boundVaultID)
+    }
+
+    public var description: String {
+        "AtlasVaultBoundPathLocator(vault: <redacted>, root: <redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 public struct AtlasVaultPerVaultServiceFactory<
     DirectoryPreparer: AtlasVaultDirectoryPreparer,
     LocalStoreIO: AtlasVaultLocalStoreProviding
@@ -127,7 +159,11 @@ public struct AtlasVaultPerVaultServiceFactory<
         vaultID: String
     ) throws -> AtlasVaultPerVaultServices<DirectoryPreparer, LocalStoreIO> {
         let vaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(vaultID)
-        let pathLocator = try AtlasInjectedRootVaultPathLocator(rootURL: rootURL)
+        let baseLocator = try AtlasInjectedRootVaultPathLocator(rootURL: rootURL)
+        let pathLocator = AtlasVaultBoundPathLocator(
+            vaultID: vaultID,
+            baseLocator: baseLocator
+        )
         let environment = AtlasVaultPersistenceEnvironment(
             rootDirectory: rootURL,
             pathLocator: pathLocator,
@@ -165,9 +201,9 @@ public struct AtlasVaultPerVaultServices<
     LocalStoreIO: AtlasVaultLocalStoreProviding
 >: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let vaultID: String
-    public let pathLocator: AtlasInjectedRootVaultPathLocator
+    public let pathLocator: AtlasVaultBoundPathLocator
     public let persistenceCoordinator: AtlasVaultPersistenceCoordinator<
-        AtlasInjectedRootVaultPathLocator,
+        AtlasVaultBoundPathLocator,
         DirectoryPreparer,
         LocalStoreIO
     >
@@ -180,9 +216,9 @@ public struct AtlasVaultPerVaultServices<
 
     init(
         vaultID: String,
-        pathLocator: AtlasInjectedRootVaultPathLocator,
+        pathLocator: AtlasVaultBoundPathLocator,
         persistenceCoordinator: AtlasVaultPersistenceCoordinator<
-            AtlasInjectedRootVaultPathLocator,
+            AtlasVaultBoundPathLocator,
             DirectoryPreparer,
             LocalStoreIO
         >,
