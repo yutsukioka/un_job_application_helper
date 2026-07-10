@@ -78,8 +78,10 @@ owner, the coordinator built for that vault's root/path, the saver, hydrator,
 and in-memory `AtlasVaultHydratedState`. The scope must never be cached in the
 public cache or a process-global registry.
 
-Failure during key retrieval, encrypted-store load, or hydration must discard
-the provisional scope and expose no partial hydrated state.
+Once activation has loaded any key material, failure during root lookup, path or
+coordinator construction, encrypted-store load, or hydration must invoke the
+selected key-wipe/release boundary, discard the entire provisional scope, and
+expose no session or partial hydrated state.
 
 ## 8. Key Retrieval Boundary
 
@@ -296,7 +298,9 @@ Future composition tests should verify:
   key-loading seam;
 - explicit activation orders key retrieval, root lookup, path construction,
   encrypted load, and hydration;
-- any activation failure publishes no partial private state;
+- root lookup and path/coordinator construction failures after key retrieval
+  invoke the key-wipe/release boundary;
+- every activation failure publishes no session or partial private state;
 - lock clears session/private state and invokes the selected wipe boundary;
 - atomic saves serialize per vault and propagate both commit states;
 - vault IDs isolate paths, sessions, and save queues;
