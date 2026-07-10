@@ -282,9 +282,11 @@ final class AtlasVaultRuntimeCompositionTests: XCTestCase {
     }
 
     private func publicSnapshot() throws -> AtlasPublicLocalSnapshot {
-        try JSONDecoder().decode(AtlasPublicLocalSnapshot.self, from: Data("""
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AtlasPublicLocalSnapshot.self, from: Data("""
         {
-          "savedAt": 1767744000,
+          "savedAt": "2026-01-07T00:00:00Z",
           "baseURL": "http://127.0.0.1:8765",
           "health": {
             "status": "ok",
@@ -311,6 +313,7 @@ final class AtlasVaultRuntimeCompositionTests: XCTestCase {
 
     private func encodedSnapshot(_ snapshot: AtlasPublicLocalSnapshot) throws -> Data {
         let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(snapshot)
     }
