@@ -6,8 +6,8 @@ Phase 2D-21 designs how encrypted records produced by the record saver will be
 merged into an AtlasVault local-store envelope and handed to the persistence
 coordinator for a future write. The design keeps the coordinator on encrypted
 envelopes only: private record type and private payload values remain inside
-ciphertext, while the plaintext encrypted-record envelope contains only the
-reviewed allowlist needed for storage, authentication, and merge decisions.
+ciphertext, while plaintext encrypted-record metadata contains only the reviewed
+allowlist needed for storage, authentication, and merge decisions.
 
 ## 2. Scope
 
@@ -18,7 +18,7 @@ It does not add:
 - coordinator save code;
 - runtime app integration;
 - SwiftUI, `SearchViewModel`, or `AtlasLocalCache` wiring;
-- actual local store writes;
+- actual local-store writes;
 - migration execution;
 - cleanup of old plaintext snapshots;
 - cloud sync, device onboarding, or key rotation.
@@ -81,10 +81,10 @@ sync.
 
 ## 5. Store Merge Semantics
 
-The first implementation should treat the local-store record list as a map by
-plaintext envelope record ID. Record IDs are non-semantic and must not contain
-job keys, search names, notes, snippets, generated document references, record
-types, or user context.
+The first implementation should validate the existing local-store record list
+before converting it to a map by plaintext envelope record ID. Record IDs are
+non-semantic and must not contain job keys, search names, notes, snippets,
+generated document references, record types, or user context.
 
 Recommended merge rules:
 
@@ -96,12 +96,15 @@ Recommended merge rules:
 - unknown existing records are preserved unchanged;
 - existing tombstones are preserved unless replaced by a newer envelope for the
   same record ID;
+- duplicate record IDs already present in the existing store fail with a
+  non-sensitive error before the map is built;
 - duplicate record IDs within the incoming batch fail with a non-sensitive
   error.
 
-Failing on duplicate incoming IDs is the recommended first implementation. It is
-easier to reason about than a last-writer policy and avoids silently discarding
-an encrypted envelope before conflict behavior is designed.
+Failing on duplicate existing or incoming IDs is the recommended first
+implementation. It is easier to reason about than a last-writer policy and
+avoids silently discarding an encrypted envelope before conflict behavior is
+designed.
 
 ## 6. Revision And Conflict Behavior
 
@@ -167,6 +170,7 @@ Future errors should be typed and non-sensitive:
 - missing store, when save requires an existing envelope;
 - corrupt store;
 - unsupported store version;
+- duplicate existing records;
 - duplicate incoming encrypted records;
 - missing current record for update/delete;
 - stale parent revision;
@@ -221,12 +225,14 @@ Future test-only implementation should cover:
 - merge tombstone preserves the deleted flag and replaces the active record;
 - untouched encrypted records are preserved;
 - existing tombstones are preserved;
+- duplicate existing record IDs fail before mapping;
 - duplicate incoming IDs fail safely;
 - stale parent revision fails safely;
 - missing current record for update/delete fails safely;
 - local-store metadata updates contain no private data;
-- serialized local store contains no fake private sentinels;
-- serialized local store contains no plaintext private record type strings;
+- serialized local-store envelope contains no fake private sentinels;
+- serialized local-store envelope contains no plaintext private record type
+  strings;
 - public snapshot and public cache state remain untouched;
 - write failure leaves the original store untouched once an atomic writer exists.
 
