@@ -157,6 +157,32 @@ public struct AtlasVaultPersistenceCoordinator<
         }
     }
 
+    public func saveEncryptedRecords(
+        _ records: [AtlasVaultEncryptedRecordEnvelope],
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool = false
+    ) throws {
+        try saveEncryptedRecords(
+            records,
+            for: session,
+            overwrite: overwrite,
+            merger: AtlasVaultLocalStoreMerger()
+        )
+    }
+
+    public func saveEncryptedRecords<Merger: AtlasVaultLocalStoreMerging>(
+        _ records: [AtlasVaultEncryptedRecordEnvelope],
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool = false,
+        merger: Merger
+    ) throws {
+        guard let currentStore = try loadEncryptedStore(for: session) else {
+            throw AtlasVaultPersistenceError.readFailed
+        }
+        let mergedStore = try merger.merge(records: records, into: currentStore)
+        try saveEncryptedStore(mergedStore, for: session, overwrite: overwrite)
+    }
+
     private func localStoreURL(for session: AtlasVaultUnlockedSession) throws -> URL {
         do {
             return try environment.pathLocator.localStoreURL(vaultID: session.vaultID)
