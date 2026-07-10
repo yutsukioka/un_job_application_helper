@@ -66,17 +66,20 @@ public struct AtlasVaultPersistenceEnvironment<
     public let pathLocator: PathLocator
     public let directoryPreparer: DirectoryPreparer
     public let localStoreIO: LocalStoreIO
+    public let atomicStoreWriter: any AtlasVaultAtomicStoreWriting
 
     public init(
         rootDirectory: URL,
         pathLocator: PathLocator,
         directoryPreparer: DirectoryPreparer,
-        localStoreIO: LocalStoreIO
+        localStoreIO: LocalStoreIO,
+        atomicStoreWriter: any AtlasVaultAtomicStoreWriting = AtlasVaultAtomicStoreWriter()
     ) {
         self.rootDirectory = rootDirectory
         self.pathLocator = pathLocator
         self.directoryPreparer = directoryPreparer
         self.localStoreIO = localStoreIO
+        self.atomicStoreWriter = atomicStoreWriter
     }
 }
 
@@ -84,13 +87,15 @@ public extension AtlasVaultPersistenceEnvironment where LocalStoreIO == AtlasVau
     init(
         rootDirectory: URL,
         pathLocator: PathLocator,
-        directoryPreparer: DirectoryPreparer
+        directoryPreparer: DirectoryPreparer,
+        atomicStoreWriter: any AtlasVaultAtomicStoreWriting = AtlasVaultAtomicStoreWriter()
     ) {
         self.init(
             rootDirectory: rootDirectory,
             pathLocator: pathLocator,
             directoryPreparer: directoryPreparer,
-            localStoreIO: AtlasVaultLocalStoreFileIO()
+            localStoreIO: AtlasVaultLocalStoreFileIO(),
+            atomicStoreWriter: atomicStoreWriter
         )
     }
 }
@@ -102,6 +107,11 @@ public protocol AtlasVaultPersistenceCoordinating: Sendable {
         for session: AtlasVaultUnlockedSession,
         overwrite: Bool
     ) throws
+    func saveEncryptedStoreAtomically(
+        _ store: AtlasVaultLocalStoreEnvelope,
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool
+    ) throws -> AtlasVaultAtomicWriteResult
 }
 
 public struct AtlasVaultPersistenceCoordinator<
@@ -157,6 +167,28 @@ public struct AtlasVaultPersistenceCoordinator<
         }
     }
 
+    @discardableResult
+    public func saveEncryptedStoreAtomically(
+        _ store: AtlasVaultLocalStoreEnvelope,
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool = false
+    ) throws -> AtlasVaultAtomicWriteResult {
+        let storeURL = try localStoreURL(for: session)
+        do {
+            try environment.directoryPreparer.prepareParentDirectory(
+                for: storeURL,
+                under: environment.rootDirectory
+            )
+        } catch {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+        return try environment.atomicStoreWriter.write(
+            store,
+            to: storeURL,
+            overwrite: overwrite
+        )
+    }
+
     public func saveEncryptedRecords(
         _ records: [AtlasVaultEncryptedRecordEnvelope],
         for session: AtlasVaultUnlockedSession,
@@ -181,6 +213,38 @@ public struct AtlasVaultPersistenceCoordinator<
         }
         let mergedStore = try merger.merge(records: records, into: currentStore)
         try saveEncryptedStore(mergedStore, for: session, overwrite: overwrite)
+    }
+
+    @discardableResult
+    public func saveEncryptedRecordsAtomically(
+        _ records: [AtlasVaultEncryptedRecordEnvelope],
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool = false
+    ) throws -> AtlasVaultAtomicWriteResult {
+        try saveEncryptedRecordsAtomically(
+            records,
+            for: session,
+            overwrite: overwrite,
+            merger: AtlasVaultLocalStoreMerger()
+        )
+    }
+
+    @discardableResult
+    public func saveEncryptedRecordsAtomically<Merger: AtlasVaultLocalStoreMerging>(
+        _ records: [AtlasVaultEncryptedRecordEnvelope],
+        for session: AtlasVaultUnlockedSession,
+        overwrite: Bool = false,
+        merger: Merger
+    ) throws -> AtlasVaultAtomicWriteResult {
+        guard let currentStore = try loadEncryptedStore(for: session) else {
+            throw AtlasVaultPersistenceError.readFailed
+        }
+        let mergedStore = try merger.merge(records: records, into: currentStore)
+        return try saveEncryptedStoreAtomically(
+            mergedStore,
+            for: session,
+            overwrite: overwrite
+        )
     }
 
     private func localStoreURL(for session: AtlasVaultUnlockedSession) throws -> URL {
