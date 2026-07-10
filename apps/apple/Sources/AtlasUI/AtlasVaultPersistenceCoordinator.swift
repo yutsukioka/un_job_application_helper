@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct AtlasVaultUnlockedSession: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -177,17 +178,18 @@ public struct AtlasVaultPersistenceCoordinator<
         overwrite: Bool = false
     ) throws -> AtlasVaultAtomicWriteResult {
         let storeURL = try localStoreURL(for: session)
+        let atomicDestination = try atomicDestination(for: storeURL)
         do {
             try environment.directoryPreparer.prepareParentDirectory(
-                for: storeURL,
-                under: environment.rootDirectory
+                for: atomicDestination.storeURL,
+                under: atomicDestination.rootURL
             )
         } catch {
             throw AtlasVaultPersistenceError.directoryPreparationFailed
         }
         return try environment.atomicStoreWriter.write(
             store,
-            to: storeURL,
+            to: atomicDestination.storeURL,
             overwrite: overwrite
         )
     }
@@ -256,6 +258,70 @@ public struct AtlasVaultPersistenceCoordinator<
         } catch {
             throw AtlasVaultPersistenceError.invalidSession
         }
+    }
+
+    private func atomicDestination(
+        for storeURL: URL
+    ) throws -> (rootURL: URL, storeURL: URL) {
+        let inputRootURL = environment.rootDirectory.standardized
+        let inputStoreURL = storeURL.standardized
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(environment.rootDirectory),
+              AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(storeURL),
+              AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(inputRootURL),
+              AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(inputStoreURL)
+        else {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+
+        let rootComponents = inputRootURL.pathComponents
+        let storeComponents = inputStoreURL.pathComponents
+        guard storeComponents.count > rootComponents.count,
+              zip(rootComponents, storeComponents).allSatisfy({ $0.0 == $0.1 })
+        else {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+
+        let relativeComponents = storeComponents.dropFirst(rootComponents.count)
+        let canonicalRootURL = try canonicalRootURL(inputRootURL)
+        var destinationURL = canonicalRootURL
+        for (index, component) in relativeComponents.enumerated() {
+            guard AtlasVaultFileURLPolicy.isSafePathComponent(component) else {
+                throw AtlasVaultPersistenceError.directoryPreparationFailed
+            }
+            destinationURL.appendPathComponent(
+                component,
+                isDirectory: index < relativeComponents.count - 1
+            )
+        }
+        let standardizedDestinationURL = destinationURL.standardized
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedDestinationURL) else {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+        return (canonicalRootURL, standardizedDestinationURL)
+    }
+
+    private func canonicalRootURL(_ rootURL: URL) throws -> URL {
+        var resolvedPath = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let resolved = rootURL.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return false
+            }
+            return resolvedPath.withUnsafeMutableBufferPointer { buffer in
+                realpath(path, buffer.baseAddress) != nil
+            }
+        }
+        guard resolved else {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+        let path = String(
+            decoding: resolvedPath.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        let canonicalRootURL = URL(fileURLWithPath: path, isDirectory: true)
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(canonicalRootURL) else {
+            throw AtlasVaultPersistenceError.directoryPreparationFailed
+        }
+        return canonicalRootURL
     }
 
     private func fileExists(at url: URL) -> Bool {
