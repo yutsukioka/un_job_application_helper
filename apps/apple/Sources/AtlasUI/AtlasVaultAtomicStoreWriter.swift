@@ -1,22 +1,6 @@
 import Darwin
 import Foundation
 
-private func atlasVaultURLContainsNUL(_ url: URL) -> Bool {
-    url.path.utf8.contains(0)
-        || url.absoluteString.range(of: "%00", options: .caseInsensitive) != nil
-}
-
-private func atlasVaultURLContainsEncodedSlash(_ url: URL) -> Bool {
-    url.absoluteString.range(of: "%2f", options: .caseInsensitive) != nil
-}
-
-private func atlasVaultURLIsAbsoluteLocalFile(_ url: URL) -> Bool {
-    let host = url.host
-    return url.isFileURL
-        && url.path.hasPrefix("/")
-        && (host == nil || host?.isEmpty == true || host == "localhost")
-}
-
 public enum AtlasVaultAtomicCommitState: Equatable, Sendable {
     case committed
     case committedDurabilityUnconfirmed
@@ -220,10 +204,8 @@ public struct AtlasVaultAtomicStoreWriter: AtlasVaultAtomicStoreWriting {
     }
 
     private func validatedDestinationURL(_ url: URL) throws -> URL {
-        guard atlasVaultURLIsAbsoluteLocalFile(url),
-              !url.hasDirectoryPath,
-              !atlasVaultURLContainsNUL(url),
-              !atlasVaultURLContainsEncodedSlash(url)
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(url),
+              !url.hasDirectoryPath
         else {
             throw AtlasVaultAtomicWriteError.invalidDestination
         }
@@ -446,10 +428,7 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
 
         try withParentDirectoryDescriptor(for: destinationURL) { parentDescriptor, destinationName in
             let temporaryName = temporaryURL.lastPathComponent
-            guard !atlasVaultURLContainsNUL(temporaryURL),
-                  !atlasVaultURLContainsEncodedSlash(temporaryURL),
-                  !temporaryName.utf8.contains(0),
-                  !temporaryName.contains("/"),
+            guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(temporaryURL),
                   try pathType(named: temporaryName, relativeTo: parentDescriptor) == .regularFile
             else {
                 throw AtlasVaultAtomicFileSystemError.unsafePath
@@ -558,11 +537,8 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         _ operation: (Int32, String) throws -> Result
     ) throws -> Result {
         let standardizedURL = url.standardized
-        guard atlasVaultURLIsAbsoluteLocalFile(standardizedURL),
-              !standardizedURL.lastPathComponent.isEmpty,
-              !atlasVaultURLContainsNUL(standardizedURL),
-              !atlasVaultURLContainsEncodedSlash(standardizedURL),
-              !standardizedURL.lastPathComponent.contains("/")
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedURL),
+              !standardizedURL.lastPathComponent.isEmpty
         else {
             throw AtlasVaultAtomicFileSystemError.unsafePath
         }
@@ -575,9 +551,7 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
 
     private func openDirectoryDescriptor(at url: URL) throws -> Int32 {
         let standardizedURL = url.standardized
-        guard atlasVaultURLIsAbsoluteLocalFile(standardizedURL),
-              !atlasVaultURLContainsNUL(standardizedURL),
-              !atlasVaultURLContainsEncodedSlash(standardizedURL)
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(standardizedURL)
         else {
             throw AtlasVaultAtomicFileSystemError.unsafePath
         }
@@ -591,12 +565,7 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
         }
 
         for component in standardizedURL.pathComponents.dropFirst() {
-            guard !component.isEmpty,
-                  component != ".",
-                  component != "..",
-                  !component.utf8.contains(0),
-                  !component.contains("/")
-            else {
+            guard AtlasVaultFileURLPolicy.isSafePathComponent(component) else {
                 _ = Darwin.close(descriptor)
                 throw AtlasVaultAtomicFileSystemError.unsafePath
             }

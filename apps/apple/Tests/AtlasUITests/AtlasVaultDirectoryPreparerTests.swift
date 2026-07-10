@@ -43,6 +43,21 @@ final class AtlasVaultDirectoryPreparerTests: XCTestCase {
         }
     }
 
+    func testRejectsEncodedSlashBeforeCreatingDirectories() throws {
+        let rootURL = try temporaryDirectory()
+        let rootString = rootURL.absoluteString.hasSuffix("/")
+            ? String(rootURL.absoluteString.dropLast())
+            : rootURL.absoluteString
+        let storeURL = try XCTUnwrap(
+            URL(string: "\(rootString)/safe%2Fescape/vault-store.json")
+        )
+
+        XCTAssertThrowsError(try preparer.prepareParentDirectory(for: storeURL, under: rootURL)) { error in
+            XCTAssertEqual(error as? AtlasVaultDirectoryError, .invalidURL)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: rootURL.path), [])
+    }
+
     func testRejectsRootPathThatExistsAsFile() throws {
         let directory = try temporaryDirectory()
         let rootFileURL = directory.appendingPathComponent("root-file")

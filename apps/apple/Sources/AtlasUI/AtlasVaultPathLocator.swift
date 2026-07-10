@@ -18,7 +18,7 @@ public struct AtlasInjectedRootVaultPathLocator: AtlasVaultPathLocator {
     private let rootURL: URL
 
     public init(rootURL: URL) throws {
-        guard rootURL.isFileURL else {
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(rootURL) else {
             throw AtlasVaultPathLocatorError.invalidRootURL
         }
         self.rootURL = rootURL.standardized

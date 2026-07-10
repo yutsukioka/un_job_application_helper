@@ -17,7 +17,9 @@ public struct AtlasFileManagerVaultDirectoryPreparer: AtlasVaultDirectoryPrepare
     public init() {}
 
     public func prepareParentDirectory(for storeURL: URL, under rootDirectory: URL) throws {
-        guard storeURL.isFileURL, rootDirectory.isFileURL else {
+        guard AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(storeURL),
+              AtlasVaultFileURLPolicy.isSafeAbsoluteLocalFileURL(rootDirectory)
+        else {
             throw AtlasVaultDirectoryError.invalidURL
         }
 
