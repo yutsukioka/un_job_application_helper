@@ -357,6 +357,36 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: outsideURL), originalData)
     }
 
+    func testRemoveItemIfExistsTreatsMissingParentAsNoOp() throws {
+        let rootURL = try temporaryDirectory()
+        let stagedURL = rootURL
+            .appendingPathComponent("missing-parent", isDirectory: true)
+            .appendingPathComponent("staged.tmp")
+
+        XCTAssertNoThrow(
+            try AtlasFoundationAtomicFileSystemClient().removeItemIfExists(at: stagedURL)
+        )
+        XCTAssertEqual(try directoryEntryNames(rootURL), [])
+    }
+
+    func testRemoveItemIfExistsStillRejectsSymbolicLinkParent() throws {
+        let rootURL = try temporaryDirectory()
+        let outsideURL = try temporaryDirectory()
+        let redirectedURL = rootURL.appendingPathComponent("redirected", isDirectory: true)
+        do {
+            try FileManager.default.createSymbolicLink(at: redirectedURL, withDestinationURL: outsideURL)
+        } catch {
+            throw XCTSkip("Symbolic links are unavailable in this environment")
+        }
+        let stagedURL = redirectedURL.appendingPathComponent("staged.tmp")
+
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().removeItemIfExists(at: stagedURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
+    }
+
     func testRealWriterRejectsIntermediateSymbolicLinkAncestorBeforeStagingBytes() throws {
         let rootURL = try temporaryDirectory()
         let outsideURL = try temporaryDirectory()

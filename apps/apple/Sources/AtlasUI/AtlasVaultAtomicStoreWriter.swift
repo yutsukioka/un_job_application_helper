@@ -487,16 +487,20 @@ public struct AtlasFoundationAtomicFileSystemClient: AtlasVaultAtomicFileSystemC
     }
 
     public func removeItemIfExists(at url: URL) throws {
-        try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
-            if try pathType(named: fileName, relativeTo: parentDescriptor) == .missing {
-                return
+        do {
+            try withParentDirectoryDescriptor(for: url) { parentDescriptor, fileName in
+                if try pathType(named: fileName, relativeTo: parentDescriptor) == .missing {
+                    return
+                }
+                let result = fileName.withCString { path in
+                    Darwin.unlinkat(parentDescriptor, path, 0)
+                }
+                if result != 0, errno != ENOENT {
+                    throw AtlasVaultAtomicFileSystemError.cleanupFailed
+                }
             }
-            let result = fileName.withCString { path in
-                Darwin.unlinkat(parentDescriptor, path, 0)
-            }
-            if result != 0, errno != ENOENT {
-                throw AtlasVaultAtomicFileSystemError.cleanupFailed
-            }
+        } catch AtlasVaultAtomicFileSystemError.parentUnavailable {
+            return
         }
     }
 
