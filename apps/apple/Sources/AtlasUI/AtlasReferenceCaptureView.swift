@@ -143,26 +143,6 @@ private extension AtlasReferenceCaptureMode {
     }
 }
 
-extension AtlasSearchResponse {
-    init(
-        total: Int,
-        limit: Int,
-        offset: Int,
-        results: [JobSearchResult],
-        facets: [String: [String: Int]],
-        facetLabels: [String: [String: String]],
-        unclassifiedCount: Int
-    ) {
-        self.total = total
-        self.limit = limit
-        self.offset = offset
-        self.results = results
-        self.facets = facets
-        self.facetLabels = facetLabels
-        self.unclassifiedCount = unclassifiedCount
-    }
-}
-
 private enum AtlasReferenceCaptureData {
     private static let baseURL = URL(string: "http://10.253.1.43:8765")!
     private static let observedAt = "2026-07-03T04:58:56Z"

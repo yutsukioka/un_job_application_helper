@@ -56,6 +56,32 @@ final class AtlasAPIClientTests: XCTestCase {
         XCTAssertEqual(response.results.first?.gradeCode, "IPSA-9")
     }
 
+    func testServerSearchLimitRespectsBoundedAPIContract() {
+        XCTAssertEqual(AtlasAPIClient.serverSearchLimit(for: 10_000), 200)
+        XCTAssertEqual(AtlasAPIClient.serverSearchLimit(for: 200), 200)
+        XCTAssertEqual(AtlasAPIClient.serverSearchLimit(for: 50), 50)
+        XCTAssertEqual(AtlasAPIClient.serverSearchLimit(for: 0), 1)
+        XCTAssertEqual(AtlasAPIClient.serverSearchLimit(for: -5), 1)
+    }
+
+    func testServerPagePreservesFiltersAndReplacesPaginationFields() {
+        let request = AtlasSearchRequest(
+            text: "finance",
+            sourceIDs: ["undp_oracle_hcm"],
+            includeFacets: true,
+            limit: 10_000,
+            offset: 0
+        )
+
+        let page = request.serverPage(limit: 200, offset: 400, includeFacets: false)
+
+        XCTAssertEqual(page.text, "finance")
+        XCTAssertEqual(page.sourceIDs, ["undp_oracle_hcm"])
+        XCTAssertEqual(page.limit, 200)
+        XCTAssertEqual(page.offset, 400)
+        XCTAssertFalse(page.includeFacets)
+    }
+
     func testTransportErrorMessageExplainsLocalNetworkPermission() throws {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
         let url = try XCTUnwrap(URL(string: "http://192.168.50.22:8765/api/health"))

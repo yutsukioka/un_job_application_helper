@@ -142,6 +142,14 @@ public struct AtlasSearchRequest: Codable, Equatable, Sendable {
             sort: try container.decodeIfPresent(String.self, forKey: .sort) ?? "closing_date_asc"
         )
     }
+
+    func serverPage(limit: Int, offset: Int, includeFacets: Bool) -> AtlasSearchRequest {
+        var request = self
+        request.limit = limit
+        request.offset = offset
+        request.includeFacets = includeFacets
+        return request
+    }
 }
 
 public struct AtlasSearchResponse: Codable, Sendable {
@@ -161,6 +169,24 @@ public struct AtlasSearchResponse: Codable, Sendable {
         case facets
         case facetLabels = "facet_labels"
         case unclassifiedCount = "unclassified_count"
+    }
+
+    public init(
+        total: Int,
+        limit: Int,
+        offset: Int,
+        results: [JobSearchResult],
+        facets: [String: [String: Int]],
+        facetLabels: [String: [String: String]],
+        unclassifiedCount: Int
+    ) {
+        self.total = total
+        self.limit = limit
+        self.offset = offset
+        self.results = results
+        self.facets = facets
+        self.facetLabels = facetLabels
+        self.unclassifiedCount = unclassifiedCount
     }
 
     public init(from decoder: Decoder) throws {
@@ -390,6 +416,11 @@ public enum AtlasAPIError: LocalizedError, Equatable {
 
 public struct AtlasAPIClient: Sendable {
     public static let baseURLDefaultsKey = "atlas.api.baseURL"
+    static let maxSearchPageSize = 200
+
+    static func serverSearchLimit(for requestedLimit: Int) -> Int {
+        min(max(requestedLimit, 1), maxSearchPageSize)
+    }
 
     public let baseURL: URL
 
@@ -433,7 +464,58 @@ public struct AtlasAPIClient: Sendable {
     }
 
     public func search(_ request: AtlasSearchRequest) async throws -> AtlasSearchResponse {
-        try await post("api/search", body: request)
+        let requestedLimit = max(0, request.limit)
+        let normalizedOffset = max(0, request.offset)
+        let firstRequest = request.serverPage(
+            limit: Self.serverSearchLimit(for: requestedLimit),
+            offset: normalizedOffset,
+            includeFacets: request.includeFacets
+        )
+        let firstResponse: AtlasSearchResponse = try await post("api/search", body: firstRequest)
+
+        guard requestedLimit > 0 else {
+            return AtlasSearchResponse(
+                total: firstResponse.total,
+                limit: 0,
+                offset: normalizedOffset,
+                results: [],
+                facets: firstResponse.facets,
+                facetLabels: firstResponse.facetLabels,
+                unclassifiedCount: firstResponse.unclassifiedCount
+            )
+        }
+
+        let targetCount = min(requestedLimit, max(0, firstResponse.total - normalizedOffset))
+        var results: [JobSearchResult] = []
+        var seenJobKeys: Set<String> = []
+        appendUnique(firstResponse.results, to: &results, seenJobKeys: &seenJobKeys, limit: targetCount)
+        var nextOffset = normalizedOffset + firstResponse.results.count
+        var previousPage = firstResponse.results
+
+        while results.count < targetCount,
+              !previousPage.isEmpty,
+              nextOffset < firstResponse.total {
+            let pageRequest = request.serverPage(
+                limit: min(Self.maxSearchPageSize, targetCount - results.count),
+                offset: nextOffset,
+                includeFacets: false
+            )
+            let page: AtlasSearchResponse = try await post("api/search", body: pageRequest)
+            previousPage = page.results
+            guard !previousPage.isEmpty else { break }
+            appendUnique(previousPage, to: &results, seenJobKeys: &seenJobKeys, limit: targetCount)
+            nextOffset += previousPage.count
+        }
+
+        return AtlasSearchResponse(
+            total: firstResponse.total,
+            limit: requestedLimit,
+            offset: normalizedOffset,
+            results: results,
+            facets: firstResponse.facets,
+            facetLabels: firstResponse.facetLabels,
+            unclassifiedCount: firstResponse.unclassifiedCount
+        )
     }
 
     public func jobDetail(_ jobKey: String) async throws -> AtlasJobDetail {
@@ -445,9 +527,14 @@ public struct AtlasAPIClient: Sendable {
     }
 
     public func saveSearch(name: String, request: AtlasSearchRequest, summary: String) async throws -> AtlasSavedSearch {
-        try await post(
+        let serverRequest = request.serverPage(
+            limit: Self.serverSearchLimit(for: request.limit),
+            offset: max(request.offset, 0),
+            includeFacets: request.includeFacets
+        )
+        return try await post(
             "api/saved-searches",
-            body: AtlasSavedSearchPayload(name: name, request: request, summary: summary)
+            body: AtlasSavedSearchPayload(name: name, request: serverRequest, summary: summary)
         )
     }
 
@@ -534,6 +621,19 @@ public struct AtlasAPIClient: Sendable {
 
     private func endpoint(_ path: String) -> URL {
         baseURL.appendingPathComponent(path)
+    }
+
+    private func appendUnique(
+        _ page: [JobSearchResult],
+        to results: inout [JobSearchResult],
+        seenJobKeys: inout Set<String>,
+        limit: Int
+    ) {
+        for job in page where results.count < limit {
+            if seenJobKeys.insert(job.jobKey).inserted {
+                results.append(job)
+            }
+        }
     }
 }
 

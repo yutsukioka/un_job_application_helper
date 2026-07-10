@@ -194,7 +194,119 @@ void main() {
       expect(transport.requests[4].jsonBody?['summary'], 'Text: finance');
       expect(transport.requests[4].jsonBody?['request'], isA<Map>());
     });
+
+    test(
+      'paginates large logical searches within the API page bound',
+      () async {
+        final transport = PaginatedAtlasTransport(total: 450);
+        final client = AtlasAPIClient(
+          baseURL: Uri.parse('http://127.0.0.1:8765'),
+          transport: transport,
+        );
+
+        final response = await client.search(
+          const AtlasSearchRequest(text: 'finance', limit: 450),
+        );
+
+        expect(
+          transport.requests.map((request) => request.jsonBody?['limit']),
+          [200, 200, 50],
+        );
+        expect(
+          transport.requests.map((request) => request.jsonBody?['offset']),
+          [0, 200, 400],
+        );
+        expect(
+          transport.requests.map(
+            (request) => request.jsonBody?['include_facets'],
+          ),
+          [true, false, false],
+        );
+        expect(response.total, 450);
+        expect(response.limit, 450);
+        expect(response.results, hasLength(450));
+        expect(response.results.first.jobKey, 'test_source:0');
+        expect(response.results.last.jobKey, 'test_source:449');
+      },
+    );
+
+    test(
+      'uses a one-row wire request for a facet-only logical search',
+      () async {
+        final transport = PaginatedAtlasTransport(total: 3);
+        final client = AtlasAPIClient(
+          baseURL: Uri.parse('http://127.0.0.1:8765'),
+          transport: transport,
+        );
+
+        final response = await client.search(
+          const AtlasSearchRequest(limit: 0),
+        );
+
+        expect(transport.requests, hasLength(1));
+        expect(transport.requests.single.jsonBody?['limit'], 1);
+        expect(response.total, 3);
+        expect(response.limit, 0);
+        expect(response.results, isEmpty);
+        expect(response.facets['organizations'], {'test_org': 3});
+      },
+    );
+
+    test('bounds saved-search requests to the API page limit', () async {
+      final transport = RecordingAtlasTransport();
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://127.0.0.1:8765'),
+        transport: transport,
+      );
+
+      await client.saveSearch(
+        name: 'all-open-jobs',
+        request: const AtlasSearchRequest(limit: 10_000),
+        summary: 'All open jobs',
+      );
+
+      final requestBody = transport.requests.single.jsonBody?['request'] as Map;
+      expect(requestBody['limit'], 200);
+      expect(requestBody['offset'], 0);
+    });
   });
+}
+
+final class PaginatedAtlasTransport implements AtlasTransport {
+  PaginatedAtlasTransport({required this.total});
+
+  final int total;
+  final requests = <AtlasRequest>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    requests.add(request);
+    final offset = request.jsonBody?['offset'] as int? ?? 0;
+    final limit = request.jsonBody?['limit'] as int? ?? 50;
+    final end = (offset + limit) < total ? offset + limit : total;
+    final results = <Map<String, Object?>>[
+      for (var index = offset; index < end; index += 1)
+        {
+          'job_key': 'test_source:$index',
+          'title': 'Job $index',
+          'source_id': 'test_source',
+          'status': 'open',
+        },
+    ];
+    return {
+      'total': total,
+      'limit': limit,
+      'offset': offset,
+      'results': results,
+      'facets': request.jsonBody?['include_facets'] == true
+          ? {
+              'organizations': {'test_org': total},
+            }
+          : <String, Object?>{},
+      'facet_labels': <String, Object?>{},
+      'unclassified_count': 0,
+    };
+  }
 }
 
 final class RecordingAtlasTransport implements AtlasTransport {

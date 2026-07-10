@@ -625,6 +625,40 @@ def test_default_collected_search_excludes_expired_open_rows(tmp_path):
     assert collected.results[0]["job_key"] == "unicef_pageup:current-open"
 
 
+def test_collected_search_pagination_uses_stable_job_key_tiebreaker(tmp_path):
+    db = _db(tmp_path)
+    source = _source("unicef_pageup", "pageup")
+    for external_id in ("charlie", "alpha", "bravo"):
+        db.upsert_job(
+            build_job(
+                source,
+                title=f"Programme Officer {external_id}",
+                external_id=external_id,
+                location="Nairobi",
+                closes_at="2099-01-01T00:00:00+00:00",
+                posted_at="2026-01-01T00:00:00+00:00",
+                apply_url=f"https://jobs.unicef.org/jobs/{external_id}",
+            )
+        )
+    classify_database(db)
+
+    expected = [
+        "unicef_pageup:alpha",
+        "unicef_pageup:bravo",
+        "unicef_pageup:charlie",
+    ]
+    for sort in ("closing_date_asc", "closing_date_desc", "posted_date_desc"):
+        actual = [
+            search_collected_jobs(
+                db,
+                VacancySearchRequest(sort=sort, limit=1, offset=offset),
+                include_facets=False,
+            ).results[0]["job_key"]
+            for offset in range(3)
+        ]
+        assert actual == expected
+
+
 def test_filter_cli_writes_markdown_for_unv_facets(tmp_path):
     db = _db(tmp_path)
     source = _source("unv_uvp", "unv")

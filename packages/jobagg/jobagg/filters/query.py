@@ -188,7 +188,10 @@ def search_vacancies(db: JobDatabase, filters: VacancyFilters) -> list[dict[str,
     _add_filters(clauses, params, filters, use_fts=use_fts)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY (j.closes_at IS NULL), j.closes_at ASC, j.posted_at DESC"
+    query += (
+        " ORDER BY (j.closes_at IS NULL), j.closes_at ASC,"
+        " j.posted_at DESC, j.job_key ASC"
+    )
     if filters.limit is not None:
         query += " LIMIT ?"
         params.append(filters.limit)
@@ -745,10 +748,19 @@ def _normalize_country_iso3(value: str) -> str | None:
 
 def _order_by(request: VacancySearchRequest) -> str:
     if request.sort == "posted_date_desc":
-        return "ORDER BY j.posted_at IS NULL, j.posted_at DESC, j.closes_at ASC"
+        return (
+            "ORDER BY j.posted_at IS NULL, j.posted_at DESC,"
+            " j.closes_at ASC, j.job_key ASC"
+        )
     if request.sort == "closing_date_desc":
-        return "ORDER BY j.closes_at IS NULL, j.closes_at DESC, j.posted_at DESC"
-    return "ORDER BY j.closes_at IS NULL, j.closes_at ASC, j.posted_at DESC"
+        return (
+            "ORDER BY j.closes_at IS NULL, j.closes_at DESC,"
+            " j.posted_at DESC, j.job_key ASC"
+        )
+    return (
+        "ORDER BY j.closes_at IS NULL, j.closes_at ASC,"
+        " j.posted_at DESC, j.job_key ASC"
+    )
 
 
 def _add_filters(
