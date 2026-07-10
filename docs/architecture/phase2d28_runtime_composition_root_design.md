@@ -54,7 +54,7 @@ or global singletons.
 
 Constructing the factory or locked scope must not call the root provider, access
 Keychain, inspect the filesystem, read or write a store, or unlock a vault. It
-may construct value-type adapters whose initializers are side-effect free.
+may construct value-type adapters whose initializers are side-effect-free.
 
 Activation is a separate explicit operation with a caller-supplied random
 `vaultID`. Only activation may request the root, retrieve key material, construct
@@ -83,11 +83,17 @@ the provisional scope and expose no partial hydrated state.
 
 ## 8. Key Retrieval Boundary
 
-The caller initiates key retrieval through `AtlasVaultUnlockService` and an
-injected `AtlasVaultKeyStore`. The production adapter may compose
+The current `AtlasVaultUnlockService.unlockWithStoredKey` collapses both a
+missing key and every `AtlasVaultKeyStore` load error into `keyUnavailable`.
+Runtime composition must not claim those outcomes are distinct while using that
+method unchanged. Before runtime wiring, extend the unlock state/service or add
+an injected key-loading coordinator that preserves separate non-sensitive
+`keyUnavailable` and `keyStoreFailure` outcomes.
+
+The production adapter may compose
 `AtlasKeychainVaultKeyStore<SecItemAtlasKeychainClient>`, but constructing it
-does not call SecItem APIs. Missing key, Keychain failure, invalid key length,
-and corrupt vault are distinct non-sensitive runtime states.
+does not call SecItem APIs. Invalid key length and corrupt-vault outcomes remain
+separate from the key-loading outcome.
 
 Passphrase/recovery unwrapping, user-presence policy, LocalAuthentication, and
 unlock UI remain outside this composition root.
@@ -199,10 +205,11 @@ path.
 
 ## 19. Non-Sensitive Runtime Error Mapping
 
-The controller should map root, Keychain, persistence, merge, atomic-write,
-save, and hydration errors into stable categories such as key unavailable,
-invalid key, vault unavailable, corrupt/unsupported vault, conflict, save
-failed, and committed durability unconfirmed.
+After the key-loading seam is extended as required above, the controller should
+map root, Keychain, persistence, merge, atomic-write, save, and hydration errors
+into stable categories such as key unavailable, key-store failure, invalid key,
+vault unavailable, corrupt/unsupported vault, conflict, save failed, and
+committed durability unconfirmed.
 
 Underlying paths, OSStatus descriptions, record IDs, payload types, and private
 values stay below the mapping boundary. A committed result must never be
@@ -285,6 +292,8 @@ Future composition tests should verify:
 
 - construction invokes no root, Keychain, filesystem, crypto, or network seam;
 - locked scope contains no session or hydrated state;
+- missing key and key-store load failure remain distinct through the extended
+  key-loading seam;
 - explicit activation orders key retrieval, root lookup, path construction,
   encrypted load, and hydration;
 - any activation failure publishes no partial private state;
@@ -297,7 +306,8 @@ Future composition tests should verify:
 
 ## 30. Recommended Phase 2D-29
 
-Add a test-only runtime composition factory and dependency-graph tests. Reconcile
-the two session representations, prove construction is side-effect free, and
-exercise locked/unlocked scopes entirely with mocks and temporary roots before
-any app-launch or SwiftUI integration.
+Add a test-only runtime composition factory and dependency-graph tests. Extend
+or wrap the current unlock helper so missing-key and key-store-failure outcomes
+remain distinct, reconcile the two session representations, prove construction
+is side-effect-free, and exercise locked/unlocked scopes entirely with mocks and
+temporary roots before any app-launch or SwiftUI integration.
