@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import AtlasUI
@@ -428,7 +429,7 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let url = try canonicalTemporaryRoot()
             .appendingPathComponent("atlasvault-atomic-coordinator-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -436,6 +437,27 @@ final class AtlasVaultPersistenceCoordinatorAtomicSaveTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+
+    private func canonicalTemporaryRoot() throws -> URL {
+        var resolvedPath = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let temporaryRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let resolved = temporaryRoot.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return false
+            }
+            return resolvedPath.withUnsafeMutableBufferPointer { buffer in
+                realpath(path, buffer.baseAddress) != nil
+            }
+        }
+        guard resolved else {
+            throw NSError(domain: "AtlasVaultPersistenceCoordinatorAtomicSaveTests", code: 2)
+        }
+        let path = String(
+            decoding: resolvedPath.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     private func publicSnapshot() throws -> AtlasPublicLocalSnapshot {

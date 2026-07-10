@@ -44,6 +44,8 @@ failure tests. `AtlasFoundationAtomicFileSystemClient` uses Darwin operations
 to:
 
 - require an existing ordinary parent directory;
+- reject relative, remote-host, or NUL-bearing file URLs before
+  standardization or filesystem access;
 - walk from the filesystem root with descriptor-relative, no-follow directory
   opens so symbolic-link ancestors are rejected;
 - reject symbolic-link or non-file destinations with descriptor-relative

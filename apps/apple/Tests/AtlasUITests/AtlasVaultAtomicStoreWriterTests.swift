@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import AtlasUI
@@ -192,6 +193,39 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
             XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
         }
         XCTAssertTrue(fileSystem.calls.isEmpty)
+    }
+
+    func testRelativeFileURLFailsBeforeStandardizationOrFilesystemMutation() throws {
+        let destinationURL = try XCTUnwrap(URL(string: "file:relative/vault-store.json"))
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+    }
+
+    func testDestinationContainingNULFailsBeforeFilesystemMutation() throws {
+        let destinationURL = URL(fileURLWithPath: "/private/tmp/vault\0store.json")
+        let fileSystem = FakeAtomicFileSystemClient(destinationURL: fakeDestinationURL())
+
+        XCTAssertThrowsError(try testWriter(fileSystem: fileSystem).write(
+            localStore(),
+            to: destinationURL,
+            overwrite: false
+        )) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicWriteError, .invalidDestination)
+        }
+        XCTAssertTrue(fileSystem.calls.isEmpty)
+        XCTAssertThrowsError(
+            try AtlasFoundationAtomicFileSystemClient().validatePreparedParent(for: destinationURL)
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultAtomicFileSystemError, .unsafePath)
+        }
     }
 
     func testMissingPreparedParentFailsBeforeTemporaryCreation() throws {
@@ -473,7 +507,7 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
     }
 
     private func temporaryDirectory() throws -> URL {
-        let url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let url = try canonicalTemporaryRoot()
             .appendingPathComponent("atlasvault-atomic-writer-tests-\(UUID().uuidString)", isDirectory: true)
             .standardizedFileURL
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -481,6 +515,27 @@ final class AtlasVaultAtomicStoreWriterTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+
+    private func canonicalTemporaryRoot() throws -> URL {
+        var resolvedPath = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let temporaryRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let resolved = temporaryRoot.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                return false
+            }
+            return resolvedPath.withUnsafeMutableBufferPointer { buffer in
+                realpath(path, buffer.baseAddress) != nil
+            }
+        }
+        guard resolved else {
+            throw NSError(domain: "AtlasVaultAtomicStoreWriterTests", code: 2)
+        }
+        let path = String(
+            decoding: resolvedPath.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     private func directoryEntryNames(_ url: URL) throws -> [String] {
