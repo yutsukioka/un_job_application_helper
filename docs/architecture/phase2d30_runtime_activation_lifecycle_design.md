@@ -121,8 +121,8 @@ failure for the first implementation. Activation must not silently create an
 empty store, prepare directories, or install an unlocked session.
 
 New-vault creation requires a separate explicit creation policy and tests. On
-missing store, release/wipe loaded key material and return to a locked private
-scope.
+missing store, release/wipe loaded key material, install no session, bound
+service, or private state, and then publish `failed(.storeMissing)`.
 
 ## 14. Existing Vault Load Behavior
 
