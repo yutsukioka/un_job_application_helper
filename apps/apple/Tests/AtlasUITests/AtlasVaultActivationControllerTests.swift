@@ -408,6 +408,59 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         XCTAssertTrue(isEmpty)
     }
 
+    func testLockWhileAlreadyLockedRemainsObserverIdempotentDuringClear() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = ClearAllGatedPrivateStateStore()
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+
+        let locking = Task {
+            await controller.lock()
+        }
+        await privateStateStore.waitUntilClearEntered()
+
+        await assertState(controller, .locked)
+
+        await privateStateStore.openClear()
+        await locking.value
+        await assertState(controller, .locked)
+    }
+
+    func testSnapshotStartedBeforeLockCannotReturnPrivateStateAfterLock() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = SnapshotGatedPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("SNAPSHOT_LOCK")
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let snapshot = Task {
+            try await controller.privateStateSnapshot()
+        }
+        await privateStateStore.waitUntilSnapshotEntered()
+
+        await controller.lock()
+        await privateStateStore.openSnapshot()
+
+        do {
+            _ = try await snapshot.value
+            XCTFail("Expected snapshot started before lock to fail")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        } catch {
+            XCTFail("Unexpected error type: \(type(of: error))")
+        }
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+    }
+
     func testCancellationDuringPrivateStateCommitClearsGenerationAndCannotUnlock() async throws {
         let dependencies = try makeDependencies()
         dependencies.hydratedState = activationPrivateState("CANCEL_COMMIT")
@@ -1303,6 +1356,62 @@ private actor ClearAllGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
     }
 
     func openClear() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func isEmpty() async -> Bool {
+        await store.isEmpty
+    }
+}
+
+private actor SnapshotGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var snapshotEntered = false
+    private var snapshotWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        let snapshot = try await store.snapshot(generation: generation)
+        snapshotEntered = true
+        let waiters = snapshotWaiters
+        snapshotWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+        return snapshot
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+    }
+
+    func waitUntilSnapshotEntered() async {
+        guard !snapshotEntered else { return }
+        await withCheckedContinuation { continuation in
+            snapshotWaiters.append(continuation)
+        }
+    }
+
+    func openSnapshot() {
         releaseContinuation?.resume()
         releaseContinuation = nil
     }

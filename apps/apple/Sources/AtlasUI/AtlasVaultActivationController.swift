@@ -455,7 +455,9 @@ public actor AtlasVaultActivationController:
     }
 
     public func lock() async {
-        state = .locking
+        if state != .locked {
+            state = .locking
+        }
         activeAttemptID = nil
         activeAttemptGeneration = nil
         provisionalKeyOwner?.wipe()
@@ -475,7 +477,12 @@ public actor AtlasVaultActivationController:
               let generation = activeSession?.privateStateGeneration else {
             throw AtlasVaultPrivateStateStoreError.unavailable
         }
-        return try await privateStateStore.snapshot(generation: generation)
+        let snapshot = try await privateStateStore.snapshot(generation: generation)
+        guard state == .unlocked,
+              activeSession?.privateStateGeneration == generation else {
+            throw AtlasVaultPrivateStateStoreError.unavailable
+        }
+        return snapshot
     }
 
     public nonisolated var description: String {

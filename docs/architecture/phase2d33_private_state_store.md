@@ -46,16 +46,21 @@ await. It installs key ownership and the bound persistence scope and publishes
 
 The activated session retains the key owner, bound scope, and private-state
 generation. It no longer embeds a second hydrated-state copy. The module-internal
-snapshot seam is available only for the generation of an unlocked session.
+snapshot seam is available only for the generation of an unlocked session. It
+rechecks both public state and the installed generation after its cross-actor
+store await, so a read started before lock cannot return private state after
+lock wins.
 
 ## Cancellation And Lock Races
 
 Cancellation and lock invalidate the attempt before awaiting store cleanup.
 Explicit lock publishes the non-sensitive `locking` transition before the
 cross-actor clear so public state never remains `unlocked` after its installed
-session has been removed. If either operation runs while stage or commit is
-suspended, the activation path observes the invalid attempt, clears its
-generation again, and returns `cancelled` without publishing `unlocked`.
+session has been removed. Calling lock from `locked` leaves the public state
+unchanged while idempotent cleanup runs. If either operation runs while stage
+or commit is suspended, the activation path observes the invalid attempt,
+clears its generation again, and returns `cancelled` without publishing
+`unlocked`.
 
 Failure cleanup keeps its attempt identity across the store-clear await so a
 concurrent cancellation or lock can win. The stale failure path cannot overwrite
@@ -89,10 +94,10 @@ duplicate and stale generations, generation-scoped clear, idempotent clear-all,
 concurrent snapshots and clear, and redacted diagnostics.
 
 Controller tests cover successful installation, the observable `locking`
-transition, lock, controller teardown, reactivation isolation, cancellation
-during commit, lock during commit, no late `unlocked` publication,
-public-snapshot immutability, and the existing failure and runtime-neutral
-source guards.
+transition, observer-idempotent repeated lock, snapshot-versus-lock races,
+controller teardown, reactivation isolation, cancellation during commit, lock
+during commit, no late `unlocked` publication, public-snapshot immutability,
+and the existing failure and runtime-neutral source guards.
 
 ## Deferred
 
