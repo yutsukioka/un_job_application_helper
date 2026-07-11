@@ -51,11 +51,13 @@ Failure values are stable categories without paths, key data, record IDs,
 payload types, private counts, or underlying error descriptions. Do not expose
 partially completed steps as public state.
 
-Every terminal non-cancellation failure first tears down all provisional
-private state and then publishes `failed(AtlasVaultActivationFailure)`. The
-`failed` projection still means that no session, key ownership, bound service,
-or hydrated state is installed. Cancellation and explicit lock publish
-`locked` instead.
+Every terminal non-cancellation failure of the active activation attempt first
+tears down all provisional private state and then publishes
+`failed(AtlasVaultActivationFailure)`. The `failed` projection still means that
+no session, key ownership, bound service, or hydrated state is installed.
+Cancellation and explicit lock publish `locked` instead. Rejected duplicate or
+re-entrant `activate` calls return a per-call error without changing the public
+state of the active attempt or installed session.
 
 ## 7. Proposed Private Activated-Session Object
 
@@ -101,8 +103,8 @@ failure as distinct outcomes. Do not use the current collapsing
 ## 11. Root-Directory Resolution During Explicit Activation Only
 
 After key selection succeeds, activation calls the injected root provider. A
-root failure triggers key release/wipe and leaves the controller locked with no
-per-vault scope.
+root failure triggers key release/wipe, installs no per-vault scope or private
+state, and then publishes `failed(.vaultUnavailable)`.
 
 The resolved root must retain the existing safe local, non-filesystem-root
 policy. It is never written to logs or public state.
@@ -151,8 +153,8 @@ partial hydrated collections.
 
 Authentication failure maps to a non-sensitive `authenticationFailed` result.
 Discard all provisional plaintext and encrypted working values, invoke the
-selected key wipe/release boundary, install no private state, and remain
-locked.
+selected key wipe/release boundary, install no private state, and then publish
+`failed(.authenticationFailed)`.
 
 Do not retry automatically with another source after a supplied key fails;
 that could hide user intent or create a key-source oracle.
@@ -204,7 +206,8 @@ control returns.
 
 Actor isolation serializes state transitions. While one activation is active,
 a second activation request should fail with non-sensitive
-`activationInProgress`; it must not cancel or replace the first implicitly.
+`activationInProgress`; it must not cancel or replace the first implicitly, and
+the public state remains `activating` for the original attempt.
 
 An explicit cancel or lock operation may invalidate the active attempt before
 the caller starts another.
@@ -212,8 +215,9 @@ the caller starts another.
 ## 24. Re-Entrant Activation Behavior
 
 Calling activate while already unlocked must fail with `alreadyUnlocked`, even
-for the same vault. Switching vaults requires an explicit lock/teardown followed
-by a new activation, preventing key and hydrated-state overlap.
+for the same vault, without changing public state or the installed private
+session. Switching vaults requires an explicit lock/teardown followed by a new
+activation, preventing key and hydrated-state overlap.
 
 ## 25. Per-Vault Serialization
 
@@ -239,8 +243,9 @@ teardown routine. This includes root lookup, root validation, per-vault scope
 creation, cancellation, store load, store validation, hydration, attempt-token
 supersession, and state-installation rejection.
 
-Tests must spy on the wipe/release boundary for every path, not merely assert
-that public state is locked.
+Tests must spy on the wipe/release boundary for every path and separately
+assert the exact terminal `failed` or `locked` projection; public state alone
+does not prove private teardown.
 
 ## 28. Vault-Key In-Memory Lifetime
 
@@ -296,7 +301,9 @@ Phase 2D-31 tests should verify:
 
 - construction and initial locked state perform zero calls;
 - invalid vault ID fails before key retrieval;
-- supplied-key priority and Keychain fallback ordering;
+- supplied raw-key priority and Keychain lookup only when no explicit raw key
+  was provided; no fallback after invalid or authentication-failing supplied
+  input;
 - explicit input accepts only an already-unwrapped 32-byte raw vault key;
 - missing item, key-store failure, and invalid vault-key length remain
   distinct;
