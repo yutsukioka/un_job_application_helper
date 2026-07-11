@@ -56,14 +56,21 @@ mismatches fail with stable non-sensitive errors.
 
 The controller should retain the hydration result provisionally, ask the store
 to stage it for the current activation generation, recheck cancellation, and
-then commit that same generation. A staged value must never be returned by a
-snapshot/read API.
+then commit that same generation. After the commit await returns, the controller
+must recheck that the activation generation is still current before installing
+session ownership or publishing `unlocked`. A staged value must never be
+returned by a snapshot/read API.
 
-After the store commit succeeds, the controller may install key ownership and
-the bound scope and publish `unlocked`. Future consumers must access private
-state through a controller-gated capability or projection that is issued only
-after `unlocked`; they must not observe the store actor directly. This prevents
-the unavoidable cross-actor commit interval from becoming a UI-visible state.
+If cancellation or lock won during the commit await, the controller must clear
+the just-committed generation and return the cancellation outcome without
+overwriting `locked`. Only a still-current generation may install key ownership
+and the bound scope and then publish `unlocked` synchronously, with no further
+await between the final generation check and publication.
+
+Future consumers must access private state through a controller-gated
+capability or projection that is issued only after `unlocked`; they must not
+observe the store actor directly. This prevents the unavoidable cross-actor
+commit interval from becoming a UI-visible state.
 
 If cancellation or failure wins at any point, the controller clears that
 generation before publishing its terminal state. A stale attempt may clear only
@@ -97,8 +104,8 @@ best-effort lifetime control, not a claim that every historical byte is erased.
 ## 9. Actor Isolation And Concurrency
 
 All mutable store state belongs to one actor. Stage, commit, snapshot, and clear
-methods should perform no external await while private state is installed or
-being transitioned, avoiding actor reentrancy inside invariants.
+methods must not await external calls while installing or transitioning private
+state, avoiding actor reentrancy inside invariants.
 
 The activation controller may await store operations only at explicit attempt
 checkpoints. Concurrent snapshots serialize through the store. Concurrent
@@ -187,6 +194,8 @@ the complete hydration result.
 - wrong key, corrupt store, missing store, unsupported version, and path failure
   install no state;
 - cancellation during hydration/staging leaves the store empty;
+- cancellation or lock during the commit await clears that generation and
+  cannot publish `unlocked`;
 - lock clears active state and is idempotent;
 - controller teardown releases private state;
 - reactivation cannot expose a prior vault generation;
@@ -212,7 +221,7 @@ canonical temporary root but must create no committed `.atlasvault` artifact.
 
 ## 18. Recommended Next Phase
 
-After exact-head review and merge of this design, Phase 2D-33 should implement
-the actor-isolated private-state store and integrate it with the activation
+After review and merge of this design, Phase 2D-33 should implement the
+actor-isolated private-state store and integrate it with the activation
 controller under mocks and tests only. It must remain disconnected from app
 launch, SwiftUI, `SearchViewModel`, and `AtlasLocalCache`.
