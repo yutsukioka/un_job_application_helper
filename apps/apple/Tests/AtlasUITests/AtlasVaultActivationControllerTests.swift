@@ -368,6 +368,46 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         }
     }
 
+    func testLockPublishesTransitionStateWhilePrivateClearIsInFlight() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = ClearAllGatedPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("LOCK_TRANSITION")
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let locking = Task {
+            await controller.lock()
+        }
+        await privateStateStore.waitUntilClearEntered()
+
+        await assertState(controller, .locking)
+        let activationFailure = await capturedFailure {
+            try await controller.activate(
+                vaultID: "vault_other_33",
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        XCTAssertEqual(activationFailure, .activationInProgress)
+        do {
+            _ = try await controller.privateStateSnapshot()
+            XCTFail("Expected private state to be unavailable while locking")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        }
+
+        await privateStateStore.openClear()
+        await locking.value
+
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+    }
+
     func testCancellationDuringPrivateStateCommitClearsGenerationAndCannotUnlock() async throws {
         let dependencies = try makeDependencies()
         dependencies.hydratedState = activationPrivateState("CANCEL_COMMIT")
@@ -915,7 +955,9 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
     }
 
     private func waitUntilAsync(
-        _ predicate: @escaping @Sendable () async -> Bool
+        _ predicate: @escaping @Sendable () async -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
     ) async {
         for _ in 0..<500 {
             if await predicate() {
@@ -923,6 +965,7 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
             }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        XCTFail("Timed out waiting for asynchronous condition", file: file, line: line)
     }
 
     private func queuedCancellation(
@@ -1205,6 +1248,61 @@ private actor CommitGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
     }
 
     func openCommit() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func isEmpty() async -> Bool {
+        await store.isEmpty
+    }
+}
+
+private actor ClearAllGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var clearEntered = false
+    private var clearWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        try await store.snapshot(generation: generation)
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+        clearEntered = true
+        let waiters = clearWaiters
+        clearWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilClearEntered() async {
+        guard !clearEntered else { return }
+        await withCheckedContinuation { continuation in
+            clearWaiters.append(continuation)
+        }
+    }
+
+    func openClear() {
         releaseContinuation?.resume()
         releaseContinuation = nil
     }

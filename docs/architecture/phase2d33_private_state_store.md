@@ -50,10 +50,12 @@ snapshot seam is available only for the generation of an unlocked session.
 
 ## Cancellation And Lock Races
 
-Cancellation and lock invalidate the attempt before awaiting store cleanup. If
-either operation runs while stage or commit is suspended, the activation path
-observes the invalid attempt, clears its generation again, and returns
-`cancelled` without publishing `unlocked`.
+Cancellation and lock invalidate the attempt before awaiting store cleanup.
+Explicit lock publishes the non-sensitive `locking` transition before the
+cross-actor clear so public state never remains `unlocked` after its installed
+session has been removed. If either operation runs while stage or commit is
+suspended, the activation path observes the invalid attempt, clears its
+generation again, and returns `cancelled` without publishing `unlocked`.
 
 Failure cleanup keeps its attempt identity across the store-clear await so a
 concurrent cancellation or lock can win. The stale failure path cannot overwrite
@@ -86,10 +88,11 @@ Focused tests cover empty construction, staging visibility, matching commit,
 duplicate and stale generations, generation-scoped clear, idempotent clear-all,
 concurrent snapshots and clear, and redacted diagnostics.
 
-Controller tests cover successful installation, lock, controller teardown,
-reactivation isolation, cancellation during commit, lock during commit, no
-late `unlocked` publication, public-snapshot immutability, and the existing
-failure and runtime-neutral source guards.
+Controller tests cover successful installation, the observable `locking`
+transition, lock, controller teardown, reactivation isolation, cancellation
+during commit, lock during commit, no late `unlocked` publication,
+public-snapshot immutability, and the existing failure and runtime-neutral
+source guards.
 
 ## Deferred
 

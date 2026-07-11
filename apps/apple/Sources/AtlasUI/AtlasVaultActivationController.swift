@@ -50,6 +50,7 @@ public enum AtlasVaultActivationState:
 {
     case locked
     case activating
+    case locking
     case unlocked
     case failed(AtlasVaultActivationFailure)
 
@@ -57,6 +58,7 @@ public enum AtlasVaultActivationState:
         switch self {
         case .locked: "locked"
         case .activating: "activating"
+        case .locking: "locking"
         case .unlocked: "unlocked"
         case let .failed(failure): "failed(\(failure))"
         }
@@ -259,7 +261,7 @@ public actor AtlasVaultActivationController:
         suppliedVaultKey: Data? = nil
     ) async throws {
         switch state {
-        case .activating:
+        case .activating, .locking:
             throw AtlasVaultActivationFailure.activationInProgress
         case .unlocked:
             throw AtlasVaultActivationFailure.alreadyUnlocked
@@ -453,6 +455,7 @@ public actor AtlasVaultActivationController:
     }
 
     public func lock() async {
+        state = .locking
         activeAttemptID = nil
         activeAttemptGeneration = nil
         provisionalKeyOwner?.wipe()
