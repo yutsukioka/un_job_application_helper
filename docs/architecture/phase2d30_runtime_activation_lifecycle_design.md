@@ -51,6 +51,12 @@ Failure values are stable categories without paths, key data, record IDs,
 payload types, private counts, or underlying error descriptions. Do not expose
 partially completed steps as public state.
 
+Every terminal non-cancellation failure first tears down all provisional
+private state and then publishes `failed(AtlasVaultActivationFailure)`. The
+`failed` projection still means that no session, key ownership, bound service,
+or hydrated state is installed. Cancellation and explicit lock publish
+`locked` instead.
+
 ## 7. Proposed Private Activated-Session Object
 
 Keep a private controller-owned object containing the canonical wipeable vault
@@ -72,12 +78,14 @@ reserved semantic IDs fail without root, Keychain, filesystem, or crypto calls.
 
 For a valid vault ID, key selection order is:
 
-1. an explicitly supplied, already unwrapped passphrase/recovery key;
+1. an explicitly supplied, already-unwrapped raw 32-byte vault key produced by
+   a separate reviewed passphrase/recovery flow;
 2. the local `AtlasVaultKeyStore` item;
 3. a non-sensitive `keyUnavailable` result.
 
-The controller does not obtain passphrases, unwrap recovery material, prompt
-for user presence, or persist an explicitly supplied key unless a separate
+The controller never accepts a passphrase, recovery key, or wrapping secret at
+this raw-key boundary. It does not unwrap recovery material, prompt for user
+presence, or persist an explicitly supplied vault key unless a separate
 reviewed policy requests that operation.
 
 ## 10. No Key Retrieval During Composition Construction
@@ -165,9 +173,12 @@ no private state, and wipe/release provisional key ownership.
 
 When no explicit key is supplied and `loadVaultKey` returns `nil`, report
 `keyUnavailable`. Do not resolve the root or inspect the filesystem. This is
-distinct from a thrown Keychain/key-store error, which maps to the stable,
-non-sensitive `keyStoreFailure` category and likewise performs no root or
-filesystem operation.
+distinct from an infrastructure Keychain/key-store error, which maps to the
+stable, non-sensitive `keyStoreFailure` category. A supplied raw key or loaded
+item that fails the 32-byte key-length policy maps separately to
+`invalidVaultKey`. None of these failures resolves the root, inspects the
+filesystem, or installs a session; discard any provisional key bytes before
+publishing failure.
 
 ## 21. Filesystem And Path Failure
 
@@ -286,7 +297,9 @@ Phase 2D-31 tests should verify:
 - construction and initial locked state perform zero calls;
 - invalid vault ID fails before key retrieval;
 - supplied-key priority and Keychain fallback ordering;
-- missing item and key-store failure remain distinct;
+- explicit input accepts only an already-unwrapped 32-byte raw vault key;
+- missing item, key-store failure, and invalid vault-key length remain
+  distinct;
 - root/path/load/hydration ordering;
 - missing store performs no write or directory creation;
 - success installs session/services/state atomically;
@@ -295,6 +308,8 @@ Phase 2D-31 tests should verify:
 - concurrent and re-entrant activation policies;
 - lock and controller teardown clear private state and key ownership;
 - late cancelled results cannot install state;
+- non-cancellation failure publishes `failed` only after private teardown,
+  while cancellation and lock publish `locked`;
 - descriptions/errors contain no fake private sentinels;
 - public snapshot bytes remain unchanged;
 - source guards exclude SwiftUI, app launch, cache/view-model integration,
