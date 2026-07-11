@@ -373,6 +373,31 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         XCTAssertEqual(dependencies.recorder.releaseCount, 1)
     }
 
+    func testCancellationDuringStoredKeyLoadDoesNotRetainLateKeyOwner() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationGate()
+        dependencies.storedKeyGate = gate
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(vaultID: Self.vaultID)
+        }
+        await gate.waitUntilEntered()
+
+        let didCancel = await controller.cancelActivation()
+        XCTAssertTrue(didCancel)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 0)
+
+        await gate.open()
+        let failure = await taskFailure(activation)
+
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        await assertInstalledState(controller, false)
+        await controller.lock()
+        XCTAssertEqual(dependencies.recorder.releaseCount, 0)
+    }
+
     func testControllerDeinitReleasesInstalledKey() async throws {
         let dependencies = try makeDependencies()
         var controller: AtlasVaultActivationController? = makeController(dependencies)
@@ -542,8 +567,11 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
     private func waitUntil(
         _ predicate: @escaping @Sendable () -> Bool
     ) async {
-        for _ in 0..<100 where !predicate() {
-            await Task.yield()
+        for _ in 0..<100 {
+            if predicate() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
 

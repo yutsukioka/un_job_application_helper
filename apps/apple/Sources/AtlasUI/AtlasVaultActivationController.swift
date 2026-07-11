@@ -264,6 +264,7 @@ public actor AtlasVaultActivationController:
                 vaultID: validatedVaultID,
                 suppliedVaultKey: suppliedVaultKey
             )
+            try await checkpoint(attemptID)
             let keyOwner: AtlasVaultActivationKeyOwner
             do {
                 keyOwner = try AtlasVaultActivationKeyOwner(
