@@ -14,6 +14,27 @@ private func activationTestStore() -> AtlasVaultLocalStoreEnvelope {
     )
 }
 
+private func activationPrivateState(_ marker: String) -> AtlasVaultHydratedState {
+    let timestamp = "2026-01-01T00:00:00Z"
+    let metadata = AtlasHydratedRecordMetadata(
+        id: "fake-record-\(marker)",
+        revision: "fake-revision-\(marker)",
+        parentRevision: nil,
+        deleted: false,
+        keyID: "fake-key-id"
+    )
+    return AtlasVaultHydratedState(savedSearches: [AtlasHydratedSavedSearch(
+        metadata: metadata,
+        payload: AtlasSavedSearchVaultPayload(
+            name: "FAKE_PRIVATE_SEARCH_\(marker)",
+            summary: "fake summary",
+            request: AtlasSearchRequest(text: "FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK")
+        ),
+        clientCreatedAt: timestamp,
+        clientUpdatedAt: timestamp
+    )])
+}
+
 @MainActor
 final class AtlasVaultActivationControllerTests: XCTestCase {
     private static let vaultID = "vault_test_31"
@@ -155,6 +176,26 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         await assertState(controller, .unlocked)
         await assertInstalledState(controller, true)
         XCTAssertEqual(dependencies.recorder.releaseCount, 0)
+    }
+
+    func testActivationCommitsHydratedStateBeforeUnlockedAccess() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = AtlasVaultPrivateStateStore()
+        let expected = activationPrivateState("COMMITTED")
+        dependencies.hydratedState = expected
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+
+        await assertState(controller, .unlocked)
+        let snapshot = try await controller.privateStateSnapshot()
+        XCTAssertEqual(snapshot, expected)
     }
 
     func testMissingStoreInstallsNoPrivateStateAndCreatesNoArtifact() async throws {
@@ -299,6 +340,215 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         await assertState(controller, .locked)
         await assertInstalledState(controller, false)
         XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
+    func testLockClearsCommittedPrivateStateBeforePublishingLocked() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = AtlasVaultPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("LOCK")
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+
+        await controller.lock()
+
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty
+        XCTAssertTrue(isEmpty)
+        do {
+            _ = try await controller.privateStateSnapshot()
+            XCTFail("Expected locked private state to be unavailable")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        }
+    }
+
+    func testLockPublishesTransitionStateWhilePrivateClearIsInFlight() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = ClearAllGatedPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("LOCK_TRANSITION")
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let locking = Task {
+            await controller.lock()
+        }
+        await privateStateStore.waitUntilClearEntered()
+
+        await assertState(controller, .locking)
+        let activationFailure = await capturedFailure {
+            try await controller.activate(
+                vaultID: "vault_other_33",
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        XCTAssertEqual(activationFailure, .activationInProgress)
+        do {
+            _ = try await controller.privateStateSnapshot()
+            XCTFail("Expected private state to be unavailable while locking")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        }
+
+        await privateStateStore.openClear()
+        await locking.value
+
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+    }
+
+    func testLockWhileAlreadyLockedRemainsObserverIdempotentDuringClear() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = ClearAllGatedPrivateStateStore()
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+
+        let locking = Task {
+            await controller.lock()
+        }
+        await privateStateStore.waitUntilClearEntered()
+
+        await assertState(controller, .locked)
+
+        await privateStateStore.openClear()
+        await locking.value
+        await assertState(controller, .locked)
+    }
+
+    func testSnapshotStartedBeforeLockCannotReturnPrivateStateAfterLock() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = SnapshotGatedPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("SNAPSHOT_LOCK")
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let snapshot = Task {
+            try await controller.privateStateSnapshot()
+        }
+        await privateStateStore.waitUntilSnapshotEntered()
+
+        await controller.lock()
+        await privateStateStore.openSnapshot()
+
+        do {
+            _ = try await snapshot.value
+            XCTFail("Expected snapshot started before lock to fail")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        } catch {
+            XCTFail("Unexpected error type: \(type(of: error))")
+        }
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+    }
+
+    func testCancellationDuringPrivateStateCommitClearsGenerationAndCannotUnlock() async throws {
+        let dependencies = try makeDependencies()
+        dependencies.hydratedState = activationPrivateState("CANCEL_COMMIT")
+        let privateStateStore = CommitGatedPrivateStateStore()
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await privateStateStore.waitUntilCommitEntered()
+
+        await assertState(controller, .activating)
+        do {
+            _ = try await controller.privateStateSnapshot()
+            XCTFail("Expected committed state to remain unavailable before unlocked")
+        } catch let error as AtlasVaultPrivateStateStoreError {
+            XCTAssertEqual(error, .unavailable)
+        }
+
+        let didCancel = await controller.cancelActivation()
+        XCTAssertTrue(didCancel)
+        await privateStateStore.openCommit()
+
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+        await assertInstalledState(controller, false)
+    }
+
+    func testLockDuringPrivateStateCommitClearsGenerationAndCannotUnlock() async throws {
+        let dependencies = try makeDependencies()
+        dependencies.hydratedState = activationPrivateState("LOCK_COMMIT")
+        let privateStateStore = CommitGatedPrivateStateStore()
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await privateStateStore.waitUntilCommitEntered()
+
+        await controller.lock()
+        await privateStateStore.openCommit()
+
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        let isEmpty = await privateStateStore.isEmpty()
+        XCTAssertTrue(isEmpty)
+        await assertInstalledState(controller, false)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
+    func testReactivationCannotExposePriorPrivateStateGeneration() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = AtlasVaultPrivateStateStore()
+        let controller = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        dependencies.hydratedState = activationPrivateState("FIRST")
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let firstSnapshot = try await controller.privateStateSnapshot()
+        XCTAssertEqual(firstSnapshot, activationPrivateState("FIRST"))
+        await controller.lock()
+
+        dependencies.hydratedState = activationPrivateState("SECOND")
+        try await controller.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+
+        let secondSnapshot = try await controller.privateStateSnapshot()
+        XCTAssertEqual(secondSnapshot, activationPrivateState("SECOND"))
     }
 
     func testReentrantActivationReturnsErrorWithoutMutatingUnlockedState() async throws {
@@ -562,6 +812,28 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         XCTAssertEqual(dependencies.recorder.releaseCount, 1)
     }
 
+    func testControllerDeinitClearsInjectedPrivateStateStore() async throws {
+        let dependencies = try makeDependencies()
+        let privateStateStore = AtlasVaultPrivateStateStore()
+        dependencies.hydratedState = activationPrivateState("TEARDOWN")
+        var controller: AtlasVaultActivationController? = makeController(
+            dependencies,
+            privateStateStore: privateStateStore
+        )
+        try await controller?.activate(
+            vaultID: Self.vaultID,
+            suppliedVaultKey: Self.vaultKey
+        )
+        let wasEmptyBeforeTeardown = await privateStateStore.isEmpty
+        XCTAssertFalse(wasEmptyBeforeTeardown)
+
+        controller = nil
+        await waitUntilAsync { await privateStateStore.isEmpty }
+
+        let isEmptyAfterTeardown = await privateStateStore.isEmpty
+        XCTAssertTrue(isEmptyAfterTeardown)
+    }
+
     func testDescriptionsAndErrorsContainNoPrivateValues() async throws {
         let dependencies = try makeDependencies()
         let environment = dependencies.environment()
@@ -683,6 +955,17 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         )
     }
 
+    private func makeController(
+        _ dependencies: ActivationDependencies,
+        privateStateStore: any AtlasVaultPrivateStateStoring
+    ) -> AtlasVaultActivationController {
+        AtlasVaultActivationController(
+            environment: dependencies.environment(),
+            privateStateStore: privateStateStore,
+            keyReleaseObserver: { dependencies.recorder.record("release") }
+        )
+    }
+
     private func capturedFailure(
         _ operation: () async throws -> Void
     ) async -> AtlasVaultActivationFailure? {
@@ -722,6 +1005,20 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
             }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    private func waitUntilAsync(
+        _ predicate: @escaping @Sendable () async -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<500 {
+            if await predicate() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for asynchronous condition", file: file, line: line)
     }
 
     private func queuedCancellation(
@@ -955,6 +1252,172 @@ private final class ActivationRecorder: @unchecked Sendable {
         lock.lock()
         recordedEvents.append(event)
         lock.unlock()
+    }
+}
+
+private actor CommitGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var commitEntered = false
+    private var commitWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+        commitEntered = true
+        let waiters = commitWaiters
+        commitWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        try await store.snapshot(generation: generation)
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+    }
+
+    func waitUntilCommitEntered() async {
+        guard !commitEntered else { return }
+        await withCheckedContinuation { continuation in
+            commitWaiters.append(continuation)
+        }
+    }
+
+    func openCommit() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func isEmpty() async -> Bool {
+        await store.isEmpty
+    }
+}
+
+private actor ClearAllGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var clearEntered = false
+    private var clearWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        try await store.snapshot(generation: generation)
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+        clearEntered = true
+        let waiters = clearWaiters
+        clearWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilClearEntered() async {
+        guard !clearEntered else { return }
+        await withCheckedContinuation { continuation in
+            clearWaiters.append(continuation)
+        }
+    }
+
+    func openClear() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func isEmpty() async -> Bool {
+        await store.isEmpty
+    }
+}
+
+private actor SnapshotGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var snapshotEntered = false
+    private var snapshotWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        let snapshot = try await store.snapshot(generation: generation)
+        snapshotEntered = true
+        let waiters = snapshotWaiters
+        snapshotWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+        return snapshot
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+    }
+
+    func waitUntilSnapshotEntered() async {
+        guard !snapshotEntered else { return }
+        await withCheckedContinuation { continuation in
+            snapshotWaiters.append(continuation)
+        }
+    }
+
+    func openSnapshot() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func isEmpty() async -> Bool {
+        await store.isEmpty
     }
 }
 

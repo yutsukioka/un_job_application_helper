@@ -50,6 +50,7 @@ public enum AtlasVaultActivationState:
 {
     case locked
     case activating
+    case locking
     case unlocked
     case failed(AtlasVaultActivationFailure)
 
@@ -57,6 +58,7 @@ public enum AtlasVaultActivationState:
         switch self {
         case .locked: "locked"
         case .activating: "activating"
+        case .locking: "locking"
         case .unlocked: "unlocked"
         case let .failed(failure): "failed(\(failure))"
         }
@@ -216,9 +218,11 @@ public actor AtlasVaultActivationController:
     public private(set) var state: AtlasVaultActivationState
 
     private let environment: AtlasVaultActivationEnvironment
+    private let privateStateStore: any AtlasVaultPrivateStateStoring
     private let keyReleaseObserver: @Sendable () -> Void
     private var nextAttemptID: UInt64 = 1
     private var activeAttemptID: UInt64?
+    private var activeAttemptGeneration: AtlasVaultPrivateStateGeneration?
     private var provisionalKeyOwner: AtlasVaultActivationKeyOwner?
     private var activeSession: AtlasVaultActivatedSession?
 
@@ -227,8 +231,29 @@ public actor AtlasVaultActivationController:
         keyReleaseObserver: @escaping @Sendable () -> Void = {}
     ) {
         self.environment = environment
+        self.privateStateStore = AtlasVaultPrivateStateStore()
         self.keyReleaseObserver = keyReleaseObserver
         self.state = .locked
+    }
+
+    init(
+        environment: AtlasVaultActivationEnvironment,
+        privateStateStore: any AtlasVaultPrivateStateStoring,
+        keyReleaseObserver: @escaping @Sendable () -> Void = {}
+    ) {
+        self.environment = environment
+        self.privateStateStore = privateStateStore
+        self.keyReleaseObserver = keyReleaseObserver
+        self.state = .locked
+    }
+
+    deinit {
+        provisionalKeyOwner?.wipe()
+        activeSession?.keyOwner.wipe()
+        let privateStateStore = privateStateStore
+        Task {
+            await privateStateStore.clearAll()
+        }
     }
 
     public func activate(
@@ -236,7 +261,7 @@ public actor AtlasVaultActivationController:
         suppliedVaultKey: Data? = nil
     ) async throws {
         switch state {
-        case .activating:
+        case .activating, .locking:
             throw AtlasVaultActivationFailure.activationInProgress
         case .unlocked:
             throw AtlasVaultActivationFailure.alreadyUnlocked
@@ -245,8 +270,10 @@ public actor AtlasVaultActivationController:
         }
 
         let attemptID = nextAttemptID
+        let generation = AtlasVaultPrivateStateGeneration()
         nextAttemptID &+= 1
         activeAttemptID = attemptID
+        activeAttemptGeneration = generation
         state = .activating
 
         do {
@@ -351,53 +378,111 @@ public actor AtlasVaultActivationController:
             }
 
             try await checkpoint(attemptID)
-            guard activeAttemptID == attemptID else {
-                throw AtlasVaultActivationFailure.cancelled
+            do {
+                try await privateStateStore.stage(
+                    hydratedState,
+                    generation: generation
+                )
+            } catch {
+                try requireActiveAttempt(attemptID)
+                throw error
+            }
+
+            try await checkpoint(attemptID)
+            do {
+                try await privateStateStore.commit(generation: generation)
+            } catch {
+                try requireActiveAttempt(attemptID)
+                throw error
+            }
+
+            do {
+                try requireActiveAttempt(attemptID)
+                guard activeAttemptGeneration == generation else {
+                    throw AtlasVaultActivationFailure.cancelled
+                }
+            } catch {
+                await privateStateStore.clear(generation: generation)
+                throw error
             }
 
             activeSession = AtlasVaultActivatedSession(
                 keyOwner: keyOwner,
                 scope: scope,
-                hydratedState: hydratedState
+                privateStateGeneration: generation
             )
             provisionalKeyOwner = nil
             activeAttemptID = nil
+            activeAttemptGeneration = nil
             state = .unlocked
         } catch let failure as AtlasVaultActivationFailure {
-            finishFailedAttempt(attemptID, failure: failure)
-            throw failure
+            let finalFailure = await finishFailedAttempt(
+                attemptID,
+                generation: generation,
+                failure: failure
+            )
+            throw finalFailure
         } catch is CancellationError {
-            finishFailedAttempt(attemptID, failure: .cancelled)
-            throw AtlasVaultActivationFailure.cancelled
+            let finalFailure = await finishFailedAttempt(
+                attemptID,
+                generation: generation,
+                failure: .cancelled
+            )
+            throw finalFailure
         } catch {
-            finishFailedAttempt(attemptID, failure: .vaultUnavailable)
-            throw AtlasVaultActivationFailure.vaultUnavailable
+            let finalFailure = await finishFailedAttempt(
+                attemptID,
+                generation: generation,
+                failure: .vaultUnavailable
+            )
+            throw finalFailure
         }
     }
 
     @discardableResult
-    public func cancelActivation() -> Bool {
-        guard activeAttemptID != nil else {
+    public func cancelActivation() async -> Bool {
+        guard activeAttemptID != nil,
+              let generation = activeAttemptGeneration else {
             return false
         }
         activeAttemptID = nil
+        activeAttemptGeneration = nil
         provisionalKeyOwner?.wipe()
         provisionalKeyOwner = nil
+        await privateStateStore.clear(generation: generation)
         state = .locked
         return true
     }
 
-    public func lock() {
+    public func lock() async {
+        if state != .locked {
+            state = .locking
+        }
         activeAttemptID = nil
+        activeAttemptGeneration = nil
         provisionalKeyOwner?.wipe()
         provisionalKeyOwner = nil
         activeSession?.keyOwner.wipe()
         activeSession = nil
+        await privateStateStore.clearAll()
         state = .locked
     }
 
     var hasInstalledPrivateStateForTesting: Bool {
         activeSession != nil
+    }
+
+    func privateStateSnapshot() async throws -> AtlasVaultHydratedState {
+        guard state == .unlocked,
+              let generation = activeSession?.privateStateGeneration else {
+            throw AtlasVaultPrivateStateStoreError.unavailable
+        }
+        let snapshot = try await privateStateStore.snapshot(generation: generation)
+        guard state == .unlocked,
+              activeSession?.privateStateGeneration == generation else {
+            throw AtlasVaultPrivateStateStoreError.unavailable
+        }
+        return snapshot
     }
 
     public nonisolated var description: String {
@@ -460,15 +545,24 @@ public actor AtlasVaultActivationController:
 
     private func finishFailedAttempt(
         _ attemptID: UInt64,
+        generation: AtlasVaultPrivateStateGeneration,
         failure: AtlasVaultActivationFailure
-    ) {
+    ) async -> AtlasVaultActivationFailure {
         guard activeAttemptID == attemptID else {
-            return
+            await privateStateStore.clear(generation: generation)
+            return .cancelled
         }
         provisionalKeyOwner?.wipe()
         provisionalKeyOwner = nil
+        await privateStateStore.clear(generation: generation)
+        guard activeAttemptID == attemptID,
+              activeAttemptGeneration == generation else {
+            return .cancelled
+        }
         activeAttemptID = nil
+        activeAttemptGeneration = nil
         state = failure == .cancelled ? .locked : .failed(failure)
+        return failure
     }
 
     private static func activationFailure(
@@ -561,5 +655,5 @@ private final class AtlasVaultActivationKeyOwner: @unchecked Sendable {
 private struct AtlasVaultActivatedSession: Sendable {
     let keyOwner: AtlasVaultActivationKeyOwner
     let scope: AtlasVaultActivationScope
-    let hydratedState: AtlasVaultHydratedState
+    let privateStateGeneration: AtlasVaultPrivateStateGeneration
 }
