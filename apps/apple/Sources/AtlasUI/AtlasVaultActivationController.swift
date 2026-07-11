@@ -260,10 +260,16 @@ public actor AtlasVaultActivationController:
             }
 
             try await checkpoint(attemptID)
-            let vaultKey = try await selectedVaultKey(
-                vaultID: validatedVaultID,
-                suppliedVaultKey: suppliedVaultKey
-            )
+            let vaultKey: Data
+            do {
+                vaultKey = try await selectedVaultKey(
+                    vaultID: validatedVaultID,
+                    suppliedVaultKey: suppliedVaultKey
+                )
+            } catch {
+                try requireActiveAttempt(attemptID)
+                throw error
+            }
             try await checkpoint(attemptID)
             let keyOwner: AtlasVaultActivationKeyOwner
             do {
@@ -281,11 +287,14 @@ public actor AtlasVaultActivationController:
             let rootURL: URL
             do {
                 rootURL = try await environment.resolveRootDirectory()
-            } catch let failure as AtlasVaultActivationFailure {
-                throw failure
-            } catch is CancellationError {
-                throw CancellationError()
             } catch {
+                try requireActiveAttempt(attemptID)
+                if let failure = error as? AtlasVaultActivationFailure {
+                    throw failure
+                }
+                if error is CancellationError {
+                    throw CancellationError()
+                }
                 throw AtlasVaultActivationFailure.vaultUnavailable
             }
 
@@ -296,11 +305,14 @@ public actor AtlasVaultActivationController:
                     rootURL: rootURL,
                     vaultID: validatedVaultID
                 )
-            } catch let failure as AtlasVaultActivationFailure {
-                throw failure
-            } catch is CancellationError {
-                throw CancellationError()
             } catch {
+                try requireActiveAttempt(attemptID)
+                if let failure = error as? AtlasVaultActivationFailure {
+                    throw failure
+                }
+                if error is CancellationError {
+                    throw CancellationError()
+                }
                 throw AtlasVaultActivationFailure.vaultUnavailable
             }
             guard scope.isBound(to: validatedVaultID) else {
@@ -428,6 +440,10 @@ public actor AtlasVaultActivationController:
 
     private func checkpoint(_ attemptID: UInt64) async throws {
         await Task.yield()
+        try requireActiveAttempt(attemptID)
+    }
+
+    private func requireActiveAttempt(_ attemptID: UInt64) throws {
         try Task.checkCancellation()
         guard activeAttemptID == attemptID else {
             throw AtlasVaultActivationFailure.cancelled

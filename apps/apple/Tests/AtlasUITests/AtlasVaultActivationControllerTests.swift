@@ -398,6 +398,77 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         XCTAssertEqual(dependencies.recorder.releaseCount, 0)
     }
 
+    func testCancellationWinsOverLateStoredKeyFailure() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationGate()
+        dependencies.storedKeyGate = gate
+        dependencies.storedKeyFailure = .keyStore
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(vaultID: Self.vaultID)
+        }
+        await gate.waitUntilEntered()
+
+        let didCancel = await controller.cancelActivation()
+        XCTAssertTrue(didCancel)
+        await gate.open()
+
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 0)
+    }
+
+    func testCancellationWinsOverLateRootFailure() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationGate()
+        dependencies.rootGate = gate
+        dependencies.rootFailure = true
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await gate.waitUntilEntered()
+
+        let didCancel = await controller.cancelActivation()
+        XCTAssertTrue(didCancel)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+        await gate.open()
+
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
+    func testCancellationWinsOverLateScopeFailure() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationGate()
+        dependencies.scopeGate = gate
+        dependencies.scopeFailure = true
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await gate.waitUntilEntered()
+
+        let didCancel = await controller.cancelActivation()
+        XCTAssertTrue(didCancel)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+        await gate.open()
+
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
     func testControllerDeinitReleasesInstalledKey() async throws {
         let dependencies = try makeDependencies()
         var controller: AtlasVaultActivationController? = makeController(dependencies)
@@ -567,7 +638,7 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
     private func waitUntil(
         _ predicate: @escaping @Sendable () -> Bool
     ) async {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if predicate() {
                 return
             }
@@ -576,10 +647,12 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
     }
 
     private func temporaryRoot() throws -> URL {
-        let rootURL = URL(
-            fileURLWithPath: "/private/tmp/atlasvault-activation-tests-\(UUID().uuidString)",
-            isDirectory: true
-        ).standardizedFileURL
+        let rootURL = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
+            .appendingPathComponent(
+                "atlasvault-activation-tests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            .standardizedFileURL
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         return rootURL
     }
@@ -710,6 +783,7 @@ private final class ActivationDependencies: @unchecked Sendable {
     var scopeVaultIDOverride: String?
     var storedKeyGate: ActivationGate?
     var rootGate: ActivationGate?
+    var scopeGate: ActivationGate?
 
     init(rootURL: URL) {
         self.rootURL = rootURL
@@ -739,6 +813,9 @@ private final class ActivationDependencies: @unchecked Sendable {
             },
             makeScope: { [self] _, vaultID in
                 recorder.record("scope")
+                if let scopeGate {
+                    await scopeGate.suspend()
+                }
                 if scopeFailure {
                     throw RuntimeTestError.root
                 }
