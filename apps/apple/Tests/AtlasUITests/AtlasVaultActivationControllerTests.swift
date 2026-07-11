@@ -469,6 +469,84 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         XCTAssertEqual(dependencies.recorder.releaseCount, 1)
     }
 
+    func testQueuedCancellationWinsOverSynchronousStoreFailure() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationSynchronousGate()
+        dependencies.loadGate = gate
+        dependencies.persistenceFailure = .readFailed
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await waitUntil { gate.hasEntered }
+        XCTAssertTrue(gate.hasEntered)
+
+        let cancellation = await queuedCancellation(for: controller)
+        gate.open()
+
+        let didCancel = await cancellation.value
+        XCTAssertTrue(didCancel)
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
+    func testQueuedCancellationWinsOverSynchronousMissingStoreResult() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationSynchronousGate()
+        dependencies.loadGate = gate
+        dependencies.store = nil
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await waitUntil { gate.hasEntered }
+        XCTAssertTrue(gate.hasEntered)
+
+        let cancellation = await queuedCancellation(for: controller)
+        gate.open()
+
+        let didCancel = await cancellation.value
+        XCTAssertTrue(didCancel)
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
+    func testQueuedCancellationWinsOverSynchronousHydrationFailure() async throws {
+        let dependencies = try makeDependencies()
+        let gate = ActivationSynchronousGate()
+        dependencies.hydrationGate = gate
+        dependencies.hydrationFailure = .corruptRecord
+        let controller = makeController(dependencies)
+        let activation = Task {
+            try await controller.activate(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        }
+        await waitUntil { gate.hasEntered }
+        XCTAssertTrue(gate.hasEntered)
+
+        let cancellation = await queuedCancellation(for: controller)
+        gate.open()
+
+        let didCancel = await cancellation.value
+        XCTAssertTrue(didCancel)
+        let failure = await taskFailure(activation)
+        XCTAssertEqual(failure, .cancelled)
+        await assertState(controller, .locked)
+        XCTAssertEqual(dependencies.recorder.releaseCount, 1)
+    }
+
     func testControllerDeinitReleasesInstalledKey() async throws {
         let dependencies = try makeDependencies()
         var controller: AtlasVaultActivationController? = makeController(dependencies)
@@ -646,6 +724,16 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
         }
     }
 
+    private func queuedCancellation(
+        for controller: AtlasVaultActivationController
+    ) async -> Task<Bool, Never> {
+        let cancellation = Task(priority: .high) {
+            await controller.cancelActivation()
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        return cancellation
+    }
+
     private func temporaryRoot() throws -> URL {
         let rootURL = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
             .appendingPathComponent(
@@ -784,6 +872,8 @@ private final class ActivationDependencies: @unchecked Sendable {
     var storedKeyGate: ActivationGate?
     var rootGate: ActivationGate?
     var scopeGate: ActivationGate?
+    var loadGate: ActivationSynchronousGate?
+    var hydrationGate: ActivationSynchronousGate?
 
     init(rootURL: URL) {
         self.rootURL = rootURL
@@ -829,6 +919,7 @@ private final class ActivationDependencies: @unchecked Sendable {
             vaultID: vaultID,
             loadEncryptedStore: { [self] _ in
                 recorder.record("load")
+                loadGate?.suspend()
                 if let persistenceFailure {
                     throw persistenceFailure
                 }
@@ -836,6 +927,7 @@ private final class ActivationDependencies: @unchecked Sendable {
             },
             hydrateRecords: { [self] _, _ in
                 recorder.record("hydrate")
+                hydrationGate?.suspend()
                 if let hydrationFailure {
                     throw hydrationFailure
                 }
@@ -891,6 +983,35 @@ private actor ActivationGate {
     func open() {
         releaseContinuation?.resume()
         releaseContinuation = nil
+    }
+}
+
+private final class ActivationSynchronousGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var entered = false
+    private var isOpen = false
+
+    var hasEntered: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return entered
+    }
+
+    func suspend() {
+        condition.lock()
+        entered = true
+        condition.broadcast()
+        while !isOpen {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func open() {
+        condition.lock()
+        isOpen = true
+        condition.broadcast()
+        condition.unlock()
     }
 }
 

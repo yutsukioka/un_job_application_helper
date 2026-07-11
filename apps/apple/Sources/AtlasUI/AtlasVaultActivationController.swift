@@ -320,11 +320,15 @@ public actor AtlasVaultActivationController:
             }
 
             try await checkpoint(attemptID)
-            let store: AtlasVaultLocalStoreEnvelope?
-            do {
-                store = try keyOwner.withUnlockedSession { session in
+            let storeResult: Result<AtlasVaultLocalStoreEnvelope?, Error> = Result {
+                try keyOwner.withUnlockedSession { session in
                     try scope.loadEncryptedStore(for: session)
                 }
+            }
+            try await checkpoint(attemptID)
+            let store: AtlasVaultLocalStoreEnvelope?
+            do {
+                store = try storeResult.get()
             } catch {
                 throw Self.activationFailure(forPersistenceError: error)
             }
@@ -333,11 +337,15 @@ public actor AtlasVaultActivationController:
             }
 
             try await checkpoint(attemptID)
-            let hydratedState: AtlasVaultHydratedState
-            do {
-                hydratedState = try keyOwner.withUnlockedSession { session in
+            let hydrationResult: Result<AtlasVaultHydratedState, Error> = Result {
+                try keyOwner.withUnlockedSession { session in
                     try scope.hydrate(records: store.records, session: session)
                 }
+            }
+            try await checkpoint(attemptID)
+            let hydratedState: AtlasVaultHydratedState
+            do {
+                hydratedState = try hydrationResult.get()
             } catch {
                 throw Self.activationFailure(forHydrationError: error)
             }
