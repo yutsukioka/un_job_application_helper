@@ -352,7 +352,7 @@ an explicit future consent and storage-policy design.
 
 This phase adds no SwiftUI import, view, observable object, property wrapper,
 navigation, secure field, preview, app-host call site, or app-entry wiring. It
-does not alter `SearchViewModel`, `AtlasLocalCache`, or public job-cache state.
+does not alter `AtlasSearchViewModel`, `AtlasLocalCache`, or public job-cache state.
 
 ## 43. No LocalAuthentication
 
