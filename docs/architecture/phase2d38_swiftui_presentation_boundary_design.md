@@ -55,7 +55,7 @@ service locator or global singleton.
 
 ## 9. Proposed UI-Safe Public Status
 
-Use a presentation enum with stable categories only: no vault, locked,
+Use a presentation enum with stable categories only: no-vault, locked,
 activating, unlocked, saving, locking, and redacted failure categories.
 Transient command outcomes such as cancellation do not become stable status.
 The enum must contain no vault ID, key state detail, path, record ID, record
