@@ -480,6 +480,50 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(events, ["activate", "cancelActivation"])
     }
 
+    func testFacadeConditionalCancellationRejectsStaleSuccessForNewActivation() async {
+        let cancellationGate = LifecycleGate()
+        let harness = LifecycleFacadeHarness(
+            blockActivation: true,
+            firstCancellationGate: cancellationGate
+        )
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        let firstRequest = AtlasVaultRuntimeActivationRequest(vaultID: "vault-random-004")
+        let firstActivation = Task { try await facade.activate(firstRequest) }
+        let didStartFirst = await harness.waitUntilActivationCount(1)
+        XCTAssertTrue(didStartFirst)
+
+        let staleCancellation = Task {
+            await facade.cancelActivationIfInProgress()
+        }
+        let didHoldCancellation = await cancellationGate.waitUntilEntered()
+        XCTAssertTrue(didHoldCancellation)
+        do {
+            try await firstActivation.value
+            XCTFail("Expected first activation cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+
+        let secondRequest = AtlasVaultRuntimeActivationRequest(vaultID: "vault-random-005")
+        let secondActivation = Task { try await facade.activate(secondRequest) }
+        let didStartSecond = await harness.waitUntilActivationCount(2)
+        XCTAssertTrue(didStartSecond)
+        await cancellationGate.open()
+
+        let didCancelCurrentActivation = await staleCancellation.value
+        let statusBeforeCleanup = await facade.status()
+        XCTAssertFalse(didCancelCurrentActivation)
+        XCTAssertEqual(statusBeforeCleanup, .activating)
+
+        await facade.lock()
+        do {
+            try await secondActivation.value
+            XCTFail("Expected cleanup cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+    }
+
     func testCoordinatorSourceHasNoRuntimeOrPlatformCoupling() throws {
         let source = try String(contentsOf: sourceURL(), encoding: .utf8)
         let forbidden = [
@@ -749,13 +793,17 @@ private actor LifecycleFacadeHarness {
     private var activationContinuation: CheckedContinuation<Void, Error>?
     private let blockActivation: Bool
     private let cancellationCompletesActivation: Bool
+    private let firstCancellationGate: LifecycleGate?
+    private var cancellationCallCount = 0
 
     init(
         blockActivation: Bool = false,
-        cancellationCompletesActivation: Bool = false
+        cancellationCompletesActivation: Bool = false,
+        firstCancellationGate: LifecycleGate? = nil
     ) {
         self.blockActivation = blockActivation
         self.cancellationCompletesActivation = cancellationCompletesActivation
+        self.firstCancellationGate = firstCancellationGate
     }
 
     nonisolated func environment() -> AtlasVaultRuntimeFacadeEnvironment {
@@ -773,13 +821,17 @@ private actor LifecycleFacadeHarness {
     }
 
     func waitUntilActivationStarted() async -> Bool {
+        await waitUntilActivationCount(1)
+    }
+
+    func waitUntilActivationCount(_ expected: Int) async -> Bool {
         for _ in 0..<1_000 {
-            if recordedEvents.contains("activate") {
+            if recordedEvents.filter({ $0 == "activate" }).count >= expected {
                 return true
             }
             await Task.yield()
         }
-        return recordedEvents.contains("activate")
+        return recordedEvents.filter { $0 == "activate" }.count >= expected
     }
 
     private func activate() async throws {
@@ -794,8 +846,21 @@ private actor LifecycleFacadeHarness {
         }
     }
 
-    private func cancelActivation() -> Bool {
+    private func cancelActivation() async -> Bool {
         recordedEvents.append("cancelActivation")
+        cancellationCallCount += 1
+        if cancellationCallCount == 1,
+           let firstCancellationGate,
+           let continuation = activationContinuation {
+            activationContinuation = nil
+            continuation.resume(throwing: CancellationError())
+            await firstCancellationGate.enter()
+            return true
+        }
+        if cancellationCallCount == 2,
+           firstCancellationGate != nil {
+            return false
+        }
         guard let continuation = activationContinuation else {
             return false
         }

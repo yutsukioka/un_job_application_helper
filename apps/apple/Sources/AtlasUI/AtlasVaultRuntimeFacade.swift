@@ -380,7 +380,7 @@ public actor AtlasVaultRuntimeFacade:
             return false
         }
         guard isCurrent(activationOperation) else {
-            return true
+            return false
         }
 
         let lockOperation = begin(.lock, status: .locking)

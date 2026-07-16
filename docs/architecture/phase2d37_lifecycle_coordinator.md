@@ -25,6 +25,10 @@ state. It transitions to locked only when cancellation returns success. If
 activation has already completed, the operation returns `false` and leaves the
 new unlocked session intact.
 
+A cancellation result tied to an older facade operation also returns `false`.
+This forces the lifecycle coordinator to inspect and apply policy to the
+current operation rather than treating a newer activation as cancelled.
+
 If a grace-policy background event still observes the transient activating
 facade state after cancellation loses twice, the coordinator requests an
 immediate fail-closed lock instead of abandoning the background lock path.
