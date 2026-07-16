@@ -52,16 +52,23 @@ activation reservation mutually exclusive without awaiting an actor hop.
 The active dispatch retains the claimed buffer only as a cleanup handle;
 caller cancellation, explicit cancellation, timeout, and coordinator teardown
 clear that handle even when the operation task has not begun consuming it.
+The child operation waits behind an internal start gate. Dispatch installs its
+caller-cancellation handler, synchronously handles an already-cancelled caller,
+and only then releases the child, so activation cannot outrun cancellation
+handler registration.
 Non-positive timeouts expire synchronously after the request is claimed and
 before any operation task or activation can start.
 Positive timeouts cover the whole dispatch. Expiration may cancel an in-flight
 activation until that activation atomically completes; the injected activation
 seam must honor cancellation before committing an unlocked session, as the
-runtime facade does. Cancellation that reserves the gate before activation
-prevents a late dependency completion from activating the vault. Once
-activation completes, later cancellation or expiration cannot relabel that
-potentially irreversible side effect. Dependencies remain responsible for
-clearing any copies they own.
+runtime facade does. If activation returns success despite a timeout racing
+after commit, that returned success is authoritative: the coordinator promotes
+the terminal gate and request storage to completed rather than reporting a
+failure while the runtime is unlocked. Cancellation that reserves the gate
+before activation prevents a late dependency completion from activating the
+vault. Once activation completes, later cancellation or expiration cannot
+relabel that potentially irreversible side effect. Dependencies remain
+responsible for clearing any copies they own.
 
 Only the coordinator that owns an active dispatch may cancel it. Another
 coordinator can cancel the shared request while it is pending, but cannot
@@ -86,11 +93,12 @@ modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
 Fake-only tests cover construction, all four input sources, request-copy and
 concurrent single-use enforcement, cancellation before and during dispatch,
 pre-operation cancellation and timeout cleanup, caller cancellation, late
-dependency completion, timeout during activation, non-owner cancellation,
-dependency error normalization, success and failure cleanup, redacted
-descriptions, non-persistability, actor serialization, no public snapshot
-mutation, no filesystem artifacts, and source guards for UI, platform,
-persistence, networking, and encoding coupling.
+dependency completion, cancellation before handler installation, an already
+cancelled caller, timeout during activation, timeout after activation return,
+non-owner cancellation, dependency error normalization, success and failure
+cleanup, redacted descriptions, non-persistability, actor serialization, no
+public snapshot mutation, no filesystem artifacts, and source guards for UI,
+platform, persistence, networking, and encoding coupling.
 
 ## Deferred
 

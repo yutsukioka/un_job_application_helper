@@ -249,6 +249,44 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         await assertTaskThrows(.cancelled, task: dispatch)
     }
 
+    func testCallerCancellationBeforeHandlerInstallationPreventsActivation() async {
+        let cancellationHandlerGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            beforeCancellationHandlerGate: cancellationHandlerGate
+        )
+        let request = request(input: .localKey)
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReachHandlerGate = await cancellationHandlerGate.waitUntilEntered()
+        XCTAssertTrue(didReachHandlerGate)
+
+        dispatch.cancel()
+        await cancellationHandlerGate.open()
+
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
+    func testAlreadyCancelledCallerCannotStartActivation() async {
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(spy: spy)
+        let request = request(input: .localKey)
+        let dispatch = Task {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+            }
+            try await coordinator.dispatch(request)
+        }
+
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
     func testCallerCancellationCannotRelabelActivationOnceStarted() async throws {
         let activationGate = UnlockGate(honorCancellation: false)
         let spy = UnlockDependencySpy(activationGate: activationGate)
@@ -391,6 +429,38 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         await successCommitGate.open()
 
         try await dispatch.value
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testReturnedActivationWinsTimeoutBeforeCompletionRecording() async throws {
+        let sleeper = UnlockManualSleeper()
+        let activationReturnGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            sleeper: sleeper,
+            activationReturnGate: activationReturnGate
+        )
+        let request = request(input: .localKey, timeout: .seconds(30))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReturnFromActivation = await activationReturnGate.waitUntilEntered()
+        let didSleep = await sleeper.waitUntilSleeping()
+        XCTAssertTrue(didReturnFromActivation)
+        XCTAssertTrue(didSleep)
+
+        await sleeper.fire()
+        let didObserveCancellation = await activationReturnGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didObserveCancellation)
+        await activationReturnGate.open()
+
+        try await dispatch.value
+        await assertDispatchThrows(.alreadyUsed) {
+            try await coordinator.dispatch(request)
+        }
         let snapshot = await spy.snapshot()
         XCTAssertEqual(snapshot.activationCalls, 1)
     }
@@ -724,7 +794,9 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         spy: UnlockDependencySpy,
         sleeper: UnlockManualSleeper? = nil,
+        beforeCancellationHandlerGate: UnlockGate? = nil,
         operationStartGate: UnlockGate? = nil,
+        activationReturnGate: UnlockGate? = nil,
         successCommitGate: UnlockGate? = nil
     ) -> AtlasVaultUnlockRequestCoordinator {
         let dependencies = AtlasVaultUnlockRequestDependencies(
@@ -744,9 +816,19 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
                     try await Task.sleep(for: duration)
                 }
             },
+            beforeCancellationHandler: {
+                if let beforeCancellationHandlerGate {
+                    try? await beforeCancellationHandlerGate.enter()
+                }
+            },
             beforeOperationStart: {
                 if let operationStartGate {
                     try? await operationStartGate.enter()
+                }
+            },
+            afterActivationReturn: {
+                if let activationReturnGate {
+                    try? await activationReturnGate.enter()
                 }
             },
             beforeSuccessCommit: {
@@ -957,6 +1039,7 @@ private actor UnlockGate {
     private let honorCancellation: Bool
     private var entered = false
     private var isOpen = false
+    private var cancellationObserved = false
     private var continuation: CheckedContinuation<Void, Error>?
 
     init(honorCancellation: Bool) {
@@ -969,18 +1052,16 @@ private actor UnlockGate {
             return
         }
         precondition(continuation == nil, "UnlockGate supports one waiter")
-        let honorCancellation = honorCancellation
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, Error>) in
                 self.continuation = continuation
-                if honorCancellation, Task.isCancelled {
-                    cancelWaiter()
+                if Task.isCancelled {
+                    observeCancellation()
                 }
             }
         } onCancel: {
-            guard honorCancellation else { return }
-            Task { await self.cancelWaiter() }
+            Task { await self.observeCancellation() }
         }
     }
 
@@ -998,6 +1079,23 @@ private actor UnlockGate {
         isOpen = true
         continuation?.resume()
         continuation = nil
+    }
+
+    func waitUntilCancellationObserved() async -> Bool {
+        for _ in 0..<1_000 {
+            if cancellationObserved {
+                return true
+            }
+            await Task.yield()
+        }
+        return cancellationObserved
+    }
+
+    private func observeCancellation() {
+        cancellationObserved = true
+        if honorCancellation {
+            cancelWaiter()
+        }
     }
 
     private func cancelWaiter() {

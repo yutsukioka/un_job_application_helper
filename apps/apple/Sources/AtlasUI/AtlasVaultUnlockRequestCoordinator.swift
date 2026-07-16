@@ -177,7 +177,9 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
     fileprivate let deriveRecoveryVaultKey: @Sendable (Data) async throws -> Data
     fileprivate let activate: @Sendable (AtlasVaultRuntimeActivationRequest) async throws -> Void
     fileprivate let sleep: @Sendable (Duration) async throws -> Void
+    fileprivate let beforeCancellationHandler: @Sendable () async -> Void
     fileprivate let beforeOperationStart: @Sendable () async -> Void
+    fileprivate let afterActivationReturn: @Sendable () async -> Void
     fileprivate let beforeSuccessCommit: @Sendable () async -> Void
 
     public init(
@@ -195,7 +197,9 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             deriveRecoveryVaultKey: deriveRecoveryVaultKey,
             activate: activate,
             sleep: sleep,
+            beforeCancellationHandler: {},
             beforeOperationStart: {},
+            afterActivationReturn: {},
             beforeSuccessCommit: {}
         )
     }
@@ -207,14 +211,18 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             AtlasVaultRuntimeActivationRequest
         ) async throws -> Void,
         sleep: @escaping @Sendable (Duration) async throws -> Void,
+        beforeCancellationHandler: @escaping @Sendable () async -> Void,
         beforeOperationStart: @escaping @Sendable () async -> Void,
+        afterActivationReturn: @escaping @Sendable () async -> Void,
         beforeSuccessCommit: @escaping @Sendable () async -> Void
     ) {
         self.derivePassphraseVaultKey = derivePassphraseVaultKey
         self.deriveRecoveryVaultKey = deriveRecoveryVaultKey
         self.activate = activate
         self.sleep = sleep
+        self.beforeCancellationHandler = beforeCancellationHandler
         self.beforeOperationStart = beforeOperationStart
+        self.afterActivationReturn = afterActivationReturn
         self.beforeSuccessCommit = beforeSuccessCommit
     }
 }
@@ -272,7 +280,10 @@ public actor AtlasVaultUnlockRequestCoordinator:
 
         let dependencies = dependencies
         let terminalGate = AtlasVaultUnlockTerminalGate()
+        let operationStartGate = AtlasVaultUnlockOperationStartGate()
         let operation = Task {
+            await operationStartGate.wait()
+            try Task.checkCancellation()
             await dependencies.beforeOperationStart()
             try await Self.perform(
                 claim: claim,
@@ -289,9 +300,19 @@ public actor AtlasVaultUnlockRequestCoordinator:
             timeout: nil
         )
         scheduleTimeout(for: claim)
+        await dependencies.beforeCancellationHandler()
 
         do {
             try await withTaskCancellationHandler {
+                if Task.isCancelled,
+                   terminalGate.reserveTermination(.cancelled) {
+                    operation.cancel()
+                    Task {
+                        await claim.input.clearSecret()
+                        _ = await storage.cancelActive()
+                    }
+                }
+                await operationStartGate.release()
                 try await operation.value
             } onCancel: {
                 if terminalGate.reserveTermination(.cancelled) {
@@ -303,7 +324,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
                 }
             }
             await dependencies.beforeSuccessCommit()
-            if let error = await storage.finishSuccess() {
+            if let error = await storage.finishActivationSuccess() {
                 throw error
             }
             clearActiveDispatch(claim.id)
@@ -435,6 +456,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
                     AtlasVaultRuntimeActivationRequest(vaultID: vaultID),
                     dependencies: dependencies
                 )
+                await dependencies.afterActivationReturn()
                 try terminalGate.completeActivation()
             case let .suppliedTestVaultKey(buffer):
                 var key = try await takeSecret(from: buffer)
@@ -473,6 +495,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             ),
             dependencies: dependencies
         )
+        await dependencies.afterActivationReturn()
         try terminalGate.completeActivation()
     }
 
@@ -591,15 +614,37 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         switch state {
-        case .activationReserved:
+        case .activationReserved, .expired:
             state = .activationCompleted
         case .cancelled:
             throw AtlasVaultUnlockRequestError.cancelled
-        case .expired:
-            throw AtlasVaultUnlockRequestError.expired
         case .open, .activationCompleted:
             throw AtlasVaultUnlockRequestError.alreadyUsed
         }
+    }
+}
+
+private actor AtlasVaultUnlockOperationStartGate {
+    private var isReleased = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            if isReleased {
+                continuation.resume()
+            } else {
+                precondition(waiter == nil, "Operation start gate supports one waiter")
+                waiter = continuation
+            }
+        }
+    }
+
+    func release() {
+        guard !isReleased else { return }
+        isReleased = true
+        waiter?.resume()
+        waiter = nil
     }
 }
 
@@ -684,15 +729,13 @@ private actor AtlasVaultUnlockRequestStorage {
         }
     }
 
-    func finishSuccess() -> AtlasVaultUnlockRequestError? {
+    func finishActivationSuccess() -> AtlasVaultUnlockRequestError? {
         switch state {
-        case .dispatching:
+        case .dispatching, .expired:
             state = .completed
             return nil
         case .cancelled:
             return .cancelled
-        case .expired:
-            return .expired
         case .pending, .completed:
             return .alreadyUsed
         }
