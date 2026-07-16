@@ -72,6 +72,8 @@ completion cannot lock a later foreground session.
 A policy that retains grace on foreground also retains scheduling across a
 foreground or inactive event that arrives while a facade await is in progress.
 A cancel-on-active policy invalidates that same scheduling generation.
+If its monotonic deadline expired while execution was suspended, foregrounding
+fails closed to lock instead of cancelling the overdue task.
 
 The pending task retains the coordinator until the scheduled lock completes
 or an explicit lifecycle event cancels it, so dropping the host's last

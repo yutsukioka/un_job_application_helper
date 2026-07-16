@@ -128,6 +128,7 @@ public actor AtlasVaultLifecycleCoordinator:
     private var lastFailure: AtlasVaultLifecycleFailure?
     private var lifecycleGeneration: UInt64 = 0
     private var pendingGraceGeneration: UInt64?
+    private var pendingGraceDeadline: Duration?
     private var pendingGraceTask: Task<Void, Never>?
     private var isTerminated = false
 
@@ -170,7 +171,7 @@ public actor AtlasVaultLifecycleCoordinator:
         switch event {
         case .didBecomeActive:
             if lockPolicy.cancelsGraceLockOnActive {
-                invalidatePendingGraceLock()
+                await handleActiveGracePolicy()
             }
         case .willResignActive:
             _ = await runtime.cancelActivationIfInProgress()
@@ -189,6 +190,25 @@ public actor AtlasVaultLifecycleCoordinator:
             await runtime.lock()
         case .protectedDataBecameAvailable:
             break
+        }
+    }
+
+    private func handleActiveGracePolicy() async {
+        guard let generation = pendingGraceGeneration,
+              let deadline = pendingGraceDeadline else {
+            invalidatePendingGraceLock()
+            return
+        }
+
+        let now = await clock.now()
+        guard pendingGraceGeneration == generation,
+              pendingGraceDeadline == deadline else {
+            return
+        }
+        let isOverdue = now >= deadline
+        invalidatePendingGraceLock()
+        if isOverdue {
+            await runtime.lock()
         }
     }
 
@@ -271,6 +291,7 @@ public actor AtlasVaultLifecycleCoordinator:
         }
 
         let deadline = now + duration
+        pendingGraceDeadline = deadline
         let sleeper = sleeper
         pendingGraceTask = Task { [self] in
             do {
@@ -293,6 +314,7 @@ public actor AtlasVaultLifecycleCoordinator:
             return
         }
         pendingGraceGeneration = nil
+        pendingGraceDeadline = nil
         pendingGraceTask = nil
         await runtime.lock()
     }
@@ -302,6 +324,7 @@ public actor AtlasVaultLifecycleCoordinator:
             return
         }
         pendingGraceGeneration = nil
+        pendingGraceDeadline = nil
         pendingGraceTask = nil
         lastFailure = .graceTimerUnavailable
         await runtime.lock()
@@ -310,6 +333,7 @@ public actor AtlasVaultLifecycleCoordinator:
     private func invalidatePendingGraceLock() {
         lifecycleGeneration &+= 1
         pendingGraceGeneration = nil
+        pendingGraceDeadline = nil
         pendingGraceTask?.cancel()
         pendingGraceTask = nil
     }

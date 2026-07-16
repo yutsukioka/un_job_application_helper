@@ -102,6 +102,24 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertFalse(status.hasPendingGraceLock)
     }
 
+    func testForegroundLocksWhenSuspendedGraceDeadlineAlreadyExpired() async {
+        let harness = LifecycleHarness(status: .unlocked)
+        let coordinator = harness.coordinator(
+            policy: .afterGracePeriod(.seconds(30), cancelOnActive: true)
+        )
+        await coordinator.handle(.didEnterBackground)
+        let didSchedule = await harness.time.waitUntilSleeperCount(1)
+        XCTAssertTrue(didSchedule)
+
+        await harness.time.elapseWithoutResumingSleepers(by: .seconds(30))
+        await coordinator.handle(.didBecomeActive)
+
+        let lockCount = await harness.runtime.lockCount()
+        let status = await coordinator.status()
+        XCTAssertEqual(lockCount, 1)
+        XCTAssertFalse(status.hasPendingGraceLock)
+    }
+
     func testGracePolicyCanRetainTimerOnForeground() async {
         let harness = LifecycleHarness(status: .unlocked)
         let coordinator = harness.coordinator(
@@ -779,6 +797,10 @@ private actor LifecycleManualTime: AtlasVaultLifecycleClock, AtlasVaultLifecycle
             waiters.removeValue(forKey: id)
             waiter.continuation.resume()
         }
+    }
+
+    func elapseWithoutResumingSleepers(by duration: Duration) {
+        current += duration
     }
 
     func failNextSleep() {
