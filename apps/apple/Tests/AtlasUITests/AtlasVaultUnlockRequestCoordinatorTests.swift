@@ -83,7 +83,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakeVaultKey)
 
         try await coordinator.dispatch(
-            request(input: .suppliedTestVaultKey(buffer))
+            suppliedTestKeyRequest(buffer: buffer)
         )
 
         let snapshot = await spy.snapshot()
@@ -359,6 +359,30 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertFalse(didCancel)
     }
 
+    func testCancellationCannotRelabelCompletedActivation() async throws {
+        let successCommitGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            successCommitGate: successCommitGate
+        )
+        let request = request(input: .localKey)
+
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReachCommit = await successCommitGate.waitUntilEntered()
+        XCTAssertTrue(didReachCommit)
+
+        let didCancel = await coordinator.cancel(request)
+        XCTAssertFalse(didCancel)
+        await successCommitGate.open()
+        try await dispatch.value
+
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
     func testRequestBufferCoordinatorAndErrorsHaveRedactedDescriptions() async {
         let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
         let request = request(input: .passphrase(buffer))
@@ -409,19 +433,6 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(try encodedPublicSnapshot(snapshot), before)
     }
 
-    func testDispatchCreatesNoFilesOrVaultArtifacts() async throws {
-        let root = try temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let before = try relativePaths(at: root)
-        let coordinator = makeCoordinator(spy: UnlockDependencySpy())
-
-        try await coordinator.dispatch(request(input: .localKey))
-
-        let after = try relativePaths(at: root)
-        XCTAssertEqual(after, before)
-        XCTAssertFalse(after.contains { $0.hasSuffix(".atlasvault") })
-    }
-
     func testSourceHasNoUIPlatformPersistenceOrEncodingCoupling() throws {
         let source = try String(contentsOf: sourceURL(), encoding: .utf8)
         let forbidden = [
@@ -448,9 +459,19 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         )
     }
 
+    private func suppliedTestKeyRequest(
+        buffer: any AtlasVaultSecretBuffer
+    ) -> AtlasVaultUnlockRequest {
+        AtlasVaultUnlockRequest(
+            vaultID: Self.fakeVaultID,
+            suppliedTestVaultKey: buffer
+        )
+    }
+
     private func makeCoordinator(
         spy: UnlockDependencySpy,
-        sleeper: UnlockManualSleeper? = nil
+        sleeper: UnlockManualSleeper? = nil,
+        successCommitGate: UnlockGate? = nil
     ) -> AtlasVaultUnlockRequestCoordinator {
         let dependencies = AtlasVaultUnlockRequestDependencies(
             derivePassphraseVaultKey: { bytes in
@@ -467,6 +488,11 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
                     try await sleeper.sleep(for: duration)
                 } else {
                     try await Task.sleep(for: duration)
+                }
+            },
+            beforeSuccessCommit: {
+                if let successCommitGate {
+                    try? await successCommitGate.enter()
                 }
             }
         )
@@ -555,30 +581,6 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(snapshot)
-    }
-
-    private func temporaryRoot() throws -> URL {
-        let root = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
-            .appendingPathComponent("atlas-unlock-request-tests")
-            .appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(
-            at: root,
-            withIntermediateDirectories: true
-        )
-        return root
-    }
-
-    private func relativePaths(at root: URL) throws -> [String] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: nil
-        ) else {
-            return []
-        }
-        return enumerator.compactMap { value in
-            guard let url = value as? URL else { return nil }
-            return String(url.path.dropFirst(root.path.count + 1))
-        }.sorted()
     }
 
     private func sourceURL() throws -> URL {

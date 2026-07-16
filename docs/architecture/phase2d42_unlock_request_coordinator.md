@@ -31,6 +31,10 @@ transfer, explicit cleanup, or deinitialization. Clearing is best effort:
 Swift `Data`, allocator behavior, and dependency-owned copies prevent a formal
 memory-zeroization guarantee.
 
+The public input enum exposes passphrase, recovery-key, and local-key choices.
+The supplied fake vault-key constructor is internal to the module and available
+to `@testable` tests only; it is not a public bypass around derivation.
+
 ## Coordinator Behavior
 
 `AtlasVaultUnlockRequestCoordinator` serializes request claims in an actor and
@@ -41,9 +45,12 @@ resulting fake key length, and delegates activation through the existing
 supplied key and reveals no Keychain implementation detail.
 
 Success, failure, cancellation, and timeout remove coordinator-owned secret
-references. Cancellation invalidates pending or active requests, cancels the
-active child task, and prevents a late dependency completion from activating
-the vault. Dependencies remain responsible for clearing any copies they own.
+references. Once activation completes, the coordinator synchronously enters a
+completion phase before another coordinator action can reserve cancellation or
+expiration; a late cancel therefore cannot relabel a completed activation.
+Earlier cancellation invalidates the request, cancels the active child task,
+and prevents a late dependency completion from activating the vault.
+Dependencies remain responsible for clearing any copies they own.
 
 ## Privacy And Error Behavior
 
