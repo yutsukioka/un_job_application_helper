@@ -628,6 +628,76 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         XCTAssertFalse(recorder.events.contains("atomicWrite"))
     }
 
+    func testLockCancelsSynchronousPreCommitSaveBeforeAtomicWrite() async throws {
+        let rootURL = try temporaryRoot()
+        addTeardownBlock { try? FileManager.default.removeItem(at: rootURL) }
+        let recorder = RuntimeFacadeRecorder()
+        let box = RuntimeStoreBox(store: Self.emptyStore())
+        let gate = RuntimePreCommitGate()
+        let storeURL = try AtlasInjectedRootVaultPathLocator(rootURL: rootURL)
+            .localStoreURL(vaultID: Self.vaultID)
+        try FileManager.default.createDirectory(
+            at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        XCTAssertTrue(FileManager.default.createFile(atPath: storeURL.path, contents: Data()))
+        let services: AtlasVaultRuntimeServices<
+            RuntimeDirectoryPreparer,
+            RuntimeLocalStoreIO
+        > = AtlasVaultRuntimeFactory.makeServices(
+            rootDirectoryProvider: RuntimeRootProvider(
+                rootURL: rootURL,
+                recorder: recorder
+            ),
+            keyStore: RuntimeKeyStore(key: Self.vaultKey, recorder: recorder),
+            directoryPreparer: RuntimeDirectoryPreparer(recorder: recorder),
+            localStoreIO: RuntimeLocalStoreIO(box: box, recorder: recorder),
+            atomicStoreWriter: RuntimeAtomicWriter(box: box, recorder: recorder),
+            localStoreMerger: RuntimeBlockingMerger(
+                recorder: recorder,
+                gate: gate
+            ),
+            recordSaver: RuntimeSaver(recorder: recorder),
+            recordHydrator: RuntimeHydrator(recorder: recorder)
+        )
+        let facade = AtlasVaultRuntimeFacade.runtimeServices(services)
+        try await facade.activate(activationRequest(suppliedKey: nil))
+        let request = AtlasVaultRuntimeMutationRequest(
+            expectedVaultID: Self.vaultID,
+            mutations: AtlasVaultMutationSet(creates: [AtlasVaultCreateMutation(
+                payload: .savedSearch(savedSearchEnvelope()),
+                keyID: "fake-key-id"
+            )])
+        )
+
+        let save = Task { try await facade.apply(request) }
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            gate.open()
+            _ = try? await save.value
+            return
+        }
+
+        let lock = Task { await facade.lock() }
+        let didObserveCancellation = await gate.waitUntilCancellationObserved()
+        XCTAssertTrue(didObserveCancellation)
+        gate.open()
+        await lock.value
+
+        do {
+            _ = try await save.value
+            XCTFail("Expected lock-priority cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+        let status = await facade.status()
+        XCTAssertEqual(status, .locked)
+        XCTAssertTrue(recorder.events.contains("merger"))
+        XCTAssertFalse(recorder.events.contains("atomicWrite"))
+    }
+
     func testDiagnosticsContainNoKeyPathOrPrivateSentinel() async {
         let harness = FacadeHarness()
         let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
@@ -1242,6 +1312,79 @@ private struct RuntimeCancellingMerger: AtlasVaultLocalStoreMerging {
         return try AtlasVaultLocalStoreMerger(
             updatedAtProvider: { "2026-01-02T00:00:00Z" }
         ).merge(records: incoming, into: store)
+    }
+}
+
+private struct RuntimeBlockingMerger: AtlasVaultLocalStoreMerging {
+    let recorder: RuntimeFacadeRecorder
+    let gate: RuntimePreCommitGate
+
+    func merge(
+        records incoming: [AtlasVaultEncryptedRecordEnvelope],
+        into store: AtlasVaultLocalStoreEnvelope
+    ) throws -> AtlasVaultLocalStoreEnvelope {
+        recorder.record("merger")
+        gate.blockUntilOpened()
+        return try AtlasVaultLocalStoreMerger(
+            updatedAtProvider: { "2026-01-02T00:00:00Z" }
+        ).merge(records: incoming, into: store)
+    }
+}
+
+private final class RuntimePreCommitGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var entered = false
+    private var cancellationObserved = false
+    private var isOpen = false
+
+    func blockUntilOpened() {
+        condition.lock()
+        entered = true
+        condition.broadcast()
+        while !isOpen {
+            let isCancelled = withUnsafeCurrentTask { task in
+                task?.isCancelled ?? false
+            }
+            if isCancelled {
+                cancellationObserved = true
+                condition.broadcast()
+            }
+            _ = condition.wait(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        condition.unlock()
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<100 {
+            if snapshot(\.entered) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return snapshot(\.entered)
+    }
+
+    func waitUntilCancellationObserved() async -> Bool {
+        for _ in 0..<100 {
+            if snapshot(\.cancellationObserved) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return snapshot(\.cancellationObserved)
+    }
+
+    func open() {
+        condition.lock()
+        isOpen = true
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    private func snapshot(_ keyPath: KeyPath<RuntimePreCommitGate, Bool>) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return self[keyPath: keyPath]
     }
 }
 

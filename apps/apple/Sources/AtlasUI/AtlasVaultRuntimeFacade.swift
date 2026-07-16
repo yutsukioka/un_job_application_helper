@@ -269,10 +269,16 @@ public actor AtlasVaultRuntimeFacade:
         let kind: OperationKind
     }
 
+    private struct ActiveSaveOperation {
+        let operation: ActiveOperation
+        let task: Task<AtlasVaultAtomicWriteResult, Error>
+    }
+
     private let environment: AtlasVaultRuntimeFacadeEnvironment
     private var runtimeStatus: AtlasVaultRuntimeStatus = .locked
     private var operationEpoch: UInt64 = 0
     private var activeOperation: ActiveOperation?
+    private var activeSaveOperation: ActiveSaveOperation?
 
     public init(activationController: AtlasVaultActivationController) {
         self.environment = AtlasVaultRuntimeFacadeEnvironment(
@@ -344,10 +350,13 @@ public actor AtlasVaultRuntimeFacade:
 
     public func lock() async {
         let wasActivating = runtimeStatus == .activating
+        let saveTask = runtimeStatus == .saving ? activeSaveOperation?.task : nil
         let operation = begin(
             .lock,
             status: runtimeStatus == .locked ? .locked : .locking
         )
+        activeSaveOperation = nil
+        saveTask?.cancel()
         if wasActivating {
             _ = await environment.cancelActivation()
         }
@@ -410,18 +419,35 @@ public actor AtlasVaultRuntimeFacade:
         }
 
         let operation = begin(.save, status: .saving)
+        let environment = environment
+        let mutations = request.mutations
+        let expectedVaultID = request.expectedVaultID
+        let saveTask = Task {
+            try await environment.save(
+                mutations,
+                expectedVaultID
+            )
+        }
+        activeSaveOperation = ActiveSaveOperation(
+            operation: operation,
+            task: saveTask
+        )
         let result: AtlasVaultAtomicWriteResult
         do {
-            result = try await environment.save(
-                request.mutations,
-                request.expectedVaultID
-            )
+            result = try await withTaskCancellationHandler {
+                try await saveTask.value
+            } onCancel: {
+                saveTask.cancel()
+            }
         } catch let error as AtlasVaultActivatedOperationError {
+            clearSaveOperation(operation)
             throw await finishSaveFailure(error, operation: operation)
         } catch is CancellationError {
+            clearSaveOperation(operation)
             await cancelAndLock(operation: operation)
             throw AtlasVaultRuntimeFacadeError.cancelled
         } catch {
+            clearSaveOperation(operation)
             guard isCurrent(operation) else {
                 throw AtlasVaultRuntimeFacadeError.cancelled
             }
@@ -429,6 +455,7 @@ public actor AtlasVaultRuntimeFacade:
             runtimeStatus = .unlocked
             throw AtlasVaultRuntimeFacadeError.saveFailed
         }
+        clearSaveOperation(operation)
         let outcome = AtlasVaultSaveOutcome(result)
         guard isCurrent(operation) else {
             return outcome
@@ -459,6 +486,13 @@ public actor AtlasVaultRuntimeFacade:
 
     private func isCurrent(_ operation: ActiveOperation) -> Bool {
         activeOperation == operation && operationEpoch == operation.token
+    }
+
+    private func clearSaveOperation(_ operation: ActiveOperation) {
+        guard activeSaveOperation?.operation == operation else {
+            return
+        }
+        activeSaveOperation = nil
     }
 
     private func finishActivationFailure(
