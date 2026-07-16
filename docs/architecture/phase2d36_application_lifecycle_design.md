@@ -33,6 +33,11 @@ The initial neutral event set is `didBecomeActive`, `willResignActive`,
 `protectedDataBecameAvailable`. Platform adapters may map callbacks to these
 values but must not add platform objects or private data to them.
 
+In this document, Foreground means `didBecomeActive`, Inactive means
+`willResignActive`, Background means `didEnterBackground`, and Termination
+means `willTerminate`. The protected-data section names map directly to their
+corresponding enum cases.
+
 ## 5. Construction At Launch
 
 Launch may construct the side-effect-free runtime composition, facade, and a
@@ -146,10 +151,17 @@ plaintext persistence or restoration.
 
 ## 21. Cancellation Of Pending Activation
 
-Background, inactive, protected-data unavailability, termination, and
-explicit lock invalidate pending activation by calling the facade's lock
-boundary. The coordinator does not retain or inspect the activation request or
-key material.
+Background, protected-data unavailability, termination, and explicit lock
+invalidate pending activation through the facade's lock boundary. Inactive
+cancels only an operation that is still activating; it must leave an already
+unlocked session unchanged under the initial policy.
+
+Phase 2D-37 should add the smallest internal facade capability that atomically
+cancels activation only when activation is in progress. It must not implement
+inactive cancellation as `status()` followed by `lock()`, because activation
+could complete between those calls and the lock would tear down the new
+session. The coordinator never retains or inspects activation input or key
+material.
 
 ## 22. Cancellation Of Pending Save
 
@@ -225,9 +237,12 @@ snippets, or document references.
 ## 33. Runtime Facade Interaction
 
 The future coordinator depends on a narrow injected facade capability:
-redacted `status()` and idempotent `lock()`. It does not call `activate` on a
-lifecycle event. If operation-aware waiting is needed, add a redacted facade
-completion seam only after review rather than polling private internals.
+redacted `status()`, idempotent `lock()`, and an internal atomic
+`cancelActivationIfInProgress()`-style operation. It does not call `activate`
+on a lifecycle event. Conditional cancellation must be implemented inside the
+facade actor rather than as a status/lock check. If operation-aware waiting is
+needed, add a redacted facade completion seam only after review rather than
+polling private internals.
 
 ## 34. Future Lifecycle Coordinator
 
