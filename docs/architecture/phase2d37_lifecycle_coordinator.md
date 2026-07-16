@@ -28,6 +28,9 @@ new unlocked session intact.
 A cancellation result tied to an older facade operation also returns `false`.
 This forces the lifecycle coordinator to inspect and apply policy to the
 current operation rather than treating a newer activation as cancelled.
+The same rule applies if the cancellation-triggered lock is superseded while
+its injected lock operation is suspended: success is reported only when that
+specific operation installs the locked facade state.
 
 If a grace-policy background event still observes the transient activating
 facade state after cancellation loses twice, the coordinator requests an

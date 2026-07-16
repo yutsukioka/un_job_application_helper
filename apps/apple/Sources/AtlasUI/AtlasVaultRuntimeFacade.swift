@@ -386,7 +386,7 @@ public actor AtlasVaultRuntimeFacade:
         let lockOperation = begin(.lock, status: .locking)
         await environment.lock()
         guard isCurrent(lockOperation) else {
-            return true
+            return false
         }
         activeOperation = nil
         runtimeStatus = .locked

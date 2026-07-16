@@ -566,6 +566,52 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         }
     }
 
+    func testFacadeConditionalCancellationRejectsStaleLockSuccessForNewActivation() async {
+        let lockGate = LifecycleGate()
+        let harness = LifecycleFacadeHarness(
+            blockActivation: true,
+            firstLockGate: lockGate
+        )
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        let firstRequest = AtlasVaultRuntimeActivationRequest(vaultID: "vault-random-006")
+        let firstActivation = Task { try await facade.activate(firstRequest) }
+        let didStartFirst = await harness.waitUntilActivationCount(1)
+        XCTAssertTrue(didStartFirst)
+
+        let staleCancellation = Task {
+            await facade.cancelActivationIfInProgress()
+        }
+        let didHoldFirstLock = await lockGate.waitUntilEntered()
+        XCTAssertTrue(didHoldFirstLock)
+
+        await facade.lock()
+        do {
+            try await firstActivation.value
+            XCTFail("Expected first activation cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+
+        let secondRequest = AtlasVaultRuntimeActivationRequest(vaultID: "vault-random-007")
+        let secondActivation = Task { try await facade.activate(secondRequest) }
+        let didStartSecond = await harness.waitUntilActivationCount(2)
+        XCTAssertTrue(didStartSecond)
+        await lockGate.open()
+
+        let didCancelCurrentActivation = await staleCancellation.value
+        let statusBeforeCleanup = await facade.status()
+        XCTAssertFalse(didCancelCurrentActivation)
+        XCTAssertEqual(statusBeforeCleanup, .activating)
+
+        await facade.lock()
+        do {
+            try await secondActivation.value
+            XCTFail("Expected cleanup cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+    }
+
     func testCoordinatorSourceHasNoRuntimeOrPlatformCoupling() throws {
         let source = try String(contentsOf: sourceURL(), encoding: .utf8)
         let forbidden = [
@@ -843,16 +889,20 @@ private actor LifecycleFacadeHarness {
     private let blockActivation: Bool
     private let cancellationCompletesActivation: Bool
     private let firstCancellationGate: LifecycleGate?
+    private let firstLockGate: LifecycleGate?
     private var cancellationCallCount = 0
+    private var lockCallCount = 0
 
     init(
         blockActivation: Bool = false,
         cancellationCompletesActivation: Bool = false,
-        firstCancellationGate: LifecycleGate? = nil
+        firstCancellationGate: LifecycleGate? = nil,
+        firstLockGate: LifecycleGate? = nil
     ) {
         self.blockActivation = blockActivation
         self.cancellationCompletesActivation = cancellationCompletesActivation
         self.firstCancellationGate = firstCancellationGate
+        self.firstLockGate = firstLockGate
     }
 
     nonisolated func environment() -> AtlasVaultRuntimeFacadeEnvironment {
@@ -922,7 +972,12 @@ private actor LifecycleFacadeHarness {
         return true
     }
 
-    private func lock() {
+    private func lock() async {
         recordedEvents.append("lock")
+        lockCallCount += 1
+        if lockCallCount == 1,
+           let firstLockGate {
+            await firstLockGate.enter()
+        }
     }
 }
