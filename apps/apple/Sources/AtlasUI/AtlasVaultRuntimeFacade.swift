@@ -444,8 +444,7 @@ public actor AtlasVaultRuntimeFacade:
             throw await finishSaveFailure(error, operation: operation)
         } catch is CancellationError {
             clearSaveOperation(operation)
-            await cancelAndLock(operation: operation)
-            throw AtlasVaultRuntimeFacadeError.cancelled
+            throw finishSaveCancellation(operation: operation)
         } catch {
             clearSaveOperation(operation)
             guard isCurrent(operation) else {
@@ -516,6 +515,21 @@ public actor AtlasVaultRuntimeFacade:
         _ error: AtlasVaultActivatedOperationError,
         operation: ActiveOperation
     ) async -> AtlasVaultRuntimeFacadeError {
+        if case let .committedStateUnavailable(result) = error {
+            let failure = AtlasVaultRuntimeFacadeError.committedStateUnavailable(
+                AtlasVaultSaveOutcome(result)
+            )
+            guard isCurrent(operation) else {
+                return failure
+            }
+            await environment.lock()
+            guard isCurrent(operation) else {
+                return failure
+            }
+            activeOperation = nil
+            runtimeStatus = .locked
+            return failure
+        }
         guard isCurrent(operation) else {
             return .cancelled
         }
@@ -533,17 +547,21 @@ public actor AtlasVaultRuntimeFacade:
             runtimeStatus = .unlocked
             return .saveFailed
         case .cancelled:
-            await cancelAndLock(operation: operation)
-            return .cancelled
-        case let .committedStateUnavailable(result):
-            await environment.lock()
-            guard isCurrent(operation) else {
-                return .committedStateUnavailable(AtlasVaultSaveOutcome(result))
-            }
-            activeOperation = nil
-            runtimeStatus = .locked
-            return .committedStateUnavailable(AtlasVaultSaveOutcome(result))
+            return finishSaveCancellation(operation: operation)
+        case .committedStateUnavailable:
+            preconditionFailure("handled before stale-operation downgrade")
         }
+    }
+
+    private func finishSaveCancellation(
+        operation: ActiveOperation
+    ) -> AtlasVaultRuntimeFacadeError {
+        guard isCurrent(operation) else {
+            return .cancelled
+        }
+        activeOperation = nil
+        runtimeStatus = .unlocked
+        return .cancelled
     }
 
     private func cancelAndLock(operation: ActiveOperation) async {

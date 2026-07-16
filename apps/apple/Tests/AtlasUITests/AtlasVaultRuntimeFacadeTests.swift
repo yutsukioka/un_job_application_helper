@@ -195,6 +195,41 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         XCTAssertEqual(state.state, initial)
     }
 
+    func testCallerCancellationBeforeSaveCommitKeepsFacadeUnlocked() async throws {
+        let initial = privateState(recordID: "initial-private-record")
+        let gate = FacadeGate()
+        let harness = FacadeHarness(privateState: initial, saveGate: gate)
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        try await facade.activate(activationRequest())
+        let request = mutationRequest()
+
+        let save = Task { try await facade.apply(request) }
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            await gate.open()
+            _ = try? await save.value
+            return
+        }
+
+        save.cancel()
+        await gate.open()
+
+        do {
+            _ = try await save.value
+            XCTFail("Expected pre-commit cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+        let status = await facade.status()
+        let state = try await facade.privateState()
+        let lockCount = await harness.events().filter { $0 == "lock" }.count
+        XCTAssertEqual(status, .unlocked)
+        XCTAssertEqual(state.state, initial)
+        XCTAssertEqual(lockCount, 0)
+    }
+
     func testSessionMismatchLeavesPrivateStateUnchanged() async throws {
         let initial = privateState(recordID: "initial-private-record")
         let harness = FacadeHarness(privateState: initial)
@@ -428,6 +463,44 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
     func testExplicitLockDuringCommittedFailurePreservesCommitAwareError() async throws {
         let gate = FacadeGate()
         let harness = FacadeHarness(firstLockGate: gate)
+        await harness.setSaveFailure(
+            .committedStateUnavailable(
+                AtlasVaultAtomicWriteResult(commitState: .committed)
+            )
+        )
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        try await facade.activate(activationRequest())
+        let request = mutationRequest()
+
+        let save = Task { try await facade.apply(request) }
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            await gate.open()
+            _ = try? await save.value
+            return
+        }
+
+        await facade.lock()
+        await gate.open()
+
+        do {
+            _ = try await save.value
+            XCTFail("Expected committed-state failure")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultRuntimeFacadeError,
+                .committedStateUnavailable(.committed)
+            )
+        }
+        let status = await facade.status()
+        XCTAssertEqual(status, .locked)
+    }
+
+    func testLockBeforeCommittedFailureDeliveryPreservesCommitAwareError() async throws {
+        let gate = FacadeGate()
+        let harness = FacadeHarness(saveFailureGate: gate)
         await harness.setSaveFailure(
             .committedStateUnavailable(
                 AtlasVaultAtomicWriteResult(commitState: .committed)
@@ -981,6 +1054,7 @@ private actor FacadeHarness {
     private var saveFailure: AtlasVaultActivatedOperationError?
     private var saveResult = AtlasVaultAtomicWriteResult(commitState: .committed)
     private var saveGate: FacadeGate?
+    private var saveFailureGate: FacadeGate?
     private var postCommitSaveGate: FacadeGate?
     private var firstLockGate: FacadeGate?
     private var activationSleepsUntilCancelled = false
@@ -990,12 +1064,14 @@ private actor FacadeHarness {
         privateState: AtlasVaultHydratedState = AtlasVaultHydratedState(),
         postSaveState: AtlasVaultHydratedState? = nil,
         saveGate: FacadeGate? = nil,
+        saveFailureGate: FacadeGate? = nil,
         postCommitSaveGate: FacadeGate? = nil,
         firstLockGate: FacadeGate? = nil
     ) {
         self.installedState = privateState
         self.stateAfterSave = postSaveState ?? privateState
         self.saveGate = saveGate
+        self.saveFailureGate = saveFailureGate
         self.postCommitSaveGate = postCommitSaveGate
         self.firstLockGate = firstLockGate
     }
@@ -1107,11 +1183,17 @@ private actor FacadeHarness {
         if let saveGate {
             await saveGate.enter()
         }
+        guard !Task.isCancelled else {
+            throw AtlasVaultActivatedOperationError.cancelled
+        }
         guard activeVaultID == expectedVaultID else {
             throw AtlasVaultActivatedOperationError.sessionMismatch
         }
         if let saveFailure {
             if case .committedStateUnavailable = saveFailure {
+                if let saveFailureGate {
+                    await saveFailureGate.enter()
+                }
                 activeVaultID = nil
             }
             throw saveFailure
