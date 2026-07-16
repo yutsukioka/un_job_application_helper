@@ -200,8 +200,10 @@ public actor AtlasVaultLifecycleCoordinator:
             invalidatePendingGraceLock()
             await runtime.lock()
         case let .afterGracePeriod(duration, _):
+            let schedulingGeneration = lifecycleGeneration
             let cancelledActivation = await runtime.cancelActivationIfInProgress()
-            guard lastEvent == .didEnterBackground else {
+            guard lifecycleGeneration == schedulingGeneration,
+                  !isTerminated else {
                 return
             }
             if cancelledActivation {
@@ -210,7 +212,8 @@ public actor AtlasVaultLifecycleCoordinator:
             }
 
             let runtimeStatus = await runtime.status()
-            guard lastEvent == .didEnterBackground else {
+            guard lifecycleGeneration == schedulingGeneration,
+                  !isTerminated else {
                 return
             }
             switch runtimeStatus {
@@ -237,8 +240,7 @@ public actor AtlasVaultLifecycleCoordinator:
         let generation = lifecycleGeneration
         pendingGraceGeneration = generation
         let now = await clock.now()
-        guard pendingGraceGeneration == generation,
-              lastEvent == .didEnterBackground else {
+        guard pendingGraceGeneration == generation else {
             return
         }
 

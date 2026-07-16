@@ -103,6 +103,48 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertFalse(status.hasPendingGraceLock)
     }
 
+    func testRetainedGracePolicySurvivesForegroundWhileStatusIsSuspended() async {
+        let statusGate = LifecycleGate()
+        let harness = LifecycleHarness(status: .unlocked, statusGate: statusGate)
+        let coordinator = harness.coordinator(
+            policy: .afterGracePeriod(.seconds(30), cancelOnActive: false)
+        )
+        let background = Task { await coordinator.handle(.didEnterBackground) }
+        let didEnterStatus = await statusGate.waitUntilEntered()
+        XCTAssertTrue(didEnterStatus)
+
+        await coordinator.handle(.didBecomeActive)
+        await statusGate.open()
+        await background.value
+
+        let didSchedule = await harness.time.waitUntilSleeperCount(1)
+        XCTAssertTrue(didSchedule)
+        await harness.time.advance(by: .seconds(30))
+        let didLock = await harness.runtime.waitUntilLockCount(1)
+        XCTAssertTrue(didLock)
+    }
+
+    func testCancellableGracePolicyDropsSchedulingAfterForegroundRace() async {
+        let statusGate = LifecycleGate()
+        let harness = LifecycleHarness(status: .unlocked, statusGate: statusGate)
+        let coordinator = harness.coordinator(
+            policy: .afterGracePeriod(.seconds(30), cancelOnActive: true)
+        )
+        let background = Task { await coordinator.handle(.didEnterBackground) }
+        let didEnterStatus = await statusGate.waitUntilEntered()
+        XCTAssertTrue(didEnterStatus)
+
+        await coordinator.handle(.didBecomeActive)
+        await statusGate.open()
+        await background.value
+        await drainTasks()
+
+        let sleeperCount = await harness.time.sleeperCount()
+        let lockCount = await harness.runtime.lockCount()
+        XCTAssertEqual(sleeperCount, 0)
+        XCTAssertEqual(lockCount, 0)
+    }
+
     func testProtectedDataUnavailableOverridesGracePeriod() async {
         let harness = LifecycleHarness(status: .unlocked)
         let coordinator = harness.coordinator(
@@ -386,9 +428,10 @@ private struct LifecycleHarness {
 
     init(
         status: AtlasVaultRuntimeStatus,
-        honorTimerCancellation: Bool = true
+        honorTimerCancellation: Bool = true,
+        statusGate: LifecycleGate? = nil
     ) {
-        runtime = LifecycleRuntimeSpy(status: status)
+        runtime = LifecycleRuntimeSpy(status: status, statusGate: statusGate)
         time = LifecycleManualTime(honorCancellation: honorTimerCancellation)
     }
 
@@ -409,13 +452,18 @@ private struct LifecycleHarness {
 private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
     private var statusValue: AtlasVaultRuntimeStatus
     private var recordedEvents: [String] = []
+    private let statusGate: LifecycleGate?
 
-    init(status: AtlasVaultRuntimeStatus) {
+    init(status: AtlasVaultRuntimeStatus, statusGate: LifecycleGate?) {
         statusValue = status
+        self.statusGate = statusGate
     }
 
-    func status() -> AtlasVaultRuntimeStatus {
+    func status() async -> AtlasVaultRuntimeStatus {
         recordedEvents.append("status")
+        if let statusGate {
+            await statusGate.enter()
+        }
         return statusValue
     }
 
@@ -457,6 +505,39 @@ private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
             await Task.yield()
         }
         return lockCount() >= expected
+    }
+}
+
+private actor LifecycleGate {
+    private var entered = false
+    private var isOpen = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func enter() async {
+        entered = true
+        guard !isOpen else {
+            return
+        }
+        precondition(continuation == nil, "LifecycleGate supports one waiter")
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<1_000 {
+            if entered {
+                return true
+            }
+            await Task.yield()
+        }
+        return entered
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 

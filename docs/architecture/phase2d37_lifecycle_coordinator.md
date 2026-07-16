@@ -50,6 +50,10 @@ work is tagged with a coordinator-owned generation. Cancellation, foreground,
 security events, and later timers invalidate older generations so stale timer
 completion cannot lock a later foreground session.
 
+A policy that retains grace on foreground also retains scheduling across a
+foreground or inactive event that arrives while a facade await is in progress.
+A cancel-on-active policy invalidates that same scheduling generation.
+
 Tests inject manual time and continuations. No test waits for wall-clock sleep.
 
 ## Save And Activation Behavior
