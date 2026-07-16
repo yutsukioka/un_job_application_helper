@@ -23,10 +23,10 @@ persistence services, record crypto, or private-state store directly.
 
 ## 4. App Host Boundary
 
-The app host owns translation from platform-specific events into neutral
-`AtlasVaultLifecycleEvent` values. It forwards those values to one injected
-coordinator and does not contain vault policy, key handling, private-state
-cleanup, or save logic.
+The app host owns translation from platform-specific events into a future
+neutral `AtlasVaultLifecycleEvent` enum to be defined in Phase 2D-37. It
+forwards those values to one injected coordinator and does not contain vault
+policy, key handling, private-state cleanup, or save logic.
 
 The initial neutral event set is `didBecomeActive`, `willResignActive`,
 `didEnterBackground`, `willTerminate`, `protectedDataBecameUnavailable`, and
