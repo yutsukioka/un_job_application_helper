@@ -102,7 +102,7 @@ content using fixed user-facing language. It exposes no path, ciphertext,
 schema, record metadata, or partial plaintext and contains no private
 projection.
 
-### Unsupported-Version Status
+## 15.1. Unsupported-Version Status
 
 `unsupportedVersion` is distinct from corruption. It permits fixed upgrade
 guidance without revealing the encountered version, schema details, record
