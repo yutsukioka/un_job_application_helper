@@ -104,28 +104,29 @@ immediately, starts a grace period, or waits for an explicit security event.
 
 An iOS host should translate scene changes without passing `ScenePhase`,
 UIKit, or SwiftUI types into the coordinator. Scene backgrounding,
-protected-data loss, and process termination remain distinct events with
-protected-data loss taking highest priority.
+protected-data unavailability, and process termination remain distinct events
+with protected-data unavailability taking highest priority.
 
 ## 16. Multiple-Window Considerations
 
 One runtime facade represents one process-wide unlocked vault session. A
 future host should aggregate window activity so one active scene may cancel a
-scheduled grace lock, while protected-data loss or explicit lock from any
-scene locks all windows. Window identifiers must not become vault metadata.
+scheduled grace lock, while protected-data unavailability or explicit lock
+from any scene locks all windows. Window identifiers must not become vault
+metadata.
 
 ## 17. Lock-On-Background Policy Options
 
 The policy may be `immediate` or `afterGracePeriod(duration)`. A future
 explicitly reviewed `manual` option would carry greater privacy risk and is
-not recommended as the initial behavior. Protected-data loss and termination
-ignore the selected background policy and request immediate lock.
+not recommended as the initial behavior. Protected-data unavailability and
+termination ignore the selected background policy and request immediate lock.
 
 ## 18. Recommended Initial Lock Policy
 
-Use immediate lock on background, protected-data loss, and termination. This
-is deterministic, minimizes private-state lifetime, and avoids implying that
-background execution or a timer can be relied upon.
+Use immediate lock on background, protected-data unavailability, and
+termination. This is deterministic, minimizes private-state lifetime, and
+avoids implying that background execution or a timer can be relied upon.
 
 ## 19. Configurable Grace Period
 
@@ -143,10 +144,10 @@ plaintext persistence or restoration.
 
 ## 21. Cancellation Of Pending Activation
 
-Background, inactive when configured, protected-data loss, termination, and
-explicit lock invalidate pending activation by calling the facade's lock
-boundary. The coordinator does not retain or inspect the activation request or
-key material.
+Background, inactive when configured, protected-data unavailability,
+termination, and explicit lock invalidate pending activation by calling the
+facade's lock boundary. The coordinator does not retain or inspect the
+activation request or key material.
 
 ## 22. Cancellation Of Pending Save
 
