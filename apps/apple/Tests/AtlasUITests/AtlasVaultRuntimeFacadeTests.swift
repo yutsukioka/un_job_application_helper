@@ -94,6 +94,20 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         XCTAssertEqual(events, [])
     }
 
+    func testPrivateStateDependencyCancellationRemainsCancellation() async throws {
+        let harness = FacadeHarness(privateState: privateState(recordID: "private-record"))
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        try await facade.activate(activationRequest())
+        await harness.setPrivateStateCancels(true)
+
+        do {
+            _ = try await facade.privateState()
+            XCTFail("Expected private-state cancellation")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .cancelled)
+        }
+    }
+
     func testLockClearsStateAndRepeatedLockIsSafe() async throws {
         let harness = FacadeHarness(privateState: privateState(recordID: "private-record"))
         let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
@@ -713,6 +727,7 @@ private actor FacadeHarness {
     private var installedState: AtlasVaultHydratedState
     private var stateAfterSave: AtlasVaultHydratedState
     private var activationFailure: AtlasVaultActivationFailure?
+    private var privateStateCancels = false
     private var saveFailure: AtlasVaultActivatedOperationError?
     private var saveResult = AtlasVaultAtomicWriteResult(commitState: .committed)
     private var saveGate: FacadeGate?
@@ -769,6 +784,10 @@ private actor FacadeHarness {
         saveGate = gate
     }
 
+    func setPrivateStateCancels(_ value: Bool) {
+        privateStateCancels = value
+    }
+
     func events() -> [String] {
         recordedEvents
     }
@@ -811,6 +830,9 @@ private actor FacadeHarness {
 
     private func privateState() throws -> AtlasVaultHydratedState {
         recordedEvents.append("privateState")
+        if privateStateCancels {
+            throw CancellationError()
+        }
         guard activeVaultID != nil else {
             throw AtlasVaultPrivateStateStoreError.unavailable
         }
