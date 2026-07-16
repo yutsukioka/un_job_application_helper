@@ -26,10 +26,11 @@ accepts exactly one `AtlasVaultUnlockInputSource`:
 - a supplied fake vault-key buffer for tests.
 
 `AtlasVaultSecretBuffer` exposes only consuming byte transfer and idempotent
-clearing. `AtlasVaultInMemorySecretBuffer` clears its retained bytes on
-transfer, explicit cleanup, or deinitialization. Clearing is best effort:
-Swift `Data`, allocator behavior, and dependency-owned copies prevent a formal
-memory-zeroization guarantee.
+clearing. `AtlasVaultInMemorySecretBuffer` makes a byte-array copy on input so
+it does not retain caller-owned `Data` storage, then clears that owned storage
+on transfer, explicit cleanup, or deinitialization. Clearing is best effort:
+Swift copy-on-write behavior, allocator behavior, and dependency-owned copies
+prevent a formal memory-zeroization guarantee.
 
 The public input enum exposes passphrase, recovery-key, and local-key choices.
 The supplied fake vault-key constructor is internal to the module and available
@@ -47,6 +48,9 @@ supplied key and reveals no Keychain implementation detail.
 Success, failure, cancellation, and timeout remove coordinator-owned secret
 references. A lock-backed terminal gate makes cancellation, expiration, and
 activation reservation mutually exclusive without awaiting an actor hop.
+The active dispatch retains the claimed buffer only as a cleanup handle;
+caller cancellation, explicit cancellation, timeout, and coordinator teardown
+clear that handle even when the operation task has not begun consuming it.
 Cancellation or expiration that reserves the gate before activation prevents a
 late dependency completion from activating the vault. Once activation is
 reserved, a later cancellation cannot relabel that potentially irreversible
@@ -68,10 +72,11 @@ modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
 
 Fake-only tests cover construction, all four input sources, request-copy and
 concurrent single-use enforcement, cancellation before and during dispatch,
-caller cancellation, timeout, late dependency completion, success and failure
-cleanup, redacted descriptions, non-persistability, actor serialization, no
-public snapshot mutation, no filesystem artifacts, and source guards for UI,
-platform, persistence, networking, and encoding coupling.
+pre-operation cancellation and timeout cleanup, caller cancellation, late
+dependency completion, success and failure cleanup, redacted descriptions,
+non-persistability, actor serialization, no public snapshot mutation, no
+filesystem artifacts, and source guards for UI, platform, persistence,
+networking, and encoding coupling.
 
 ## Deferred
 

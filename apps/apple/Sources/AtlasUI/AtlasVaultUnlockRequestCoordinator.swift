@@ -28,10 +28,10 @@ public actor AtlasVaultInMemorySecretBuffer:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    private var bytes: Data?
+    private var bytes: [UInt8]?
 
     public init(bytes: Data) {
-        self.bytes = bytes
+        self.bytes = Array(bytes)
     }
 
     deinit {
@@ -41,11 +41,18 @@ public actor AtlasVaultInMemorySecretBuffer:
     }
 
     public func takeSecretBytes() async throws -> Data {
-        guard let bytes else {
+        guard var retainedBytes = bytes else {
             throw AtlasVaultSecretBufferError.unavailable
         }
-        self.bytes = nil
-        return bytes
+        bytes = nil
+        let result = retainedBytes.withUnsafeBytes { rawBuffer -> Data in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: rawBuffer.count)
+        }
+        Self.wipe(&retainedBytes)
+        return result
     }
 
     public func clear() async {
@@ -66,9 +73,13 @@ public actor AtlasVaultInMemorySecretBuffer:
         description
     }
 
-    private static func wipe(_ value: inout Data) {
+    private static func wipe(_ value: inout [UInt8]) {
         guard !value.isEmpty else { return }
-        value.resetBytes(in: value.startIndex..<value.endIndex)
+        value.withUnsafeMutableBufferPointer { buffer in
+            for index in buffer.indices {
+                buffer[index] = 0
+            }
+        }
         value.removeAll(keepingCapacity: false)
     }
 }
@@ -166,6 +177,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
     fileprivate let deriveRecoveryVaultKey: @Sendable (Data) async throws -> Data
     fileprivate let activate: @Sendable (AtlasVaultRuntimeActivationRequest) async throws -> Void
     fileprivate let sleep: @Sendable (Duration) async throws -> Void
+    fileprivate let beforeOperationStart: @Sendable () async -> Void
     fileprivate let beforeSuccessCommit: @Sendable () async -> Void
 
     public init(
@@ -183,6 +195,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             deriveRecoveryVaultKey: deriveRecoveryVaultKey,
             activate: activate,
             sleep: sleep,
+            beforeOperationStart: {},
             beforeSuccessCommit: {}
         )
     }
@@ -194,12 +207,14 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             AtlasVaultRuntimeActivationRequest
         ) async throws -> Void,
         sleep: @escaping @Sendable (Duration) async throws -> Void,
+        beforeOperationStart: @escaping @Sendable () async -> Void,
         beforeSuccessCommit: @escaping @Sendable () async -> Void
     ) {
         self.derivePassphraseVaultKey = derivePassphraseVaultKey
         self.deriveRecoveryVaultKey = deriveRecoveryVaultKey
         self.activate = activate
         self.sleep = sleep
+        self.beforeOperationStart = beforeOperationStart
         self.beforeSuccessCommit = beforeSuccessCommit
     }
 }
@@ -211,6 +226,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
 {
     private struct ActiveDispatch {
         let storage: AtlasVaultUnlockRequestStorage
+        let input: AtlasVaultUnlockRequestInput
         let operation: Task<Void, Error>
         let terminalGate: AtlasVaultUnlockTerminalGate
         var timeout: Task<Void, Never>?
@@ -227,6 +243,10 @@ public actor AtlasVaultUnlockRequestCoordinator:
         for active in activeDispatches.values {
             active.operation.cancel()
             active.timeout?.cancel()
+            let input = active.input
+            Task {
+                await input.clearSecret()
+            }
         }
     }
 
@@ -244,6 +264,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
         let dependencies = dependencies
         let terminalGate = AtlasVaultUnlockTerminalGate()
         let operation = Task {
+            await dependencies.beforeOperationStart()
             try await Self.perform(
                 claim: claim,
                 storage: storage,
@@ -253,6 +274,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
         }
         activeDispatches[claim.id] = ActiveDispatch(
             storage: storage,
+            input: claim.input,
             operation: operation,
             terminalGate: terminalGate,
             timeout: nil
@@ -266,6 +288,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
                 if terminalGate.reserveTermination(.cancelled) {
                     operation.cancel()
                     Task {
+                        await claim.input.clearSecret()
                         _ = await storage.cancel()
                     }
                 }
@@ -277,6 +300,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             clearActiveDispatch(claim.id)
         } catch {
             clearActiveDispatch(claim.id)
+            await claim.input.clearSecret()
             if error is CancellationError || Task.isCancelled {
                 _ = await storage.cancel()
             }
@@ -295,6 +319,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             guard didCancel else {
                 return false
             }
+            await active.input.clearSecret()
             active.operation.cancel()
             active.timeout?.cancel()
             return true
@@ -341,6 +366,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             return
         }
         guard await active.storage.expire() else { return }
+        await active.input.clearSecret()
         active.operation.cancel()
     }
 
