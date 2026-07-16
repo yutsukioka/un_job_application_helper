@@ -25,6 +25,10 @@ state. It transitions to locked only when cancellation returns success. If
 activation has already completed, the operation returns `false` and leaves the
 new unlocked session intact.
 
+If a grace-policy background event still observes the transient activating
+facade state after cancellation loses twice, the coordinator requests an
+immediate fail-closed lock instead of abandoning the background lock path.
+
 External clients construct the public coordinator with a concrete public
 `AtlasVaultRuntimeFacade` plus public clock and sleeper abstractions. The
 initializer does not invoke any dependency. Test injection of alternate

@@ -271,6 +271,25 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(sleeperCount, 0)
     }
 
+    func testGraceBackgroundFailsClosedWhenActivationRemainsTransient() async {
+        let harness = LifecycleHarness(
+            status: .activating,
+            cancellationResults: [false, false]
+        )
+        let coordinator = harness.coordinator(
+            policy: .afterGracePeriod(.seconds(30), cancelOnActive: true)
+        )
+
+        await coordinator.handle(.didEnterBackground)
+
+        let events = await harness.runtime.events()
+        let status = await harness.runtime.currentStatus()
+        let sleeperCount = await harness.time.sleeperCount()
+        XCTAssertEqual(events, ["cancelActivation", "status", "cancelActivation", "lock"])
+        XCTAssertEqual(status, .locked)
+        XCTAssertEqual(sleeperCount, 0)
+    }
+
     func testSavingStateReceivesBoundedGraceThenLocks() async {
         let harness = LifecycleHarness(status: .saving)
         let coordinator = harness.coordinator(
@@ -504,9 +523,14 @@ private struct LifecycleHarness {
     init(
         status: AtlasVaultRuntimeStatus,
         honorTimerCancellation: Bool = true,
-        statusGate: LifecycleGate? = nil
+        statusGate: LifecycleGate? = nil,
+        cancellationResults: [Bool] = []
     ) {
-        runtime = LifecycleRuntimeSpy(status: status, statusGate: statusGate)
+        runtime = LifecycleRuntimeSpy(
+            status: status,
+            statusGate: statusGate,
+            cancellationResults: cancellationResults
+        )
         time = LifecycleManualTime(honorCancellation: honorTimerCancellation)
     }
 
@@ -528,10 +552,16 @@ private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
     private var statusValue: AtlasVaultRuntimeStatus
     private var recordedEvents: [String] = []
     private let statusGate: LifecycleGate?
+    private var cancellationResults: [Bool]
 
-    init(status: AtlasVaultRuntimeStatus, statusGate: LifecycleGate?) {
+    init(
+        status: AtlasVaultRuntimeStatus,
+        statusGate: LifecycleGate?,
+        cancellationResults: [Bool]
+    ) {
         statusValue = status
         self.statusGate = statusGate
+        self.cancellationResults = cancellationResults
     }
 
     func status() async -> AtlasVaultRuntimeStatus {
@@ -542,13 +572,20 @@ private actor LifecycleRuntimeSpy: AtlasVaultLifecycleRuntimeControlling {
         return statusValue
     }
 
-    func lock() {
+    func lock() async {
         recordedEvents.append("lock")
         statusValue = .locked
     }
 
-    func cancelActivationIfInProgress() -> Bool {
+    func cancelActivationIfInProgress() async -> Bool {
         recordedEvents.append("cancelActivation")
+        if !cancellationResults.isEmpty {
+            let result = cancellationResults.removeFirst()
+            if result {
+                statusValue = .locked
+            }
+            return result
+        }
         guard statusValue == .activating else {
             return false
         }
@@ -632,7 +669,7 @@ private actor LifecycleManualTime: AtlasVaultLifecycleClock, AtlasVaultLifecycle
         self.honorCancellation = honorCancellation
     }
 
-    func now() -> Duration {
+    func now() async -> Duration {
         recordedEvents.append("now")
         return current
     }
