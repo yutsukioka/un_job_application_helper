@@ -368,6 +368,15 @@ public actor AtlasVaultRuntimeFacade:
         runtimeStatus = .locked
     }
 
+    func cancelActivationIfInProgress() async -> Bool {
+        guard runtimeStatus == .activating,
+              activeOperation?.kind == .activation else {
+            return false
+        }
+        await lock()
+        return true
+    }
+
     func privateState() async throws -> AtlasVaultPrivateStateSnapshot {
         guard runtimeStatus == .unlocked,
               activeOperation == nil else {
