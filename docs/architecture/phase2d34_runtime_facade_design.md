@@ -196,9 +196,10 @@ envelopes, never hydrated models or plaintext payloads.
 ## 18. Per-Vault Serialization
 
 One facade represents at most one active vault. Activation and every save use a
-single operation gate. Saves are serialized so a later mutation observes the
-committed revision state of the earlier mutation. Multi-vault concurrency
-requires separate facade instances and later policy review.
+single operation gate. Sequential save requests are ordered so a later mutation
+observes the committed revision state of the earlier mutation; a save request
+that overlaps an in-flight save is rejected rather than queued. Multi-vault
+concurrency requires separate facade instances and later policy review.
 
 This is in-process serialization only. Cross-process compare-and-swap and file
 locking remain production-readiness work.
@@ -237,8 +238,8 @@ provisional state but must not publish status or private data.
 
 The initial policy is one mutating operation at a time:
 
-- concurrent saves are rejected with a non-sensitive busy category rather
-  than queued against stale revisions;
+- overlapping saves are rejected with the non-sensitive
+  `operationInProgress` category rather than queued against stale revisions;
 - repeated lock calls coalesce and remain idempotent;
 - reads may proceed only while no lock transition is pending;
 - activation and save never overlap.
@@ -368,7 +369,8 @@ Phase 2D-35 should cover:
 - successful encrypted save and post-commit private-state consistency;
 - pre-commit failure leaving installed state unchanged;
 - committed-but-post-processing failure locking and clearing;
-- serialized concurrent saves and activation/save rejection;
+- overlapping-save rejection, sequential-save ordering, and activation/save
+  rejection;
 - lock during each save stage, including non-interruptible commit;
 - committed durability-unconfirmed propagation;
 - fixed redaction for status, requests, errors, outcomes, and facade;
