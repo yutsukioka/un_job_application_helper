@@ -130,14 +130,15 @@ encrypted data changed.
 
 Lock is explicit, idempotent, and available from every screen. The adapter
 first obscures and clears its private display copy, cancels presentation tasks,
-then awaits `facade.lock()` and publishes locked only from the resulting
-redacted status.
+then awaits `facade.lock()`, performs a follow-up `facade.status()` read, and
+publishes only that redacted post-lock status.
 
 ## 21. Activate Action
 
 Activation is initiated only by a deliberate user action. The adapter creates
-a one-shot request, calls the facade once, discards transient input, and loads
-private display state only after the facade reports successful unlock.
+a one-shot request, submits it through `facade.activate(_:)`, discards transient
+input, and reads the redacted facade status. Only after that status reports
+successful unlock may it request a private-state snapshot from the facade.
 
 ## 22. User-Entered Passphrase Handling
 
