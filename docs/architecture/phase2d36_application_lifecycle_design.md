@@ -28,6 +28,11 @@ The app host owns translation from platform-specific events into neutral
 coordinator and does not contain vault policy, key handling, private-state
 cleanup, or save logic.
 
+The initial neutral event set is `didBecomeActive`, `willResignActive`,
+`didEnterBackground`, `willTerminate`, `protectedDataBecameUnavailable`, and
+`protectedDataBecameAvailable`. Platform adapters may map callbacks to these
+values but must not add platform objects or private data to them.
+
 ## 5. Construction At Launch
 
 Launch may construct the side-effect-free runtime composition, facade, and a
@@ -98,9 +103,9 @@ immediately, starts a grace period, or waits for an explicit security event.
 ## 15. iOS Scene Lifecycle Considerations
 
 An iOS host should translate scene changes without passing `ScenePhase`,
-UIKit, or SwiftUI types into the coordinator. Scene backgrounding, protected
-data loss, and process termination remain distinct events with protected-data
-loss taking highest priority.
+UIKit, or SwiftUI types into the coordinator. Scene backgrounding,
+protected-data loss, and process termination remain distinct events with
+protected-data loss taking highest priority.
 
 ## 16. Multiple-Window Considerations
 
