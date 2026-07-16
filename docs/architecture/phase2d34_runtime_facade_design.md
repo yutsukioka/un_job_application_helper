@@ -48,11 +48,10 @@ public protocol AtlasVaultRuntimeFacading: Sendable {
     func status() async -> AtlasVaultRuntimeStatus
     func activate(_ request: AtlasVaultRuntimeActivationRequest) async throws
     func lock() async
-    func apply(_ request: AtlasVaultRuntimeMutationRequest) async throws
-        -> AtlasVaultSaveOutcome
+    func apply(_ request: AtlasVaultRuntimeMutationRequest) async throws -> AtlasVaultSaveOutcome
 }
 
-protocol AtlasVaultPrivateStateReading: Sendable {
+internal protocol AtlasVaultPrivateStateReading: Sendable {
     func privateState() async throws -> AtlasVaultPrivateStateSnapshot
 }
 ```
@@ -61,6 +60,10 @@ Names may be refined in Phase 2D-35. The public protocol intentionally omits
 hydrated state. `AtlasVaultPrivateStateReading` is a module-internal capability
 for a later privacy-reviewed presentation adapter; it is not a public-status
 projection or a UI-safe observable property.
+
+Every request, status, error, outcome, and snapshot value crossing these async
+actor boundaries must conform to `Sendable`; value models should also use
+`Equatable` where tests need stable category comparisons.
 
 ## 6. Proposed Facade Implementation Type
 
