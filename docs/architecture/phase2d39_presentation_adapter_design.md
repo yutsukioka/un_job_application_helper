@@ -61,8 +61,9 @@ The snapshot is not `Codable`, persistable, or a public-cache model.
 
 `AtlasVaultPresentationStatus: Equatable, Sendable` should use a closed set of
 fixed cases such as `locked`, `noVault`, `activating`, `locking`, `unlocked`,
-`keyUnavailable`, `corruptStore`, `saveInProgress`, `saveFailed`, `cancelled`,
-and `failed`. Cases carry no associated private or diagnostic values.
+`keyUnavailable`, `corruptStore`, `unsupportedVersion`, `saveInProgress`,
+`saveFailed`, `cancelled`, and `failed`. Cases carry no associated private or
+diagnostic values.
 
 ## 10. Locked Status
 
@@ -96,9 +97,16 @@ failed. It contains no prior private projection.
 
 ## 15. Corrupt-Store Status
 
-`corruptStore` represents an unreadable, unauthenticated, or unsupported vault
-using fixed user-facing language. It exposes no path, ciphertext, schema,
-record metadata, or partial plaintext and contains no private projection.
+`corruptStore` represents authentication failure or malformed encrypted-store
+content using fixed user-facing language. It exposes no path, ciphertext,
+schema, record metadata, or partial plaintext and contains no private
+projection.
+
+### Unsupported-Version Status
+
+`unsupportedVersion` is distinct from corruption. It permits fixed upgrade
+guidance without revealing the encountered version, schema details, record
+types, or payload values, and it contains no private projection.
 
 ## 16. Save-In-Progress Status
 
@@ -124,6 +132,21 @@ facade status and current private snapshot independently justify one.
 `failed` is a fixed fallback for reviewed failures that do not map to a more
 specific UI category. It carries no `Error`, `localizedDescription`, path,
 identifier, type, count, payload, or operation detail.
+
+The first implementation should exhaustively map every existing
+`AtlasVaultActivationFailure` case:
+
+| Runtime activation failure | Presentation status |
+| --- | --- |
+| `keyUnavailable`, `keyStoreFailure`, `invalidVaultKey` | `keyUnavailable` |
+| `storeMissing` | `noVault` |
+| `authenticationFailed`, `corruptStore` | `corruptStore` |
+| `unsupportedVersion` | `unsupportedVersion` |
+| `cancelled` | `cancelled` |
+| `invalidVaultID`, `vaultUnavailable`, `activationInProgress`, `alreadyUnlocked` | `failed` |
+
+The switch has no permissive default, so a future runtime failure case requires
+an explicit privacy review and mapping before compilation succeeds.
 
 ## 20. Public Versus Private Presentation Models
 
