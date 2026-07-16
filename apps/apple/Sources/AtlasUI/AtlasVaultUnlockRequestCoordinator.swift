@@ -261,6 +261,15 @@ public actor AtlasVaultUnlockRequestCoordinator:
         }
 
         let storage = request.storage
+        if let timeout = claim.timeout, timeout <= .zero {
+            let didExpire = await storage.expire()
+            await claim.input.clearSecret()
+            guard didExpire else {
+                throw await storage.finishFailure(default: .expired)
+            }
+            throw AtlasVaultUnlockRequestError.expired
+        }
+
         let dependencies = dependencies
         let terminalGate = AtlasVaultUnlockTerminalGate()
         let operation = Task {

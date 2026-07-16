@@ -320,6 +320,40 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.activationCalls, 0)
     }
 
+    func testNonPositiveTimeoutExpiresBeforeLocalKeyActivation() async {
+        for timeout in [Duration.zero, .seconds(-1)] {
+            let spy = UnlockDependencySpy()
+            let coordinator = makeCoordinator(spy: spy)
+            let request = request(input: .localKey, timeout: timeout)
+
+            await assertDispatchThrows(.expired) {
+                try await coordinator.dispatch(request)
+            }
+
+            let snapshot = await spy.snapshot()
+            XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+        }
+    }
+
+    func testNonPositiveTimeoutClearsSecretWithoutInvokingDependencies() async {
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(spy: spy)
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+        let request = request(
+            input: .passphrase(buffer),
+            timeout: .zero
+        )
+
+        await assertDispatchThrows(.expired) {
+            try await coordinator.dispatch(request)
+        }
+
+        let isCleared = await buffer.isClearedForTesting
+        let snapshot = await spy.snapshot()
+        XCTAssertTrue(isCleared)
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
     func testTimeoutBeforeOperationStartClearsClaimedBuffer() async {
         let operationStartGate = UnlockGate(honorCancellation: false)
         let sleeper = UnlockManualSleeper()

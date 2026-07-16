@@ -33,8 +33,9 @@ Swift copy-on-write behavior, allocator behavior, and dependency-owned copies
 prevent a formal memory-zeroization guarantee.
 
 The public input enum exposes passphrase, recovery-key, and local-key choices.
-The supplied fake vault-key constructor is internal to the module and available
-to `@testable` tests only; it is not a public bypass around derivation.
+The supplied fake vault-key constructor is module-internal, which also makes it
+reachable to this module's `@testable` tests; it is not a public bypass around
+derivation.
 
 ## Coordinator Behavior
 
@@ -51,6 +52,8 @@ activation reservation mutually exclusive without awaiting an actor hop.
 The active dispatch retains the claimed buffer only as a cleanup handle;
 caller cancellation, explicit cancellation, timeout, and coordinator teardown
 clear that handle even when the operation task has not begun consuming it.
+Non-positive timeouts expire synchronously after the request is claimed and
+before any operation task or activation can start.
 Cancellation or expiration that reserves the gate before activation prevents a
 late dependency completion from activating the vault. Once activation is
 reserved, a later cancellation cannot relabel that potentially irreversible
