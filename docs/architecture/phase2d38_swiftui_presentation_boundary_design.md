@@ -56,9 +56,10 @@ service locator or global singleton.
 ## 9. Proposed UI-Safe Public Status
 
 Use a presentation enum with stable categories only: no vault, locked,
-activating, unlocked, saving, locking, cancelled, and redacted failure
-categories. It must contain no vault ID, key state detail, path, record ID,
-record type, private count, saved membership, user text, or underlying error.
+activating, unlocked, saving, locking, and redacted failure categories.
+Transient command outcomes such as cancellation do not become stable status.
+The enum must contain no vault ID, key state detail, path, record ID, record
+type, private count, saved membership, user text, or underlying error.
 
 ## 10. Locked State
 
@@ -272,7 +273,7 @@ be attached to crash reports or diagnostic context.
 ## 42. Future View-Model Protocol
 
 A future module-internal `AtlasVaultPresentationModeling` protocol should
-expose UI-safe status plus explicit activate, cancel, lock, refresh-private-
+expose UI-safe status plus explicit activate, cancel, lock, refresh private
 display, and apply-mutation commands. It must not expose service objects,
 sessions, keys, paths, envelopes, or a Codable private snapshot.
 
@@ -328,7 +329,7 @@ phase. This document requires review before any such implementation.
 
 Deferred work includes SwiftUI implementation, app-launch wiring, UI prompts,
 screen-capture hardening, migration and plaintext cleanup, cloud sync,
-conflict UI, recovery UX, device onboarding, key rotation, and production-
+conflict UI, recovery UX, device onboarding, key rotation, and production
 readiness validation.
 
 ## 51. Recommended Phase 2D-39
