@@ -379,6 +379,30 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(sleeperCount, 0)
     }
 
+    func testManualSleeperCancelsWhenTaskIsAlreadyCancelled() async {
+        let startGate = LifecycleGate()
+        let time = LifecycleManualTime(honorCancellation: true)
+        let sleeper = Task {
+            await startGate.enter()
+            try await time.sleep(until: .seconds(10))
+        }
+        let didReachGate = await startGate.waitUntilEntered()
+        XCTAssertTrue(didReachGate)
+        sleeper.cancel()
+        await startGate.open()
+
+        do {
+            try await sleeper.value
+            XCTFail("Expected cancelled sleeper")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let sleeperCount = await time.sleeperCount()
+        XCTAssertEqual(sleeperCount, 0)
+    }
+
     func testDescriptionsAndFailureAreNonSensitive() async {
         let harness = LifecycleHarness(status: .unlocked)
         await harness.time.failNextSleep()
@@ -736,6 +760,9 @@ private actor LifecycleManualTime: AtlasVaultLifecycleClock, AtlasVaultLifecycle
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, Error>) in
                 waiters[id] = Waiter(deadline: deadline, continuation: continuation)
+                if honorCancellation, Task.isCancelled {
+                    cancelWaiter(id)
+                }
             }
         } onCancel: {
             guard honorCancellation else {

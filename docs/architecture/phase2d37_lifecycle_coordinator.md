@@ -78,6 +78,8 @@ or an explicit lifecycle event cancels it, so dropping the host's last
 reference cannot silently abandon an already scheduled security action.
 
 Tests inject manual time and continuations. No test waits for wall-clock sleep.
+The manual sleeper also closes the cancellation-before-registration race so a
+pre-cancelled test task cannot leave a continuation suspended.
 
 ## Save And Activation Behavior
 
