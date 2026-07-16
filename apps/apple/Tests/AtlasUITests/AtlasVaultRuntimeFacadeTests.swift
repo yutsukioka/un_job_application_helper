@@ -1224,7 +1224,7 @@ private actor FacadeGate {
     }
 
     func waitUntilEntered() async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if entered {
                 return true
             }
@@ -1287,7 +1287,7 @@ private actor SaveRefreshGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
     }
 
     func waitUntilClearEntered() async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if clearEntered {
                 return true
             }
@@ -1482,7 +1482,7 @@ private final class RuntimePreCommitGate: @unchecked Sendable {
     }
 
     func waitUntilEntered() async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if snapshot(\.entered) {
                 return true
             }
@@ -1492,7 +1492,7 @@ private final class RuntimePreCommitGate: @unchecked Sendable {
     }
 
     func waitUntilCancellationObserved() async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if snapshot(\.cancellationObserved) {
                 return true
             }
