@@ -244,6 +244,11 @@ facade actor rather than as a status/lock check. If operation-aware waiting is
 needed, add a redacted facade completion seam only after review rather than
 polling private internals.
 
+Phase 2D-37 should define that capability in a module-internal protocol such
+as `AtlasVaultLifecycleRuntimeControlling`, implemented by the facade. It must
+not add lifecycle-only cancellation to the public
+`AtlasVaultRuntimeFacading` application boundary.
+
 ## 34. Future Lifecycle Coordinator
 
 Phase 2D-37 should implement an actor that accepts neutral events, an injected
