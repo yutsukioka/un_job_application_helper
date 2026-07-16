@@ -131,6 +131,20 @@ public actor AtlasVaultLifecycleCoordinator:
     private var pendingGraceTask: Task<Void, Never>?
     private var isTerminated = false
 
+    public init(
+        runtimeFacade: AtlasVaultRuntimeFacade,
+        lockPolicy: AtlasVaultLifecycleLockPolicy,
+        clock: any AtlasVaultLifecycleClock,
+        sleeper: any AtlasVaultLifecycleSleeper,
+        lockOnInactive: Bool = false
+    ) {
+        self.runtime = runtimeFacade
+        self.lockPolicy = lockPolicy
+        self.clock = clock
+        self.sleeper = sleeper
+        self.lockOnInactive = lockOnInactive
+    }
+
     init(
         runtime: any AtlasVaultLifecycleRuntimeControlling,
         lockPolicy: AtlasVaultLifecycleLockPolicy,
@@ -246,19 +260,19 @@ public actor AtlasVaultLifecycleCoordinator:
 
         let deadline = now + duration
         let sleeper = sleeper
-        pendingGraceTask = Task { [weak self] in
+        pendingGraceTask = Task { [self] in
             do {
                 try await sleeper.sleep(until: deadline)
             } catch is CancellationError {
                 return
             } catch {
-                await self?.graceTimerFailed(generation: generation)
+                await graceTimerFailed(generation: generation)
                 return
             }
             guard !Task.isCancelled else {
                 return
             }
-            await self?.graceTimerElapsed(generation: generation)
+            await graceTimerElapsed(generation: generation)
         }
     }
 

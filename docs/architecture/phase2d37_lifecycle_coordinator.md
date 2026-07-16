@@ -20,6 +20,11 @@ redacted runtime status, idempotent lock, and atomic
 `cancelActivationIfInProgress()`. The public `AtlasVaultRuntimeFacading`
 application boundary remains unchanged.
 
+External clients construct the public coordinator with a concrete public
+`AtlasVaultRuntimeFacade` plus public clock and sleeper abstractions. The
+initializer does not invoke any dependency. Test injection of alternate
+runtime controls remains module-internal.
+
 The coordinator never receives an activation request, vault ID, vault key,
 hydrated state, mutation, record envelope, path, or local-store service.
 
@@ -53,6 +58,10 @@ completion cannot lock a later foreground session.
 A policy that retains grace on foreground also retains scheduling across a
 foreground or inactive event that arrives while a facade await is in progress.
 A cancel-on-active policy invalidates that same scheduling generation.
+
+The pending task retains the coordinator until the scheduled lock completes
+or an explicit lifecycle event cancels it, so dropping the host's last
+reference cannot silently abandon an already scheduled security action.
 
 Tests inject manual time and continuations. No test waits for wall-clock sleep.
 

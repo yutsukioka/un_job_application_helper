@@ -17,6 +17,24 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(timeEvents, [])
     }
 
+    func testPublicFacadeInitializerIsSideEffectFree() async {
+        let facadeHarness = LifecycleFacadeHarness()
+        let facade = AtlasVaultRuntimeFacade(environment: facadeHarness.environment())
+        let time = LifecycleManualTime(honorCancellation: true)
+
+        _ = AtlasVaultLifecycleCoordinator(
+            runtimeFacade: facade,
+            lockPolicy: .immediate,
+            clock: time,
+            sleeper: time
+        )
+
+        let facadeEvents = await facadeHarness.events()
+        let timeEvents = await time.events()
+        XCTAssertEqual(facadeEvents, [])
+        XCTAssertEqual(timeEvents, [])
+    }
+
     func testActiveEventDoesNotActivateOrCallRuntime() async {
         let harness = LifecycleHarness(status: .locked)
         let coordinator = harness.coordinator(policy: .immediate)
@@ -288,6 +306,24 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         let status = await harness.runtime.currentStatus()
         XCTAssertEqual(lockCount, 0)
         XCTAssertEqual(status, .unlocked)
+    }
+
+    func testPendingGraceTaskRetainsCoordinatorUntilScheduledLockRuns() async {
+        let harness = LifecycleHarness(status: .unlocked)
+        var coordinator: AtlasVaultLifecycleCoordinator? = harness.coordinator(
+            policy: .afterGracePeriod(.seconds(10), cancelOnActive: true)
+        )
+        weak let weakCoordinator = coordinator
+        await coordinator?.handle(.didEnterBackground)
+        let didSchedule = await harness.time.waitUntilSleeperCount(1)
+        XCTAssertTrue(didSchedule)
+
+        coordinator = nil
+        XCTAssertNotNil(weakCoordinator)
+        await harness.time.advance(by: .seconds(10))
+
+        let didLock = await harness.runtime.waitUntilLockCount(1)
+        XCTAssertTrue(didLock)
     }
 
     func testEventOrderingLetsSecurityEventWinOverForeground() async {
