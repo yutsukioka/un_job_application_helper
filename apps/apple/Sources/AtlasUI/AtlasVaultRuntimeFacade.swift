@@ -538,7 +538,7 @@ public actor AtlasVaultRuntimeFacade:
         case let .committedStateUnavailable(result):
             await environment.lock()
             guard isCurrent(operation) else {
-                return .cancelled
+                return .committedStateUnavailable(AtlasVaultSaveOutcome(result))
             }
             activeOperation = nil
             runtimeStatus = .locked
