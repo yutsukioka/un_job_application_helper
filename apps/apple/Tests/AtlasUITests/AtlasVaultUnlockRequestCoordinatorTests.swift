@@ -269,6 +269,33 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.activationCalls, 1)
     }
 
+    func testNonOwningCoordinatorCannotCancelActiveDispatch() async {
+        let derivationGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy(passphraseGate: derivationGate)
+        let owner = makeCoordinator(spy: spy)
+        let nonOwner = makeCoordinator(spy: UnlockDependencySpy())
+        let request = request(
+            input: .passphrase(
+                AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+            )
+        )
+        let dispatch = Task {
+            try await owner.dispatch(request)
+        }
+        let didEnter = await derivationGate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+
+        let nonOwnerDidCancel = await nonOwner.cancel(request)
+        let ownerDidCancel = await owner.cancel(request)
+        await derivationGate.open()
+
+        XCTAssertFalse(nonOwnerDidCancel)
+        XCTAssertTrue(ownerDidCancel)
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
     func testLateDerivationCompletionAfterCancellationCannotActivate() async {
         let gate = UnlockGate(honorCancellation: false)
         let spy = UnlockDependencySpy(passphraseGate: gate)
@@ -318,6 +345,54 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
+    func testTimeoutDuringActivationCancelsAndExpiresDispatch() async {
+        let activationGate = UnlockGate(honorCancellation: true)
+        let sleeper = UnlockManualSleeper()
+        let spy = UnlockDependencySpy(activationGate: activationGate)
+        let coordinator = makeCoordinator(spy: spy, sleeper: sleeper)
+        let request = request(input: .localKey, timeout: .seconds(30))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartActivation = await activationGate.waitUntilEntered()
+        let didSleep = await sleeper.waitUntilSleeping()
+        XCTAssertTrue(didStartActivation)
+        XCTAssertTrue(didSleep)
+
+        await sleeper.fire()
+
+        await assertTaskThrows(.expired, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testCompletedActivationCannotBeRelabelledByLateTimeout() async throws {
+        let sleeper = UnlockManualSleeper()
+        let successCommitGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            sleeper: sleeper,
+            successCommitGate: successCommitGate
+        )
+        let request = request(input: .localKey, timeout: .seconds(30))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReachCommit = await successCommitGate.waitUntilEntered()
+        let didSleep = await sleeper.waitUntilSleeping()
+        XCTAssertTrue(didReachCommit)
+        XCTAssertTrue(didSleep)
+
+        await sleeper.fire()
+        await Task.yield()
+        await successCommitGate.open()
+
+        try await dispatch.value
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
     }
 
     func testNonPositiveTimeoutExpiresBeforeLocalKeyActivation() async {
@@ -424,6 +499,54 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         }
         let snapshot = await spy.snapshot()
         XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testDependencyLifecycleErrorsAreAlwaysGeneric() async {
+        for lifecycleError in [
+            AtlasVaultUnlockRequestError.cancelled,
+            AtlasVaultUnlockRequestError.expired,
+        ] {
+            let dependencies = AtlasVaultUnlockRequestDependencies(
+                derivePassphraseVaultKey: { _ in throw lifecycleError },
+                deriveRecoveryVaultKey: { _ in throw lifecycleError },
+                activate: { _ in throw lifecycleError }
+            )
+
+            let passphraseCoordinator = AtlasVaultUnlockRequestCoordinator(
+                dependencies: dependencies
+            )
+            await assertDispatchThrows(.unlockFailed) {
+                try await passphraseCoordinator.dispatch(
+                    self.request(
+                        input: .passphrase(
+                            AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+                        )
+                    )
+                )
+            }
+
+            let recoveryCoordinator = AtlasVaultUnlockRequestCoordinator(
+                dependencies: dependencies
+            )
+            await assertDispatchThrows(.unlockFailed) {
+                try await recoveryCoordinator.dispatch(
+                    self.request(
+                        input: .recoveryKey(
+                            AtlasVaultInMemorySecretBuffer(bytes: Self.fakeRecoveryKey)
+                        )
+                    )
+                )
+            }
+
+            let activationCoordinator = AtlasVaultUnlockRequestCoordinator(
+                dependencies: dependencies
+            )
+            await assertDispatchThrows(.unlockFailed) {
+                try await activationCoordinator.dispatch(
+                    self.request(input: .localKey)
+                )
+            }
+        }
     }
 
     func testInvalidVaultIDFailsBeforeDependenciesAndClearsBuffer() async {
@@ -575,6 +698,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         for token in forbidden {
             XCTAssertFalse(source.contains(token), "Unexpected source token: \(token)")
         }
+        XCTAssertFalse(source.contains("consumeSecret(buffer) { Data($0) }"))
     }
 
     private func request(

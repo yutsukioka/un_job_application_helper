@@ -54,11 +54,18 @@ caller cancellation, explicit cancellation, timeout, and coordinator teardown
 clear that handle even when the operation task has not begun consuming it.
 Non-positive timeouts expire synchronously after the request is claimed and
 before any operation task or activation can start.
-Cancellation or expiration that reserves the gate before activation prevents a
-late dependency completion from activating the vault. Once activation is
-reserved, a later cancellation cannot relabel that potentially irreversible
-runtime side effect; the activation result becomes authoritative. Dependencies
-remain responsible for clearing any copies they own.
+Positive timeouts cover the whole dispatch. Expiration may cancel an in-flight
+activation until that activation atomically completes; the injected activation
+seam must honor cancellation before committing an unlocked session, as the
+runtime facade does. Cancellation that reserves the gate before activation
+prevents a late dependency completion from activating the vault. Once
+activation completes, later cancellation or expiration cannot relabel that
+potentially irreversible side effect. Dependencies remain responsible for
+clearing any copies they own.
+
+Only the coordinator that owns an active dispatch may cancel it. Another
+coordinator can cancel the shared request while it is pending, but cannot
+mutate dispatching storage without the owning operation and terminal gate.
 
 ## Privacy And Error Behavior
 
@@ -67,6 +74,9 @@ Underlying derivation and activation failures map to `unlockFailed`; invalid
 request structure, reuse, cancellation, and expiration use stable,
 non-sensitive cases. No error or debug description includes input source,
 vault ID, secret length, bytes, dependency details, or private record values.
+Injected dependencies cannot surface lifecycle-shaped request errors directly;
+those values are normalized to `unlockFailed` unless coordinator-owned state
+actually records cancellation or expiration.
 
 The coordinator does not place unlock input in presentation snapshots or
 modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
@@ -76,10 +86,11 @@ modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
 Fake-only tests cover construction, all four input sources, request-copy and
 concurrent single-use enforcement, cancellation before and during dispatch,
 pre-operation cancellation and timeout cleanup, caller cancellation, late
-dependency completion, success and failure cleanup, redacted descriptions,
-non-persistability, actor serialization, no public snapshot mutation, no
-filesystem artifacts, and source guards for UI, platform, persistence,
-networking, and encoding coupling.
+dependency completion, timeout during activation, non-owner cancellation,
+dependency error normalization, success and failure cleanup, redacted
+descriptions, non-persistability, actor serialization, no public snapshot
+mutation, no filesystem artifacts, and source guards for UI, platform,
+persistence, networking, and encoding coupling.
 
 ## Deferred
 

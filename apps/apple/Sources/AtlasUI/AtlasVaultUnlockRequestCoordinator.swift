@@ -298,7 +298,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
                     operation.cancel()
                     Task {
                         await claim.input.clearSecret()
-                        _ = await storage.cancel()
+                        _ = await storage.cancelActive()
                     }
                 }
             }
@@ -311,7 +311,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             clearActiveDispatch(claim.id)
             await claim.input.clearSecret()
             if error is CancellationError || Task.isCancelled {
-                _ = await storage.cancel()
+                _ = await storage.cancelActive()
             }
             throw await storage.finishFailure(default: Self.publicError(for: error))
         }
@@ -324,7 +324,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
                 return false
             }
 
-            let didCancel = await request.storage.cancel()
+            let didCancel = await request.storage.cancelActive()
             guard didCancel else {
                 return false
             }
@@ -334,7 +334,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             return true
         }
 
-        let didCancel = await request.storage.cancel()
+        let didCancel = await request.storage.cancelPending()
         return didCancel
     }
 
@@ -431,11 +431,13 @@ public actor AtlasVaultUnlockRequestCoordinator:
             case .localKey:
                 try await storage.requireDispatching()
                 try terminalGate.reserveActivation()
-                try await dependencies.activate(
-                    AtlasVaultRuntimeActivationRequest(vaultID: vaultID)
+                try await invokeActivation(
+                    AtlasVaultRuntimeActivationRequest(vaultID: vaultID),
+                    dependencies: dependencies
                 )
+                try terminalGate.completeActivation()
             case let .suppliedTestVaultKey(buffer):
-                var key = try await consumeSecret(buffer) { Data($0) }
+                var key = try await takeSecret(from: buffer)
                 defer { wipe(&key) }
                 try await activate(
                     vaultID: vaultID,
@@ -464,25 +466,21 @@ public actor AtlasVaultUnlockRequestCoordinator:
         }
         try await storage.requireDispatching()
         try terminalGate.reserveActivation()
-        try await dependencies.activate(
+        try await invokeActivation(
             AtlasVaultRuntimeActivationRequest(
                 vaultID: vaultID,
                 suppliedVaultKey: key
-            )
+            ),
+            dependencies: dependencies
         )
+        try terminalGate.completeActivation()
     }
 
     private static func consumeSecret(
         _ buffer: any AtlasVaultSecretBuffer,
         transform: @Sendable (Data) async throws -> Data
     ) async throws -> Data {
-        var secret: Data
-        do {
-            secret = try await buffer.takeSecretBytes()
-        } catch {
-            await buffer.clear()
-            throw error
-        }
+        var secret = try await takeSecret(from: buffer)
 
         do {
             let result = try await transform(secret)
@@ -492,7 +490,38 @@ public actor AtlasVaultUnlockRequestCoordinator:
         } catch {
             wipe(&secret)
             await buffer.clear()
-            throw error
+            if error is CancellationError, Task.isCancelled {
+                throw CancellationError()
+            }
+            throw AtlasVaultUnlockRequestInternalError.dependencyFailure
+        }
+    }
+
+    private static func takeSecret(
+        from buffer: any AtlasVaultSecretBuffer
+    ) async throws -> Data {
+        do {
+            return try await buffer.takeSecretBytes()
+        } catch {
+            await buffer.clear()
+            if error is CancellationError, Task.isCancelled {
+                throw CancellationError()
+            }
+            throw AtlasVaultUnlockRequestInternalError.dependencyFailure
+        }
+    }
+
+    private static func invokeActivation(
+        _ request: AtlasVaultRuntimeActivationRequest,
+        dependencies: AtlasVaultUnlockRequestDependencies
+    ) async throws {
+        do {
+            try await dependencies.activate(request)
+        } catch {
+            if error is CancellationError, Task.isCancelled {
+                throw CancellationError()
+            }
+            throw AtlasVaultUnlockRequestInternalError.dependencyFailure
         }
     }
 
@@ -523,6 +552,7 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
         case cancelled
         case expired
         case activationReserved
+        case activationCompleted
     }
 
     private let lock = NSLock()
@@ -531,15 +561,12 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
     func reserveTermination(_ error: AtlasVaultUnlockRequestError) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard case .open = state else {
-            return false
-        }
-        switch error {
-        case .cancelled:
+        switch (state, error) {
+        case (.open, .cancelled):
             state = .cancelled
-        case .expired:
+        case (.open, .expired), (.activationReserved, .expired):
             state = .expired
-        case .invalidRequest, .alreadyUsed, .unlockFailed:
+        default:
             return false
         }
         return true
@@ -555,7 +582,22 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
             throw AtlasVaultUnlockRequestError.cancelled
         case .expired:
             throw AtlasVaultUnlockRequestError.expired
+        case .activationReserved, .activationCompleted:
+            throw AtlasVaultUnlockRequestError.alreadyUsed
+        }
+    }
+
+    func completeActivation() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        switch state {
         case .activationReserved:
+            state = .activationCompleted
+        case .cancelled:
+            throw AtlasVaultUnlockRequestError.cancelled
+        case .expired:
+            throw AtlasVaultUnlockRequestError.expired
+        case .open, .activationCompleted:
             throw AtlasVaultUnlockRequestError.alreadyUsed
         }
     }
@@ -571,6 +613,7 @@ private struct AtlasVaultUnlockRequestClaim: Sendable {
 private enum AtlasVaultUnlockRequestInternalError: Error, Equatable, Sendable {
     case invalidRequest
     case invalidKey
+    case dependencyFailure
 }
 
 private enum AtlasVaultUnlockRequestState: Sendable {
@@ -671,7 +714,7 @@ private actor AtlasVaultUnlockRequestStorage {
         }
     }
 
-    func cancel() async -> Bool {
+    func cancelPending() async -> Bool {
         switch state {
         case .pending:
             state = .cancelled
@@ -679,10 +722,17 @@ private actor AtlasVaultUnlockRequestStorage {
             self.input = nil
             await input?.clearSecret()
             return true
+        case .dispatching, .completed, .cancelled, .expired:
+            return false
+        }
+    }
+
+    func cancelActive() async -> Bool {
+        switch state {
         case .dispatching:
             state = .cancelled
             return true
-        case .completed, .cancelled, .expired:
+        case .pending, .completed, .cancelled, .expired:
             return false
         }
     }
