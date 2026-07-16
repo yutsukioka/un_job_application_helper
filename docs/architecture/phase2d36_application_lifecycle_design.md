@@ -146,10 +146,10 @@ plaintext persistence or restoration.
 
 ## 21. Cancellation Of Pending Activation
 
-Background, inactive when configured, protected-data unavailability,
-termination, and explicit lock invalidate pending activation by calling the
-facade's lock boundary. The coordinator does not retain or inspect the
-activation request or key material.
+Background, inactive, protected-data unavailability, termination, and
+explicit lock invalidate pending activation by calling the facade's lock
+boundary. The coordinator does not retain or inspect the activation request or
+key material.
 
 ## 22. Cancellation Of Pending Save
 
