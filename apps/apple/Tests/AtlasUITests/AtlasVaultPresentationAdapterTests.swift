@@ -257,16 +257,16 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         XCTAssertEqual(projection, projectedState())
     }
 
-    func testOpaquePresentationIDsDoNotRetainRawRecordIDStrings() {
+    func testOpaquePresentationIDsDoNotRetainRawRecordIDStrings() throws {
         let projection = projectedState()
         let identifiers = [
-            tryUnwrap(projection.savedSearches.first).id,
-            tryUnwrap(projection.savedJobs.first).id,
-            tryUnwrap(projection.applicationNotes.first).id,
-            tryUnwrap(projection.applicationNotes.first?.linkedSavedJobID),
-            tryUnwrap(projection.profileSnippets.first).id,
-            tryUnwrap(projection.draftMetadata.first).id,
-            tryUnwrap(projection.draftMetadata.first?.linkedSavedJobID),
+            try XCTUnwrap(projection.savedSearches.first).id,
+            try XCTUnwrap(projection.savedJobs.first).id,
+            try XCTUnwrap(projection.applicationNotes.first).id,
+            try XCTUnwrap(projection.applicationNotes.first?.linkedSavedJobID),
+            try XCTUnwrap(projection.profileSnippets.first).id,
+            try XCTUnwrap(projection.draftMetadata.first).id,
+            try XCTUnwrap(projection.draftMetadata.first?.linkedSavedJobID),
         ]
 
         for identifier in identifiers {
@@ -306,7 +306,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         XCTAssertNil(snapshot.privateState)
     }
 
-    func testPublicAndPrivateDescriptionsAreRedacted() {
+    func testPublicAndPrivateDescriptionsAreRedacted() throws {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
             privateState: hydratedState(),
@@ -314,12 +314,12 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         )
         let values: [Any] = [
             snapshot,
-            tryUnwrap(snapshot.privateState),
-            tryUnwrap(snapshot.privateState?.savedSearches.first),
-            tryUnwrap(snapshot.privateState?.savedJobs.first),
-            tryUnwrap(snapshot.privateState?.applicationNotes.first),
-            tryUnwrap(snapshot.privateState?.profileSnippets.first),
-            tryUnwrap(snapshot.privateState?.draftMetadata.first),
+            try XCTUnwrap(snapshot.privateState),
+            try XCTUnwrap(snapshot.privateState?.savedSearches.first),
+            try XCTUnwrap(snapshot.privateState?.savedJobs.first),
+            try XCTUnwrap(snapshot.privateState?.applicationNotes.first),
+            try XCTUnwrap(snapshot.privateState?.profileSnippets.first),
+            try XCTUnwrap(snapshot.privateState?.draftMetadata.first),
         ]
 
         for value in values {
@@ -330,7 +330,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         }
     }
 
-    func testPresentationTypesDoNotConformToEncodingProtocols() {
+    func testPresentationTypesDoNotConformToEncodingProtocols() throws {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
             privateState: hydratedState(),
@@ -339,8 +339,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
 
         XCTAssertFalse(isEncodable(snapshot))
         XCTAssertFalse(isDecodable(AtlasVaultPresentationSnapshot.self))
-        XCTAssertFalse(isEncodable(tryUnwrap(snapshot.privateState)))
-        XCTAssertFalse(isEncodable(tryUnwrap(snapshot.privateState?.savedSearches.first).request))
+        XCTAssertFalse(isEncodable(try XCTUnwrap(snapshot.privateState)))
+        XCTAssertFalse(
+            isEncodable(try XCTUnwrap(snapshot.privateState?.savedSearches.first).request)
+        )
     }
 
     func testPresentationContainsNoVaultKeyEnvelopeOrFilesystemPath() {
@@ -563,14 +565,6 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         ] {
             XCTAssertFalse(rendered.contains(forbidden), forbidden, file: file, line: line)
         }
-    }
-
-    private func tryUnwrap<T>(_ value: T?) -> T {
-        guard let value else {
-            XCTFail("Expected test value")
-            fatalError("Missing test value")
-        }
-        return value
     }
 
     private func isEncodable(_ value: Any) -> Bool {
