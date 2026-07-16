@@ -56,7 +56,7 @@ to the facade with no supplied key. It does not query Keychain, infer whether an
 item exists, expose `SecItem` status, or fall back to another source after an
 explicit source fails.
 
-## 7. Explicit Supplied Vault-Key Testing Path
+## 7. Explicitly Supplied Vault-Key Testing Path
 
 Tests may provide a fake 32-byte vault key through a secret buffer and injected
 activation spy. This path exists for deterministic boundary tests, not as a
@@ -316,10 +316,17 @@ counters, lockouts, and recovery policy remain separate design work.
 ## 38. Error Redaction
 
 Public errors are finite categories such as invalid request, already used,
-cancelled, expired, derivation failed, activation failed, or unavailable. They
-contain no secret, source-specific oracle, vault ID, Keychain status, KDF
-parameter, wrapped-key metadata, path, payload, record count, timing detail, or
-underlying localized description.
+cancelled, expired, unavailable, or `unlockFailed`. Every source-specific
+failure after dispatch, including recovery parsing, passphrase derivation, key
+unwrap, local-key loading, and runtime activation, collapses to the same
+`unlockFailed` category. Public callers cannot infer which input source was
+attempted or which stage rejected it.
+
+Errors contain no secret, source-specific oracle, vault ID, Keychain status,
+KDF parameter, wrapped-key metadata, path, payload, record count, timing detail,
+or underlying localized description. Internal fake seams may expose invocation
+categories to tests, but those details never cross the coordinator's public
+result boundary.
 
 ## 39. No Logging
 
@@ -365,6 +372,8 @@ Phase 2D-42 should use fake seams and fake sentinels to verify:
 - cleanup after success, failure, cancellation, and expiration;
 - no retained secret buffer or provisional key reference;
 - constant redacted request, error, and debug descriptions;
+- every parser, derivation, unwrap, local-key, and activation failure maps to
+  the same public `unlockFailed` category;
 - no secret in presentation or public runtime state;
 - no Keychain write, filesystem, network, UI, or public-cache call;
 - actor serialization with no automatic source fallback;
