@@ -39,8 +39,10 @@ private state.
 
 The five active hydrated record models map to dedicated presentation values.
 Each receives an opaque `AtlasVaultPresentationID` whose underlying record ID
-is inaccessible and redacted in diagnostics. Revisions, parent revisions, key
-IDs, tombstones, encrypted envelopes, keys, and filesystem locations are not
+is replaced by a process-local, non-persistable hash token and redacted in
+diagnostics. Links between private presentation records use the same opaque ID
+instead of exposing source record IDs. Revisions, parent revisions, key IDs,
+tombstones, encrypted envelopes, keys, and filesystem locations are not
 projected. Saved-search query and filter fields map into a dedicated redacted,
 non-persistable presentation value rather than retaining the existing request
 model.

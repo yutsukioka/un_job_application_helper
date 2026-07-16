@@ -89,10 +89,12 @@ public struct AtlasVaultPresentationID:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    private let token: String
+    private let processLocalToken: Int
 
     init(recordID: String) {
-        self.token = recordID
+        var hasher = Hasher()
+        hasher.combine(recordID)
+        self.processLocalToken = hasher.finalize()
     }
 
     public var description: String {
@@ -260,7 +262,7 @@ public struct AtlasVaultApplicationNotePresentation:
     public let body: String
     public let noteKind: String
     public let linkedJobKey: String?
-    public let linkedSavedJobRecordID: String?
+    public let linkedSavedJobID: AtlasVaultPresentationID?
     public let createdAt: String
     public let updatedAt: String
     public let isPinned: Bool?
@@ -308,7 +310,7 @@ public struct AtlasVaultDraftMetadataPresentation:
 {
     public let id: AtlasVaultPresentationID
     public let linkedJobKey: String?
-    public let linkedSavedJobRecordID: String?
+    public let linkedSavedJobID: AtlasVaultPresentationID?
     public let targetSystem: String
     public let documentType: String
     public let generatedDocumentReference: String
@@ -479,7 +481,9 @@ public struct AtlasVaultPresentationAdapter:
                     body: record.payload.body,
                     noteKind: record.payload.noteKind,
                     linkedJobKey: record.payload.linkedJobKey,
-                    linkedSavedJobRecordID: record.payload.linkedSavedJobRecordID,
+                    linkedSavedJobID: record.payload.linkedSavedJobRecordID.map {
+                        AtlasVaultPresentationID(recordID: $0)
+                    },
                     createdAt: record.payload.createdAt,
                     updatedAt: record.payload.updatedAt,
                     isPinned: record.payload.isPinned,
@@ -503,7 +507,9 @@ public struct AtlasVaultPresentationAdapter:
                 AtlasVaultDraftMetadataPresentation(
                     id: AtlasVaultPresentationID(recordID: record.metadata.id),
                     linkedJobKey: record.payload.linkedJobKey,
-                    linkedSavedJobRecordID: record.payload.linkedSavedJobRecordID,
+                    linkedSavedJobID: record.payload.linkedSavedJobRecordID.map {
+                        AtlasVaultPresentationID(recordID: $0)
+                    },
                     targetSystem: record.payload.targetSystem,
                     documentType: record.payload.documentType,
                     generatedDocumentReference: record.payload.generatedDocumentReference,

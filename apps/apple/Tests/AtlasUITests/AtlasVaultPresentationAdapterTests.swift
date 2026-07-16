@@ -184,7 +184,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         XCTAssertEqual(value.body, "FAKE_PRIVATE_NOTE_DO_NOT_LEAK")
         XCTAssertEqual(value.noteKind, "FAKE_NOTE_KIND_DO_NOT_LEAK")
         XCTAssertEqual(value.linkedJobKey, "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK")
-        XCTAssertEqual(value.linkedSavedJobRecordID, "record-job")
+        XCTAssertEqual(
+            value.linkedSavedJobID,
+            AtlasVaultPresentationID(recordID: "record-job")
+        )
         XCTAssertEqual(value.isPinned, true)
         XCTAssertEqual(value.sortOrder, 7)
     }
@@ -206,7 +209,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
 
         XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-draft"))
         XCTAssertEqual(value.linkedJobKey, "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK")
-        XCTAssertEqual(value.linkedSavedJobRecordID, "record-job")
+        XCTAssertEqual(
+            value.linkedSavedJobID,
+            AtlasVaultPresentationID(recordID: "record-job")
+        )
         XCTAssertEqual(value.targetSystem, "FAKE_DRAFT_TARGET_DO_NOT_LEAK")
         XCTAssertEqual(value.documentType, "FAKE_DOCUMENT_TYPE_DO_NOT_LEAK")
         XCTAssertEqual(value.generatedDocumentReference, "FAKE_DOCUMENT_REFERENCE_DO_NOT_LEAK")
@@ -223,6 +229,26 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         ).privateState
 
         XCTAssertEqual(projection, projectedState())
+    }
+
+    func testOpaquePresentationIDsDoNotRetainRawRecordIDStrings() {
+        let projection = projectedState()
+        let identifiers = [
+            tryUnwrap(projection.savedSearches.first).id,
+            tryUnwrap(projection.savedJobs.first).id,
+            tryUnwrap(projection.applicationNotes.first).id,
+            tryUnwrap(projection.applicationNotes.first?.linkedSavedJobID),
+            tryUnwrap(projection.profileSnippets.first).id,
+            tryUnwrap(projection.draftMetadata.first).id,
+            tryUnwrap(projection.draftMetadata.first?.linkedSavedJobID),
+        ]
+
+        for identifier in identifiers {
+            XCTAssertFalse(
+                Mirror(reflecting: identifier).children.contains { $0.value is String }
+            )
+            XCTAssertFalse(String(reflecting: identifier).contains("record-"))
+        }
     }
 
     func testPublicAndPrivateDescriptionsAreRedacted() {
@@ -534,7 +560,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     }
 
     private func temporaryRoot() throws -> URL {
-        let root = FileManager.default.temporaryDirectory
+        let root = try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
             .appendingPathComponent("atlas-presentation-adapter-tests")
             .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(
