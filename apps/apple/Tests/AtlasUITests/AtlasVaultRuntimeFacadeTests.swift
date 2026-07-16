@@ -872,6 +872,7 @@ private actor FacadeGate {
         guard !isOpen else {
             return
         }
+        precondition(entryContinuation == nil, "FacadeGate does not support overlapping entries")
         await withCheckedContinuation { continuation in
             entryContinuation = continuation
         }
