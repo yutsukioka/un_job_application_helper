@@ -639,6 +639,10 @@ public actor AtlasVaultActivationController:
             try requireInstalledSession(generation: generation)
             return writeResult
         } catch {
+            guard activeSession?.privateStateGeneration == generation else {
+                await privateStateStore.clear(generation: generation)
+                return writeResult
+            }
             await failClosedAfterCommittedSave(generation: generation)
             throw AtlasVaultActivatedOperationError.committedStateUnavailable(writeResult)
         }
@@ -702,14 +706,14 @@ public actor AtlasVaultActivationController:
     private func failClosedAfterCommittedSave(
         generation: AtlasVaultPrivateStateGeneration
     ) async {
-        if activeSession?.privateStateGeneration == generation {
-            activeSession?.keyOwner.wipe()
-            activeSession = nil
+        guard activeSession?.privateStateGeneration == generation else {
+            await privateStateStore.clear(generation: generation)
+            return
         }
+        activeSession?.keyOwner.wipe()
+        activeSession = nil
+        state = .locked
         await privateStateStore.clear(generation: generation)
-        if state == .unlocked {
-            state = .locked
-        }
     }
 
     private func checkpoint(_ attemptID: UInt64) async throws {

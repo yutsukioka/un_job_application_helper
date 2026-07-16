@@ -313,6 +313,66 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         XCTAssertEqual(saveCount, 1)
     }
 
+    func testRuntimeControllerLockAfterCommitPreservesOutcome() async throws {
+        let privateStateStore = SaveRefreshGatedPrivateStateStore()
+        let controller = try saveRaceController(privateStateStore: privateStateStore)
+        let facade = AtlasVaultRuntimeFacade(activationController: controller)
+        try await facade.activate(activationRequest())
+        await privateStateStore.gateNextClear()
+        let request = mutationRequest()
+
+        let save = Task { try await facade.apply(request) }
+        let didEnter = await privateStateStore.waitUntilClearEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            await privateStateStore.openClear()
+            _ = try? await save.value
+            return
+        }
+
+        await facade.lock()
+        await privateStateStore.openClear()
+
+        let outcome = try await save.value
+        let facadeStatus = await facade.status()
+        let controllerState = await controller.state
+        XCTAssertEqual(outcome, .committed)
+        XCTAssertEqual(facadeStatus, .locked)
+        XCTAssertEqual(controllerState, .locked)
+    }
+
+    func testStaleCommittedSaveCannotLockReactivatedSession() async throws {
+        let privateStateStore = SaveRefreshGatedPrivateStateStore()
+        let controller = try saveRaceController(privateStateStore: privateStateStore)
+        let facade = AtlasVaultRuntimeFacade(activationController: controller)
+        try await facade.activate(activationRequest())
+        await privateStateStore.gateNextClear()
+        let request = mutationRequest()
+
+        let save = Task { try await facade.apply(request) }
+        let didEnter = await privateStateStore.waitUntilClearEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            await privateStateStore.openClear()
+            _ = try? await save.value
+            return
+        }
+
+        await facade.lock()
+        try await facade.activate(activationRequest())
+        await privateStateStore.openClear()
+
+        let outcome = try await save.value
+        let facadeStatus = await facade.status()
+        let controllerState = await controller.state
+        _ = try await facade.privateState()
+        XCTAssertEqual(outcome, .committed)
+        XCTAssertEqual(facadeStatus, .unlocked)
+        XCTAssertEqual(controllerState, .unlocked)
+    }
+
     func testActivationCancellationLocksAndClears() async {
         let harness = FacadeHarness()
         await harness.setActivationSleepsUntilCancelled(true)
@@ -761,6 +821,31 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         return try encoder.encode(snapshot)
     }
 
+    private func saveRaceController(
+        privateStateStore: any AtlasVaultPrivateStateStoring
+    ) throws -> AtlasVaultActivationController {
+        let hydratedState = privateState(recordID: "save-race-private-record")
+        let scope = try AtlasVaultActivationScope(
+            vaultID: Self.vaultID,
+            loadEncryptedStore: { _ in Self.emptyStore() },
+            hydrateRecords: { _, _ in hydratedState },
+            saveMutations: { _, _ in
+                AtlasVaultAtomicWriteResult(commitState: .committed)
+            }
+        )
+        let environment = AtlasVaultActivationEnvironment(
+            loadStoredVaultKey: { _ in Self.vaultKey },
+            resolveRootDirectory: {
+                URL(fileURLWithPath: "/tmp/fake-runtime-facade-save-race-root")
+            },
+            makeScope: { _, _ in scope }
+        )
+        return AtlasVaultActivationController(
+            environment: environment,
+            privateStateStore: privateStateStore
+        )
+    }
+
     private func sourceURL() throws -> URL {
         let sourceDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let candidates = [
@@ -955,6 +1040,68 @@ private actor FacadeGate {
         isOpen = true
         entryContinuation?.resume()
         entryContinuation = nil
+    }
+}
+
+private actor SaveRefreshGatedPrivateStateStore: AtlasVaultPrivateStateStoring {
+    private let store = AtlasVaultPrivateStateStore()
+    private var shouldGateNextClear = false
+    private var clearEntered = false
+    private var clearContinuation: CheckedContinuation<Void, Never>?
+
+    func stage(
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws {
+        try await store.stage(state, generation: generation)
+    }
+
+    func commit(generation: AtlasVaultPrivateStateGeneration) async throws {
+        try await store.commit(generation: generation)
+    }
+
+    func snapshot(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async throws -> AtlasVaultHydratedState {
+        try await store.snapshot(generation: generation)
+    }
+
+    func clear(generation: AtlasVaultPrivateStateGeneration) async {
+        await store.clear(generation: generation)
+        guard shouldGateNextClear else {
+            return
+        }
+        shouldGateNextClear = false
+        clearEntered = true
+        await withCheckedContinuation { continuation in
+            precondition(clearContinuation == nil, "Only one save refresh may be gated")
+            clearContinuation = continuation
+        }
+    }
+
+    func clearAll() async {
+        await store.clearAll()
+    }
+
+    func gateNextClear() {
+        precondition(clearContinuation == nil, "A save refresh is already gated")
+        clearEntered = false
+        shouldGateNextClear = true
+    }
+
+    func waitUntilClearEntered() async -> Bool {
+        for _ in 0..<100 {
+            if clearEntered {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return clearEntered
+    }
+
+    func openClear() {
+        clearContinuation?.resume()
+        clearContinuation = nil
     }
 }
 
