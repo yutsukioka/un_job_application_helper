@@ -45,12 +45,13 @@ resulting fake key length, and delegates activation through the existing
 supplied key and reveals no Keychain implementation detail.
 
 Success, failure, cancellation, and timeout remove coordinator-owned secret
-references. Once activation completes, the coordinator synchronously enters a
-completion phase before another coordinator action can reserve cancellation or
-expiration; a late cancel therefore cannot relabel a completed activation.
-Earlier cancellation invalidates the request, cancels the active child task,
-and prevents a late dependency completion from activating the vault.
-Dependencies remain responsible for clearing any copies they own.
+references. A lock-backed terminal gate makes cancellation, expiration, and
+activation reservation mutually exclusive without awaiting an actor hop.
+Cancellation or expiration that reserves the gate before activation prevents a
+late dependency completion from activating the vault. Once activation is
+reserved, a later cancellation cannot relabel that potentially irreversible
+runtime side effect; the activation result becomes authoritative. Dependencies
+remain responsible for clearing any copies they own.
 
 ## Privacy And Error Behavior
 

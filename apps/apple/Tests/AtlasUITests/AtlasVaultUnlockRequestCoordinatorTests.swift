@@ -183,7 +183,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
     }
 
     func testCallerTaskCancellationClearsAndPreventsActivation() async {
-        let gate = UnlockGate(honorCancellation: true)
+        let gate = UnlockGate(honorCancellation: false)
         let spy = UnlockDependencySpy(passphraseGate: gate)
         let coordinator = makeCoordinator(spy: spy)
         let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
@@ -195,12 +195,33 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let didEnter = await gate.waitUntilEntered()
         XCTAssertTrue(didEnter)
         dispatch.cancel()
+        await gate.open()
 
         await assertTaskThrows(.cancelled, task: dispatch)
         let isCleared = await buffer.isClearedForTesting
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
+    func testCallerCancellationCannotRelabelActivationOnceStarted() async throws {
+        let activationGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy(activationGate: activationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let request = request(input: .localKey)
+
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartActivation = await activationGate.waitUntilEntered()
+        XCTAssertTrue(didStartActivation)
+
+        dispatch.cancel()
+        await activationGate.open()
+        try await dispatch.value
+
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
     }
 
     func testLateDerivationCompletionAfterCancellationCannotActivate() async {
