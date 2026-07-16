@@ -372,8 +372,10 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         await coordinator.handle(.didEnterBackground)
 
         let lockCount = await harness.runtime.lockCount()
+        let events = await harness.runtime.events()
         let sleeperCount = await harness.time.sleeperCount()
         XCTAssertEqual(lockCount, 1)
+        XCTAssertEqual(events, ["lock"])
         XCTAssertEqual(sleeperCount, 0)
     }
 

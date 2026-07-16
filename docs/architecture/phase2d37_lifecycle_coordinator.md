@@ -49,8 +49,9 @@ are not platform framework types.
 `immediate` locks on background immediately. `afterGracePeriod` gives an
 already unlocked or saving runtime a bounded interval before lock. Its
 `cancelOnActive` option allows foregrounding to invalidate the pending timer.
-Non-positive grace durations fail closed as immediate lock. Inactive cancels
-only an activation still in progress unless the separately injected strict
+Non-positive grace durations short-circuit directly to an immediate lock,
+without waiting for activation cancellation or status. Inactive cancels only
+an activation still in progress unless the separately injected strict
 inactive-lock option is enabled.
 
 Protected-data unavailability and termination always invalidate grace work

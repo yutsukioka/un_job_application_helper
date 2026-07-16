@@ -214,6 +214,11 @@ public actor AtlasVaultLifecycleCoordinator:
             invalidatePendingGraceLock()
             await runtime.lock()
         case let .afterGracePeriod(duration, _):
+            guard duration > .zero else {
+                invalidatePendingGraceLock()
+                await runtime.lock()
+                return
+            }
             let schedulingGeneration = lifecycleGeneration
             let cancelledActivation = await runtime.cancelActivationIfInProgress()
             guard lifecycleGeneration == schedulingGeneration,
