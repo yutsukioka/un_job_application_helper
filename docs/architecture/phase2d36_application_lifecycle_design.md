@@ -56,9 +56,10 @@ raw-key material.
 ## 8. Foreground Event
 
 Foregrounding cancels a pending background grace-period lock when policy
-allows and the scheduled lock still belongs to the same runtime generation.
-It does not activate, restore private state, reload a key, or change a locked
-failure into an unlocked state.
+allows and the scheduled lock still belongs to the same coordinator-owned
+lifecycle generation. That generation is internal timer state, not a value
+from facade status. Foregrounding does not activate, restore private state,
+reload a key, or change a locked failure into an unlocked state.
 
 ## 9. Background Event
 
@@ -132,8 +133,9 @@ avoids implying that background execution or a timer can be relied upon.
 
 If product review requires a grace period, inject a monotonic clock and
 cancellable sleeper. Keep the duration bounded and non-persistent. A grace
-token must identify the runtime generation so stale timer completion cannot
-lock a later activation.
+token must identify a lifecycle generation owned entirely by the coordinator
+so stale timer completion cannot lock a later activation. It is never derived
+from facade status or exposed to the app host.
 
 ## 20. Grace-Period Privacy Implications
 
