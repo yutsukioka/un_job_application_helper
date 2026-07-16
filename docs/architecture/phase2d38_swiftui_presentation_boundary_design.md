@@ -55,11 +55,15 @@ service locator or global singleton.
 
 ## 9. Proposed UI-Safe Public Status
 
-Use a presentation enum with stable categories only: no-vault, locked,
-activating, unlocked, saving, locking, and redacted failure categories.
-Transient command outcomes such as cancellation do not become stable status.
-The enum must contain no vault ID, key state detail, path, record ID, record
-type, private count, saved membership, user text, or underlying error.
+Use a presentation enum with a closed set of UI-safe cases: no-vault, locked,
+activating, unlocked, saving, locking, and redacted-failure variants. `locking`
+is the in-flight status after private display state is cleared and before the
+post-lock facade status read settles. Key-unavailable and corrupt-vault are
+specific redacted-failure variants, not separate metadata-bearing status
+families. One-shot command outcomes such as cancellation do not become
+persisted status. The enum must contain no vault ID, key state detail, path,
+record ID, record type, private count, saved membership, user text, or
+underlying error.
 
 ## 10. Locked State
 
