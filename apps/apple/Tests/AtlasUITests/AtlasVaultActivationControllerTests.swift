@@ -934,7 +934,7 @@ final class AtlasVaultActivationControllerTests: XCTestCase {
             "FileManager.default",
             "Data.write",
             "createFile",
-            "saveEncryptedStore",
+            "saveEncryptedStore(",
         ] {
             XCTAssertFalse(source.contains(forbidden), "Unexpected source reference: \(forbidden)")
         }

@@ -69,6 +69,36 @@ public enum AtlasVaultActivationState:
     }
 }
 
+enum AtlasVaultActivatedOperationError:
+    Error,
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case locked
+    case sessionMismatch
+    case saveUnavailable
+    case saveFailed
+    case cancelled
+    case committedStateUnavailable(AtlasVaultAtomicWriteResult)
+
+    var description: String {
+        switch self {
+        case .locked: "locked"
+        case .sessionMismatch: "sessionMismatch"
+        case .saveUnavailable: "saveUnavailable"
+        case .saveFailed: "saveFailed"
+        case .cancelled: "cancelled"
+        case .committedStateUnavailable: "committedStateUnavailable"
+        }
+    }
+
+    var debugDescription: String {
+        description
+    }
+}
+
 public struct AtlasVaultActivationScope:
     Sendable,
     CustomStringConvertible,
@@ -82,6 +112,11 @@ public struct AtlasVaultActivationScope:
             [AtlasVaultEncryptedRecordEnvelope],
             AtlasVaultUnlockedSession
         ) throws -> AtlasVaultHydratedState
+    private let mutationSaver:
+        @Sendable (
+            AtlasVaultMutationSet,
+            AtlasVaultUnlockedSession
+        ) throws -> AtlasVaultAtomicWriteResult
 
     public init(
         vaultID: String,
@@ -93,9 +128,34 @@ public struct AtlasVaultActivationScope:
             AtlasVaultUnlockedSession
         ) throws -> AtlasVaultHydratedState
     ) throws {
+        try self.init(
+            vaultID: vaultID,
+            loadEncryptedStore: loadEncryptedStore,
+            hydrateRecords: hydrateRecords,
+            saveMutations: { _, _ in
+                throw AtlasVaultActivatedOperationError.saveUnavailable
+            }
+        )
+    }
+
+    init(
+        vaultID: String,
+        loadEncryptedStore: @escaping @Sendable (
+            AtlasVaultUnlockedSession
+        ) throws -> AtlasVaultLocalStoreEnvelope?,
+        hydrateRecords: @escaping @Sendable (
+            [AtlasVaultEncryptedRecordEnvelope],
+            AtlasVaultUnlockedSession
+        ) throws -> AtlasVaultHydratedState,
+        saveMutations: @escaping @Sendable (
+            AtlasVaultMutationSet,
+            AtlasVaultUnlockedSession
+        ) throws -> AtlasVaultAtomicWriteResult
+    ) throws {
         self.boundVaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(vaultID)
         self.encryptedStoreLoader = loadEncryptedStore
         self.recordHydrator = hydrateRecords
+        self.mutationSaver = saveMutations
     }
 
     func isBound(to vaultID: String) -> Bool {
@@ -119,6 +179,16 @@ public struct AtlasVaultActivationScope:
             throw AtlasVaultHydrationError.invalidSession
         }
         return try recordHydrator(records, session)
+    }
+
+    func save(
+        mutations: AtlasVaultMutationSet,
+        session: AtlasVaultUnlockedSession
+    ) throws -> AtlasVaultAtomicWriteResult {
+        guard session.vaultID == boundVaultID else {
+            throw AtlasVaultActivatedOperationError.sessionMismatch
+        }
+        return try mutationSaver(mutations, session)
     }
 
     public var description: String {
@@ -204,6 +274,31 @@ public extension AtlasVaultActivationEnvironment {
                             records: records,
                             session: session
                         )
+                    },
+                    saveMutations: { mutations, session in
+                        let encryptedRecords = try perVaultServices.recordSaver.save(
+                            mutations: mutations,
+                            session: session
+                        )
+                        guard let currentStore = try perVaultServices
+                            .persistenceCoordinator
+                            .loadEncryptedStore(for: session)
+                        else {
+                            throw AtlasVaultPersistenceError.readFailed
+                        }
+                        let mergedStore = try perVaultServices.localStoreMerger.merge(
+                            records: encryptedRecords,
+                            into: currentStore
+                        )
+                        guard !Task.isCancelled else {
+                            throw AtlasVaultActivatedOperationError.cancelled
+                        }
+                        return try perVaultServices.persistenceCoordinator
+                            .saveEncryptedStoreAtomically(
+                                mergedStore,
+                                for: session,
+                                overwrite: true
+                            )
                     }
                 )
             }
@@ -485,6 +580,74 @@ public actor AtlasVaultActivationController:
         return snapshot
     }
 
+    func saveRuntimeMutations(
+        _ mutations: AtlasVaultMutationSet,
+        expectedVaultID: String
+    ) async throws -> AtlasVaultAtomicWriteResult {
+        guard state == .unlocked,
+              let installedSession = activeSession else {
+            throw AtlasVaultActivatedOperationError.locked
+        }
+        guard installedSession.keyOwner.isBound(to: expectedVaultID),
+              installedSession.scope.isBound(to: expectedVaultID) else {
+            throw AtlasVaultActivatedOperationError.sessionMismatch
+        }
+        guard !Task.isCancelled else {
+            throw AtlasVaultActivatedOperationError.cancelled
+        }
+
+        let generation = installedSession.privateStateGeneration
+        let writeResult: AtlasVaultAtomicWriteResult
+        do {
+            writeResult = try installedSession.keyOwner.withUnlockedSession { session in
+                try installedSession.scope.save(
+                    mutations: mutations,
+                    session: session
+                )
+            }
+        } catch let error as AtlasVaultActivatedOperationError {
+            throw error
+        } catch {
+            throw AtlasVaultActivatedOperationError.saveFailed
+        }
+
+        let refreshedState: AtlasVaultHydratedState
+        do {
+            refreshedState = try installedSession.keyOwner.withUnlockedSession { session in
+                guard let store = try installedSession.scope.loadEncryptedStore(for: session) else {
+                    throw AtlasVaultPersistenceError.readFailed
+                }
+                return try installedSession.scope.hydrate(
+                    records: store.records,
+                    session: session
+                )
+            }
+        } catch {
+            await failClosedAfterCommittedSave(generation: generation)
+            throw AtlasVaultActivatedOperationError.committedStateUnavailable(writeResult)
+        }
+
+        do {
+            await privateStateStore.clear(generation: generation)
+            try requireInstalledSession(generation: generation)
+            try await privateStateStore.stage(
+                refreshedState,
+                generation: generation
+            )
+            try requireInstalledSession(generation: generation)
+            try await privateStateStore.commit(generation: generation)
+            try requireInstalledSession(generation: generation)
+            return writeResult
+        } catch {
+            guard activeSession?.privateStateGeneration == generation else {
+                await privateStateStore.clear(generation: generation)
+                return writeResult
+            }
+            await failClosedAfterCommittedSave(generation: generation)
+            throw AtlasVaultActivatedOperationError.committedStateUnavailable(writeResult)
+        }
+    }
+
     public nonisolated var description: String {
         "AtlasVaultActivationController(state: <redacted>, private: <redacted>)"
     }
@@ -529,6 +692,28 @@ public actor AtlasVaultActivationController:
         } catch {
             throw AtlasVaultActivationFailure.keyStoreFailure
         }
+    }
+
+    private func requireInstalledSession(
+        generation: AtlasVaultPrivateStateGeneration
+    ) throws {
+        guard state == .unlocked,
+              activeSession?.privateStateGeneration == generation else {
+            throw AtlasVaultActivatedOperationError.cancelled
+        }
+    }
+
+    private func failClosedAfterCommittedSave(
+        generation: AtlasVaultPrivateStateGeneration
+    ) async {
+        guard activeSession?.privateStateGeneration == generation else {
+            await privateStateStore.clear(generation: generation)
+            return
+        }
+        activeSession?.keyOwner.wipe()
+        activeSession = nil
+        state = .locked
+        await privateStateStore.clear(generation: generation)
     }
 
     private func checkpoint(_ attemptID: UInt64) async throws {
@@ -635,6 +820,10 @@ private final class AtlasVaultActivationKeyOwner: @unchecked Sendable {
             )
             return try operation(view)
         }
+    }
+
+    func isBound(to vaultID: String) -> Bool {
+        session?.vaultID == vaultID
     }
 
     func wipe() {
