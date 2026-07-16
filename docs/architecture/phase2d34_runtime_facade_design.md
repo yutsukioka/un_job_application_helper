@@ -48,15 +48,19 @@ public protocol AtlasVaultRuntimeFacading: Sendable {
     func status() async -> AtlasVaultRuntimeStatus
     func activate(_ request: AtlasVaultRuntimeActivationRequest) async throws
     func lock() async
-    func privateState() async throws -> AtlasVaultPrivateStateSnapshot
     func apply(_ request: AtlasVaultRuntimeMutationRequest) async throws
         -> AtlasVaultSaveOutcome
 }
+
+protocol AtlasVaultPrivateStateReading: Sendable {
+    func privateState() async throws -> AtlasVaultPrivateStateSnapshot
+}
 ```
 
-Names may be refined in Phase 2D-35. `privateState()` is a restricted private-
-data capability, not a public-status projection and not a UI-safe observable
-property.
+Names may be refined in Phase 2D-35. The public protocol intentionally omits
+hydrated state. `AtlasVaultPrivateStateReading` is a module-internal capability
+for a later privacy-reviewed presentation adapter; it is not a public-status
+projection or a UI-safe observable property.
 
 ## 6. Proposed Facade Implementation Type
 
@@ -115,11 +119,11 @@ publishes `locked` only after teardown completes.
 
 ## 11. Read-Private-State Operation
 
-`privateState()` succeeds only for the currently installed unlocked
-generation. It delegates to the activation controller's generation-checked
-snapshot boundary and rechecks the facade operation generation after every
-cross-actor await. A read begun before lock must not return private state after
-lock wins.
+The module-internal `privateState()` capability succeeds only for the currently
+installed unlocked generation. It delegates to the activation controller's
+generation-checked snapshot boundary and rechecks the facade operation
+generation after every cross-actor await. A read begun before lock must not
+return private state after lock wins.
 
 `AtlasVaultPrivateStateSnapshot` may wrap the existing immutable hydrated state
 for module-internal use. It must not be `Codable`, persisted, logged, embedded
@@ -146,8 +150,9 @@ The controller-owned save transaction should:
 
 The transaction must not install optimistic private state before commit. A
 pre-commit failure leaves the previous installed state unchanged. If disk
-commit succeeds but post-commit private-state reconstruction fails, fail closed
-by clearing and locking rather than representing stale memory as current.
+commit succeeds but post-commit private-state reconstruction fails, use
+fail-closed recovery by clearing and locking rather than representing stale
+memory as current.
 
 ## 13. Clear-Private-State Operation
 
