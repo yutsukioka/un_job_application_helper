@@ -1,7 +1,10 @@
+import Foundation
+
 public protocol AtlasVaultPresentationAdapting: Sendable {
     func makeSnapshot(
         runtimeStatus: AtlasVaultRuntimeStatus,
         privateState: AtlasVaultHydratedState?,
+        generation: AtlasVaultPresentationGeneration?,
         commandState: AtlasVaultPresentationCommandState
     ) -> AtlasVaultPresentationSnapshot
 }
@@ -9,11 +12,24 @@ public protocol AtlasVaultPresentationAdapting: Sendable {
 public extension AtlasVaultPresentationAdapting {
     func makeSnapshot(
         runtimeStatus: AtlasVaultRuntimeStatus,
-        privateState: AtlasVaultHydratedState?
+        privateState: AtlasVaultHydratedState?,
+        generation: AtlasVaultPresentationGeneration?
     ) -> AtlasVaultPresentationSnapshot {
         makeSnapshot(
             runtimeStatus: runtimeStatus,
             privateState: privateState,
+            generation: generation,
+            commandState: .none
+        )
+    }
+
+    func makeSnapshot(
+        runtimeStatus: AtlasVaultRuntimeStatus
+    ) -> AtlasVaultPresentationSnapshot {
+        makeSnapshot(
+            runtimeStatus: runtimeStatus,
+            privateState: nil,
+            generation: nil,
             commandState: .none
         )
     }
@@ -83,6 +99,25 @@ public enum AtlasVaultPresentationStatus:
     }
 }
 
+public struct AtlasVaultPresentationGeneration:
+    Hashable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private let token = UUID()
+
+    public init() {}
+
+    public var description: String {
+        "AtlasVaultPresentationGeneration(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 public struct AtlasVaultPresentationID:
     Hashable,
     Sendable,
@@ -91,8 +126,12 @@ public struct AtlasVaultPresentationID:
 {
     private let processLocalToken: Int
 
-    init(recordID: String) {
+    init(
+        recordID: String,
+        generation: AtlasVaultPresentationGeneration
+    ) {
         var hasher = Hasher()
+        hasher.combine(generation)
         hasher.combine(recordID)
         self.processLocalToken = hasher.finalize()
     }
@@ -341,6 +380,7 @@ public struct AtlasVaultPresentationAdapter:
     public func makeSnapshot(
         runtimeStatus: AtlasVaultRuntimeStatus,
         privateState: AtlasVaultHydratedState?,
+        generation: AtlasVaultPresentationGeneration?,
         commandState: AtlasVaultPresentationCommandState
     ) -> AtlasVaultPresentationSnapshot {
         AtlasVaultPresentationSnapshot(
@@ -348,9 +388,11 @@ public struct AtlasVaultPresentationAdapter:
                 runtimeStatus: runtimeStatus,
                 commandState: commandState
             ),
-            privateState: shouldProjectPrivateState(runtimeStatus)
-                ? privateState.map(project)
-                : nil
+            privateState: projectPrivateState(
+                privateState,
+                generation: generation,
+                runtimeStatus: runtimeStatus
+            )
         )
     }
 
@@ -425,13 +467,31 @@ public struct AtlasVaultPresentationAdapter:
         }
     }
 
+    private func projectPrivateState(
+        _ state: AtlasVaultHydratedState?,
+        generation: AtlasVaultPresentationGeneration?,
+        runtimeStatus: AtlasVaultRuntimeStatus
+    ) -> AtlasVaultPrivatePresentationState? {
+        guard shouldProjectPrivateState(runtimeStatus),
+              let state,
+              let generation
+        else {
+            return nil
+        }
+        return project(state, generation: generation)
+    }
+
     private func project(
-        _ state: AtlasVaultHydratedState
+        _ state: AtlasVaultHydratedState,
+        generation: AtlasVaultPresentationGeneration
     ) -> AtlasVaultPrivatePresentationState {
         AtlasVaultPrivatePresentationState(
             savedSearches: state.savedSearches.map { record in
                 AtlasVaultSavedSearchPresentation(
-                    id: AtlasVaultPresentationID(recordID: record.metadata.id),
+                    id: AtlasVaultPresentationID(
+                        recordID: record.metadata.id,
+                        generation: generation
+                    ),
                     name: record.payload.name,
                     summary: record.payload.summary,
                     details: record.payload.description,
@@ -465,7 +525,10 @@ public struct AtlasVaultPresentationAdapter:
             },
             savedJobs: state.savedJobs.map { record in
                 AtlasVaultSavedJobPresentation(
-                    id: AtlasVaultPresentationID(recordID: record.metadata.id),
+                    id: AtlasVaultPresentationID(
+                        recordID: record.metadata.id,
+                        generation: generation
+                    ),
                     applicationID: record.payload.id,
                     jobKey: record.payload.jobKey,
                     status: record.payload.status,
@@ -476,13 +539,19 @@ public struct AtlasVaultPresentationAdapter:
             },
             applicationNotes: state.applicationNotes.map { record in
                 AtlasVaultApplicationNotePresentation(
-                    id: AtlasVaultPresentationID(recordID: record.metadata.id),
+                    id: AtlasVaultPresentationID(
+                        recordID: record.metadata.id,
+                        generation: generation
+                    ),
                     title: record.payload.title,
                     body: record.payload.body,
                     noteKind: record.payload.noteKind,
                     linkedJobKey: record.payload.linkedJobKey,
                     linkedSavedJobID: record.payload.linkedSavedJobRecordID.map {
-                        AtlasVaultPresentationID(recordID: $0)
+                        AtlasVaultPresentationID(
+                            recordID: $0,
+                            generation: generation
+                        )
                     },
                     createdAt: record.payload.createdAt,
                     updatedAt: record.payload.updatedAt,
@@ -492,7 +561,10 @@ public struct AtlasVaultPresentationAdapter:
             },
             profileSnippets: state.profileSnippets.map { record in
                 AtlasVaultProfileSnippetPresentation(
-                    id: AtlasVaultPresentationID(recordID: record.metadata.id),
+                    id: AtlasVaultPresentationID(
+                        recordID: record.metadata.id,
+                        generation: generation
+                    ),
                     title: record.payload.title,
                     body: record.payload.body,
                     targetSystem: record.payload.targetSystem,
@@ -505,10 +577,16 @@ public struct AtlasVaultPresentationAdapter:
             },
             draftMetadata: state.draftMetadata.map { record in
                 AtlasVaultDraftMetadataPresentation(
-                    id: AtlasVaultPresentationID(recordID: record.metadata.id),
+                    id: AtlasVaultPresentationID(
+                        recordID: record.metadata.id,
+                        generation: generation
+                    ),
                     linkedJobKey: record.payload.linkedJobKey,
                     linkedSavedJobID: record.payload.linkedSavedJobRecordID.map {
-                        AtlasVaultPresentationID(recordID: $0)
+                        AtlasVaultPresentationID(
+                            recordID: $0,
+                            generation: generation
+                        )
                     },
                     targetSystem: record.payload.targetSystem,
                     documentType: record.payload.documentType,

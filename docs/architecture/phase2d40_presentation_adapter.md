@@ -17,7 +17,8 @@ or production-readiness claim.
 ## Adapter Boundary
 
 `AtlasVaultPresentationAdapting` accepts `AtlasVaultRuntimeStatus`, an optional
-`AtlasVaultHydratedState`, and a fixed transient command state. The concrete
+`AtlasVaultHydratedState`, an explicit presentation generation, and a fixed
+transient command state. The concrete
 `AtlasVaultPresentationAdapter` is a value with no stored dependencies or
 mutable state. It invokes no runtime service and performs only deterministic
 projection.
@@ -39,9 +40,12 @@ private state.
 
 The five active hydrated record models map to dedicated presentation values.
 Each receives an opaque `AtlasVaultPresentationID` whose underlying record ID
-is replaced by a process-local, non-persistable hash token and redacted in
-diagnostics. Links between private presentation records use the same opaque ID
-instead of exposing source record IDs. Revisions, parent revisions, key IDs,
+is replaced by a process-local, non-persistable hash token salted by an explicit
+unlock-generation value and redacted in diagnostics. The future presentation
+owner must create a new generation after every lock/activation boundary; a
+missing generation fails closed by omitting private projection. Links between
+private presentation records use the same opaque ID instead of exposing source
+record IDs. Revisions, parent revisions, key IDs,
 tombstones, encrypted envelopes, keys, and filesystem locations are not
 projected. Saved-search query and filter fields map into a dedicated redacted,
 non-persistable presentation value rather than retaining the existing request

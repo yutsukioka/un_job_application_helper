@@ -5,6 +5,7 @@ import XCTest
 final class AtlasVaultPresentationAdapterTests: XCTestCase {
     private static let fakeKey = Data(repeating: 0xA9, count: 32)
     private static let fakePath = "/tmp/FAKE_PRIVATE_VAULT_PATH_DO_NOT_LEAK"
+    private let generation = AtlasVaultPresentationGeneration()
 
     func testConstructionIsSideEffectFreeAndInitiallyProjectsLocked() throws {
         let root = try temporaryRoot()
@@ -12,7 +13,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let before = try relativePaths(at: root)
 
         let adapter = AtlasVaultPresentationAdapter()
-        let snapshot = adapter.makeSnapshot(runtimeStatus: .locked, privateState: nil)
+        let snapshot = adapter.makeSnapshot(runtimeStatus: .locked)
 
         XCTAssertEqual(snapshot, AtlasVaultPresentationSnapshot(status: .locked, privateState: nil))
         XCTAssertTrue(Mirror(reflecting: adapter).children.isEmpty)
@@ -29,7 +30,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testActivatingSnapshotClearsSuppliedPrivateState() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .activating,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertEqual(snapshot.status, .activating)
@@ -39,7 +41,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testUnlockedSnapshotProjectsPrivateState() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertEqual(snapshot.status, .unlocked)
@@ -84,6 +87,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .locked,
             privateState: hydratedState(),
+            generation: generation,
             commandState: .cancelled
         )
 
@@ -95,7 +99,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testSaveInProgressRetainsOnlySuppliedInMemoryProjection() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .saving,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertEqual(snapshot.status, .saveInProgress)
@@ -106,6 +111,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
             privateState: hydratedState(),
+            generation: generation,
             commandState: .saveFailed
         )
 
@@ -117,6 +123,7 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .locked,
             privateState: hydratedState(),
+            generation: generation,
             commandState: .saveFailed
         )
 
@@ -128,13 +135,15 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let adapter = adapter()
         let unlocked = adapter.makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
         XCTAssertNotNil(unlocked.privateState)
 
         let failed = adapter.makeSnapshot(
             runtimeStatus: .failed(.activation(.authenticationFailed)),
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertNil(failed.privateState)
@@ -145,7 +154,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         for status in [AtlasVaultRuntimeStatus.locking, .locked] {
             let snapshot = adapter.makeSnapshot(
                 runtimeStatus: status,
-                privateState: hydratedState()
+                privateState: hydratedState(),
+                generation: generation
             )
             XCTAssertNil(snapshot.privateState)
         }
@@ -154,7 +164,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testSavedSearchProjection() throws {
         let value = try XCTUnwrap(projectedState().savedSearches.first)
 
-        XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-search"))
+        XCTAssertEqual(
+            value.id,
+            AtlasVaultPresentationID(recordID: "record-search", generation: generation)
+        )
         XCTAssertEqual(value.name, "FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK")
         XCTAssertEqual(value.summary, "FAKE_SEARCH_SUMMARY_DO_NOT_LEAK")
         XCTAssertEqual(value.details, "FAKE_SEARCH_DETAILS_DO_NOT_LEAK")
@@ -167,7 +180,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testSavedJobProjection() throws {
         let value = try XCTUnwrap(projectedState().savedJobs.first)
 
-        XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-job"))
+        XCTAssertEqual(
+            value.id,
+            AtlasVaultPresentationID(recordID: "record-job", generation: generation)
+        )
         XCTAssertEqual(value.applicationID, "FAKE_APPLICATION_ID_DO_NOT_LEAK")
         XCTAssertEqual(value.jobKey, "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK")
         XCTAssertEqual(value.status, "FAKE_APPLICATION_STATUS_DO_NOT_LEAK")
@@ -179,14 +195,17 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testApplicationNoteProjection() throws {
         let value = try XCTUnwrap(projectedState().applicationNotes.first)
 
-        XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-note"))
+        XCTAssertEqual(
+            value.id,
+            AtlasVaultPresentationID(recordID: "record-note", generation: generation)
+        )
         XCTAssertEqual(value.title, "FAKE_NOTE_TITLE_DO_NOT_LEAK")
         XCTAssertEqual(value.body, "FAKE_PRIVATE_NOTE_DO_NOT_LEAK")
         XCTAssertEqual(value.noteKind, "FAKE_NOTE_KIND_DO_NOT_LEAK")
         XCTAssertEqual(value.linkedJobKey, "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK")
         XCTAssertEqual(
             value.linkedSavedJobID,
-            AtlasVaultPresentationID(recordID: "record-job")
+            AtlasVaultPresentationID(recordID: "record-job", generation: generation)
         )
         XCTAssertEqual(value.isPinned, true)
         XCTAssertEqual(value.sortOrder, 7)
@@ -195,7 +214,10 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testProfileSnippetProjection() throws {
         let value = try XCTUnwrap(projectedState().profileSnippets.first)
 
-        XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-snippet"))
+        XCTAssertEqual(
+            value.id,
+            AtlasVaultPresentationID(recordID: "record-snippet", generation: generation)
+        )
         XCTAssertEqual(value.title, "FAKE_SNIPPET_TITLE_DO_NOT_LEAK")
         XCTAssertEqual(value.body, "FAKE_PROFILE_SNIPPET_DO_NOT_LEAK")
         XCTAssertEqual(value.targetSystem, "FAKE_TARGET_SYSTEM_DO_NOT_LEAK")
@@ -207,11 +229,14 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testDraftMetadataProjection() throws {
         let value = try XCTUnwrap(projectedState().draftMetadata.first)
 
-        XCTAssertEqual(value.id, AtlasVaultPresentationID(recordID: "record-draft"))
+        XCTAssertEqual(
+            value.id,
+            AtlasVaultPresentationID(recordID: "record-draft", generation: generation)
+        )
         XCTAssertEqual(value.linkedJobKey, "FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK")
         XCTAssertEqual(
             value.linkedSavedJobID,
-            AtlasVaultPresentationID(recordID: "record-job")
+            AtlasVaultPresentationID(recordID: "record-job", generation: generation)
         )
         XCTAssertEqual(value.targetSystem, "FAKE_DRAFT_TARGET_DO_NOT_LEAK")
         XCTAssertEqual(value.documentType, "FAKE_DOCUMENT_TYPE_DO_NOT_LEAK")
@@ -225,7 +250,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         let state = hydratedState(includeTombstone: true)
         let projection = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: state
+            privateState: state,
+            generation: generation
         ).privateState
 
         XCTAssertEqual(projection, projectedState())
@@ -251,10 +277,40 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         }
     }
 
+    func testOpaquePresentationIDsRotateAcrossUnlockGenerations() {
+        let sameGeneration = AtlasVaultPresentationID(
+            recordID: "record-search",
+            generation: generation
+        )
+        let repeated = AtlasVaultPresentationID(
+            recordID: "record-search",
+            generation: generation
+        )
+        let nextGeneration = AtlasVaultPresentationID(
+            recordID: "record-search",
+            generation: AtlasVaultPresentationGeneration()
+        )
+
+        XCTAssertEqual(sameGeneration, repeated)
+        XCTAssertNotEqual(sameGeneration, nextGeneration)
+    }
+
+    func testMissingGenerationFailsClosedWithoutPrivateProjection() {
+        let snapshot = adapter().makeSnapshot(
+            runtimeStatus: .unlocked,
+            privateState: hydratedState(),
+            generation: nil
+        )
+
+        XCTAssertEqual(snapshot.status, .unlocked)
+        XCTAssertNil(snapshot.privateState)
+    }
+
     func testPublicAndPrivateDescriptionsAreRedacted() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
         let values: [Any] = [
             snapshot,
@@ -277,7 +333,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testPresentationTypesDoNotConformToEncodingProtocols() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertFalse(isEncodable(snapshot))
@@ -289,7 +346,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     func testPresentationContainsNoVaultKeyEnvelopeOrFilesystemPath() {
         let snapshot = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
         let rendered = "\(snapshot) \(String(reflecting: snapshot))"
         let keyBase64 = Self.fakeKey.base64EncodedString()
@@ -306,7 +364,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
 
         _ = adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
 
         XCTAssertEqual(try encodedPublicSnapshot(publicSnapshot), before)
@@ -352,14 +411,16 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
     ) -> AtlasVaultPresentationSnapshot {
         adapter().makeSnapshot(
             runtimeStatus: .failed(.activation(failure)),
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         )
     }
 
     private func projectedState() -> AtlasVaultPrivatePresentationState {
         adapter().makeSnapshot(
             runtimeStatus: .unlocked,
-            privateState: hydratedState()
+            privateState: hydratedState(),
+            generation: generation
         ).privateState!
     }
 
