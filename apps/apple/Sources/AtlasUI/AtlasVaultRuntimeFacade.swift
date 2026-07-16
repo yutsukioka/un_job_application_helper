@@ -429,12 +429,13 @@ public actor AtlasVaultRuntimeFacade:
             runtimeStatus = .unlocked
             throw AtlasVaultRuntimeFacadeError.saveFailed
         }
+        let outcome = AtlasVaultSaveOutcome(result)
         guard isCurrent(operation) else {
-            throw AtlasVaultRuntimeFacadeError.cancelled
+            return outcome
         }
         activeOperation = nil
         runtimeStatus = .unlocked
-        return AtlasVaultSaveOutcome(result)
+        return outcome
     }
 
     public nonisolated var description: String {

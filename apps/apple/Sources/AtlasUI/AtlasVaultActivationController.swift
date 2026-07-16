@@ -290,6 +290,9 @@ public extension AtlasVaultActivationEnvironment {
                             records: encryptedRecords,
                             into: currentStore
                         )
+                        guard !Task.isCancelled else {
+                            throw AtlasVaultActivatedOperationError.cancelled
+                        }
                         return try perVaultServices.persistenceCoordinator
                             .saveEncryptedStoreAtomically(
                                 mergedStore,
