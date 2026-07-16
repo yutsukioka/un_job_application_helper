@@ -589,6 +589,9 @@ public actor AtlasVaultActivationController:
               installedSession.scope.isBound(to: expectedVaultID) else {
             throw AtlasVaultActivatedOperationError.sessionMismatch
         }
+        guard !Task.isCancelled else {
+            throw AtlasVaultActivatedOperationError.cancelled
+        }
 
         let generation = installedSession.privateStateGeneration
         let writeResult: AtlasVaultAtomicWriteResult

@@ -244,7 +244,14 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         let request = mutationRequest()
 
         let first = Task { try await facade.apply(request) }
-        await gate.waitUntilEntered()
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            first.cancel()
+            await gate.open()
+            _ = try? await first.value
+            return
+        }
         do {
             _ = try await facade.apply(mutationRequest())
             XCTFail("Expected overlapping save rejection")
@@ -273,7 +280,14 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         let request = mutationRequest()
 
         let save = Task { try await facade.apply(request) }
-        await gate.waitUntilEntered()
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            save.cancel()
+            await gate.open()
+            _ = try? await save.value
+            return
+        }
         await facade.lock()
         await gate.open()
 
@@ -293,7 +307,13 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
         let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
         let request = activationRequest()
         let activation = Task { try await facade.activate(request) }
-        await harness.waitUntilActivationStarted()
+        let didStart = await harness.waitUntilActivationStarted()
+        XCTAssertTrue(didStart)
+        guard didStart else {
+            activation.cancel()
+            _ = try? await activation.value
+            return
+        }
 
         activation.cancel()
 
@@ -424,6 +444,55 @@ final class AtlasVaultRuntimeFacadeTests: XCTestCase {
             XCTFail("Expected session mismatch")
         } catch {
             XCTAssertEqual(error as? AtlasVaultRuntimeFacadeError, .sessionMismatch)
+        }
+        XCTAssertFalse(recorder.events.contains("save"))
+    }
+
+    func testRuntimeControllerHonorsQueuedCancellationBeforeSaverCall() async throws {
+        let recorder = RuntimeFacadeRecorder()
+        let scope = try AtlasVaultActivationScope(
+            vaultID: Self.vaultID,
+            loadEncryptedStore: { _ in Self.emptyStore() },
+            hydrateRecords: { _, _ in AtlasVaultHydratedState() },
+            saveMutations: { _, _ in
+                recorder.record("save")
+                return AtlasVaultAtomicWriteResult(commitState: .committed)
+            }
+        )
+        let environment = AtlasVaultActivationEnvironment(
+            loadStoredVaultKey: { _ in Self.vaultKey },
+            resolveRootDirectory: { URL(fileURLWithPath: "/tmp/fake-runtime-facade-root") },
+            makeScope: { _, _ in scope }
+        )
+        let controller = AtlasVaultActivationController(environment: environment)
+        try await controller.activate(vaultID: Self.vaultID)
+        let gate = FacadeGate()
+        let vaultID = Self.vaultID
+        let mutations = AtlasVaultMutationSet()
+        let task = Task {
+            await gate.enter()
+            return try await controller.saveRuntimeMutations(
+                mutations,
+                expectedVaultID: vaultID
+            )
+        }
+        let didEnter = await gate.waitUntilEntered()
+        XCTAssertTrue(didEnter)
+        guard didEnter else {
+            task.cancel()
+            await gate.open()
+            _ = try? await task.value
+            return
+        }
+
+        task.cancel()
+        await gate.open()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation before save")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultActivatedOperationError, .cancelled)
         }
         XCTAssertFalse(recorder.events.contains("save"))
     }
@@ -708,10 +777,14 @@ private actor FacadeHarness {
         completedSaves
     }
 
-    func waitUntilActivationStarted() async {
-        while !recordedEvents.contains("activate") {
-            await Task.yield()
+    func waitUntilActivationStarted() async -> Bool {
+        for _ in 0..<100 {
+            if recordedEvents.contains("activate") {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        return recordedEvents.contains("activate")
     }
 
     private func activate(vaultID: String) async throws {
@@ -770,14 +843,10 @@ private actor FacadeHarness {
 private actor FacadeGate {
     private var entered = false
     private var isOpen = false
-    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
     private var entryContinuation: CheckedContinuation<Void, Never>?
 
     func enter() async {
         entered = true
-        let waiters = enteredWaiters
-        enteredWaiters.removeAll()
-        waiters.forEach { $0.resume() }
         guard !isOpen else {
             return
         }
@@ -786,13 +855,14 @@ private actor FacadeGate {
         }
     }
 
-    func waitUntilEntered() async {
-        guard !entered else {
-            return
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<100 {
+            if entered {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
-        await withCheckedContinuation { continuation in
-            enteredWaiters.append(continuation)
-        }
+        return entered
     }
 
     func open() {
