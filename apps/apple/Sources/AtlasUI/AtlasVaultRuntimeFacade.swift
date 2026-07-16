@@ -370,10 +370,26 @@ public actor AtlasVaultRuntimeFacade:
 
     func cancelActivationIfInProgress() async -> Bool {
         guard runtimeStatus == .activating,
-              activeOperation?.kind == .activation else {
+              let activationOperation = activeOperation,
+              activationOperation.kind == .activation else {
             return false
         }
-        await lock()
+
+        let didCancel = await environment.cancelActivation()
+        guard didCancel else {
+            return false
+        }
+        guard isCurrent(activationOperation) else {
+            return true
+        }
+
+        let lockOperation = begin(.lock, status: .locking)
+        await environment.lock()
+        guard isCurrent(lockOperation) else {
+            return true
+        }
+        activeOperation = nil
+        runtimeStatus = .locked
         return true
     }
 

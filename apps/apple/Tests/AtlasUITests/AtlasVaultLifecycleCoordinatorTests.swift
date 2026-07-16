@@ -370,14 +370,32 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         XCTAssertTrue(didLock)
 
         let status = await coordinator.status()
-        let values = [
+        XCTAssertEqual(
             String(describing: coordinator),
+            "AtlasVaultLifecycleCoordinator(state: <redacted>)"
+        )
+        XCTAssertEqual(
             String(reflecting: coordinator),
+            "AtlasVaultLifecycleCoordinator(state: <redacted>)"
+        )
+        XCTAssertEqual(
             String(describing: AtlasVaultLifecycleEvent.didEnterBackground),
+            "didEnterBackground"
+        )
+        XCTAssertEqual(
             String(reflecting: AtlasVaultLifecycleLockPolicy.immediate),
+            "immediate"
+        )
+        XCTAssertEqual(
             String(describing: status),
+            "AtlasVaultLifecycleStatus(event: <redacted>, timer: <redacted>, failure: <redacted>)"
+        )
+        XCTAssertEqual(
             String(reflecting: AtlasVaultLifecycleFailure.graceTimerUnavailable),
-        ].joined(separator: "|")
+            "graceTimerUnavailable"
+        )
+        let values = [String(describing: coordinator), String(describing: status)]
+            .joined(separator: "|")
         XCTAssertFalse(values.contains(Self.privateSentinel))
         XCTAssertFalse(values.contains(Self.keySentinel))
         XCTAssertEqual(status.failure, .graceTimerUnavailable)
@@ -418,6 +436,27 @@ final class AtlasVaultLifecycleCoordinatorTests: XCTestCase {
         let events = await harness.events()
         XCTAssertEqual(status, .locked)
         XCTAssertEqual(events, ["activate", "cancelActivation", "lock"])
+    }
+
+    func testFacadeConditionalCancellationDoesNotLockWhenCancellationLosesRace() async throws {
+        let harness = LifecycleFacadeHarness(
+            blockActivation: true,
+            cancellationCompletesActivation: true
+        )
+        let facade = AtlasVaultRuntimeFacade(environment: harness.environment())
+        let request = AtlasVaultRuntimeActivationRequest(vaultID: "vault-random-003")
+        let activation = Task { try await facade.activate(request) }
+        let didStart = await harness.waitUntilActivationStarted()
+        XCTAssertTrue(didStart)
+
+        let didCancel = await facade.cancelActivationIfInProgress()
+
+        XCTAssertFalse(didCancel)
+        try await activation.value
+        let status = await facade.status()
+        let events = await harness.events()
+        XCTAssertEqual(status, .unlocked)
+        XCTAssertEqual(events, ["activate", "cancelActivation"])
     }
 
     func testCoordinatorSourceHasNoRuntimeOrPlatformCoupling() throws {
@@ -670,9 +709,14 @@ private actor LifecycleFacadeHarness {
     private var recordedEvents: [String] = []
     private var activationContinuation: CheckedContinuation<Void, Error>?
     private let blockActivation: Bool
+    private let cancellationCompletesActivation: Bool
 
-    init(blockActivation: Bool = false) {
+    init(
+        blockActivation: Bool = false,
+        cancellationCompletesActivation: Bool = false
+    ) {
         self.blockActivation = blockActivation
+        self.cancellationCompletesActivation = cancellationCompletesActivation
     }
 
     nonisolated func environment() -> AtlasVaultRuntimeFacadeEnvironment {
@@ -713,8 +757,15 @@ private actor LifecycleFacadeHarness {
 
     private func cancelActivation() -> Bool {
         recordedEvents.append("cancelActivation")
-        activationContinuation?.resume(throwing: CancellationError())
+        guard let continuation = activationContinuation else {
+            return false
+        }
         activationContinuation = nil
+        if cancellationCompletesActivation {
+            continuation.resume()
+            return false
+        }
+        continuation.resume(throwing: CancellationError())
         return true
     }
 

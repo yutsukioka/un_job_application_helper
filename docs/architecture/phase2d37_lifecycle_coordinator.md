@@ -20,6 +20,11 @@ redacted runtime status, idempotent lock, and atomic
 `cancelActivationIfInProgress()`. The public `AtlasVaultRuntimeFacading`
 application boundary remains unchanged.
 
+The facade asks its activation controller to cancel before changing facade
+state. It transitions to locked only when cancellation returns success. If
+activation has already completed, the operation returns `false` and leaves the
+new unlocked session intact.
+
 External clients construct the public coordinator with a concrete public
 `AtlasVaultRuntimeFacade` plus public clock and sleeper abstractions. The
 initializer does not invoke any dependency. Test injection of alternate
