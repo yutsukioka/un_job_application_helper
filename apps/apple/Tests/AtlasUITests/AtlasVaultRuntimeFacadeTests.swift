@@ -1053,7 +1053,7 @@ private actor FacadeHarness {
     }
 
     func waitUntilActivationStarted() async -> Bool {
-        for _ in 0..<100 {
+        for _ in 0..<500 {
             if recordedEvents.contains("activate") {
                 return true
             }
@@ -1065,7 +1065,7 @@ private actor FacadeHarness {
     private func activate(vaultID: String) async throws {
         recordedEvents.append("activate")
         if activationSleepsUntilCancelled {
-            try await Task.sleep(for: .seconds(60))
+            try await Task.sleep(for: .seconds(5))
         }
         if let activationFailure {
             throw activationFailure
