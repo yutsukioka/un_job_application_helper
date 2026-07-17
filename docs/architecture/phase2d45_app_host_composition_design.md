@@ -72,6 +72,11 @@ critical section that can deadlock with the owner while awaiting that hop. A
 later `start()` uses a fresh presentation generation and may not replay a prior
 private snapshot.
 
+The same barrier applies to an explicit user- or window-initiated lock. Closing
+the host lifetime and locking an active vault differ in public-task ownership,
+but neither may return while a UI owner or the observable adapter still exposes
+private presentation.
+
 ## 7. Public Job-Search Service Boundary
 
 Introduce a future narrow `AtlasPublicJobSearching` protocol or equivalent for
@@ -140,6 +145,21 @@ recovery-key, local-key, timeout, and cancellation handling. It delegates its
 validated activation request to the runtime facade. UI-originated unlock must
 not call `AtlasVaultRuntimeFacading.activate` directly and thereby bypass
 single-use request ownership, secret cleanup, or timeout behavior.
+
+UI-originated lock similarly calls the host's lock command, not
+`AtlasVaultRuntimeFacading.lock()` directly. Under the host's serialized
+authority, that command closes unlock and private-presentation authorization,
+invalidates the current presentation generation, cancels or invalidates active
+private requests, and rejects their late results. It then starts runtime lock,
+directly resets every registered presentation owner, and emits the monotonic
+private-free observable control update. Runtime lock and owner reset may
+proceed concurrently after gate closure so a stalled UI owner cannot delay
+runtime teardown, but the host command awaits both and verifies the adapter is
+private-free before returning. Public-only search may continue independently.
+
+After that barrier completes, an active host with available protected data and
+no lifecycle lock in flight may become eligible for a new, distinct explicit
+unlock request. The request that was active when lock began is never reusable.
 
 ## 11. Proposed Test-Host Protocol
 
@@ -331,9 +351,9 @@ The owner also implements a narrow future host-only reset operation such as
 published snapshot, discards buffered values from invalidated generations, and
 returns only after the replacement is visible to its consumers. This operation
 accepts no private payload and is not a general runtime mutation API. Host stop,
-inactivity, backgrounding, protected-data loss, termination, and fatal
-containment use it before cancelling subscriptions or returning control to a
-caller that assumes presentation is cleared.
+explicit lock, inactivity, backgrounding, protected-data loss, termination, and
+fatal containment use it before cancelling subscriptions or returning control
+to a caller that assumes presentation is cleared.
 
 ## 24. MainActor Boundary
 
@@ -377,6 +397,12 @@ is closed, the host must not accept a replacement request merely because the
 runtime facade currently reports locked or because a grace timer has not yet
 expired. Runtime status and active-process status are not unlock-eligibility
 signals while lifecycle status still reports a pending grace lock.
+
+An explicit lock request uses the same host serialization. It first reserves
+the lock terminal state, closes both gates, and invalidates the presentation
+generation before cancellation or runtime work can complete late. Concurrent
+lock requests coalesce on the same in-flight barrier or await it; none may
+return based solely on the runtime facade's locked status.
 
 ## 28. Save Task Coordination
 
@@ -432,7 +458,8 @@ status changes.
 The preferred first host has one process-wide `@MainActor` presentation owner
 that every window renders. If a later design permits window-local owners, the
 host must register them and await a private-free acknowledgement from every
-current owner before lifecycle handling or stop reports completion.
+current owner before explicit lock, lifecycle handling, or stop reports
+completion.
 
 ## 33. Single Active Vault Policy
 
@@ -595,6 +622,17 @@ Phase 2D-46 must cover:
   acknowledge the owner reset, remain locked, and never show the warning-only
   state;
 - fatal or integrity-unknown save failure locking and clearing;
+- explicit user lock while an unlocked snapshot is published, proving the host
+  closes both gates, invalidates the presentation generation, resets and awaits
+  every registered owner, publishes the private-free control update, awaits
+  runtime lock, and returns only after the owner and adapter are private-free;
+- explicit lock with a suspended presentation owner and a buffered late private
+  update, proving runtime lock still completes, the host command does not return
+  before owner acknowledgement, and the late update cannot be installed;
+- explicit lock racing an unlock request, private mutation, or second window's
+  lock request, proving the prior request is terminal and non-reusable, late
+  private results are rejected, and every caller observes the same completed
+  private-free lock barrier;
 - lock propagation to every subscriber and rejection of late updates;
 - stop while unlocked cancelling active unlock, mutation, and public-search
   work, closing presentation authorization, invalidating the presentation
