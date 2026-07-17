@@ -42,14 +42,18 @@ The stateless presentation adapter is ready for runtime-neutral projection. It
 exposes UI-safe status and private in-memory presentation models without keys,
 record envelopes, or filesystem URLs. A future observable owner must still
 publish snapshots, reject stale generations, and clear projected state on every
-non-unlocked transition.
+non-unlocked transition. While locked, the adapter must receive no private-state
+snapshot and must project no private collection, including legacy saved-search
+or tracker state.
 
 ## 6. Lifecycle Coordinator Readiness
 
 The lifecycle coordinator is ready to consume injected, platform-neutral
 events and apply the reviewed lock policy. It does not subscribe to iOS or
 macOS notifications. A later host phase must define event sources, ordering,
-scene aggregation, background grace periods, and cancellation ownership.
+scene aggregation, background grace periods, and cancellation ownership. A
+Phase 2D-37 lifecycle lock transition must clear the runtime private state and
+remove its presentation projection before a locked view is rendered.
 
 ## 7. Unlock Request Coordinator Readiness
 
@@ -172,7 +176,11 @@ collections. It must not be `Codable` or restored from persistent UI state.
 A dedicated vault presentation owner should own UI tasks and snapshots. Existing
 `SearchViewModel` must not acquire vault keys, private state, persistence seams,
 or unlock logic. Any eventual public-search coordination requires an explicit
-adapter rather than merging public and private storage responsibilities.
+adapter rather than merging public and private storage responsibilities. The
+future SwiftUI layer must render vault-private content only from the reviewed
+runtime-facade and presentation-adapter boundary. It must not bypass that
+boundary by asking `SearchViewModel` or `AtlasAPIClient` to load private state
+from compatibility endpoints.
 
 ## 23. App Host Ownership
 
@@ -215,7 +223,30 @@ cache may remain available while the vault is locked. Detail cache content,
 filenames, requested keys, and warmup behavior must derive only from public job
 data, never saved-only membership. Locked state must not reveal private
 membership, private counts, saved-only job keys, prior private labels, or
-whether a public result has a private record.
+whether a public result has a private record. Public search is ready while
+locked only when its view path does not invoke `refreshSidebarData()` or any
+equivalent private saved-search or tracker refresh.
+
+## 28.1. Locked-Shell Legacy Panel Gate
+
+`AtlasRootView` is not safe to reuse unchanged as the first locked SwiftUI
+shell. Its current hierarchy includes `AtlasSidebarView` and `SavedPanel`.
+Those legacy panels can invoke `refreshSidebarData()`, whose current
+implementation calls `savedSearches()` and `trackerRecords()` and publishes the
+returned private saved-search and tracker state through `SearchViewModel`.
+
+A locked shell must not fetch, publish, hydrate, retain, or display that private
+state. Merely hiding labels or panels after the fetch is insufficient: the
+private endpoint calls and publication path must be impossible while locked.
+Reuse of `AtlasRootView` is therefore blocked until all private panels and every
+equivalent refresh path are gated, disabled, or replaced and verified by tests.
+
+The preferred first implementation is a dedicated public-only locked shell. It
+may expose public search, `AtlasPublicLocalSnapshot`, and reviewed public job
+detail cache data, but must omit legacy saved-search and tracker panels
+entirely. Reusing a shared root is permitted only after a separately reviewed
+design and implementation prove that private panels cannot be instantiated and
+private refresh calls cannot run before unlock.
 
 ## 29. Explicit Unlock Flow
 
@@ -236,8 +267,9 @@ crash diagnostics.
 
 The reviewed default is to lock on an eligible background or protected-data
 event according to a host-supplied lifecycle policy. The host must cancel UI
-tasks, clear presentation immediately, then await runtime teardown. Grace
-periods, if any, require a separate privacy review.
+tasks, clear presentation immediately, remove private panels and their state,
+then await runtime teardown. Grace periods, if any, require a separate privacy
+review.
 
 ## 32. Protected-Data Behavior
 
@@ -322,6 +354,29 @@ Future UI tests should start with locked and no-vault states under a fake
 runtime facade. They should verify no automatic unlock, public-search access,
 explicit actions, redacted failures, lock clearing, cancellation, multiple
 windows, accessibility labels, and background obscuring without real secrets.
+The locked-shell gate requires these explicit tests:
+
+1. The locked shell does not call `refreshSidebarData()`.
+2. The locked shell does not invoke the saved-search compatibility endpoints.
+3. The locked shell does not invoke the tracker compatibility endpoints.
+4. The locked shell does not publish saved-search state.
+5. The locked shell does not publish saved-job or tracker state.
+6. The locked shell does not instantiate or render legacy private panels.
+7. Public job search remains usable while locked.
+8. Snapshot loading while locked accepts only `AtlasPublicLocalSnapshot`; any
+   independently read detail file must remain within the reviewed public detail
+   cache boundary.
+9. Transition to unlocked state hydrates private presentation from AtlasVault
+   runtime state, never from the public snapshot.
+10. Activation failure leaves private panels absent.
+11. Lock after unlock removes private panels and clears projected private
+    state.
+12. Background or protected-data lock leaves no private panel state visible.
+13. No saved-only job key enters public detail-cache warmup metadata.
+14. Test spies prove no plaintext compatibility endpoint is called while
+    locked.
+15. Preview fixtures use fake data only and do not instantiate the private
+    refresh path.
 
 ## 44. Integration-Test Strategy
 
@@ -329,6 +384,10 @@ Phase 2D-46 should provide a test host that composes real runtime-neutral
 services with fake root, key, clock, lifecycle, and secret-derivation seams.
 Tests should cover actor-to-main ordering, generation rejection, task teardown,
 temporary-root encrypted load/save, and zero production app-entry references.
+The test host must also spy on `SearchViewModel` or its injected client and
+prove that locked public search makes no `savedSearches()`,
+`trackerRecords()`, `api/saved-searches`, or `api/tracker` request and publishes
+no corresponding private state.
 
 ## 45. Failure-Injection Strategy
 
@@ -349,7 +408,12 @@ separately reviewed compatibility or migration flow exists.
 Existing `SearchViewModel` saved-search and saved-job behavior remains on its
 legacy path. The encrypted runtime does not consume, rewrite, or delete that
 state in this sequence. Coexistence can produce two sources of private truth,
-so UI integration must not claim migration or silently prefer one source.
+so UI integration must not claim migration or silently prefer one source. The
+current plaintext `api/saved-searches` and `api/tracker` endpoints are local
+compatibility surfaces only. Their existence does not make them safe for
+locked-shell loading, and the locked shell must not call them. Any temporary
+unlocked compatibility bridge requires a separate reviewed transition plan.
+These compatibility surfaces are not cloud sync endpoints.
 
 ## 48. Migration Remains Deferred
 
@@ -422,7 +486,11 @@ Production launch is a no-go. Required gates include macOS and iOS CI, an
 observable `@MainActor` adapter, host and scene ownership, a test host, a locked
 SwiftUI shell, explicit unlock UI, production secret derivation, platform
 privacy policy, file protection, backup policy, threat-model approval, and
-resolution of legacy private-state coexistence.
+resolution of legacy private-state coexistence. The current `AtlasRootView` is
+not integration-ready unchanged because it can refresh and publish legacy
+private state while locked. This audit adds no SwiftUI implementation and makes
+no production-readiness claim; migration, legacy cleanup, cloud sync, recovery,
+onboarding, and key rotation remain deferred.
 
 ## 59. Recommended Staged Phases
 
@@ -431,9 +499,19 @@ resolution of legacy private-state coexistence.
 2. Phase 2D-45: app-host composition design covering process, scene, task, and
    dependency ownership.
 3. Phase 2D-46: test-host integration with fake platform inputs and no
-   production app entry point.
-4. Phase 2D-47: first locked-state-only SwiftUI shell with public search still
-   separate and no automatic unlock.
+   production app entry point. It must prove locked public search performs no
+   legacy private endpoint call or state publication.
+4. Phase 2D-47: first locked-state-only SwiftUI shell, using one of two reviewed
+   strategies:
+   - Strategy A, preferred: create a dedicated public-only shell that exposes
+     public search/cache and omits legacy saved-search and tracker panels.
+   - Strategy B, only after tests: reuse a shared root after gating or replacing
+     every private panel, preventing `refreshSidebarData()` and equivalent
+     private fetches while locked, and proving no saved-search or tracker state
+     is published before unlock.
+   The dedicated public-only shell is the required initial choice unless a
+   reviewed gating design proves equivalent safety. `AtlasRootView` must not be
+   reused unchanged.
 5. Later reviewed phases: explicit unlock UI, private-state rendering, save
    actions, migration, cleanup, recovery, and cloud work under separate gates.
 
@@ -456,6 +534,11 @@ current architecture and evidence.
 | Encrypted save | Ready with constraints | Saver, merger, coordinator, and facade paths are tested; no user action or host integration exists. |
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
 | Public cache while locked | Ready | Public snapshot and per-job detail files are separate; private membership must not affect either format or detail warmup. |
+| Public job search while locked | Ready with constraints | It remains available only through a path that cannot call `refreshSidebarData()` or private compatibility endpoints. |
+| Reuse `AtlasRootView` unchanged as locked shell | Blocked | Existing sidebar and saved panels can fetch and publish private saved-search and tracker state. |
+| Dedicated public-only locked shell | Ready with constraints | It may expose only public search/cache and must omit private panels, private refreshes, and automatic unlock. |
+| Reuse `AtlasRootView` after private-panel gating | Design required | Gating or replacement, endpoint-call spies, state-publication tests, lifecycle clearing, and review are required first. |
+| Saved-search and tracker panels while locked | Blocked | Visual hiding is insufficient; their fetch, publication, retention, and rendering paths must not run. |
 | Private state display | Design required | In-memory projection exists; observable ownership, views, accessibility, and capture policy do not. |
 | Lock action | Design required | Runtime lock exists; UI ownership, multi-window propagation, and task cancellation need host design. |
 | Activation | Ready with constraints | Explicit runtime activation exists; production input and host orchestration do not. |
