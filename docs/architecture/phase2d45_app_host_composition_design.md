@@ -262,9 +262,13 @@ authority. A request accepted before the gate closes is cancelled before the
 lock-producing event returns. A request arriving after closure is rejected or
 cancelled with a fixed non-sensitive result, clears its secret ownership, and
 must not invoke derivation or facade activation. `didBecomeActive` may reopen
-the gate only after lifecycle handling completes, any overdue grace lock has
-finished, and protected data is available. Deferred grace expiry therefore
-cannot race with a newly dispatched background unlock.
+the gate only after lifecycle handling completes, protected data is available,
+and lifecycle status confirms that no grace lock remains pending. An active
+event is not sufficient by itself. With
+`afterGracePeriod(..., cancelOnActive: false)`, the gate stays closed until the
+non-cancelled timer fires or is explicitly invalidated through the lifecycle
+coordinator. Deferred grace expiry therefore cannot race with a newly
+dispatched unlock.
 
 ## 23. Host-Owned Observable Adapter Subscription
 
@@ -317,7 +321,8 @@ must not invoke facade activation.
 The same serialization applies after event delivery. While unlock eligibility
 is closed, the host must not accept a replacement request merely because the
 runtime facade currently reports locked or because a grace timer has not yet
-expired. Runtime status is not an unlock-eligibility signal.
+expired. Runtime status and active-process status are not unlock-eligibility
+signals while lifecycle status still reports a pending grace lock.
 
 ## 28. Save Task Coordination
 
@@ -484,6 +489,11 @@ Phase 2D-46 must cover:
   would otherwise complete, proving the runtime and presentation remain locked
   and private-free until a processed active/protected-data-available transition
   explicitly reopens unlock eligibility;
+- returning active before a
+  `afterGracePeriod(..., cancelOnActive: false)` timer expires, then locking or
+  entering fatal containment, proving a replacement unlock remains rejected
+  until lifecycle status reports no pending grace lock and the stale timer
+  cannot later lock a newly activated session;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
