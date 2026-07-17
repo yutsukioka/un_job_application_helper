@@ -668,6 +668,11 @@ Phase 2D-46 must cover:
   presentation;
 - single-use unlock, cancellation, timeout, failure cleanup, and rejection of
   direct host-to-facade activation;
+- a failure-injection matrix covering key unavailable, wrong key, corrupt
+  ciphertext, unsupported version, path failure, atomic-write failure, stale
+  revision, cancellation, timeout, background lock, and delayed completion,
+  proving every case leaves public cache intact and exposes no partial or stale
+  private presentation;
 - a real unlock coordinator paused during secret derivation, followed by a
   background or protected-data lock event, proving the host cancels the active
   request before lifecycle delivery completes, late derivation never calls
