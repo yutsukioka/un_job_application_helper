@@ -26,7 +26,7 @@ prompt, migration, cloud sync, onboarding, recovery UX, or key rotation.
 | Unlock input | `AtlasVaultUnlockRequestCoordinator`, secret-buffer and injected derivation/activation seams | Enforces single-use requests and bounded secret ownership without providing UI. |
 | Persistence | Persistence coordinator, path locator, directory preparer, local-store reader/writer, merger, saver, hydrator, crypto, and atomic writer | Loads and saves encrypted record envelopes under explicit calls. |
 | Root and key access | Application Support root provider and `AtlasVaultKeyStore` / `AtlasKeychainVaultKeyStore` | Encapsulates platform root lookup and Keychain operations behind protocols. |
-| Public cache | `AtlasPublicLocalSnapshot` and `AtlasLocalCache` | Persists public job-cache data independently from private vault state. |
+| Public cache | `AtlasPublicLocalSnapshot`, per-job `AtlasJobDetail` files, and `AtlasLocalCache` | Persists the public snapshot and public detail cache independently from private vault state. |
 | Existing app model | `SearchViewModel` and `AtlasIOSHostApp` | Existing application behavior; neither is integrated with the AtlasVault runtime. |
 
 ## 4. Runtime Facade Readiness
@@ -106,9 +106,12 @@ whether authentication prompts are ever required.
 
 ## 14. Public/Private Snapshot Separation
 
-`AtlasPublicLocalSnapshot` remains the only public cache format. Saved-search
+The public cache has two formats: `AtlasPublicLocalSnapshot` and separate
+per-job `AtlasJobDetail` JSON files managed by `AtlasLocalCache`. Saved-search
 membership, saved-job membership, notes, snippets, drafts, generated-document
-references, vault IDs, private record IDs, and private counts must not enter it.
+references, vault IDs, private record IDs, and private counts must not enter
+either format. Private membership must not influence detail-cache filenames,
+contents, requested keys, warmup selection, counts, or progress metadata.
 Decrypted records exist only in generation-scoped in-memory state after unlock.
 Record type remains inside the encrypted payload; plaintext record metadata is
 limited to the reviewed encrypted-record envelope allowlist.
@@ -206,10 +209,12 @@ requirement for explicit activation intent.
 
 ## 28. Locked Public-Search Behavior
 
-Public job search and `AtlasPublicLocalSnapshot` may remain available while the
-vault is locked. Locked state must not reveal private membership, private
-counts, saved-only job keys, prior private labels, or whether a public result
-has a private record.
+Public job search, `AtlasPublicLocalSnapshot`, and the public per-job detail
+cache may remain available while the vault is locked. Detail cache content,
+filenames, requested keys, and warmup behavior must derive only from public job
+data, never saved-only membership. Locked state must not reveal private
+membership, private counts, saved-only job keys, prior private labels, or
+whether a public result has a private record.
 
 ## 29. Explicit Unlock Flow
 
@@ -449,7 +454,7 @@ current architecture and evidence.
 | Encrypted store load | Ready with constraints | Activation and hydration are tested; host wiring, file protection, and backup behavior remain. |
 | Encrypted save | Ready with constraints | Saver, merger, coordinator, and facade paths are tested; no user action or host integration exists. |
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
-| Public cache while locked | Ready | Public snapshot is separate and must remain free of private membership and counts. |
+| Public cache while locked | Ready | Public snapshot and per-job detail files are separate; private membership must not affect either format or detail warmup. |
 | Private state display | Design required | In-memory projection exists; observable ownership, views, accessibility, and capture policy do not. |
 | Lock action | Design required | Runtime lock exists; UI ownership, multi-window propagation, and task cancellation need host design. |
 | Activation | Ready with constraints | Explicit runtime activation exists; production input and host orchestration do not. |
