@@ -127,7 +127,8 @@ job keys, notes, snippets, drafts, ciphertext, or decrypted JSON.
 
 Public status and secret-request debug output is redacted. Private presentation
 models necessarily contain displayable private values while unlocked, so they
-must not receive custom descriptions, reflection logging, analytics, crash
+must retain fixed `<redacted>` string and debug descriptions. They must not
+receive value-bearing descriptions, reflection logging, analytics, crash
 breadcrumbs, or automatic persistence. Debug builds do not relax this rule.
 
 ## 17. Test Coverage Inventory
