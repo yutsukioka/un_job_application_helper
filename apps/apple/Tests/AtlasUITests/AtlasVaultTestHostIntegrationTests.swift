@@ -391,6 +391,45 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testStopCancelsUnlockReservedBeforeInitialStatusRead() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let statusGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        await harness.runtime.setNextStatusGate(statusGate)
+
+        let unlock = Task {
+            try await harness.host.unlock(self.unlockRequest())
+        }
+        let statusReadEntered = await statusGate.waitUntilEntered()
+        XCTAssertTrue(statusReadEntered)
+
+        await harness.host.stop()
+        await statusGate.open()
+
+        do {
+            try await unlock.value
+            XCTFail("Expected stop to cancel reserved unlock ownership")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultUnlockRequestError,
+                .cancelled
+            )
+        }
+        let activationCount = await harness.runtime.events()
+            .filter { $0 == "activate" }
+            .count
+        XCTAssertEqual(activationCount, 0)
+        let runtimeStatus = await harness.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
+        let replacementObserver =
+            await harness.host.presentationObserver()
+        let replacementSnapshot =
+            await replacementObserver.currentSnapshot()
+        XCTAssertEqual(replacementSnapshot.status, .locked)
+        XCTAssertNil(replacementSnapshot.privateState)
+    }
+
     func testStopInvalidatesInFlightSaveAndReturnsLocked() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
@@ -488,6 +527,58 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         let publicSearchCalls = await harness.publicSearch.calls()
         XCTAssertEqual(publicSearchCalls, 1)
         await assertNoPrivateCompatibilityCalls(harness.recorder)
+    }
+
+    func testExplicitLockRejectsReplacementUnlockUntilCompletion() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let lockCompletionGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        await harness.runtime.setNextLockCompletionGate(lockCompletionGate)
+
+        let lock = Task {
+            await harness.host.lock()
+        }
+        let runtimeReachedLocked =
+            await lockCompletionGate.waitUntilEntered()
+        XCTAssertTrue(runtimeReachedLocked)
+
+        do {
+            try await harness.host.unlock(unlockRequest())
+            XCTFail("Expected explicit lock to keep unlock admission closed")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+        let activationCountDuringLock = await harness.runtime.events()
+            .filter { $0 == "activate" }
+            .count
+        XCTAssertEqual(activationCountDuringLock, 1)
+
+        await lockCompletionGate.open()
+        await lock.value
+        let locked = await harness.observer.currentSnapshot()
+        XCTAssertEqual(locked.status, .locked)
+        XCTAssertNil(locked.privateState)
+        let lockedRuntimeStatus = await harness.runtime.status()
+        XCTAssertEqual(lockedRuntimeStatus, .locked)
+
+        try await harness.host.unlock(unlockRequest())
+        let reactivated = await waitForSnapshot(
+            harness.observer,
+            status: .unlocked
+        )
+        XCTAssertNotNil(reactivated.privateState)
+        let finalActivationCount = await harness.runtime.events()
+            .filter { $0 == "activate" }
+            .count
+        XCTAssertEqual(finalActivationCount, 2)
+        await subscription.cancel()
     }
 
     func testBackgroundAndProtectedDataLossClearPrivateState() async throws {

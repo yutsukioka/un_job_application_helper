@@ -82,11 +82,22 @@ that cancellation loses to an activation that has already committed, the host
 keeps presentation closed and explicitly locks the runtime before continuing
 the lifecycle transition. No private state is restored from the public cache.
 
+The host reserves unlock ownership before its first lifecycle or runtime
+status read. Every suspended admission read revalidates the request epoch,
+host epoch, start/stop state, lifecycle admission, explicit-lock barrier, and
+caller cancellation before it may publish or dispatch activation. Stop can
+therefore cancel an unlock even when its initial status read is still pending,
+and stale admission results cannot publish into a replacement pipeline.
+
 ## 6. Lifecycle And Lock
 
 Explicit lock closes private presentation authorization before awaiting runtime
-lock. Backgrounding, protected-data loss, termination, and configured
-inactivity do the same before lifecycle delivery.
+lock. It also holds a process-local unlock-admission barrier until runtime lock
+and private-free observable synchronization both complete. A replacement
+unlock is rejected throughout that interval and may begin only after the lock
+command returns. Concurrent explicit lock callers wait for the owning lock
+transition. Backgrounding, protected-data loss, termination, and configured
+inactivity close private presentation before lifecycle delivery.
 
 Every presentation update receives a monotonic sequence. The test source marks
 a sequence processed only when the observable adapter requests its next
@@ -208,8 +219,12 @@ Tests cover:
 - side-effect-free construction and explicit locked start;
 - locked public search with zero private compatibility categories;
 - explicit private activation and observable projection;
+- stop cancellation of unlock ownership reserved before the first suspended
+  status read, with no late activation or replacement-pipeline publication;
 - explicit, background, and protected-data lock clearing acknowledged before
   the host command returns;
+- explicit lock rejects replacement unlock until runtime and observable
+  private-free completion, then reopens admission;
 - overlapping save-progress and background-lock publications complete through
   monotonic sequence acknowledgement even when the private-free update
   supersedes the buffered save update;

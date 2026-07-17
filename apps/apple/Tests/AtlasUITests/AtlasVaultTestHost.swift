@@ -454,6 +454,8 @@ actor AtlasVaultTestHost:
     private var hostEpoch: UInt64 = 0
     private var hostObservation: AtlasVaultPresentationSubscription?
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private var explicitLockInProgress = false
+    private var explicitLockWaiters: [CheckedContinuation<Void, Never>] = []
     private var publicSearchTasks:
         [UUID: Task<[AtlasVaultTestPublicJob], Error>] = [:]
     private var privatePresentationAllowed = false
@@ -539,33 +541,71 @@ actor AtlasVaultTestHost:
     }
 
     func unlock(_ request: AtlasVaultUnlockRequest) async throws {
-        guard started, !isStopping else {
-            throw AtlasVaultTestHostError.notStarted
-        }
-        let lifecycleStatus = await lifecycle.status()
-        refreshUnlockAdmission(from: lifecycleStatus)
-        let runtimeStatus = await runtime.status()
-        guard unlockAdmissionAllowed,
+        guard started,
+              !isStopping,
               activeUnlock == nil,
-              !lifecycleStatus.hasPendingGraceLock,
-              runtimeStatus == .locked || runtimeStatus.isAtlasVaultTestFailure
-        else {
+              !explicitLockInProgress,
+              !Task.isCancelled else {
+            if Task.isCancelled {
+                throw AtlasVaultUnlockRequestError.cancelled
+            }
+            if !started || isStopping {
+                throw AtlasVaultTestHostError.notStarted
+            }
             throw AtlasVaultTestHostError.privateOperationsUnavailable
         }
 
         unlockEpoch &+= 1
         let epoch = unlockEpoch
+        let admissionHostEpoch = hostEpoch
         activeUnlock = ActiveUnlock(epoch: epoch, request: request)
-        closePrivatePresentation()
-        await publishControlStatus(.activating)
+
         do {
+            let lifecycleStatus = await lifecycle.status()
             guard activeUnlock?.epoch == epoch,
-                  unlockAdmissionAllowed else {
+                  started,
+                  !isStopping,
+                  hostEpoch == admissionHostEpoch,
+                  !explicitLockInProgress,
+                  !Task.isCancelled else {
+                throw AtlasVaultUnlockRequestError.cancelled
+            }
+            refreshUnlockAdmission(from: lifecycleStatus)
+            guard unlockAdmissionAllowed,
+                  !lifecycleStatus.hasPendingGraceLock else {
+                activeUnlock = nil
+                throw AtlasVaultTestHostError.privateOperationsUnavailable
+            }
+
+            let runtimeStatus = await runtime.status()
+            guard activeUnlock?.epoch == epoch,
+                  started,
+                  !isStopping,
+                  hostEpoch == admissionHostEpoch,
+                  unlockAdmissionAllowed,
+                  !explicitLockInProgress,
+                  !Task.isCancelled else {
+                throw AtlasVaultUnlockRequestError.cancelled
+            }
+            guard runtimeStatus == .locked
+                    || runtimeStatus.isAtlasVaultTestFailure else {
+                activeUnlock = nil
+                throw AtlasVaultTestHostError.privateOperationsUnavailable
+            }
+
+            closePrivatePresentation()
+            await publishControlStatus(.activating)
+            guard activeUnlock?.epoch == epoch,
+                  unlockAdmissionAllowed,
+                  !explicitLockInProgress,
+                  !Task.isCancelled else {
                 throw AtlasVaultUnlockRequestError.cancelled
             }
             try await unlockCoordinator.dispatch(request)
             guard activeUnlock?.epoch == epoch,
-                  unlockAdmissionAllowed else {
+                  unlockAdmissionAllowed,
+                  !explicitLockInProgress,
+                  !Task.isCancelled else {
                 throw AtlasVaultUnlockRequestError.cancelled
             }
             privateSessionAuthorizedByHost = true
@@ -695,10 +735,36 @@ actor AtlasVaultTestHost:
         guard started, !isStopping else {
             return
         }
+        if explicitLockInProgress {
+            await waitForExplicitLockCompletion()
+            return
+        }
+        explicitLockInProgress = true
+        let lockHostEpoch = hostEpoch
+        defer {
+            explicitLockInProgress = false
+            resumeExplicitLockWaiters()
+        }
+
         _ = await cancelActiveUnlock()
+        guard started,
+              !isStopping,
+              hostEpoch == lockHostEpoch else {
+            return
+        }
         closePrivatePresentation()
         await publishControlStatus(.locking)
+        guard started,
+              !isStopping,
+              hostEpoch == lockHostEpoch else {
+            return
+        }
         await runtime.lock()
+        guard started,
+              !isStopping,
+              hostEpoch == lockHostEpoch else {
+            return
+        }
         await synchronizePresentation()
     }
 
@@ -1032,6 +1098,20 @@ actor AtlasVaultTestHost:
         }
     }
 
+    private func waitForExplicitLockCompletion() async {
+        await withCheckedContinuation { continuation in
+            explicitLockWaiters.append(continuation)
+        }
+    }
+
+    private func resumeExplicitLockWaiters() {
+        let waiters = explicitLockWaiters
+        explicitLockWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
     private func resetPresentationPipeline() {
         let source = AtlasVaultTestPresentationUpdateSource()
         updateSource = source
@@ -1072,6 +1152,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
     private var nextStaleSaveCompletionGate: AtlasVaultTestSuspensionGate?
     private var nextStatusGate: AtlasVaultTestSuspensionGate?
     private var nextPrivateStateGate: AtlasVaultTestSuspensionGate?
+    private var nextLockCompletionGate: AtlasVaultTestSuspensionGate?
     private var failNextPrivateStateRead = false
     private var operationEpoch: UInt64 = 0
     private var recordedEvents: [String] = []
@@ -1140,6 +1221,11 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         installedState = nil
         activeVaultID = nil
         runtimeStatus = .locked
+        let completionGate = nextLockCompletionGate
+        nextLockCompletionGate = nil
+        if let completionGate {
+            try? await completionGate.wait()
+        }
     }
 
     func cancelActivationIfInProgress() async -> Bool {
@@ -1269,6 +1355,10 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
     func setNextPrivateStateGate(_ gate: AtlasVaultTestSuspensionGate?) {
         nextPrivateStateGate = gate
+    }
+
+    func setNextLockCompletionGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        nextLockCompletionGate = gate
     }
 
     func setFailNextPrivateStateRead(_ shouldFail: Bool) {
