@@ -63,8 +63,10 @@ adopt a runtime that another owner unlocked.
 
 Activation failure or cancellation clears the cached test projection and
 publishes no private state. Timeout fails before facade activation. Lifecycle
-gate closure cancels the active unlock request before lifecycle delivery. No
-private state is restored from the public cache.
+gate closure cancels the active unlock request before lifecycle delivery. If
+that cancellation loses to an activation that has already committed, the host
+keeps presentation closed and explicitly locks the runtime before continuing
+the lifecycle transition. No private state is restored from the public cache.
 
 ## 6. Lifecycle And Lock
 
@@ -158,6 +160,8 @@ Tests cover:
 - explicit, background, and protected-data lock clearing;
 - recoverable, durability-warning, and fatal save outcomes;
 - cancellation and late-result rejection;
+- lifecycle cancellation that loses to committed activation locks the runtime
+  and still permits a later fresh explicit unlock;
 - stale unlock failure rejection after a replacement session activates;
 - stale save completion rejection after a replacement presentation generation;
 - stale private-state reads cannot publish over a completed lock transition;

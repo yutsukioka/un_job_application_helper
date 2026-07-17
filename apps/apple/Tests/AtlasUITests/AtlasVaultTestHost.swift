@@ -433,7 +433,7 @@ actor AtlasVaultTestHost:
     }
 
     func lock() async {
-        await cancelActiveUnlock()
+        _ = await cancelActiveUnlock()
         closePrivatePresentation()
         await publishControlStatus(.locking)
         await runtime.lock()
@@ -443,9 +443,12 @@ actor AtlasVaultTestHost:
     func handleLifecycle(_ event: AtlasVaultLifecycleEvent) async {
         updateLifecycleState(for: event)
         if event.closesAtlasVaultTestHostPrivatePresentation {
-            await cancelActiveUnlock()
+            let activationMayHaveCommitted = await cancelActiveUnlock()
             closePrivatePresentation(clearSessionAuthorization: false)
             await publishControlStatus(.locking)
+            if activationMayHaveCommitted {
+                await runtime.lock()
+            }
         }
 
         await lifecycle.handle(event)
@@ -551,13 +554,15 @@ actor AtlasVaultTestHost:
         }
     }
 
-    private func cancelActiveUnlock() async {
+    private func cancelActiveUnlock() async -> Bool {
         guard let activeUnlock else {
-            return
+            return false
         }
         unlockEpoch &+= 1
         self.activeUnlock = nil
-        _ = await unlockCoordinator.cancel(activeUnlock.request)
+        let cancellationWon =
+            await unlockCoordinator.cancel(activeUnlock.request)
+        return !cancellationWon
     }
 
     private func updateLifecycleState(for event: AtlasVaultLifecycleEvent) {
