@@ -44,12 +44,14 @@ public enum AtlasVaultPresentationCommandState:
     case none
     case cancelled
     case saveFailed
+    case saveDurabilityUnconfirmed
 
     public var description: String {
         switch self {
         case .none: "none"
         case .cancelled: "cancelled"
         case .saveFailed: "saveFailed"
+        case .saveDurabilityUnconfirmed: "saveDurabilityUnconfirmed"
         }
     }
 
@@ -74,6 +76,7 @@ public enum AtlasVaultPresentationStatus:
     case unsupportedVersion
     case saveInProgress
     case saveFailed
+    case saveDurabilityUnconfirmed
     case cancelled
     case failed
 
@@ -89,6 +92,7 @@ public enum AtlasVaultPresentationStatus:
         case .unsupportedVersion: "unsupportedVersion"
         case .saveInProgress: "saveInProgress"
         case .saveFailed: "saveFailed"
+        case .saveDurabilityUnconfirmed: "saveDurabilityUnconfirmed"
         case .cancelled: "cancelled"
         case .failed: "failed"
         }
@@ -420,6 +424,7 @@ public struct AtlasVaultPresentationAdapter:
             case .none: .unlocked
             case .cancelled: .cancelled
             case .saveFailed: .saveFailed
+            case .saveDurabilityUnconfirmed: .saveDurabilityUnconfirmed
             }
         case .saving:
             .saveInProgress

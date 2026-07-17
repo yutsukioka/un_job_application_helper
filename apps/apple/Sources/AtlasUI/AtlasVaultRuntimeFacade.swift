@@ -104,6 +104,7 @@ public enum AtlasVaultRuntimeFacadeError:
     case activationFailed(AtlasVaultActivationFailure)
     case sessionMismatch
     case saveFailed
+    case saveIntegrityUnknown
     case privateStateUnavailable
     case cancelled
     case committedStateUnavailable(AtlasVaultSaveOutcome)
@@ -116,6 +117,7 @@ public enum AtlasVaultRuntimeFacadeError:
         case let .activationFailed(failure): "activationFailed(\(failure))"
         case .sessionMismatch: "sessionMismatch"
         case .saveFailed: "saveFailed"
+        case .saveIntegrityUnknown: "saveIntegrityUnknown"
         case .privateStateUnavailable: "privateStateUnavailable"
         case .cancelled: "cancelled"
         case .committedStateUnavailable: "committedStateUnavailable"
@@ -123,6 +125,24 @@ public enum AtlasVaultRuntimeFacadeError:
     }
 
     public var debugDescription: String {
+        description
+    }
+}
+
+enum AtlasVaultRuntimeSaveFailure:
+    Error,
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case integrityUnknown
+
+    var description: String {
+        "integrityUnknown"
+    }
+
+    var debugDescription: String {
         description
     }
 }
@@ -262,6 +282,7 @@ public actor AtlasVaultRuntimeFacade:
         case activation
         case save
         case lock
+        case containmentLock
     }
 
     private struct ActiveOperation: Equatable {
@@ -279,6 +300,7 @@ public actor AtlasVaultRuntimeFacade:
     private var operationEpoch: UInt64 = 0
     private var activeOperation: ActiveOperation?
     private var activeSaveOperation: ActiveSaveOperation?
+    private var activeContainmentLockTask: Task<Void, Never>?
 
     public init(activationController: AtlasVaultActivationController) {
         self.environment = AtlasVaultRuntimeFacadeEnvironment(
@@ -349,6 +371,14 @@ public actor AtlasVaultRuntimeFacade:
     }
 
     public func lock() async {
+        if runtimeStatus == .locking,
+           let operation = activeOperation,
+           operation.kind == .containmentLock,
+           let lockTask = activeContainmentLockTask {
+            await lockTask.value
+            finishContainmentLock(operation: operation)
+            return
+        }
         let wasActivating = runtimeStatus == .activating
         let saveTask = runtimeStatus == .saving ? activeSaveOperation?.task : nil
         let operation = begin(
@@ -470,14 +500,12 @@ public actor AtlasVaultRuntimeFacade:
         } catch is CancellationError {
             clearSaveOperation(operation)
             throw finishSaveCancellation(operation: operation)
+        } catch is AtlasVaultRuntimeSaveFailure {
+            clearSaveOperation(operation)
+            throw await finishIntegrityUnknownSaveFailure(operation: operation)
         } catch {
             clearSaveOperation(operation)
-            guard isCurrent(operation) else {
-                throw AtlasVaultRuntimeFacadeError.cancelled
-            }
-            activeOperation = nil
-            runtimeStatus = .unlocked
-            throw AtlasVaultRuntimeFacadeError.saveFailed
+            throw await finishIntegrityUnknownSaveFailure(operation: operation)
         }
         clearSaveOperation(operation)
         let outcome = AtlasVaultSaveOutcome(result)
@@ -547,12 +575,7 @@ public actor AtlasVaultRuntimeFacade:
             guard isCurrent(operation) else {
                 return failure
             }
-            await environment.lock()
-            guard isCurrent(operation) else {
-                return failure
-            }
-            activeOperation = nil
-            runtimeStatus = .locked
+            await lockAfterCommittedStateFailure(operation: operation)
             return failure
         }
         guard isCurrent(operation) else {
@@ -576,6 +599,54 @@ public actor AtlasVaultRuntimeFacade:
         case .committedStateUnavailable:
             preconditionFailure("handled before stale-operation downgrade")
         }
+    }
+
+    private func finishIntegrityUnknownSaveFailure(
+        operation: ActiveOperation
+    ) async -> AtlasVaultRuntimeFacadeError {
+        guard isCurrent(operation) else {
+            return .cancelled
+        }
+        await failClosedSave(operation: operation)
+        return .saveIntegrityUnknown
+    }
+
+    private func failClosedSave(operation: ActiveOperation) async {
+        guard isCurrent(operation) else {
+            return
+        }
+        let lockOperation = begin(.containmentLock, status: .locking)
+        let environment = environment
+        let lockTask = Task {
+            await environment.lock()
+        }
+        activeContainmentLockTask = lockTask
+        await lockTask.value
+        finishContainmentLock(operation: lockOperation)
+    }
+
+    private func lockAfterCommittedStateFailure(
+        operation: ActiveOperation
+    ) async {
+        guard isCurrent(operation) else {
+            return
+        }
+        let lockOperation = begin(.lock, status: .locking)
+        await environment.lock()
+        guard isCurrent(lockOperation) else {
+            return
+        }
+        activeOperation = nil
+        runtimeStatus = .locked
+    }
+
+    private func finishContainmentLock(operation: ActiveOperation) {
+        guard isCurrent(operation) else {
+            return
+        }
+        activeContainmentLockTask = nil
+        activeOperation = nil
+        runtimeStatus = .locked
     }
 
     private func finishSaveCancellation(

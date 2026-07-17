@@ -328,26 +328,23 @@ integrity-uncertain failures must clear presentation and lock.
 
 ## 34.1. Save-Failure Containment Gate
 
-The atomic writer currently returns either `committed` or
+The atomic writer returns either `committed` or
 `committedDurabilityUnconfirmed` after replacement. The activation controller
 reloads and hydrates the committed store before installing refreshed private
 state; if that post-commit refresh fails, it clears the session and private
-state through `committedStateUnavailable`. These are useful lower-level
-boundaries, but they do not make every save failure safe to retry while
-unlocked. Errors thrown before an atomic result reaches the activation
-controller are currently collapsed to generic `saveFailed`, and the runtime
-facade leaves that state unlocked.
+state through `committedStateUnavailable`.
 
-Future containment must preserve three distinct outcomes:
+The runtime facade now preserves three distinct outcomes:
 
 ### Recoverable Pre-Commit Failure
 
 A recoverable outcome requires typed proof that no destination commit occurred,
 the previous encrypted store remains valid, and in-memory private state was not
-mutated. Only that proven category may remain unlocked and permit retry. The
-atomic writer exposes pre-commit stages, but the activation and facade boundary
-does not currently preserve this proof, so recoverable save handling remains
-design and implementation work.
+mutated. Within the reviewed production graph, the activation controller emits
+its typed `saveFailed` operation error only when the save scope throws before
+an atomic result exists. The facade treats only that explicit pre-commit
+category, plus unavailable save support, as recoverable. It remains unlocked
+with unchanged private state and a fixed non-sensitive error.
 
 ### Committed Durability-Unconfirmed Result
 
@@ -356,7 +353,9 @@ After replacement commits, directory synchronization may fail and produce
 must reload the committed encrypted store and update in-memory state to match;
 the current runtime-neutral path does this and returns a non-sensitive
 `committedDurabilityUnconfirmed` outcome, presented later only as a
-non-sensitive durability warning. UI warning presentation and host coordination
+non-sensitive durability warning. The stateless presentation adapter now
+provides `saveDurabilityUnconfirmed` while retaining the refreshed
+current-generation projection. Observable ownership and host coordination
 remain unimplemented.
 
 ### Fatal or Integrity-Uncertain Failure
@@ -365,9 +364,11 @@ When the runtime cannot prove coherence among the active session, in-memory
 private state, and encrypted store, it must fail closed, clear or invalidate the
 session and private state, and require explicit reactivation before another
 private operation. No unlocked `saveFailed` presentation may remain. The
-current path fails closed after a known committed-state refresh failure, but
-unknown or unclassified save errors still remain unlocked. Complete fatal save
-containment is therefore blocked pending a separate implementation and tests.
+runtime now fails closed after a known committed-state refresh failure, an
+explicit integrity-unknown failure, or any unclassified error escaping the
+trusted lower-layer mapping. It publishes `locking`, invokes environment
+teardown, then publishes `locked`; private presentation is removed and
+subsequent private operations require reactivation.
 
 ## 35. Cancellation Behavior
 
@@ -643,10 +644,11 @@ remain deferred.
 
 ## 59. Recommended Staged Phases
 
-1. Cross-phase save-failure containment follow-up: introduce typed recoverable,
+1. Cross-phase save-failure containment follow-up: implemented in the runtime
+   facade and stateless presentation adapter with typed recoverable,
    `committedDurabilityUnconfirmed`, and fatal/integrity-uncertain outcomes;
-   fail closed for unclassified failures; and add runtime and presentation
-   regression tests.
+   unclassified failures fail closed and regression tests cover teardown,
+   reactivation, redaction, and public-snapshot immutability.
 2. Phase 2D-44: test-only observable presentation adapter protocol with a fake
    runtime facade. No production view or app-entry wiring.
 3. Phase 2D-45: app-host composition design covering process, scene, task, and
@@ -688,11 +690,11 @@ current architecture and evidence.
 | Unlock request coordinator | Ready with constraints | Per-request single-use cleanup is tested; distinct requests are not globally serialized, so host arbitration, production derivation, parsing, and UI capture are absent. |
 | Keychain | Ready with constraints | Protocol and adapter exist; explicit host action, accessibility policy, and prompt policy remain. |
 | Encrypted store load | Ready with constraints | Activation and hydration are tested; host wiring, file protection, and backup behavior remain. |
-| Encrypted save | Design required | Saver, merger, coordinator, and facade paths exist, but generic save failures do not yet carry the typed containment proof required for safe integration. |
-| Recoverable pre-commit save failure | Design required | Remaining unlocked requires typed proof that no commit occurred, the prior encrypted store is valid, and in-memory state is unchanged. |
-| Committed durability-unconfirmed save | Ready with constraints | The runtime-neutral path reloads committed state and returns a warning outcome; host and UI warning presentation are absent. |
-| Fatal or integrity-uncertain save containment | Blocked | Unknown or unclassified save errors can currently remain unlocked; a separate fail-closed implementation and tests are required. |
-| SwiftUI save integration | Blocked | It must wait for typed save containment and fail-closed presentation clearing. |
+| Encrypted save | Ready with constraints | Saver, merger, coordinator, and facade paths now preserve recoverable, committed-warning, and fail-closed outcomes; observable host ownership and UI command policy remain. |
+| Recoverable pre-commit save failure | Ready with constraints | Only the controller's typed pre-atomic-result failure remains unlocked; tests prove private state is unchanged and the error is non-sensitive. |
+| Committed durability-unconfirmed save | Ready with constraints | The runtime reloads committed state, returns a warning outcome, and the stateless adapter exposes a fixed warning; observable host ownership remains absent. |
+| Fatal or integrity-uncertain save containment | Ready with constraints | Explicit integrity-unknown and unclassified errors publish locking, tear down the active environment, clear private projection, and require reactivation; production host orchestration remains. |
+| SwiftUI save integration | Blocked | Typed containment now exists, but observable command ownership, app-host coordination, private save UI, and production wiring remain intentionally absent. |
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
 | Public snapshot while locked | Ready | `AtlasPublicLocalSnapshot` is separate from private membership and may support locked public search. |
 | Public detail cache while locked | Design required | Legacy saved-only tracker navigation can write a detail file keyed by private membership; public-only provenance/namespace isolation and an existing-artifact policy are required. |
