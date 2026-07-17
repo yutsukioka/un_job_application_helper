@@ -33,7 +33,7 @@ prompt, migration, cloud sync, onboarding, recovery UX, or key rotation.
 
 The runtime facade is ready as the sole vault-facing command and status seam.
 Its actor serialization, explicit activation, lock, private-state snapshot, and
-save paths are tested. Integration remains constrained because no `MainActor`
+save paths are tested. Integration remains constrained because no `@MainActor`
 owner, host lifetime, or UI task policy currently drives it.
 
 ## 5. Presentation Adapter Readiness
@@ -418,7 +418,7 @@ accepted risks and platform-specific mitigations.
 ## 58. Production-Readiness Gate
 
 Production launch is a no-go. Required gates include macOS and iOS CI, an
-observable/main-actor adapter, host and scene ownership, a test host, a locked
+observable `@MainActor` adapter, host and scene ownership, a test host, a locked
 SwiftUI shell, explicit unlock UI, production secret derivation, platform
 privacy policy, file protection, backup policy, threat-model approval, and
 resolution of legacy private-state coexistence.
@@ -446,7 +446,7 @@ current architecture and evidence.
 
 | Capability | Classification | Evidence and next gate |
 | --- | --- | --- |
-| Runtime facade | Ready with constraints | Actor API and tests exist; a main-actor owner and host lifetime do not. |
+| Runtime facade | Ready with constraints | Actor API and tests exist; an `@MainActor` owner and host lifetime do not. |
 | Presentation adapter | Ready with constraints | Stateless projection exists; observable ownership and stale-update orchestration belong to 2D-44. |
 | Lifecycle coordinator | Ready with constraints | Neutral policy is tested; platform event subscription and scene aggregation are absent. |
 | Unlock request coordinator | Ready with constraints | Single-use cleanup is tested; production derivation, parsing, and UI capture are absent. |
