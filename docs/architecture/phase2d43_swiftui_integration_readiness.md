@@ -31,10 +31,12 @@ prompt, migration, cloud sync, onboarding, recovery UX, or key rotation.
 
 ## 4. Runtime Facade Readiness
 
-The runtime facade is ready as the sole vault-facing command and status seam.
-Its actor serialization, explicit activation, lock, private-state snapshot, and
-save paths are tested. Integration remains constrained because no `@MainActor`
-owner, host lifetime, or UI task policy currently drives it.
+The runtime facade is ready as the sole vault-facing command and status seam
+for activation, lock, and private-state snapshots. Its save path has atomic
+commit outcomes, but generic save errors do not yet preserve enough information
+for the containment policy in Section 34.1. Integration also remains constrained
+because no `@MainActor` owner, host lifetime, or UI task policy currently drives
+it.
 
 ## 5. Presentation Adapter Readiness
 
@@ -291,10 +293,53 @@ or serialized payloads.
 
 ## 34. Save-Failure Behavior
 
-A recoverable save failure may leave the current unlocked in-memory projection
-available only if the runtime confirms the session remains valid. The UI should
-show a fixed non-sensitive error and permit an explicit retry. Authentication,
-session, or integrity failures must clear presentation and lock.
+A typed, proven recoverable save failure may leave the current unlocked
+in-memory projection available only if the runtime confirms both the session
+and prior encrypted store remain valid. The UI may then show a fixed
+non-sensitive error and permit an explicit retry. Authentication, session, or
+integrity-uncertain failures must clear presentation and lock.
+
+## 34.1. Save-Failure Containment Gate
+
+The atomic writer currently returns either `committed` or
+`committedDurabilityUnconfirmed` after replacement. The activation controller
+reloads and hydrates the committed store before installing refreshed private
+state; if that post-commit refresh fails, it clears the session and private
+state through `committedStateUnavailable`. These are useful lower-level
+boundaries, but they do not make every save failure safe to retry while
+unlocked. Errors thrown before an atomic result reaches the activation
+controller are currently collapsed to generic `saveFailed`, and the runtime
+facade leaves that state unlocked.
+
+Future containment must preserve three distinct outcomes:
+
+### Recoverable Pre-Commit Failure
+
+A recoverable outcome requires typed proof that no destination commit occurred,
+the previous encrypted store remains valid, and in-memory private state was not
+mutated. Only that proven category may remain unlocked and permit retry. The
+atomic writer exposes pre-commit stages, but the activation and facade boundary
+does not currently preserve this proof, so recoverable save handling remains
+design and implementation work.
+
+### Committed Durability-Unconfirmed Result
+
+After replacement commits, directory synchronization may fail and produce
+`committedDurabilityUnconfirmed`. The runtime must not attempt rollback. It
+must reload the committed encrypted store and update in-memory state to match;
+the current runtime-neutral path does this and returns a non-sensitive
+committed-warning outcome. UI warning presentation and host coordination remain
+unimplemented.
+
+### Fatal or Integrity-Uncertain Failure
+
+When the runtime cannot prove coherence among the active session, in-memory
+private state, and encrypted store, it must fail closed, clear or invalidate the
+session and private state, and require explicit reactivation before another
+private operation. No unlocked `saveFailed` presentation may remain. The
+current path fails closed after a known committed-state refresh failure, but
+unknown or unclassified save errors still remain unlocked. Complete fatal save
+containment is therefore blocked pending a separate implementation and tests.
 
 ## 35. Cancellation Behavior
 
@@ -382,6 +427,33 @@ The locked-shell gate requires these explicit tests:
 15. Preview fixtures use fake data only and do not instantiate the private
     refresh path.
 
+Save-failure containment requires these explicit tests:
+
+1. A typed recoverable pre-commit failure leaves the previous encrypted store
+   and in-memory private state unchanged while the runtime remains unlocked.
+2. A committed durability-unconfirmed result updates in-memory private state
+   to match the committed encrypted store and exposes only a non-sensitive
+   warning.
+3. A fatal or integrity-uncertain failure locks the runtime and clears the
+   active session and private state.
+4. No fatal or integrity-uncertain failure leaves an unlocked private
+   presentation projection.
+5. Repeated lock after a fail-closed save remains idempotent.
+6. No save outcome mutates the public snapshot.
+7. Public statuses and errors contain no private values.
+
+Compatibility reachability requires these explicit tests:
+
+1. A configured loopback base URL does not cause the architecture to classify
+   compatibility endpoints as inherently local-only.
+2. The locked shell makes zero saved-search and tracker endpoint calls.
+3. Public search remains usable independently of private compatibility
+   endpoints.
+4. A test host records requested endpoints and proves the locked path requests
+   only public resources.
+5. A LAN or remote base URL produces a blocked readiness result for private
+   compatibility access.
+
 ## 44. Integration-Test Strategy
 
 Phase 2D-46 should provide a test host that composes real runtime-neutral
@@ -399,6 +471,9 @@ The test host must inject key unavailable, wrong key, corrupt ciphertext,
 unsupported version, path failure, atomic-write failure, stale revision,
 cancellation, timeout, background lock, and delayed completion. Each case must
 leave public cache intact and expose no partial or stale private presentation.
+Save failure injection must separately exercise a typed recoverable pre-commit
+failure, a committed durability-unconfirmed result, and a fatal or
+integrity-uncertain failure; a generic failure must not be assumed recoverable.
 
 ## 46. App Upgrade Behavior
 
@@ -413,11 +488,22 @@ Existing `SearchViewModel` saved-search and saved-job behavior remains on its
 legacy path. The encrypted runtime does not consume, rewrite, or delete that
 state in this sequence. Coexistence can produce two sources of private truth,
 so UI integration must not claim migration or silently prefer one source. The
-current plaintext `api/saved-searches` and `api/tracker` endpoints are local
-compatibility surfaces only. Their existence does not make them safe for
-locked-shell loading, and the locked shell must not call them. Any temporary
-unlocked compatibility bridge requires a separate reviewed transition plan.
-These compatibility surfaces are not cloud sync endpoints.
+current plaintext `api/saved-searches` and `api/tracker` endpoints carry legacy
+private models, not encrypted AtlasVault record envelopes. Their effective
+reachability depends on the configured client base URL, server bind address,
+LAN exposure, reverse proxying, tunneling, and remote HTTP or HTTPS deployment.
+The direct job API entry point may bind to loopback, while the physical-iOS
+client default and configurable base URL can target LAN or remote hosts;
+therefore these endpoints are not inherently local-only.
+
+The locked shell must never call these compatibility endpoints. Their existence
+does not justify fetching or publishing private state while locked. Any
+temporary unlocked compatibility bridge requires a separate reviewed
+transition plan covering transport authentication, TLS, authorization,
+endpoint trust, and threat analysis. Access beyond a trusted same-device
+boundary is blocked pending that redesign. These endpoints are not encrypted
+vault transport, do not provide cloud sync, and must not be treated as cloud
+sync endpoints.
 
 ## 48. Migration Remains Deferred
 
@@ -490,22 +576,28 @@ Production launch is a no-go. Required gates include macOS and iOS CI, an
 observable `@MainActor` adapter, host and scene ownership, a test host, a locked
 SwiftUI shell, explicit unlock UI, production secret derivation, platform
 privacy policy, file protection, backup policy, threat-model approval, and
-resolution of legacy private-state coexistence. The current `AtlasRootView` is
-not integration-ready unchanged because it can refresh and publish legacy
-private state while locked. This audit adds no SwiftUI implementation and makes
-no production-readiness claim; migration, legacy cleanup, cloud sync, recovery,
-onboarding, and key rotation remain deferred.
+resolution of legacy private-state coexistence. Typed save-failure containment
+must also prove recoverable pre-commit outcomes, preserve committed
+durability-warning outcomes, and fail closed for fatal or integrity-uncertain
+failures. The current `AtlasRootView` is not integration-ready unchanged
+because it can refresh and publish legacy private state while locked. This
+audit adds no SwiftUI implementation and makes no production-readiness claim;
+migration, legacy cleanup, cloud sync, recovery, onboarding, and key rotation
+remain deferred.
 
 ## 59. Recommended Staged Phases
 
-1. Phase 2D-44: test-only observable presentation adapter protocol with a fake
+1. Cross-phase save-failure containment follow-up: introduce typed recoverable,
+   committed-warning, and fatal/integrity-uncertain outcomes; fail closed for
+   unclassified failures; and add runtime and presentation regression tests.
+2. Phase 2D-44: test-only observable presentation adapter protocol with a fake
    runtime facade. No production view or app-entry wiring.
-2. Phase 2D-45: app-host composition design covering process, scene, task, and
+3. Phase 2D-45: app-host composition design covering process, scene, task, and
    dependency ownership.
-3. Phase 2D-46: test-host integration with fake platform inputs and no
+4. Phase 2D-46: test-host integration with fake platform inputs and no
    production app entry point. It must prove locked public search performs no
    legacy private endpoint call or state publication.
-4. Phase 2D-47: first locked-state-only SwiftUI shell, using one of two reviewed
+5. Phase 2D-47: first locked-state-only SwiftUI shell, using one of two reviewed
    strategies:
    - Strategy A, preferred: create a dedicated public-only shell that exposes
      public search/cache and omits legacy saved-search and tracker panels.
@@ -516,7 +608,7 @@ onboarding, and key rotation remain deferred.
    The dedicated public-only shell is the required initial choice unless a
    reviewed gating design proves equivalent safety. `AtlasRootView` must not be
    reused unchanged.
-5. Later reviewed phases: explicit unlock UI, private-state rendering, save
+6. Later reviewed phases: explicit unlock UI, private-state rendering, save
    actions, migration, cleanup, recovery, and cloud work under separate gates.
 
 ## 60. Explicit Go/No-Go Table
@@ -535,10 +627,17 @@ current architecture and evidence.
 | Unlock request coordinator | Ready with constraints | Single-use cleanup is tested; production derivation, parsing, and UI capture are absent. |
 | Keychain | Ready with constraints | Protocol and adapter exist; explicit host action, accessibility policy, and prompt policy remain. |
 | Encrypted store load | Ready with constraints | Activation and hydration are tested; host wiring, file protection, and backup behavior remain. |
-| Encrypted save | Ready with constraints | Saver, merger, coordinator, and facade paths are tested; no user action or host integration exists. |
+| Encrypted save | Design required | Saver, merger, coordinator, and facade paths exist, but generic save failures do not yet carry the typed containment proof required for safe integration. |
+| Recoverable pre-commit save failure | Design required | Remaining unlocked requires typed proof that no commit occurred, the prior encrypted store is valid, and in-memory state is unchanged. |
+| Committed durability-unconfirmed save | Ready with constraints | The runtime-neutral path reloads committed state and returns a warning outcome; host and UI warning presentation are absent. |
+| Fatal or integrity-uncertain save containment | Blocked | Unknown or unclassified save errors can currently remain unlocked; a separate fail-closed implementation and tests are required. |
+| SwiftUI save integration | Blocked | It must wait for typed save containment and fail-closed presentation clearing. |
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
 | Public cache while locked | Ready | Public snapshot and per-job detail files are separate; private membership must not affect either format or detail warmup. |
 | Public job search while locked | Ready with constraints | It remains available only through a path that cannot call `refreshSidebarData()` or private compatibility endpoints. |
+| Locked-shell use of private compatibility endpoints | Blocked | The locked path must make zero `api/saved-searches` and `api/tracker` requests regardless of endpoint reachability. |
+| LAN or remote private compatibility access | Blocked | Plaintext private models require a separately reviewed authentication, TLS, authorization, endpoint-trust, and threat boundary. |
+| Encrypted sync through compatibility endpoints | Blocked | These endpoints carry legacy plaintext models and provide neither encrypted vault transport nor cloud sync. |
 | Reuse `AtlasRootView` unchanged as locked shell | Blocked | Existing sidebar and saved panels can fetch and publish private saved-search and tracker state. |
 | Dedicated public-only locked shell | Ready with constraints | It may expose only public search/cache and must omit private panels, private refreshes, and automatic unlock. |
 | Reuse `AtlasRootView` after private-panel gating | Design required | Gating or replacement, endpoint-call spies, state-publication tests, lifecycle clearing, and review are required first. |
