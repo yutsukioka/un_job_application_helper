@@ -248,6 +248,24 @@ event to `AtlasVaultLifecycleCoordinating`. This closes the pre-activation
 window in which secret derivation is running but the runtime facade is still
 locked and therefore has no activation operation to cancel.
 
+The host also owns a non-sensitive unlock-eligibility gate. Eligibility
+requires a started host, an active process, available protected data, and no
+stop or termination in progress. Before delivering `willResignActive`,
+`didEnterBackground`, `protectedDataBecameUnavailable`, or `willTerminate`, the
+host closes the gate and cancels any accepted unlock request. The gate remains
+closed for the entire inactive interval, including every pending
+`afterGracePeriod` timer, even when an already-unlocked runtime is temporarily
+allowed to remain unlocked.
+
+Unlock dispatch and lifecycle delivery are serialized under the same host
+authority. A request accepted before the gate closes is cancelled before the
+lock-producing event returns. A request arriving after closure is rejected or
+cancelled with a fixed non-sensitive result, clears its secret ownership, and
+must not invoke derivation or facade activation. `didBecomeActive` may reopen
+the gate only after lifecycle handling completes, any overdue grace lock has
+finished, and protected data is available. Deferred grace expiry therefore
+cannot race with a newly dispatched background unlock.
+
 ## 23. Host-Owned Observable Adapter Subscription
 
 The process host owns the single observable adapter and the upstream source
@@ -295,6 +313,11 @@ state. A lock-producing lifecycle event and dispatch completion are serialized
 under host ownership: cancellation reserves the request's terminal state before
 the lifecycle event may return. A derivation dependency that completes late
 must not invoke facade activation.
+
+The same serialization applies after event delivery. While unlock eligibility
+is closed, the host must not accept a replacement request merely because the
+runtime facade currently reports locked or because a grace timer has not yet
+expired. Runtime status is not an unlock-eligibility signal.
 
 ## 28. Save Task Coordination
 
@@ -450,6 +473,17 @@ Phase 2D-46 must cover:
   background or protected-data lock event, proving the host cancels the active
   request before lifecycle delivery completes, late derivation never calls
   facade activation, and presentation remains locked and private-free;
+- an `afterGracePeriod` background event followed by a new unlock request while
+  the grace timer is pending, proving the request is rejected or cancelled,
+  secret ownership is cleared, and derivation and facade activation receive
+  zero calls;
+- a concurrent unlock/background race proving the request is either accepted
+  before gate closure and cancelled before event return, or rejected after
+  closure, with no third ordering that permits late activation;
+- advancing the grace clock past expiry while a post-event fake derivation
+  would otherwise complete, proving the runtime and presentation remain locked
+  and private-free until a processed active/protected-data-available transition
+  explicitly reopens unlock eligibility;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
