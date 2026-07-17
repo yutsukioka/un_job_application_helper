@@ -28,13 +28,19 @@ it must not replace the shell's independent public-search boundary.
 optional already-unwrapped 32-byte vault key. A `nil` supplied key delegates to
 the activation controller's stored-key loader. The facade does not derive a
 key from passphrase or recovery material and must not receive those inputs.
+`AtlasVaultRuntimeActivationRequest.init(vaultID:suppliedVaultKey:)` is public,
+so Swift access control does not enforce the raw-key path's test-only policy.
+Future production host and presentation boundaries must not expose or construct
+that argument; narrowing the runtime API requires a separate reviewed change.
 
 ## 5. Existing Unlock Request Coordinator
 
 `AtlasVaultUnlockRequestCoordinator` owns single-use request state and accepts
 passphrase, recovery-key, local-key, and module-internal supplied-test-key
 inputs. Passphrase and recovery processing are injected closures. Their
-existence is a protocol/test seam, not evidence of a production provider.
+existence is a protocol/test seam, not evidence of a production provider. Only
+the coordinator's supplied-test-key request initializer is module-internal;
+the separate runtime activation request remains publicly constructible.
 
 ## 6. Existing Keychain Key-Store Capability
 
@@ -62,9 +68,13 @@ production today.
 ## 9. Current Supplied-Test-Key Capability
 
 The runtime and unlock coordinator support an already-unwrapped fake 32-byte
-key for deterministic tests. Its request initializer is module-internal. This
-capability is test-only and must never appear as a production method, text
-field, accessibility action, preview command, or fallback.
+key for deterministic tests. The coordinator request initializer is
+module-internal, but the runtime activation request has a public
+`suppliedVaultKey` argument. Test-only status is therefore an architectural
+host policy, not a compiler-enforced visibility boundary. Production
+composition, presentation, and navigation code must never expose or construct
+the raw-key argument. It must never appear as a production method, text field,
+accessibility action, preview command, or fallback.
 
 ## 10. Capability Matrix
 
@@ -73,7 +83,7 @@ field, accessibility action, preview command, or fallback.
 | Local Keychain key | Reviewed Swift key-store and runtime path | Available with constraints | Explicit request through presentation/coordinator/facade only |
 | Passphrase-wrapped key | Python reference only; injected Swift test seam | Unavailable | Requires reviewed Swift metadata/parser/unwrap provider |
 | Recovery-key-wrapped key | Contract intent only | Unavailable | Requires reviewed format, parser, vectors, and Swift provider |
-| Supplied raw fake key | Module-internal test path | Prohibited | Tests only; never production UI |
+| Supplied raw fake key | Internal coordinator test request; public runtime request argument | Prohibited | Host-enforced test-only policy; production code must not expose or construct the raw-key argument |
 
 Capability availability means the method is implemented by the injected
 runtime composition. It does not reveal whether a credential or vault exists.
@@ -383,7 +393,9 @@ the same locked/private-free barrier before retry is enabled.
 
 The view never calls the facade. A presentation/controller layer creates the
 single-use request and delegates activation through the existing coordinator,
-which alone constructs the already-unwrapped runtime activation request.
+which alone constructs the already-unwrapped runtime activation request. The
+production controller exposes no raw-key method and must not bypass the
+coordinator by constructing the facade's public `suppliedVaultKey` argument.
 
 ## 53. Observable Presentation Interaction
 
@@ -445,6 +457,11 @@ Future phases must test:
 
 - only available production methods render;
 - raw supplied keys never render;
+- production capability, presentation, host, and navigation code never
+  construct `AtlasVaultRuntimeActivationRequest` with `suppliedVaultKey`;
+- test composition is the only code permitted to exercise the public raw-key
+  argument, and source/dependency guards enforce that policy until the runtime
+  API is narrowed;
 - unsupported selection and submission fail before secret access;
 - local-key action delegates without direct Keychain work;
 - input clears on submit, cancel, method change, disappearance, lock, and
@@ -476,7 +493,7 @@ Future phases must test:
 | Explicit local-key request through runtime | Ready with constraints | Injected capability, explicit action, generic missing-key result |
 | Production passphrase UI | No-go | Reviewed Swift wrapped-key parser and Argon2id/AES-GCM provider |
 | Production recovery-key UI | No-go | Reviewed recovery format, vectors, parser, and provider |
-| Raw-key production UI | Prohibited | Test-only forever |
+| Raw-key production UI or host command | Prohibited | Host policy and source/dependency guards; the current public runtime argument is not an access-control guarantee |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
 | Dedicated unwired unlock panel | Design ready | Capability-driven controls and clearing tests |
 | Multi-window, multi-vault-ID, or distinct-request unlock | Design/implementation required | One process-global admission token for the single runtime plus terminal reconciliation |
@@ -492,8 +509,9 @@ Keychain activation is technically present only behind runtime protocols and
 still lacks production host/navigation integration and process-wide unlock
 admission for the single runtime. Passphrase and recovery unlock are
 unavailable without reviewed Swift providers. Memory zeroization, screen
-capture, accessibility, file protection, backup, migration, cleanup, cloud,
-recovery, onboarding, and key rotation remain unresolved or deferred.
+capture, accessibility, file protection, backup, and narrowing the public
+runtime raw-key argument remain unresolved. Migration, cleanup, cloud,
+recovery, onboarding, and key rotation remain deferred.
 
 ## 65. Recommended Phase 2D-49
 
