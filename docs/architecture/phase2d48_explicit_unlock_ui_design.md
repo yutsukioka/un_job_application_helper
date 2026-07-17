@@ -161,7 +161,21 @@ model retains a second copy.
 
 Each submit creates one `AtlasVaultUnlockRequest`. The coordinator commits
 single-use ownership before dependency work. Repeated or concurrent submission
-is disabled by presentation state and still rejected by the coordinator.
+of the same request is rejected by the coordinator. That per-request guarantee
+does not serialize distinct request IDs created by different views or windows.
+
+### Process-Wide Unlock Admission
+
+A future process host must own one per-vault unlock-admission token before any
+view creates or dispatches a request. The token serializes distinct requests
+across windows and presentation owners, remains held through derivation,
+activation, cancellation, timeout reconciliation, and private-free lock
+acknowledgement, and is released only after one authoritative terminal state.
+Per-view disabling is defense in depth, not the concurrency authority.
+
+If admission is already held, another submit fails with a fixed busy state
+before reading or transferring input. It must not start a second derivation,
+dispatch another activation, or infer which method owns the token.
 
 ## 24. No Secret In Public Presentation State
 
@@ -256,8 +270,18 @@ a public-only locked snapshot before rendering resumes.
 
 ## 40. Input Clearing On Timeout
 
-Timeout invalidates the one-shot request, clears all owner references, and
-shows a fixed retry-safe state. It does not reveal which operation timed out.
+Timeout requests cancellation and clears UI-owned input immediately, but it
+does not by itself prove that activation failed to commit. The process host
+keeps unlock admission closed and awaits the coordinator's authoritative
+terminal result. If an injected activation ignores cancellation and commits,
+the coordinator's success remains authoritative and the host publishes the
+unlocked result. Otherwise the host may publish an expired locked result only
+after runtime status confirms locked/private-free state.
+
+If the UI owner cannot await that terminal result, it delegates cleanup to the
+process host, which must execute and await the existing runtime lock plus
+private-free observable acknowledgement before exposing a retry-safe state or
+releasing admission. Timeout never reveals which operation was in flight.
 
 ## 41. Wrong-Secret Behavior
 
@@ -269,7 +293,9 @@ activation, or private projection is permitted.
 
 Retry is an explicit new request with freshly entered input. The prior request,
 buffer, key, and task are not reused. Capability is revalidated before
-selection and submission.
+selection and submission. Retry remains disabled until the process host has
+reconciled the prior request to authoritative unlocked state or completed the
+locked/private-free barrier and released its admission token.
 
 ## 43. Rate-Limit Design Boundary
 
@@ -319,12 +345,18 @@ the local binding and do not persist it.
 The future SwiftUI owner and local input state are `@MainActor`. Immutable
 non-sensitive capability and presentation values cross from runtime actors.
 Secret buffers transfer directly to an actor boundary and are never published.
+Process-wide admission and terminal-state reconciliation belong to a
+host-owned actor outside each window's `@MainActor` presentation owner.
 
 ## 51. Async Task Cancellation
 
 The presentation owner stores one task/request identity. Cancel, disappearance,
 method change, lock, timeout, and replacement submission invalidate it.
-Generation checks prevent late completion from changing current presentation.
+Generation checks prevent a stale view from restoring input or panel-local
+state, but they must not discard an authoritative runtime outcome. The
+process host continues terminal reconciliation: a committed activation
+publishes unlocked state, while any abandoned or failed attempt must complete
+the runtime lock and private-free presentation barrier before retry is enabled.
 
 ## 52. Runtime Facade Interaction
 
@@ -398,6 +430,12 @@ Future phases must test:
   timeout;
 - wrong secret produces one generic failure and no fallback;
 - repeated and concurrent submit are serialized;
+- distinct request IDs from separate windows admit only one derivation and
+  activation through the process host;
+- an activation that ignores timeout cancellation and commits is reported as
+  unlocked, never as retry-safe locked;
+- an owner that stops awaiting timeout completes the runtime lock and
+  private-free acknowledgement before retry admission reopens;
 - late completion cannot restore input or private presentation;
 - accessibility, descriptions, and errors contain no fake secret;
 - public search remains usable and private endpoint counters stay zero;
@@ -414,7 +452,8 @@ Future phases must test:
 | Raw-key production UI | Prohibited | Test-only forever |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
 | Dedicated unwired unlock panel | Design ready | Capability-driven controls and clearing tests |
-| Locked-shell test-host flow | Design required | Phase 2D-52 endpoint and lifecycle tests |
+| Multi-window or distinct-request unlock | Design/implementation required | Process-wide per-vault admission and terminal reconciliation |
+| Locked-shell test-host flow | Design required | Phase 2D-52 endpoint, admission, timeout, and lifecycle tests |
 | Production navigation/app entry | Blocked | Phase 2D-53 or later reviewed host-wiring design |
 | Automatic unlock | Prohibited | No current planned exception |
 | LocalAuthentication | Blocked | Separate threat model and implementation phase |
@@ -423,10 +462,11 @@ Future phases must test:
 
 AtlasVault explicit unlock UI is not implemented or production-ready. Local
 Keychain activation is technically present only behind runtime protocols and
-still lacks production host/navigation integration. Passphrase and recovery
-unlock are unavailable without reviewed Swift providers. Memory zeroization,
-screen capture, accessibility, file protection, backup, migration, cleanup,
-cloud, recovery, onboarding, and key rotation remain unresolved or deferred.
+still lacks production host/navigation integration and process-wide unlock
+admission. Passphrase and recovery unlock are unavailable without reviewed
+Swift providers. Memory zeroization, screen capture, accessibility, file
+protection, backup, migration, cleanup, cloud, recovery, onboarding, and key
+rotation remain unresolved or deferred.
 
 ## 65. Recommended Phase 2D-49
 
