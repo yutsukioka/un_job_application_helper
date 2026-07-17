@@ -96,6 +96,34 @@ final class AtlasVaultObservablePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(terminationsAfterSecond, 0)
     }
 
+    func testCancellationDiscardsBufferedPrivateSnapshot() async {
+        let source = ObservablePresentationSource()
+        let observer = AtlasVaultObservablePresentationAdapter(source: source)
+        let subscription = await observer.subscribe()
+        var iterator = subscription.snapshots.makeAsyncIterator()
+        _ = await iterator.next()
+        let didSubscribe = await source.waitForSubscriptionCount(1)
+        XCTAssertTrue(didSubscribe)
+
+        let privateUpdate = privateSnapshot(
+            status: .unlocked,
+            marker: "buffered-before-cancel"
+        )
+        await source.send(update(1, privateUpdate))
+        let didBufferPrivate = await waitForSnapshot(
+            privateUpdate,
+            from: observer
+        )
+        XCTAssertTrue(didBufferPrivate)
+
+        await subscription.cancel()
+        let completion = await iterator.next()
+        let retained = await observer.currentSnapshot()
+
+        XCTAssertNil(completion)
+        XCTAssertEqual(retained, privateUpdate)
+    }
+
     func testSlowSubscriberUsesBoundedLatestSnapshotBuffer() async {
         let source = ObservablePresentationSource()
         let observer = AtlasVaultObservablePresentationAdapter(source: source)
@@ -589,7 +617,7 @@ final class AtlasVaultObservablePresentationAdapterTests: XCTestCase {
             if await observer.currentSnapshot() == expected {
                 return true
             }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
         }
         return await observer.currentSnapshot() == expected
     }

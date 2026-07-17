@@ -42,9 +42,13 @@ Calling `currentSnapshot()` does not contact the source. The first explicit
 `subscribe()` starts exactly one source observation; later subscribers share
 it and immediately receive the latest retained snapshot.
 
-Subscriber cancellation finishes and releases only that subscriber stream.
-Once explicitly started, source observation continues even when no subscriber
-is present. This allows a lock or fatal-containment update to clear retained
+Subscriber cancellation first invalidates that subscription's read gate,
+replaces its one-slot buffer with a locked private-free snapshot, and then
+finishes and releases only that subscriber stream. The gate makes the
+replacement unreadable after `cancel()` returns, while overwriting any unlocked
+private snapshot that `AsyncStream.finish()` would otherwise preserve. Once
+explicitly started, source observation continues even when no subscriber is
+present. This allows a lock or fatal-containment update to clear retained
 private presentation before a later subscriber appears. Source observation
 ends when its stream ends or the adapter is destroyed.
 
@@ -99,7 +103,8 @@ Fake tests cover:
 - side-effect-free construction and explicit first subscription;
 - immediate current snapshot and one shared source observation;
 - ordered multi-subscriber delivery;
-- subscriber cancellation and continued lock observation;
+- subscriber cancellation, buffered-private-state invalidation, and continued
+  lock observation;
 - bounded slow-subscriber behavior;
 - stale-sequence rejection and duplicate-state suppression;
 - activation, activation failure, recoverable save failure, committed warning,

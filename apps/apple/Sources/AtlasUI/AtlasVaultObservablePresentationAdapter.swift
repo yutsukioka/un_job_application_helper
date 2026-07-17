@@ -30,16 +30,75 @@ public protocol AtlasVaultPresentationUpdateSourcing: Sendable {
     func updates() async -> AsyncStream<AtlasVaultPresentationUpdate>
 }
 
+private actor AtlasVaultPresentationSubscriptionState {
+    private var cancelled = false
+
+    func cancel() {
+        cancelled = true
+    }
+
+    func isActive() -> Bool {
+        !cancelled
+    }
+}
+
+public struct AtlasVaultPresentationSnapshotStream:
+    AsyncSequence,
+    Sendable
+{
+    public typealias Element = AtlasVaultPresentationSnapshot
+
+    private let stream: AsyncStream<Element>
+    private let state: AtlasVaultPresentationSubscriptionState
+
+    fileprivate init(
+        stream: AsyncStream<Element>,
+        state: AtlasVaultPresentationSubscriptionState
+    ) {
+        self.stream = stream
+        self.state = state
+    }
+
+    public func makeAsyncIterator() -> Iterator {
+        Iterator(
+            iterator: stream.makeAsyncIterator(),
+            state: state
+        )
+    }
+
+    public struct Iterator: AsyncIteratorProtocol {
+        private var iterator: AsyncStream<Element>.Iterator
+        private let state: AtlasVaultPresentationSubscriptionState
+
+        fileprivate init(
+            iterator: AsyncStream<Element>.Iterator,
+            state: AtlasVaultPresentationSubscriptionState
+        ) {
+            self.iterator = iterator
+            self.state = state
+        }
+
+        public mutating func next() async -> Element? {
+            guard await state.isActive(),
+                  let snapshot = await iterator.next(),
+                  await state.isActive() else {
+                return nil
+            }
+            return snapshot
+        }
+    }
+}
+
 public struct AtlasVaultPresentationSubscription:
     Sendable,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    public let snapshots: AsyncStream<AtlasVaultPresentationSnapshot>
+    public let snapshots: AtlasVaultPresentationSnapshotStream
     private let cancelAction: @Sendable () async -> Void
 
     init(
-        snapshots: AsyncStream<AtlasVaultPresentationSnapshot>,
+        snapshots: AtlasVaultPresentationSnapshotStream,
         cancelAction: @escaping @Sendable () async -> Void
     ) {
         self.snapshots = snapshots
@@ -89,6 +148,10 @@ public actor AtlasVaultObservablePresentationAdapter:
     deinit {
         observationTask?.cancel()
         for continuation in subscribers.values {
+            continuation.yield(AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            ))
             continuation.finish()
         }
     }
@@ -99,6 +162,7 @@ public actor AtlasVaultObservablePresentationAdapter:
 
     public func subscribe() -> AtlasVaultPresentationSubscription {
         let subscriberID = UUID()
+        let subscriptionState = AtlasVaultPresentationSubscriptionState()
         let pair = AsyncStream.makeStream(
             of: AtlasVaultPresentationSnapshot.self,
             bufferingPolicy: .bufferingNewest(1)
@@ -113,8 +177,12 @@ public actor AtlasVaultObservablePresentationAdapter:
         startObservationIfNeeded()
 
         return AtlasVaultPresentationSubscription(
-            snapshots: pair.stream,
+            snapshots: AtlasVaultPresentationSnapshotStream(
+                stream: pair.stream,
+                state: subscriptionState
+            ),
             cancelAction: { [weak self] in
+                await subscriptionState.cancel()
                 await self?.removeSubscriber(subscriberID)
             }
         )
@@ -209,6 +277,10 @@ public actor AtlasVaultObservablePresentationAdapter:
         ) else {
             return
         }
+        continuation.yield(AtlasVaultPresentationSnapshot(
+            status: .locked,
+            privateState: nil
+        ))
         continuation.finish()
     }
 
