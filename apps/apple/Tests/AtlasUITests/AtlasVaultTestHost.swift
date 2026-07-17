@@ -242,49 +242,100 @@ extension AtlasVaultRuntimeFacade: AtlasVaultTestHostRuntime {}
 actor AtlasVaultTestPresentationUpdateSource:
     AtlasVaultPresentationUpdateSourcing
 {
-    private var continuation:
-        AsyncStream<AtlasVaultPresentationUpdate>.Continuation?
+    private typealias NextContinuation = CheckedContinuation<
+        AtlasVaultPresentationUpdate?,
+        Never
+    >
+    private typealias AcknowledgementContinuation = CheckedContinuation<
+        Bool,
+        Never
+    >
+
+    private var observationID: UUID?
+    private var pendingNext: NextContinuation?
     private var bufferedUpdate: AtlasVaultPresentationUpdate?
+    private var deliveredSequenceAwaitingAcknowledgement: UInt64?
+    private var acknowledgedSequence: UInt64 = 0
+    private var acknowledgementWaiters:
+        [UInt64: [AcknowledgementContinuation]] = [:]
     private var latestSentSnapshot = AtlasVaultPresentationSnapshot(
         status: .locked,
         privateState: nil
     )
     private var nextSequence: UInt64 = 1
     private var observationStartCount = 0
+    private var acceptingUpdates = true
+    private var deliverySuspended = false
 
     func updates() -> AsyncStream<AtlasVaultPresentationUpdate> {
         observationStartCount += 1
-        let pair = AsyncStream.makeStream(
-            of: AtlasVaultPresentationUpdate.self,
-            bufferingPolicy: .bufferingNewest(1)
-        )
-        continuation?.finish()
-        continuation = pair.continuation
-        if let bufferedUpdate {
-            pair.continuation.yield(bufferedUpdate)
-            self.bufferedUpdate = nil
+        if observationID != nil {
+            invalidateObservation()
         }
-        return pair.stream
+        guard acceptingUpdates else {
+            return AsyncStream(unfolding: { nil })
+        }
+        let identifier = UUID()
+        observationID = identifier
+        return AsyncStream(
+            unfolding: { [weak self] in
+                guard let self else {
+                    return nil
+                }
+                return await self.nextUpdate(observationID: identifier)
+            },
+            onCancel: { [weak self] in
+                Task {
+                    await self?.cancelObservation(identifier)
+                }
+            }
+        )
     }
 
-    func send(_ snapshot: AtlasVaultPresentationSnapshot) {
+    func sendAndWait(
+        _ snapshot: AtlasVaultPresentationSnapshot
+    ) async -> Bool {
+        guard acceptingUpdates else {
+            return false
+        }
         latestSentSnapshot = snapshot
         let update = AtlasVaultPresentationUpdate(
             sequence: nextSequence,
             snapshot: snapshot
         )
         nextSequence &+= 1
-        if let continuation {
-            continuation.yield(update)
-        } else {
-            bufferedUpdate = update
+        enqueue(update)
+        if update.sequence <= acknowledgedSequence {
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            acknowledgementWaiters[update.sequence, default: []]
+                .append(continuation)
         }
     }
 
     func finish() {
-        continuation?.finish()
-        continuation = nil
+        acceptingUpdates = false
+        deliverySuspended = false
         bufferedUpdate = nil
+        invalidateObservation()
+    }
+
+    func suspendDelivery() {
+        deliverySuspended = true
+    }
+
+    func resumeDelivery() {
+        deliverySuspended = false
+        deliverBufferedUpdateIfPossible()
+    }
+
+    func latestSequence() -> UInt64 {
+        nextSequence &- 1
+    }
+
+    func lastAcknowledgedSequence() -> UInt64 {
+        acknowledgedSequence
     }
 
     func startCount() -> Int {
@@ -293,6 +344,90 @@ actor AtlasVaultTestPresentationUpdateSource:
 
     func latestSnapshot() -> AtlasVaultPresentationSnapshot {
         latestSentSnapshot
+    }
+
+    private func enqueue(_ update: AtlasVaultPresentationUpdate) {
+        guard !deliverySuspended, let pendingNext else {
+            bufferedUpdate = update
+            return
+        }
+        self.pendingNext = nil
+        deliveredSequenceAwaitingAcknowledgement = update.sequence
+        pendingNext.resume(returning: update)
+    }
+
+    private func nextUpdate(
+        observationID identifier: UUID
+    ) async -> AtlasVaultPresentationUpdate? {
+        guard observationID == identifier, acceptingUpdates else {
+            return nil
+        }
+        acknowledgeDeliveredSequence()
+        if !deliverySuspended, let bufferedUpdate {
+            self.bufferedUpdate = nil
+            deliveredSequenceAwaitingAcknowledgement = bufferedUpdate.sequence
+            return bufferedUpdate
+        }
+        return await withCheckedContinuation { continuation in
+            guard observationID == identifier,
+                  acceptingUpdates,
+                  pendingNext == nil else {
+                continuation.resume(returning: nil)
+                return
+            }
+            pendingNext = continuation
+        }
+    }
+
+    private func deliverBufferedUpdateIfPossible() {
+        guard let pendingNext, let bufferedUpdate else {
+            return
+        }
+        self.pendingNext = nil
+        self.bufferedUpdate = nil
+        deliveredSequenceAwaitingAcknowledgement = bufferedUpdate.sequence
+        pendingNext.resume(returning: bufferedUpdate)
+    }
+
+    private func acknowledgeDeliveredSequence() {
+        guard let deliveredSequenceAwaitingAcknowledgement else {
+            return
+        }
+        self.deliveredSequenceAwaitingAcknowledgement = nil
+        if deliveredSequenceAwaitingAcknowledgement > acknowledgedSequence {
+            acknowledgedSequence = deliveredSequenceAwaitingAcknowledgement
+        }
+        let completedSequences = acknowledgementWaiters.keys.filter {
+            $0 <= acknowledgedSequence
+        }
+        for sequence in completedSequences {
+            let continuations = acknowledgementWaiters.removeValue(
+                forKey: sequence
+            ) ?? []
+            for continuation in continuations {
+                continuation.resume(returning: true)
+            }
+        }
+    }
+
+    private func cancelObservation(_ identifier: UUID) {
+        guard observationID == identifier else {
+            return
+        }
+        invalidateObservation()
+    }
+
+    private func invalidateObservation() {
+        observationID = nil
+        deliveredSequenceAwaitingAcknowledgement = nil
+        let next = pendingNext
+        pendingNext = nil
+        next?.resume(returning: nil)
+        let waiters = acknowledgementWaiters.values.flatMap { $0 }
+        acknowledgementWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: false)
+        }
     }
 }
 
@@ -688,6 +823,22 @@ actor AtlasVaultTestHost:
         await updateSource.latestSnapshot()
     }
 
+    func suspendPresentationDeliveryForTesting() async {
+        await updateSource.suspendDelivery()
+    }
+
+    func resumePresentationDeliveryForTesting() async {
+        await updateSource.resumeDelivery()
+    }
+
+    func latestPresentationSequenceForTesting() async -> UInt64 {
+        await updateSource.latestSequence()
+    }
+
+    func acknowledgedPresentationSequenceForTesting() async -> UInt64 {
+        await updateSource.lastAcknowledgedSequence()
+    }
+
     func temporaryRootIsFileURL() -> Bool {
         environment.temporaryRootURL.isFileURL
     }
@@ -847,24 +998,7 @@ actor AtlasVaultTestHost:
             commandState: commandState
         )
         let source = updateSource
-        let observer = observablePresentation
-        await source.send(snapshot)
-        await acknowledge(snapshot, from: observer)
-    }
-
-    private func acknowledge(
-        _ expected: AtlasVaultPresentationSnapshot,
-        from observer: AtlasVaultObservablePresentationAdapter
-    ) async {
-        for _ in 0..<2_000 {
-            if await observer.currentSnapshot() == expected {
-                return
-            }
-            await Task.yield()
-        }
-        preconditionFailure(
-            "AtlasVault test presentation acknowledgement unavailable"
-        )
+        _ = await source.sendAndWait(snapshot)
     }
 
     private func waitForStopCompletion() async {

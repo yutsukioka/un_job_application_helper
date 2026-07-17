@@ -38,8 +38,9 @@ onboarding, recovery UX, or key rotation.
 
 Construction invokes none of those services. Observation starts only after an
 explicit subscription or host start, and host start does not activate a vault.
-The host-owned subscription gives every presentation publication an awaitable
-observable-adapter acknowledgement.
+The host-owned subscription gives every presentation publication an awaitable,
+monotonic sequence acknowledgement from the observable-adapter consumption
+loop.
 
 ## 4. Locked Public Boundary
 
@@ -87,12 +88,19 @@ Explicit lock closes private presentation authorization before awaiting runtime
 lock. Backgrounding, protected-data loss, termination, and configured
 inactivity do the same before lifecycle delivery.
 
-Every presentation update is acknowledged by the observable adapter before the
-host command that published it returns. Explicit lock and lifecycle-closing
-paths therefore cannot return while the adapter's current snapshot or bounded
-subscriber buffer still contains the prior private projection. This
-test-target acknowledgement does not replace the future production
-`@MainActor` presentation-owner reset described in Phase 2D-45.
+Every presentation update receives a monotonic sequence. The test source marks
+a sequence processed only when the observable adapter requests its next
+element, which happens after the adapter has installed and published the prior
+sanitized update. A later processed sequence also completes waiters for
+superseded earlier updates, so bounded newest-only delivery cannot strand a
+caller waiting for an obsolete snapshot value. Source finish and pipeline
+replacement release any remaining waiters fail closed.
+
+Explicit lock and lifecycle-closing paths therefore cannot return while the
+adapter's current snapshot or bounded subscriber buffer still contains the
+prior private projection. This test-target sequence acknowledgement does not
+replace the future production `@MainActor` presentation-owner reset described
+in Phase 2D-45.
 
 Immediate lock clears the runtime state and presentation. A grace-period
 lifecycle may leave the scripted runtime unlocked temporarily, but the host
@@ -192,6 +200,9 @@ Tests cover:
 - explicit private activation and observable projection;
 - explicit, background, and protected-data lock clearing acknowledged before
   the host command returns;
+- overlapping save-progress and background-lock publications complete through
+  monotonic sequence acknowledgement even when the private-free update
+  supersedes the buffered save update;
 - scripted session mismatch rejection before save-state mutation;
 - idempotent stop while unlocked and private-free restart without replay;
 - stop cancellation of in-flight unlock, save, and public-search work;

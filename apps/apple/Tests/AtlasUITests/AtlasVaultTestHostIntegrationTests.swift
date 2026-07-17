@@ -204,6 +204,69 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testSupersededSavePublicationAcknowledgesBeforeBackgroundLockReturns() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        let initialSequence =
+            await harness.host.latestPresentationSequenceForTesting()
+        let initialAcknowledgement =
+            await harness.host.acknowledgedPresentationSequenceForTesting()
+        XCTAssertEqual(initialAcknowledgement, initialSequence)
+        await harness.host.suspendPresentationDeliveryForTesting()
+
+        let save = Task {
+            try await harness.host.apply(self.mutationRequest())
+        }
+        let saveProgressSent = await waitForPresentationSequence(
+            harness.host,
+            atLeast: initialSequence + 1
+        )
+        XCTAssertTrue(saveProgressSent)
+        let acknowledgementWhileSuspended =
+            await harness.host.acknowledgedPresentationSequenceForTesting()
+        XCTAssertEqual(acknowledgementWhileSuspended, initialSequence)
+
+        let background = Task {
+            await harness.host.handleLifecycle(.didEnterBackground)
+        }
+        let privateFreeSupersedingUpdateSent = await waitForPresentationSequence(
+            harness.host,
+            atLeast: initialSequence + 2
+        )
+        XCTAssertTrue(privateFreeSupersedingUpdateSent)
+
+        await harness.host.resumePresentationDeliveryForTesting()
+        await background.value
+        do {
+            _ = try await save.value
+            XCTFail("Expected background lock to invalidate the pending save")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+
+        let finalSnapshot = await harness.observer.currentSnapshot()
+        let finalAcknowledgement =
+            await harness.host.acknowledgedPresentationSequenceForTesting()
+        XCTAssertEqual(finalSnapshot.status, .locked)
+        XCTAssertNil(finalSnapshot.privateState)
+        XCTAssertGreaterThanOrEqual(
+            finalAcknowledgement,
+            initialSequence + 2
+        )
+        let runtimeStatus = await harness.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
+        let applyCalls = await harness.runtime.applyCallCount()
+        XCTAssertEqual(applyCalls, 0)
+        await subscription.cancel()
+    }
+
     func testStopIsIdempotentPrivateFreeAndRestartDoesNotReplay() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
@@ -1637,6 +1700,20 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         }
         XCTFail("Timed out waiting for private-free presentation")
         return latest
+    }
+
+    private func waitForPresentationSequence(
+        _ host: AtlasVaultTestHost,
+        atLeast expectedSequence: UInt64
+    ) async -> Bool {
+        for _ in 0..<2_000 {
+            if await host.latestPresentationSequenceForTesting()
+                >= expectedSequence {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
     }
 
     private func waitForGraceLockCompletion(
