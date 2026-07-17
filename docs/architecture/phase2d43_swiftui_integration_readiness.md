@@ -26,7 +26,7 @@ prompt, migration, cloud sync, onboarding, recovery UX, or key rotation.
 | Unlock input | `AtlasVaultUnlockRequestCoordinator`, secret-buffer and injected derivation/activation seams | Enforces single-use requests and bounded secret ownership without providing UI. |
 | Persistence | Persistence coordinator, path locator, directory preparer, local-store reader/writer, merger, saver, hydrator, crypto, and atomic writer | Loads and saves encrypted record envelopes under explicit calls. |
 | Root and key access | Application Support root provider and `AtlasVaultKeyStore` / `AtlasKeychainVaultKeyStore` | Encapsulates platform root lookup and Keychain operations behind protocols. |
-| Public cache | `AtlasPublicLocalSnapshot`, per-job `AtlasJobDetail` files, and `AtlasLocalCache` | Persists the public snapshot and public detail cache independently from private vault state. |
+| Public cache | `AtlasPublicLocalSnapshot`, per-job `AtlasJobDetail` files, and `AtlasLocalCache` | Persists the public snapshot and detail files; the legacy saved-only detail-write path still requires isolation before locked-shell use. |
 | Existing app model | `SearchViewModel` and `AtlasIOSHostApp` | Existing application behavior; neither is integrated with the AtlasVault runtime. |
 
 ## 4. Runtime Facade Readiness
@@ -44,9 +44,11 @@ The stateless presentation adapter is ready for runtime-neutral projection. It
 exposes UI-safe status and private in-memory presentation models without keys,
 record envelopes, or filesystem URLs. A future observable owner must still
 publish snapshots, reject stale generations, and clear projected state on every
-non-unlocked transition. While locked, the adapter must receive no private-state
-snapshot and must project no private collection, including legacy saved-search
-or tracker state.
+non-projectable transition. The current-generation projection may remain while
+runtime status is `.saving`, matching the adapter and save-progress policy; it
+must clear for lock, activation, locking, or failure transitions. While locked,
+the adapter must receive no private-state snapshot and must project no private
+collection, including legacy saved-search or tracker state.
 
 ## 6. Lifecycle Coordinator Readiness
 
@@ -115,12 +117,23 @@ whether authentication prompts are ever required.
 
 ## 14. Public/Private Snapshot Separation
 
-The public cache has two formats: `AtlasPublicLocalSnapshot` and separate
-per-job `AtlasJobDetail` JSON files managed by `AtlasLocalCache`. Saved-search
-membership, saved-job membership, notes, snippets, drafts, generated-document
-references, vault IDs, private record IDs, and private counts must not enter
-either format. Private membership must not influence detail-cache filenames,
-contents, requested keys, warmup selection, counts, or progress metadata.
+The intended public cache has two formats: `AtlasPublicLocalSnapshot` and
+separate per-job `AtlasJobDetail` JSON files managed by `AtlasLocalCache`.
+Saved-search membership, saved-job membership, notes, snippets, drafts,
+generated-document references, vault IDs, private record IDs, and private
+counts must not enter either format. Private membership must not influence
+detail-cache filenames, contents, requested keys, warmup selection, counts, or
+progress metadata.
+
+The current legacy path does not yet prove that invariant for detail files.
+`SavedPanel` can create a `JobSearchResult.savedPlaceholder` from tracker
+membership, and opening it can cause `JobDetailView` to write that saved-only
+job key through `AtlasLocalCache.saveDetail`. Public snapshot readiness is
+therefore separate from public detail-cache readiness. The locked shell must
+not consume detail files until public-only write provenance or namespace
+isolation is implemented and existing potentially compatibility-derived files
+have a reviewed coexistence or cleanup policy.
+
 Records managed by the AtlasVault runtime exist as decrypted values only in
 generation-scoped in-memory state after unlock. This invariant does not describe
 or legitimize the legacy plaintext compatibility state called out in Section 47.
@@ -213,11 +226,15 @@ facade's serialized activation rather than create per-window sessions.
 ## 26. App Launch Behavior
 
 Launch should construct only side-effect-free AtlasVault composition and show
-locked or no-vault presentation. It must not resolve the AtlasVault Application
+locked presentation. `noVault` is available only after an explicit activation
+attempt inspects the store and reports `storeMissing`; launch must not probe the
+filesystem merely to choose that status. Before explicit user action reaches
+the activation boundary, launch must not resolve the AtlasVault Application
 Support root, access Keychain, open a vault, hydrate records, or prompt for a
-secret until an explicit user action reaches the activation boundary. This does
-not prohibit `AtlasLocalCache` from resolving its separate public-cache location
-to restore reviewed public snapshot or detail-cache data while locked.
+secret. This does not prohibit `AtlasLocalCache` from resolving its separate
+public-cache location to restore the reviewed public snapshot while locked.
+Detail-cache restore remains gated by the provenance and isolation requirements
+in Section 14.
 
 ## 27. No Automatic Unlock
 
@@ -227,14 +244,15 @@ requirement for explicit activation intent.
 
 ## 28. Locked Public-Search Behavior
 
-Public job search, `AtlasPublicLocalSnapshot`, and the public per-job detail
-cache may remain available while the vault is locked. Detail cache content,
-filenames, requested keys, and warmup behavior must derive only from public job
-data, never saved-only membership. Locked state must not reveal private
-membership, private counts, saved-only job keys, prior private labels, or
-whether a public result has a private record. Public search is ready while
-locked only when its view path does not invoke `refreshSidebarData()` or any
-equivalent private saved-search or tracker refresh.
+Public job search and `AtlasPublicLocalSnapshot` may remain available while the
+vault is locked. Per-job detail-cache use remains blocked until its content,
+filenames, requested keys, writes, and warmup behavior are proven to derive only
+from public job data, never saved-only membership, and existing unproven files
+are excluded. Locked state must not reveal private membership, private counts,
+saved-only job keys, prior private labels, or whether a public result has a
+private record. Public search is ready while locked only when its view path does
+not invoke `refreshSidebarData()` or any equivalent private saved-search or
+tracker refresh.
 
 ## 28.1. Locked-Shell Legacy Panel Gate
 
@@ -251,11 +269,12 @@ Reuse of `AtlasRootView` is therefore blocked until all private panels and every
 equivalent refresh path are gated, disabled, or replaced and verified by tests.
 
 The preferred first implementation is a dedicated public-only locked shell. It
-may expose public search, `AtlasPublicLocalSnapshot`, and reviewed public job
-detail cache data, but must omit legacy saved-search and tracker panels
-entirely. Reusing a shared root is permitted only after a separately reviewed
-design and implementation prove that private panels cannot be instantiated and
-private refresh calls cannot run before unlock.
+may expose public search and `AtlasPublicLocalSnapshot`; it may expose public
+job detail cache data only after the Section 14 provenance and isolation gate
+passes. It must omit legacy saved-search and tracker panels entirely. Reusing a
+shared root is permitted only after a separately reviewed design and
+implementation prove that private panels cannot be instantiated and private
+refresh calls cannot run before unlock.
 
 ## 29. Explicit Unlock Flow
 
@@ -331,8 +350,9 @@ After replacement commits, directory synchronization may fail and produce
 `committedDurabilityUnconfirmed`. The runtime must not attempt rollback. It
 must reload the committed encrypted store and update in-memory state to match;
 the current runtime-neutral path does this and returns a non-sensitive
-committed-warning outcome. UI warning presentation and host coordination remain
-unimplemented.
+`committedDurabilityUnconfirmed` outcome, presented later only as a
+non-sensitive durability warning. UI warning presentation and host coordination
+remain unimplemented.
 
 ### Fatal or Integrity-Uncertain Failure
 
@@ -402,11 +422,12 @@ production key, nonce, vault identifier, or path.
 
 ## 43. UI Test Strategy
 
-Future UI tests should start with locked and no-vault states under a fake
-runtime facade. They should verify no automatic unlock, public-search access,
-explicit actions, redacted failures, lock clearing, cancellation, multiple
-windows, accessibility labels, and background obscuring without real secrets.
-The locked-shell gate requires these explicit tests:
+Future UI tests should start with a locked launch state under a fake runtime
+facade and may reach `noVault` only after an explicit activation/store check.
+They should verify no automatic unlock, public-search access, explicit actions,
+redacted failures, lock clearing, cancellation, multiple windows,
+accessibility labels, and background obscuring without real secrets. The
+locked-shell gate requires these explicit tests:
 
 1. The locked shell does not call `refreshSidebarData()`.
 2. The locked shell does not invoke the saved-search compatibility endpoints.
@@ -429,6 +450,13 @@ The locked-shell gate requires these explicit tests:
     locked.
 15. Preview fixtures use fake data only and do not instantiate the private
     refresh path.
+16. Tracker-derived `savedPlaceholder` navigation cannot write into the public
+    detail-cache namespace.
+17. Every locked-shell detail-cache read has proven public-search provenance.
+18. Existing detail files without that provenance are excluded until a
+    reviewed coexistence or cleanup policy exists.
+19. Side-effect-free launch presents `locked`; `noVault` appears only after an
+    explicit store check reports `storeMissing`.
 
 Save-failure containment requires these explicit tests:
 
@@ -593,8 +621,9 @@ remain deferred.
 ## 59. Recommended Staged Phases
 
 1. Cross-phase save-failure containment follow-up: introduce typed recoverable,
-   committed-warning, and fatal/integrity-uncertain outcomes; fail closed for
-   unclassified failures; and add runtime and presentation regression tests.
+   `committedDurabilityUnconfirmed`, and fatal/integrity-uncertain outcomes;
+   fail closed for unclassified failures; and add runtime and presentation
+   regression tests.
 2. Phase 2D-44: test-only observable presentation adapter protocol with a fake
    runtime facade. No production view or app-entry wiring.
 3. Phase 2D-45: app-host composition design covering process, scene, task, and
@@ -605,7 +634,9 @@ remain deferred.
 5. Phase 2D-47: first locked-state-only SwiftUI shell, using one of two reviewed
    strategies:
    - Strategy A, preferred: create a dedicated public-only shell that exposes
-     public search/cache and omits legacy saved-search and tracker panels.
+     public search and the reviewed public snapshot, omits legacy saved-search
+     and tracker panels, and excludes detail-cache files until public-only
+     provenance and namespace isolation are proven.
    - Strategy B, only after tests: reuse a shared root after gating or replacing
      every private panel, preventing `refreshSidebarData()` and equivalent
      private fetches while locked, and proving no saved-search or tracker state
@@ -638,7 +669,8 @@ current architecture and evidence.
 | Fatal or integrity-uncertain save containment | Blocked | Unknown or unclassified save errors can currently remain unlocked; a separate fail-closed implementation and tests are required. |
 | SwiftUI save integration | Blocked | It must wait for typed save containment and fail-closed presentation clearing. |
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
-| Public cache while locked | Ready | Public snapshot and per-job detail files are separate; private membership must not affect either format or detail warmup. |
+| Public snapshot while locked | Ready | `AtlasPublicLocalSnapshot` is separate from private membership and may support locked public search. |
+| Public detail cache while locked | Design required | Legacy saved-only tracker navigation can write a detail file keyed by private membership; public-only provenance/namespace isolation and an existing-artifact policy are required. |
 | Public job search while locked | Ready with constraints | It remains available only through a path that cannot call `refreshSidebarData()` or private compatibility endpoints. |
 | Locked-shell use of private compatibility endpoints | Blocked | The locked path must make zero `api/saved-searches` and `api/tracker` requests regardless of endpoint reachability. |
 | LAN or remote private compatibility access | Blocked | Plaintext private models require a separately reviewed authentication, TLS, authorization, endpoint-trust, and threat boundary. |
