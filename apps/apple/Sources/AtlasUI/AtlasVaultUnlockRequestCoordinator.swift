@@ -84,10 +84,22 @@ public actor AtlasVaultInMemorySecretBuffer:
     }
 }
 
-public enum AtlasVaultUnlockInputSource: Sendable {
+public enum AtlasVaultUnlockInputSource:
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
     case passphrase(any AtlasVaultSecretBuffer)
     case recoveryKey(any AtlasVaultSecretBuffer)
     case localKey
+
+    public var description: String {
+        "AtlasVaultUnlockInputSource(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
 }
 
 private enum AtlasVaultUnlockRequestInput: Sendable {
@@ -402,9 +414,12 @@ public actor AtlasVaultUnlockRequestCoordinator:
             guard didCancel else {
                 return false
             }
-            await active.input.clearSecret()
             active.operation.cancel()
             active.timeout?.cancel()
+            let input = active.input
+            Task {
+                await input.clearSecret()
+            }
             return true
         }
 
@@ -457,8 +472,11 @@ public actor AtlasVaultUnlockRequestCoordinator:
             return
         }
         guard await active.storage.expire() else { return }
-        await active.input.clearSecret()
         active.operation.cancel()
+        let input = active.input
+        Task {
+            await input.clearSecret()
+        }
     }
 
     private func clearActiveDispatch(_ id: UUID) {
@@ -653,7 +671,7 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         switch (state, error) {
-        case (.open, .cancelled):
+        case (.open, .cancelled), (.activationReserved, .cancelled):
             state = .cancelled
         case (.open, .expired), (.activationReserved, .expired):
             state = .expired
@@ -697,10 +715,8 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         switch state {
-        case .activationReserved, .expired:
+        case .activationReserved, .cancelled, .expired:
             state = .activationCompleted
-        case .cancelled:
-            throw AtlasVaultUnlockRequestError.cancelled
         case .open, .activationCompleted:
             throw AtlasVaultUnlockRequestError.alreadyUsed
         }
@@ -813,11 +829,9 @@ private actor AtlasVaultUnlockRequestStorage {
 
     func finishActivationSuccess() -> AtlasVaultUnlockRequestError? {
         switch state {
-        case .dispatching, .expired:
+        case .dispatching, .cancelled, .expired:
             state = .completed
             return nil
-        case .cancelled:
-            return .cancelled
         case .pending, .completed:
             return .alreadyUsed
         }

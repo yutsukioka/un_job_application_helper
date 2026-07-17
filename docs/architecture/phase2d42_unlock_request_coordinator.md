@@ -52,28 +52,33 @@ and delegates activation through the existing
 supplied key and reveals no Keychain implementation detail.
 
 Success, failure, cancellation, and timeout remove coordinator-owned secret
-references. A lock-backed terminal gate makes cancellation, expiration, and
-activation reservation mutually exclusive without awaiting an actor hop.
+references. A lock-backed terminal gate arbitrates cancellation, expiration,
+and activation reservation without awaiting an actor hop.
 The active dispatch retains the claimed buffer only as a cleanup handle;
 caller cancellation, explicit cancellation, timeout, and coordinator teardown
 clear that handle even when the operation task has not begun consuming it.
+Explicit cancellation and expiration record their non-sensitive request state,
+cancel the child operation, and then schedule secret cleanup asynchronously.
+They do not await a caller-supplied buffer's best-effort `clear()` operation,
+which prevents slow or non-returning cleanup code from delaying cancellation
+of derivation or activation work.
 The child operation waits behind an internal start gate. Dispatch installs its
 caller-cancellation handler, synchronously handles an already-cancelled caller,
 and only then releases the child, so activation cannot outrun cancellation
 handler registration.
 Non-positive timeouts expire synchronously after the request is claimed and
 before any operation task or activation can start.
-Positive timeouts cover the whole dispatch. Expiration may cancel an in-flight
-activation until that activation atomically completes; the injected activation
-seam must honor cancellation before committing an unlocked session, as the
-runtime facade does. If activation returns success despite a timeout racing
-after commit, that returned success is authoritative: the coordinator promotes
-the terminal gate and request storage to completed rather than reporting a
-failure while the runtime is unlocked. Cancellation that reserves the gate
-before activation prevents a late dependency completion from activating the
-vault. Once activation completes, later cancellation or expiration cannot
-relabel that potentially irreversible side effect. Dependencies remain
-responsible for clearing any copies they own.
+Positive timeouts cover the whole dispatch. Caller and explicit cancellation,
+as well as expiration, cancel an in-flight child after activation is reserved.
+An injected activation seam that honors cancellation throws before committing,
+so the corresponding `cancelled` or `expired` public result remains
+authoritative. If activation ignores cancellation and returns only after it has
+committed an unlocked session, that returned success is authoritative: the
+coordinator promotes the terminal gate and request storage to completed rather
+than reporting a failure while the runtime is unlocked. Once activation
+completes, later cancellation or expiration cannot relabel that potentially
+irreversible side effect. Dependencies remain responsible for clearing any
+copies they own.
 
 Only the coordinator that owns an active dispatch may cancel it. Another
 coordinator can cancel the shared request while it is pending, but cannot
@@ -81,7 +86,9 @@ mutate dispatching storage without the owning operation and terminal gate.
 
 ## Privacy And Error Behavior
 
-Request, buffer, coordinator, and error descriptions are fixed or redacted.
+Input-source, request, buffer, coordinator, and error descriptions are fixed or
+redacted. The public input enum never delegates description or reflection to an
+associated caller-supplied secret buffer.
 Underlying derivation and activation failures map to `unlockFailed`; invalid
 request structure, reuse, cancellation, and expiration use stable,
 non-sensitive cases. No error or debug description includes input source,
@@ -98,13 +105,15 @@ modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
 Fake-only tests cover construction, all four input sources, empty-passphrase
 rejection, request-copy and concurrent single-use enforcement, cancellation
 before and during the storage claim and active dispatch, pre-operation
-cancellation and timeout cleanup, caller cancellation, late dependency
-completion, cancellation before handler installation, an already cancelled
-caller, timeout during activation, timeout after activation return, non-owner
-cancellation, dependency error normalization, success and failure cleanup,
-redacted descriptions, non-persistability, actor serialization, no public
-snapshot mutation, no filesystem artifacts, and source guards for UI,
-platform, persistence, networking, and encoding coupling.
+cancellation and timeout cleanup, cancellation during activation for both
+cancellation-honoring and cancellation-ignoring dependencies, slow cleanup
+ordering, caller cancellation, late dependency completion, cancellation before
+handler installation, an already cancelled caller, timeout during activation,
+timeout after activation return, non-owner cancellation, dependency error
+normalization, success and failure cleanup, malicious buffer-description
+redaction, non-persistability, actor serialization, no public snapshot
+mutation, no filesystem artifacts, and source guards for UI, platform,
+persistence, networking, and encoding coupling.
 
 ## Deferred
 

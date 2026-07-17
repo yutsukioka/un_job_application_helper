@@ -276,6 +276,45 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.activationCalls, 0)
     }
 
+    func testExplicitCancellationDoesNotWaitForSlowSecretCleanup() async {
+        let derivationGate = UnlockGate(honorCancellation: false)
+        let clearGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy(passphraseGate: derivationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let buffer = UnlockBlockingClearSecretBuffer(
+            bytes: Self.fakePassphrase,
+            clearGate: clearGate
+        )
+        let request = request(input: .passphrase(buffer))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartDerivation = await derivationGate.waitUntilEntered()
+        XCTAssertTrue(didStartDerivation)
+
+        let cancellationResult = UnlockBooleanResultProbe()
+        let cancellation = Task {
+            let result = await coordinator.cancel(request)
+            await cancellationResult.record(result)
+            return result
+        }
+        let didStartCleanup = await clearGate.waitUntilEntered()
+        let didReturnBeforeCleanup = await cancellationResult.waitUntilRecorded()
+        let didObserveCancellation = await derivationGate
+            .waitUntilCancellationObserved()
+
+        XCTAssertTrue(didStartCleanup)
+        XCTAssertTrue(didReturnBeforeCleanup)
+        XCTAssertTrue(didObserveCancellation)
+        await clearGate.open()
+        await derivationGate.open()
+        let didCancel = await cancellation.value
+        XCTAssertTrue(didCancel)
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
     func testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer() async {
         let operationStartGate = UnlockGate(honorCancellation: false)
         let coordinator = makeCoordinator(
@@ -293,7 +332,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let didCancel = await coordinator.cancel(request)
 
         XCTAssertTrue(didCancel)
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         XCTAssertTrue(isCleared)
         await operationStartGate.open()
         await assertTaskThrows(.cancelled, task: dispatch)
@@ -381,7 +420,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
     }
 
-    func testCallerCancellationCannotRelabelActivationOnceStarted() async throws {
+    func testCallerCancellationReachesActivationButCommittedSuccessWins() async throws {
         let activationGate = UnlockGate(honorCancellation: false)
         let spy = UnlockDependencySpy(activationGate: activationGate)
         let coordinator = makeCoordinator(spy: spy)
@@ -394,6 +433,75 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertTrue(didStartActivation)
 
         dispatch.cancel()
+        let didObserveCancellation = await activationGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didObserveCancellation)
+        await activationGate.open()
+        try await dispatch.value
+
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testCallerCancellationDuringActivationCancelsSafeDependency() async {
+        let activationGate = UnlockGate(honorCancellation: true)
+        let spy = UnlockDependencySpy(activationGate: activationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let request = request(input: .localKey)
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartActivation = await activationGate.waitUntilEntered()
+        XCTAssertTrue(didStartActivation)
+
+        dispatch.cancel()
+
+        let didObserveCancellation = await activationGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didObserveCancellation)
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testExplicitCancellationDuringActivationCancelsSafeDependency() async {
+        let activationGate = UnlockGate(honorCancellation: true)
+        let spy = UnlockDependencySpy(activationGate: activationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let request = request(input: .localKey)
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartActivation = await activationGate.waitUntilEntered()
+        XCTAssertTrue(didStartActivation)
+
+        let didCancel = await coordinator.cancel(request)
+
+        let didObserveCancellation = await activationGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didCancel)
+        XCTAssertTrue(didObserveCancellation)
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
+    func testExplicitCancellationReachesActivationButCommittedSuccessWins() async throws {
+        let activationGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy(activationGate: activationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let request = request(input: .localKey)
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartActivation = await activationGate.waitUntilEntered()
+        XCTAssertTrue(didStartActivation)
+
+        let didCancel = await coordinator.cancel(request)
+        let didObserveCancellation = await activationGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didCancel)
+        XCTAssertTrue(didObserveCancellation)
         await activationGate.open()
         try await dispatch.value
 
@@ -476,6 +584,42 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let isCleared = await buffer.isClearedForTesting
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
+        XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
+    func testTimeoutCancelsOperationBeforeSlowSecretCleanupCompletes() async {
+        let derivationGate = UnlockGate(honorCancellation: false)
+        let clearGate = UnlockGate(honorCancellation: false)
+        let sleeper = UnlockManualSleeper()
+        let spy = UnlockDependencySpy(passphraseGate: derivationGate)
+        let coordinator = makeCoordinator(spy: spy, sleeper: sleeper)
+        let buffer = UnlockBlockingClearSecretBuffer(
+            bytes: Self.fakePassphrase,
+            clearGate: clearGate
+        )
+        let request = request(
+            input: .passphrase(buffer),
+            timeout: .seconds(30)
+        )
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didStartDerivation = await derivationGate.waitUntilEntered()
+        let didStartSleeping = await sleeper.waitUntilSleeping()
+        XCTAssertTrue(didStartDerivation)
+        XCTAssertTrue(didStartSleeping)
+
+        await sleeper.fire()
+
+        let didStartCleanup = await clearGate.waitUntilEntered()
+        let didObserveCancellation = await derivationGate
+            .waitUntilCancellationObserved()
+        XCTAssertTrue(didStartCleanup)
+        XCTAssertTrue(didObserveCancellation)
+        await clearGate.open()
+        await derivationGate.open()
+        await assertTaskThrows(.expired, task: dispatch)
+        let snapshot = await spy.snapshot()
         XCTAssertEqual(snapshot.activationCalls, 0)
     }
 
@@ -821,6 +965,25 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         }
     }
 
+    func testInputSourceDescriptionsDoNotInvokeSecretBufferDescriptions() {
+        let secretBearingBuffer = UnlockSecretBearingDescriptionBuffer()
+        let inputs: [AtlasVaultUnlockInputSource] = [
+            .passphrase(secretBearingBuffer),
+            .recoveryKey(secretBearingBuffer),
+            .localKey,
+        ]
+
+        for input in inputs {
+            let rendered = "\(String(describing: input)) \(String(reflecting: input))"
+            XCTAssertEqual(
+                rendered,
+                "AtlasVaultUnlockInputSource(<redacted>) "
+                    + "AtlasVaultUnlockInputSource(<redacted>)"
+            )
+            assertContainsNoPrivateSentinel(rendered)
+        }
+    }
+
     func testSecretBearingTypesAreNotPersistable() {
         XCTAssertFalse(AtlasVaultUnlockRequest.self is any Encodable.Type)
         XCTAssertFalse(AtlasVaultUnlockRequest.self is any Decodable.Type)
@@ -1063,6 +1226,70 @@ private enum UnlockDependencyFailure: Error {
     case passphrase
     case recovery
     case activation
+}
+
+private actor UnlockBlockingClearSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: Data?
+    private var shouldBlockClear = true
+    private let clearGate: UnlockGate
+
+    init(bytes: Data, clearGate: UnlockGate) {
+        self.bytes = bytes
+        self.clearGate = clearGate
+    }
+
+    func takeSecretBytes() async throws -> Data {
+        guard let bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        self.bytes = nil
+        return bytes
+    }
+
+    func clear() async {
+        bytes = nil
+        guard shouldBlockClear else { return }
+        shouldBlockClear = false
+        try? await clearGate.enter()
+    }
+}
+
+private actor UnlockSecretBearingDescriptionBuffer:
+    AtlasVaultSecretBuffer,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    func takeSecretBytes() async throws -> Data {
+        Data()
+    }
+
+    func clear() async {}
+
+    nonisolated var description: String {
+        "FAKE_PASSPHRASE_DO_NOT_LEAK"
+    }
+
+    nonisolated var debugDescription: String {
+        description
+    }
+}
+
+private actor UnlockBooleanResultProbe {
+    private var result: Bool?
+
+    func record(_ result: Bool) {
+        self.result = result
+    }
+
+    func waitUntilRecorded() async -> Bool {
+        for _ in 0..<1_000 {
+            if result != nil {
+                return true
+            }
+            await Task.yield()
+        }
+        return result != nil
+    }
 }
 
 private struct UnlockDependencySnapshot: Equatable, Sendable {
