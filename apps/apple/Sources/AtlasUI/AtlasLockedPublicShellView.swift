@@ -80,7 +80,7 @@ public struct AtlasLockedPublicShellView: View {
                     Image(systemName: "magnifyingglass")
                 }
                 .buttonStyle(.bordered)
-                .disabled(model.isSearching)
+                .disabled(!model.permitsSearchSubmission)
                 .help("Search")
                 .accessibilityLabel("Search public jobs")
             }
@@ -126,6 +126,9 @@ public struct AtlasLockedPublicShellView: View {
     }
 
     private func dispatchSearch() {
+        guard model.permitsSearchSubmission else {
+            return
+        }
         let submittedQuery = query
         let actions = actions
         replaceActiveAction {
@@ -179,8 +182,12 @@ public struct AtlasLockedPublicShellView: View {
         activeAction?.cancel()
         let identifier = UUID()
         activeActionID = identifier
-        activeAction = Task { @MainActor in
+        let operationTask = Task.detached(priority: .userInitiated) {
             await operation()
+        }
+        activeAction = operationTask
+        Task { @MainActor in
+            await operationTask.value
             guard activeActionID == identifier else {
                 return
             }

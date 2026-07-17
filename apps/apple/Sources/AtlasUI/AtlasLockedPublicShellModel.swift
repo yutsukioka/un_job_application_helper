@@ -153,6 +153,10 @@ public struct AtlasLockedPublicShellModel:
     public var debugDescription: String {
         description
     }
+
+    var permitsSearchSubmission: Bool {
+        !isSearching
+    }
 }
 
 public struct AtlasLockedPublicShellActions:

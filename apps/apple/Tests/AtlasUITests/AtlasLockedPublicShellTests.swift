@@ -44,6 +44,11 @@ final class AtlasLockedPublicShellTests: XCTestCase {
         )
     }
 
+    func testSearchingModelRejectsAnotherSearchSubmission() {
+        XCTAssertTrue(makeModel(isSearching: false).permitsSearchSubmission)
+        XCTAssertFalse(makeModel(isSearching: true).permitsSearchSubmission)
+    }
+
     func testLockedModelSourceIsNotCodable() throws {
         let source = try source(named: "AtlasLockedPublicShellModel.swift")
 
@@ -179,15 +184,19 @@ final class AtlasLockedPublicShellTests: XCTestCase {
             clock: time,
             sleeper: time
         )
+        let temporaryRootURL =
+            try AtlasVaultTestFileSystemSupport.canonicalTemporaryRoot()
+            .appendingPathComponent(
+                "atlas-locked-public-shell-\(UUID().uuidString)",
+                isDirectory: true
+            )
         let host = AtlasVaultTestHost(
             runtime: runtime,
             lifecycle: lifecycle,
             unlockCoordinator: unlockCoordinator,
             publicSearch: publicSearch,
             environment: AtlasVaultTestHostEnvironment(
-                temporaryRootURL: URL(
-                    fileURLWithPath: "/tmp/fake-locked-shell-root"
-                ),
+                temporaryRootURL: temporaryRootURL,
                 keyStore: AtlasVaultTestFakeKeyStore(key: nil),
                 publicStateStore: publicStateStore,
                 privateCompatibilityEndpoints: privateEndpoints
@@ -320,11 +329,18 @@ final class AtlasLockedPublicShellTests: XCTestCase {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
-        let artifacts = (enumerator?.allObjects as? [URL] ?? []).filter {
-            $0.pathExtension == "atlasvault"
+        guard let enumerator else {
+            XCTFail("Unable to enumerate the worktree")
+            return
         }
 
-        XCTAssertEqual(artifacts, [])
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "atlasvault" else {
+                continue
+            }
+            XCTFail("Unexpected .atlasvault artifact")
+            return
+        }
     }
 
     func testSourceFilesExcludeLegacyPrivateRuntimeAndPersistencePaths()
@@ -388,7 +404,8 @@ final class AtlasLockedPublicShellTests: XCTestCase {
 
     private func makeModel(
         vaultStatus: AtlasLockedPublicVaultStatus = .locked,
-        searchQuery: String = ""
+        searchQuery: String = "",
+        isSearching: Bool = false
     ) -> AtlasLockedPublicShellModel {
         AtlasLockedPublicShellModel(
             vaultStatus: vaultStatus,
@@ -396,7 +413,7 @@ final class AtlasLockedPublicShellTests: XCTestCase {
             cacheFreshness: .current,
             searchQuery: searchQuery,
             publicJobs: [fakeJob()],
-            isSearching: false,
+            isSearching: isSearching,
             canRequestUnlock: true
         )
     }
