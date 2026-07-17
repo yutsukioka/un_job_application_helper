@@ -93,7 +93,9 @@ host-level commands and snapshots, for example:
 
 - `start()` and `stop()` for explicit host lifetime;
 - public-search requests through the public-only service;
-- explicit activation, lock, and save commands through reviewed coordinators;
+- unlock-request dispatch and cancellation through
+  `AtlasVaultUnlockRequestCoordinating`;
+- lock and save commands through the runtime facade;
 - lifecycle-event delivery;
 - a UI-safe presentation subscription.
 
@@ -104,19 +106,28 @@ stores.
 The dependency graph has two sibling branches:
 
 - public host services -> public search and `AtlasPublicLocalSnapshot`;
-- private host services -> runtime facade, lifecycle coordinator, stateless
-  presentation projection, and observable presentation.
+- private host services -> unlock request coordinator, runtime facade,
+  lifecycle coordinator, stateless presentation projection, and observable
+  presentation.
 
 Neither branch calls through the other. The host coordinates only public task
 lifetime and private-free status until explicit activation succeeds.
 
+The unlock request coordinator is the mandatory host boundary for passphrase,
+recovery-key, local-key, timeout, and cancellation handling. It delegates its
+validated activation request to the runtime facade. UI-originated unlock must
+not call `AtlasVaultRuntimeFacading.activate` directly and thereby bypass
+single-use request ownership, secret cleanup, or timeout behavior.
+
 ## 11. Proposed Test-Host Protocol
 
 A future `AtlasVaultTestHosting` protocol should expose deterministic start,
-stop, lifecycle-event, activation, save, lock, public-search, and snapshot
-observation seams. It may expose non-sensitive call counts and ordered event
-labels for assertions, but never private request bodies, secrets, paths, or
-payload descriptions.
+stop, lifecycle-event, unlock-request dispatch/cancellation, save, lock,
+public-search, and snapshot observation seams. It may expose non-sensitive call
+counts and ordered event labels for assertions, but never private request
+bodies, secrets, paths, or payload descriptions. A raw facade activation seam
+may exist only inside lower-level fake wiring; it is not part of the host
+contract.
 
 ## 12. Construction Versus Start
 
@@ -128,6 +139,13 @@ locked, private-free state and must not activate the vault.
 Filesystem root resolution, Keychain lookup, vault load, decryption, and
 hydration occur only after an explicit activation request crosses the runtime
 boundary. Public-search startup remains independent.
+
+The existing `ATLAS_REFERENCE_CAPTURE` environment route is not a host mode and
+must be unselectable from production host composition, the Phase 2D-46 test
+host, and the Phase 2D-47 locked shell. Those paths must not instantiate
+`AtlasReferenceCaptureView`, whose initializer currently writes fixtures into
+the normal public-cache root. Fake fixtures instead use injected in-memory
+storage or an isolated temporary root.
 
 ## 13. No Automatic Activation
 
@@ -245,8 +263,10 @@ mutate vault presentation.
 
 The host owns one explicit activation task for the process. Lock, host stop,
 background policy, protected-data loss, or user cancellation must propagate to
-the reviewed activation or unlock coordinator. Late activation completion must
-not restore private state after cancellation or lock.
+`AtlasVaultUnlockRequestCoordinating.cancel`. Dispatch must go through
+`AtlasVaultUnlockRequestCoordinating.dispatch`; its injected activation closure
+is the only bridge to the runtime facade. Late derivation or activation
+completion must not restore private state after cancellation, timeout, or lock.
 
 ## 28. Save Task Coordination
 
@@ -327,6 +347,22 @@ SwiftUI or changing a production app entry point.
 The test host should preserve the same construction/start split and own task
 identities so late public and private results can be rejected deterministically.
 
+It requires two complementary configurations:
+
+1. A scripted configuration with fake runtime and unlock coordinators for
+   focused host ordering, cancellation, and failure-state tests.
+2. An integration configuration that composes the real
+   `AtlasVaultRuntimeFacade`, activation controller, lifecycle coordinator,
+   stateless presentation adapter, observable presentation adapter, record
+   crypto/save/hydration path, and persistence path over fake lower-level
+   dependencies and an isolated temporary root.
+
+The integration configuration uses fake root, key-store, clock, sleeper,
+secret-derivation, and public-search seams. It must exercise commands through
+the host contract rather than invoking the real facade directly from tests.
+Neither configuration may set `ATLAS_REFERENCE_CAPTURE` or instantiate
+`AtlasReferenceCaptureView`.
+
 ## 39. Fake Public-Search Service
 
 The fake public-search service implements only the narrow public protocol. It
@@ -339,7 +375,13 @@ searches, tracker records, private notes, or vault operations.
 The fake runtime facade should implement the runtime protocol with scripted
 locked, activating, unlocked, saving, locking, and failed transitions. It may
 use fake private sentinels solely inside in-memory test snapshots and must use
-fixed redacted descriptions.
+fixed redacted descriptions. This is the focused unit configuration only; it
+does not replace the required real-facade integration configuration.
+
+The scripted host also injects a fake unlock coordinator. Secret-lifetime tests
+use the real unlock coordinator with fake derivation and activation
+dependencies so host dispatch still proves single-use, cancellation, timeout,
+and cleanup behavior.
 
 ## 41. Fake Lifecycle Events
 
@@ -350,10 +392,12 @@ locking deterministic.
 
 ## 42. Temp-Root Vault Environment
 
-Integration tests that exercise real encrypted persistence use an isolated
-temporary root, fake Keychain store, fake keys, and fake payloads. Tests must
-remove the root afterward and must not create committed `.atlasvault` exports,
-read real data, or resolve production Application Support.
+The required real-facade integration configuration uses an isolated temporary
+root, fake Keychain store, fake keys, and fake payloads. It must exercise
+encrypted load and save through the test-host contract, runtime facade,
+activation controller, and persistence path. Tests remove the root afterward
+and must not create committed `.atlasvault` exports, read real data, or resolve
+production Application Support.
 
 ## 43. Endpoint-Call Recorder
 
@@ -370,8 +414,10 @@ Phase 2D-46 must cover:
 - side-effect-free construction and explicit start;
 - locked public search with zero private endpoint calls;
 - no automatic activation or prior private projection restore;
-- explicit activation followed by in-memory private presentation;
-- activation cancellation and failure clearing;
+- unlock request dispatch through the coordinator followed by in-memory private
+  presentation;
+- single-use unlock, cancellation, timeout, failure cleanup, and rejection of
+  direct host-to-facade activation;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
@@ -379,6 +425,12 @@ Phase 2D-46 must cover:
 - lock propagation to every subscriber and rejection of late updates;
 - public and private task cancellation independence;
 - one active vault and one process runtime;
+- real-facade encrypted load and save through the host over fake lower-level
+  dependencies and a temporary root;
+- scripted-facade host behavior remains a separate focused configuration;
+- test-host and locked-shell source guards reject `ATLAS_REFERENCE_CAPTURE` and
+  `AtlasReferenceCaptureView`;
+- no fixture write reaches the normal public-cache root;
 - public snapshot immutability and private-value redaction;
 - temporary-root cleanup and no `.atlasvault` artifact.
 
