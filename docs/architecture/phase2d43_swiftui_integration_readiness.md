@@ -116,7 +116,9 @@ membership, saved-job membership, notes, snippets, drafts, generated-document
 references, vault IDs, private record IDs, and private counts must not enter
 either format. Private membership must not influence detail-cache filenames,
 contents, requested keys, warmup selection, counts, or progress metadata.
-Decrypted records exist only in generation-scoped in-memory state after unlock.
+Records managed by the AtlasVault runtime exist as decrypted values only in
+generation-scoped in-memory state after unlock. This invariant does not describe
+or legitimize the legacy plaintext compatibility state called out in Section 47.
 Record type remains inside the encrypted payload; plaintext record metadata is
 limited to the reviewed encrypted-record envelope allowlist.
 
@@ -205,10 +207,12 @@ facade's serialized activation rather than create per-window sessions.
 
 ## 26. App Launch Behavior
 
-Launch should construct only side-effect-free composition and show locked or
-no-vault presentation. It must not resolve Application Support, access Keychain,
-open a vault, hydrate records, or prompt for a secret until an explicit user
-action reaches the activation boundary.
+Launch should construct only side-effect-free AtlasVault composition and show
+locked or no-vault presentation. It must not resolve the AtlasVault Application
+Support root, access Keychain, open a vault, hydrate records, or prompt for a
+secret until an explicit user action reaches the activation boundary. This does
+not prohibit `AtlasLocalCache` from resolving its separate public-cache location
+to restore reviewed public snapshot or detail-cache data while locked.
 
 ## 27. No Automatic Unlock
 
