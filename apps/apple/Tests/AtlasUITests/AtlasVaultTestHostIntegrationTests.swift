@@ -448,6 +448,65 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testStaleUnlockFailureCannotTearDownReplacementSession() async throws {
+        let staleFailureGate = AtlasVaultTestSuspensionGate()
+        let harness = try await makeScriptedHarness(
+            unlockCoordinatorBuilder: { runtime, vaultKey in
+                AtlasVaultStaleFailureUnlockCoordinator(
+                    runtime: runtime,
+                    vaultID: Self.vaultID,
+                    vaultKey: vaultKey,
+                    staleFailureGate: staleFailureGate
+                )
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+
+        let staleUnlock = Task {
+            try await harness.host.unlock(self.unlockRequest())
+        }
+        let staleDispatchEntered = await staleFailureGate.waitUntilEntered()
+        XCTAssertTrue(staleDispatchEntered)
+
+        await harness.host.handleLifecycle(.didEnterBackground)
+        await harness.host.handleLifecycle(.didBecomeActive)
+        await harness.runtime.setActivationBehavior(
+            .succeed(privateState(marker: "UPDATED"))
+        )
+        try await harness.host.unlock(unlockRequest())
+        let replacement = await waitForSnapshot(
+            harness.observer,
+            status: .unlocked
+        )
+        XCTAssertEqual(
+            replacement.privateState?.savedSearches.first?.name,
+            Self.updatedPrivateSentinel
+        )
+
+        await staleFailureGate.open()
+        do {
+            try await staleUnlock.value
+            XCTFail("Expected the stale unlock to report cancellation")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultUnlockRequestError,
+                .cancelled
+            )
+        }
+
+        let finalStatus = await harness.runtime.status()
+        let finalSnapshot = await harness.observer.currentSnapshot()
+        XCTAssertEqual(finalStatus, .unlocked)
+        XCTAssertEqual(finalSnapshot.status, .unlocked)
+        XCTAssertEqual(
+            finalSnapshot.privateState?.savedSearches.first?.name,
+            Self.updatedPrivateSentinel
+        )
+        await subscription.cancel()
+    }
+
     func testUnlockTimeoutFailsBeforeFacadeActivation() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
@@ -550,6 +609,69 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             status: .locked
         )
         XCTAssertNil(locked.privateState)
+        await subscription.cancel()
+    }
+
+    func testStaleSaveFailureCannotOverwriteReplacementGeneration() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let saveGate = AtlasVaultTestSuspensionGate()
+        let staleCompletionGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        await harness.runtime.setSaveBehavior(
+            .committed(privateState(marker: "INITIAL"))
+        )
+        await harness.runtime.setSaveGate(saveGate)
+        await harness.runtime.setNextStaleSaveCompletionGate(
+            staleCompletionGate
+        )
+
+        let staleSave = Task {
+            try await harness.host.apply(self.mutationRequest())
+        }
+        let saveEntered = await saveGate.waitUntilEntered()
+        XCTAssertTrue(saveEntered)
+
+        await harness.host.handleLifecycle(.didEnterBackground)
+        let staleCompletionEntered =
+            await staleCompletionGate.waitUntilEntered()
+        XCTAssertTrue(staleCompletionEntered)
+
+        await harness.host.handleLifecycle(.didBecomeActive)
+        await harness.runtime.setActivationBehavior(
+            .succeed(privateState(marker: "UPDATED"))
+        )
+        try await harness.host.unlock(unlockRequest())
+        let replacement = await waitForSnapshot(
+            harness.observer,
+            status: .unlocked
+        )
+        XCTAssertEqual(
+            replacement.privateState?.savedSearches.first?.name,
+            Self.updatedPrivateSentinel
+        )
+
+        await staleCompletionGate.open()
+        do {
+            _ = try await staleSave.value
+            XCTFail("Expected the stale save to report cancellation")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultRuntimeFacadeError,
+                .cancelled
+            )
+        }
+
+        let finalSnapshot = await harness.observer.currentSnapshot()
+        let finalStatus = await harness.runtime.status()
+        XCTAssertEqual(finalStatus, .unlocked)
+        XCTAssertEqual(finalSnapshot.status, .unlocked)
+        XCTAssertEqual(
+            finalSnapshot.privateState?.savedSearches.first?.name,
+            Self.updatedPrivateSentinel
+        )
         await subscription.cancel()
     }
 
@@ -823,7 +945,11 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
     }
 
     private func makeScriptedHarness(
-        lockPolicy: AtlasVaultLifecycleLockPolicy = .immediate
+        lockPolicy: AtlasVaultLifecycleLockPolicy = .immediate,
+        unlockCoordinatorBuilder: ((
+            AtlasVaultScriptedTestRuntime,
+            Data
+        ) -> any AtlasVaultUnlockRequestCoordinating)? = nil
     ) async throws -> ScriptedHarness {
         let rootURL = try temporaryRoot()
         let recorder = AtlasVaultTestEndpointCallRecorder()
@@ -840,15 +966,20 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         )
         let time = AtlasVaultTestManualTime()
         let vaultKey = Self.vaultKey
-        let unlockCoordinator = AtlasVaultUnlockRequestCoordinator(
-            dependencies: AtlasVaultUnlockRequestDependencies(
-                derivePassphraseVaultKey: { _ in vaultKey },
-                deriveRecoveryVaultKey: { _ in vaultKey },
-                activate: { request in
-                    try await runtime.activate(request)
-                }
+        let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
+        if let unlockCoordinatorBuilder {
+            unlockCoordinator = unlockCoordinatorBuilder(runtime, vaultKey)
+        } else {
+            unlockCoordinator = AtlasVaultUnlockRequestCoordinator(
+                dependencies: AtlasVaultUnlockRequestDependencies(
+                    derivePassphraseVaultKey: { _ in vaultKey },
+                    deriveRecoveryVaultKey: { _ in vaultKey },
+                    activate: { request in
+                        try await runtime.activate(request)
+                    }
+                )
             )
-        )
+        }
         let lifecycle = AtlasVaultLifecycleCoordinator(
             runtime: runtime,
             lockPolicy: lockPolicy,
@@ -1104,5 +1235,45 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             )
         }
         return sourceURL
+    }
+}
+
+private actor AtlasVaultStaleFailureUnlockCoordinator:
+    AtlasVaultUnlockRequestCoordinating
+{
+    private let runtime: AtlasVaultScriptedTestRuntime
+    private let vaultID: String
+    private let vaultKey: Data
+    private let staleFailureGate: AtlasVaultTestSuspensionGate
+    private var dispatchCount = 0
+
+    init(
+        runtime: AtlasVaultScriptedTestRuntime,
+        vaultID: String,
+        vaultKey: Data,
+        staleFailureGate: AtlasVaultTestSuspensionGate
+    ) {
+        self.runtime = runtime
+        self.vaultID = vaultID
+        self.vaultKey = vaultKey
+        self.staleFailureGate = staleFailureGate
+    }
+
+    func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        dispatchCount += 1
+        if dispatchCount == 1 {
+            try? await staleFailureGate.wait()
+            throw AtlasVaultUnlockRequestError.cancelled
+        }
+        try await runtime.activate(
+            AtlasVaultRuntimeActivationRequest(
+                vaultID: vaultID,
+                suppliedVaultKey: vaultKey
+            )
+        )
+    }
+
+    func cancel(_ request: AtlasVaultUnlockRequest) -> Bool {
+        true
     }
 }

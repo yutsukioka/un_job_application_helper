@@ -284,6 +284,7 @@ actor AtlasVaultTestHost:
         let lifecycleStatus = await lifecycle.status()
         let runtimeStatus = await runtime.status()
         guard unlockAdmissionAllowed,
+              activeUnlock == nil,
               !lifecycleStatus.hasPendingGraceLock,
               runtimeStatus == .locked || runtimeStatus.isAtlasVaultTestFailure
         else {
@@ -303,7 +304,6 @@ actor AtlasVaultTestHost:
             try await unlockCoordinator.dispatch(request)
             guard activeUnlock?.epoch == epoch,
                   unlockAdmissionAllowed else {
-                await runtime.lock()
                 throw AtlasVaultUnlockRequestError.cancelled
             }
             activeUnlock = nil
@@ -311,16 +311,22 @@ actor AtlasVaultTestHost:
             generation = AtlasVaultPresentationGeneration()
             await synchronizePresentation()
         } catch {
-            if activeUnlock?.epoch == epoch {
-                activeUnlock = nil
+            guard activeUnlock?.epoch == epoch else {
+                throw error
             }
             closePrivatePresentation()
             if error as? AtlasVaultUnlockRequestError == .cancelled
                 || error as? AtlasVaultRuntimeFacadeError == .cancelled {
                 await runtime.lock()
+                guard activeUnlock?.epoch == epoch else {
+                    throw error
+                }
                 await synchronizePresentation(commandState: .cancelled)
             } else {
                 await synchronizePresentation()
+            }
+            if activeUnlock?.epoch == epoch {
+                activeUnlock = nil
             }
             throw error
         }
@@ -356,19 +362,39 @@ actor AtlasVaultTestHost:
 
         do {
             let outcome = try await runtime.apply(request)
+            guard privatePresentationAllowed,
+                  generation == admissionGeneration else {
+                throw AtlasVaultTestHostError.privateOperationsUnavailable
+            }
+            let commandState: AtlasVaultPresentationCommandState
             switch outcome {
             case .committed:
-                await synchronizePresentation()
+                commandState = .none
             case .committedDurabilityUnconfirmed:
-                await synchronizePresentation(
-                    commandState: .saveDurabilityUnconfirmed
-                )
+                commandState = .saveDurabilityUnconfirmed
+            }
+            guard await refreshPrivatePresentation(
+                commandState: commandState,
+                expectedGeneration: admissionGeneration
+            ) else {
+                throw AtlasVaultTestHostError.privateOperationsUnavailable
             }
             return outcome
         } catch {
+            guard privatePresentationAllowed,
+                  generation == admissionGeneration else {
+                throw error
+            }
             let status = await runtime.status()
-            if status == .locked || status == .locking {
+            guard privatePresentationAllowed,
+                  generation == admissionGeneration else {
+                throw error
+            }
+            switch status {
+            case .locked, .locking, .activating, .failed:
                 closePrivatePresentation()
+            case .unlocked, .saving:
+                break
             }
             let commandState: AtlasVaultPresentationCommandState
             switch error as? AtlasVaultRuntimeFacadeError {
@@ -379,7 +405,15 @@ actor AtlasVaultTestHost:
             default:
                 commandState = .none
             }
-            await synchronizePresentation(commandState: commandState)
+            let projectedState = commandState == .cancelled
+                ? nil
+                : privateState
+            await publish(
+                runtimeStatus: status,
+                privateState: projectedState,
+                generation: generation,
+                commandState: commandState
+            )
             throw error
         }
     }
@@ -530,6 +564,36 @@ actor AtlasVaultTestHost:
         )
     }
 
+    private func refreshPrivatePresentation(
+        commandState: AtlasVaultPresentationCommandState,
+        expectedGeneration: AtlasVaultPresentationGeneration
+    ) async -> Bool {
+        guard privatePresentationAllowed,
+              generation == expectedGeneration else {
+            return false
+        }
+        let runtimeStatus = await runtime.status()
+        guard runtimeStatus == .unlocked,
+              privatePresentationAllowed,
+              generation == expectedGeneration else {
+            return false
+        }
+        let currentPrivateState = try? await runtime.privateState().state
+        guard privatePresentationAllowed,
+              generation == expectedGeneration else {
+            return false
+        }
+        privateState = currentPrivateState
+        await publish(
+            runtimeStatus: runtimeStatus,
+            privateState: currentPrivateState,
+            generation: expectedGeneration,
+            commandState: commandState
+        )
+        return privatePresentationAllowed
+            && generation == expectedGeneration
+    }
+
     private func publish(
         runtimeStatus: AtlasVaultRuntimeStatus,
         privateState: AtlasVaultHydratedState?,
@@ -573,6 +637,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         .recoverableFailure(.atomicWrite)
     private var activationGate: AtlasVaultTestSuspensionGate?
     private var saveGate: AtlasVaultTestSuspensionGate?
+    private var nextStaleSaveCompletionGate: AtlasVaultTestSuspensionGate?
     private var nextStatusGate: AtlasVaultTestSuspensionGate?
     private var operationEpoch: UInt64 = 0
     private var recordedEvents: [String] = []
@@ -671,6 +736,8 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         runtimeStatus = .saving
         recordedEvents.append("apply")
         let gate = saveGate
+        let staleCompletionGate = nextStaleSaveCompletionGate
+        nextStaleSaveCompletionGate = nil
 
         do {
             if let gate {
@@ -685,6 +752,9 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         }
         guard operationEpoch == epoch,
               runtimeStatus == .saving else {
+            if let staleCompletionGate {
+                try? await staleCompletionGate.wait()
+            }
             throw AtlasVaultRuntimeFacadeError.cancelled
         }
 
@@ -732,6 +802,12 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
     func setSaveGate(_ gate: AtlasVaultTestSuspensionGate?) {
         saveGate = gate
+    }
+
+    func setNextStaleSaveCompletionGate(
+        _ gate: AtlasVaultTestSuspensionGate?
+    ) {
+        nextStaleSaveCompletionGate = gate
     }
 
     func setNextStatusGate(_ gate: AtlasVaultTestSuspensionGate?) {

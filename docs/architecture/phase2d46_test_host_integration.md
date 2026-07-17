@@ -145,6 +145,8 @@ Tests cover:
 - explicit, background, and protected-data lock clearing;
 - recoverable, durability-warning, and fatal save outcomes;
 - cancellation and late-result rejection;
+- stale unlock failure rejection after a replacement session activates;
+- stale save completion rejection after a replacement presentation generation;
 - lifecycle-grace presentation closure and mutation rejection;
 - suspended mutation admission and stale active-transition race rejection;
 - reactivation after fatal containment;
