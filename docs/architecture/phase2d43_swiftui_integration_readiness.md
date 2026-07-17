@@ -702,7 +702,7 @@ current architecture and evidence.
 | LAN or remote private compatibility access | Blocked | Plaintext private models require a separately reviewed authentication, TLS, authorization, endpoint-trust, and threat boundary. |
 | Encrypted sync through compatibility endpoints | Blocked | These endpoints carry legacy plaintext models and provide neither encrypted vault transport nor cloud sync. |
 | Reuse `AtlasRootView` unchanged as locked shell | Blocked | Existing sidebar and saved panels can fetch and publish private saved-search and tracker state. |
-| Dedicated public-only locked shell | Ready with constraints | It may expose only public search/cache and must omit private panels, private refreshes, and automatic unlock. |
+| Dedicated public-only locked shell | Design required | Phase 2D-47 must implement and test the public-only shell before it is consumable; it must omit private panels, private refreshes, automatic unlock, unproven detail-cache files, and reference-capture fixtures. |
 | Reuse `AtlasRootView` after private-panel gating | Design required | Gating or replacement, endpoint-call spies, state-publication tests, lifecycle clearing, and review are required first. |
 | Saved-search and tracker panels while locked | Blocked | Visual hiding is insufficient; their fetch, publication, retention, and rendering paths must not run. |
 | Private state display | Design required | In-memory projection exists; observable ownership, views, accessibility, and capture policy do not. |
