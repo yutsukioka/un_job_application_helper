@@ -278,10 +278,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
         for active in activeDispatches.values {
             active.operation.cancel()
             active.timeout?.cancel()
-            let input = active.input
-            Task {
-                await input.clearSecret()
-            }
+            scheduleAtlasVaultUnlockSecretCleanup(active.input)
         }
     }
 
@@ -323,22 +320,22 @@ public actor AtlasVaultUnlockRequestCoordinator:
             try terminalGate.requireOpen()
         } catch {
             pendingClaims.removeValue(forKey: id)
-            await claim.input.clearSecret()
             _ = await storage.cancelActive()
+            scheduleAtlasVaultUnlockSecretCleanup(claim.input)
             throw error
         }
 
         if let timeout = claim.timeout, timeout <= .zero {
             guard terminalGate.reserveTermination(.expired) else {
                 pendingClaims.removeValue(forKey: id)
-                await claim.input.clearSecret()
                 _ = await storage.cancelActive()
+                scheduleAtlasVaultUnlockSecretCleanup(claim.input)
                 try terminalGate.requireOpen()
                 throw AtlasVaultUnlockRequestError.expired
             }
             let didExpire = await storage.expire()
-            await claim.input.clearSecret()
             pendingClaims.removeValue(forKey: id)
+            scheduleAtlasVaultUnlockSecretCleanup(claim.input)
             guard didExpire else {
                 throw await storage.finishFailure(default: .expired)
             }
@@ -373,8 +370,8 @@ public actor AtlasVaultUnlockRequestCoordinator:
                    terminalGate.reserveTermination(.cancelled) {
                     operation.cancel()
                     Task {
-                        await claim.input.clearSecret()
                         _ = await storage.cancelActive()
+                        scheduleAtlasVaultUnlockSecretCleanup(claim.input)
                     }
                 }
                 await operationStartGate.release()
@@ -383,8 +380,8 @@ public actor AtlasVaultUnlockRequestCoordinator:
                 if terminalGate.reserveTermination(.cancelled) {
                     operation.cancel()
                     Task {
-                        await claim.input.clearSecret()
                         _ = await storage.cancelActive()
+                        scheduleAtlasVaultUnlockSecretCleanup(claim.input)
                     }
                 }
             }
@@ -395,11 +392,14 @@ public actor AtlasVaultUnlockRequestCoordinator:
             clearActiveDispatch(claim.id)
         } catch {
             clearActiveDispatch(claim.id)
-            await claim.input.clearSecret()
             if error is CancellationError || Task.isCancelled {
                 _ = await storage.cancelActive()
             }
-            throw await storage.finishFailure(default: Self.publicError(for: error))
+            let publicError = await storage.finishFailure(
+                default: Self.publicError(for: error)
+            )
+            scheduleAtlasVaultUnlockSecretCleanup(claim.input)
+            throw publicError
         }
     }
 
@@ -416,10 +416,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             }
             active.operation.cancel()
             active.timeout?.cancel()
-            let input = active.input
-            Task {
-                await input.clearSecret()
-            }
+            scheduleAtlasVaultUnlockSecretCleanup(active.input)
             return true
         }
 
@@ -473,10 +470,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
         }
         guard await active.storage.expire() else { return }
         active.operation.cancel()
-        let input = active.input
-        Task {
-            await input.clearSecret()
-        }
+        scheduleAtlasVaultUnlockSecretCleanup(active.input)
     }
 
     private func clearActiveDispatch(_ id: UUID) {
@@ -549,9 +543,9 @@ public actor AtlasVaultUnlockRequestCoordinator:
                     dependencies: dependencies
                 )
             }
-            await claim.input.clearSecret()
+            scheduleAtlasVaultUnlockSecretCleanup(claim.input)
         } catch {
-            await claim.input.clearSecret()
+            scheduleAtlasVaultUnlockSecretCleanup(claim.input)
             throw error
         }
     }
@@ -587,18 +581,18 @@ public actor AtlasVaultUnlockRequestCoordinator:
         var secret = try await takeSecret(from: buffer)
         if rejectEmpty, secret.isEmpty {
             wipe(&secret)
-            await buffer.clear()
+            scheduleAtlasVaultUnlockSecretCleanup(buffer)
             throw AtlasVaultUnlockRequestInternalError.invalidRequest
         }
 
         do {
             let result = try await transform(secret)
             wipe(&secret)
-            await buffer.clear()
+            scheduleAtlasVaultUnlockSecretCleanup(buffer)
             return result
         } catch {
             wipe(&secret)
-            await buffer.clear()
+            scheduleAtlasVaultUnlockSecretCleanup(buffer)
             if error is CancellationError, Task.isCancelled {
                 throw CancellationError()
             }
@@ -612,7 +606,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
         do {
             return try await buffer.takeSecretBytes()
         } catch {
-            await buffer.clear()
+            scheduleAtlasVaultUnlockSecretCleanup(buffer)
             if error is CancellationError, Task.isCancelled {
                 throw CancellationError()
             }
@@ -859,7 +853,7 @@ private actor AtlasVaultUnlockRequestStorage {
             state = .cancelled
             let input = input
             self.input = nil
-            await input?.clearSecret()
+            scheduleAtlasVaultUnlockSecretCleanup(input)
             return true
         case .dispatching, .completed, .cancelled, .expired:
             return false
@@ -882,7 +876,7 @@ private actor AtlasVaultUnlockRequestStorage {
             state = .expired
             let input = input
             self.input = nil
-            await input?.clearSecret()
+            scheduleAtlasVaultUnlockSecretCleanup(input)
             return true
         case .dispatching:
             state = .expired
@@ -903,6 +897,23 @@ private extension AtlasVaultUnlockRequestInput {
         case .localKey:
             return
         }
+    }
+}
+
+private func scheduleAtlasVaultUnlockSecretCleanup(
+    _ input: AtlasVaultUnlockRequestInput?
+) {
+    guard let input else { return }
+    Task.detached {
+        await input.clearSecret()
+    }
+}
+
+private func scheduleAtlasVaultUnlockSecretCleanup(
+    _ buffer: any AtlasVaultSecretBuffer
+) {
+    Task.detached {
+        await buffer.clear()
     }
 }
 

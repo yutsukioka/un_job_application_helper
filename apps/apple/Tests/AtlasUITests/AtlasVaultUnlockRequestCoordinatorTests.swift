@@ -193,7 +193,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         let request = request(input: .passphrase(buffer))
 
         let didCancel = await coordinator.cancel(request)
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         XCTAssertTrue(didCancel)
         XCTAssertTrue(isCleared)
         await assertDispatchThrows(.cancelled) {
@@ -201,6 +201,38 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         }
         let snapshot = await spy.snapshot()
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
+    func testCancellationBeforeDispatchDoesNotWaitForSlowSecretCleanup() async {
+        let clearGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(spy: spy)
+        let buffer = UnlockBlockingClearSecretBuffer(
+            bytes: Self.fakePassphrase,
+            clearGate: clearGate
+        )
+        let request = request(input: .passphrase(buffer))
+        let cancellationResult = UnlockBooleanResultProbe()
+
+        let cancellation = Task {
+            let result = await coordinator.cancel(request)
+            await cancellationResult.record(result)
+            return result
+        }
+
+        let didStartCleanup = await clearGate.waitUntilEntered()
+        let didReturnBeforeCleanup = await cancellationResult.waitUntilRecorded()
+        XCTAssertTrue(didStartCleanup)
+        XCTAssertTrue(didReturnBeforeCleanup)
+        await assertDispatchThrows(.cancelled) {
+            try await coordinator.dispatch(request)
+        }
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+
+        await clearGate.open()
+        let didCancel = await cancellation.value
+        XCTAssertTrue(didCancel)
     }
 
     func testCancellationDuringStorageClaimCannotBeLost() async {
@@ -223,7 +255,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         await claimGate.open()
 
         await assertTaskThrows(.cancelled, task: dispatch)
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
@@ -248,7 +280,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         await claimGate.open()
 
         await assertTaskThrows(.cancelled, task: dispatch)
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
@@ -313,6 +345,51 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         await assertTaskThrows(.cancelled, task: dispatch)
         let snapshot = await spy.snapshot()
         XCTAssertEqual(snapshot.activationCalls, 0)
+    }
+
+    func testCancelledDispatchReleasesActiveStateBeforeSlowCleanupFinishes() async {
+        let derivationGate = UnlockGate(honorCancellation: true)
+        let clearGate = UnlockMultiWaiterGate()
+        let spy = UnlockDependencySpy(passphraseGate: derivationGate)
+        let coordinator = makeCoordinator(spy: spy)
+        let buffer = UnlockBlockingEveryClearSecretBuffer(
+            bytes: Self.fakePassphrase,
+            clearGate: clearGate
+        )
+        let request = request(input: .passphrase(buffer))
+        let dispatchResult = UnlockDispatchResultProbe()
+        let dispatch = Task {
+            let result: UnlockDispatchResult
+            do {
+                try await coordinator.dispatch(request)
+                result = .succeeded
+            } catch {
+                result = .failed(
+                    error as? AtlasVaultUnlockRequestError ?? .unlockFailed
+                )
+            }
+            await dispatchResult.record(result)
+        }
+
+        let didStartDerivation = await derivationGate.waitUntilEntered()
+        XCTAssertTrue(didStartDerivation)
+        let didCancel = await coordinator.cancel(request)
+        XCTAssertTrue(didCancel)
+
+        let didStartCleanup = await clearGate.waitUntilEntered()
+        let didFinishDispatchBeforeCleanup = await dispatchResult.waitUntilRecorded()
+        let result = await dispatchResult.snapshot()
+        XCTAssertTrue(didStartCleanup)
+        XCTAssertTrue(didFinishDispatchBeforeCleanup)
+        XCTAssertEqual(result, .failed(.cancelled))
+
+        let didCancelAgain = await coordinator.cancel(request)
+        XCTAssertFalse(didCancelAgain)
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 0)
+
+        await clearGate.open()
+        await dispatch.value
     }
 
     func testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer() async {
@@ -731,7 +808,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
             try await coordinator.dispatch(request)
         }
 
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
@@ -870,7 +947,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
             try await coordinator.dispatch(request)
         }
 
-        let isCleared = await buffer.isClearedForTesting
+        let isCleared = await waitUntilCleared(buffer)
         let snapshot = await spy.snapshot()
         XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
@@ -906,6 +983,12 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         }
 
         XCTAssertNotNil(request)
+        for _ in 0..<1_000 {
+            if weakBuffer == nil {
+                break
+            }
+            await Task.yield()
+        }
         XCTAssertNil(weakBuffer)
     }
 
@@ -1254,6 +1337,29 @@ private actor UnlockBlockingClearSecretBuffer: AtlasVaultSecretBuffer {
     }
 }
 
+private actor UnlockBlockingEveryClearSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: Data?
+    private let clearGate: UnlockMultiWaiterGate
+
+    init(bytes: Data, clearGate: UnlockMultiWaiterGate) {
+        self.bytes = bytes
+        self.clearGate = clearGate
+    }
+
+    func takeSecretBytes() async throws -> Data {
+        guard let bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        self.bytes = nil
+        return bytes
+    }
+
+    func clear() async {
+        bytes = nil
+        await clearGate.enter()
+    }
+}
+
 private actor UnlockSecretBearingDescriptionBuffer:
     AtlasVaultSecretBuffer,
     CustomStringConvertible,
@@ -1289,6 +1395,33 @@ private actor UnlockBooleanResultProbe {
             await Task.yield()
         }
         return result != nil
+    }
+}
+
+private enum UnlockDispatchResult: Equatable, Sendable {
+    case succeeded
+    case failed(AtlasVaultUnlockRequestError)
+}
+
+private actor UnlockDispatchResultProbe {
+    private var result: UnlockDispatchResult?
+
+    func record(_ result: UnlockDispatchResult) {
+        self.result = result
+    }
+
+    func waitUntilRecorded() async -> Bool {
+        for _ in 0..<1_000 {
+            if result != nil {
+                return true
+            }
+            await Task.yield()
+        }
+        return result != nil
+    }
+
+    func snapshot() -> UnlockDispatchResult? {
+        result
     }
 }
 
@@ -1428,6 +1561,43 @@ private actor UnlockGate {
     private func cancelWaiter() {
         continuation?.resume(throwing: CancellationError())
         continuation = nil
+    }
+}
+
+private actor UnlockMultiWaiterGate {
+    private var enteredCount = 0
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        enteredCount += 1
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            if isOpen {
+                continuation.resume()
+            } else {
+                continuations.append(continuation)
+            }
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<1_000 {
+            if enteredCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return enteredCount > 0
+    }
+
+    func open() {
+        isOpen = true
+        let waiting = continuations
+        continuations.removeAll(keepingCapacity: false)
+        for continuation in waiting {
+            continuation.resume()
+        }
     }
 }
 

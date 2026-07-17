@@ -51,17 +51,21 @@ and delegates activation through the existing
 `AtlasVaultRuntimeActivationRequest` boundary. A local-key request passes no
 supplied key and reveals no Keychain implementation detail.
 
-Success, failure, cancellation, and timeout remove coordinator-owned secret
-references. A lock-backed terminal gate arbitrates cancellation, expiration,
-and activation reservation without awaiting an actor hop.
-The active dispatch retains the claimed buffer only as a cleanup handle;
-caller cancellation, explicit cancellation, timeout, and coordinator teardown
-clear that handle even when the operation task has not begun consuming it.
-Explicit cancellation and expiration record their non-sensitive request state,
-cancel the child operation, and then schedule secret cleanup asynchronously.
-They do not await a caller-supplied buffer's best-effort `clear()` operation,
-which prevents slow or non-returning cleanup code from delaying cancellation
-of derivation or activation work.
+Success, failure, cancellation, and timeout first remove coordinator-owned
+secret references and commit their non-sensitive request state. A lock-backed
+terminal gate arbitrates cancellation, expiration, and activation reservation
+without awaiting an actor hop. The active dispatch retains the claimed buffer
+only as a cleanup handle; caller cancellation, explicit cancellation, timeout,
+and coordinator teardown detach that handle even when the operation task has
+not begun consuming it.
+
+Every caller-supplied buffer cleanup is best effort and runs in an independent
+task after trusted state and input detachment. Pending cancellation, active
+dispatch cancellation, expiration, success, and failure therefore do not await
+a caller-supplied buffer's `clear()` implementation. A slow or non-returning
+cleanup cannot delay the public result or keep the request registered as
+active. Coordinator-owned byte copies are still wiped synchronously before the
+operation returns or throws.
 The child operation waits behind an internal start gate. Dispatch installs its
 caller-cancellation handler, synchronously handles an already-cancelled caller,
 and only then releases the child, so activation cannot outrun cancellation
@@ -106,10 +110,11 @@ Fake-only tests cover construction, all four input sources, empty-passphrase
 rejection, request-copy and concurrent single-use enforcement, cancellation
 before and during the storage claim and active dispatch, pre-operation
 cancellation and timeout cleanup, cancellation during activation for both
-cancellation-honoring and cancellation-ignoring dependencies, slow cleanup
-ordering, caller cancellation, late dependency completion, cancellation before
-handler installation, an already cancelled caller, timeout during activation,
-timeout after activation return, non-owner cancellation, dependency error
+cancellation-honoring and cancellation-ignoring dependencies, pending and
+active cancellation completion while caller cleanup is blocked, caller
+cancellation, late dependency completion, cancellation before handler
+installation, an already cancelled caller, timeout during activation, timeout
+after activation return, non-owner cancellation, dependency error
 normalization, success and failure cleanup, malicious buffer-description
 redaction, non-persistability, actor serialization, no public snapshot
 mutation, no filesystem artifacts, and source guards for UI, platform,
