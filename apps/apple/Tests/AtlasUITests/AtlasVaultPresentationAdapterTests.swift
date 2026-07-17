@@ -131,6 +131,18 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         XCTAssertNil(snapshot.privateState)
     }
 
+    func testDurabilityWarningRetainsCurrentCommittedProjection() {
+        let snapshot = adapter().makeSnapshot(
+            runtimeStatus: .unlocked,
+            privateState: hydratedState(),
+            generation: generation,
+            commandState: .saveDurabilityUnconfirmed
+        )
+
+        XCTAssertEqual(snapshot.status, .saveDurabilityUnconfirmed)
+        XCTAssertNotNil(snapshot.privateState)
+    }
+
     func testFailedActivationClearsPriorProjection() {
         let adapter = adapter()
         let unlocked = adapter.makeSnapshot(
@@ -530,7 +542,8 @@ final class AtlasVaultPresentationAdapterTests: XCTestCase {
         [
             .locked, .noVault, .activating, .locking, .unlocked,
             .keyUnavailable, .corruptStore, .unsupportedVersion,
-            .saveInProgress, .saveFailed, .cancelled, .failed,
+            .saveInProgress, .saveFailed, .saveDurabilityUnconfirmed,
+            .cancelled, .failed,
         ]
     }
 
