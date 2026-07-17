@@ -27,7 +27,8 @@ prompt, migration, cloud sync, onboarding, recovery UX, or key rotation.
 | Persistence | Persistence coordinator, path locator, directory preparer, local-store reader/writer, merger, saver, hydrator, crypto, and atomic writer | Loads and saves encrypted record envelopes under explicit calls. |
 | Root and key access | Application Support root provider and `AtlasVaultKeyStore` / `AtlasKeychainVaultKeyStore` | Encapsulates platform root lookup and Keychain operations behind protocols. |
 | Public cache | `AtlasPublicLocalSnapshot`, per-job `AtlasJobDetail` files, and `AtlasLocalCache` | Persists the public snapshot and detail files; the legacy saved-only detail-write path still requires isolation before locked-shell use. |
-| Existing app model | `SearchViewModel` and `AtlasIOSHostApp` | Existing application behavior; neither is integrated with the AtlasVault runtime. |
+| Reference capture | `ATLAS_REFERENCE_CAPTURE` and `AtlasReferenceCaptureView` | Existing host fixture route that writes the normal public-cache root; blocked from test-host and locked-shell integration until storage is isolated. |
+| Existing app model | `AtlasSearchViewModel` and `AtlasIOSHostApp` | Existing application behavior; neither is integrated with the AtlasVault runtime. |
 
 ## 4. Runtime Facade Readiness
 
@@ -194,12 +195,12 @@ collections. It must not be `Codable` or restored from persistent UI state.
 ## 22. View-Model Ownership
 
 A dedicated vault presentation owner should own UI tasks and snapshots. Existing
-`SearchViewModel` must not acquire vault keys, private state, persistence seams,
+`AtlasSearchViewModel` must not acquire vault keys, private state, persistence seams,
 or unlock logic. Any eventual public-search coordination requires an explicit
 adapter rather than merging public and private storage responsibilities. The
 future SwiftUI layer must render vault-private content only from the reviewed
 runtime-facade and presentation-adapter boundary. It must not bypass that
-boundary by asking `SearchViewModel` or `AtlasAPIClient` to load private state
+boundary by asking `AtlasSearchViewModel` or `AtlasAPIClient` to load private state
 from compatibility endpoints.
 
 ## 23. App Host Ownership
@@ -234,7 +235,10 @@ Support root, access Keychain, open a vault, hydrate records, or prompt for a
 secret. This does not prohibit `AtlasLocalCache` from resolving its separate
 public-cache location to restore the reviewed public snapshot while locked.
 Detail-cache restore remains gated by the provenance and isolation requirements
-in Section 14.
+in Section 14. The existing `ATLAS_REFERENCE_CAPTURE` route must not be
+selectable by a future production, test, or locked-shell host while it
+instantiates `AtlasReferenceCaptureView` and writes fixtures into the normal
+public-cache root.
 
 ## 27. No Automatic Unlock
 
@@ -260,7 +264,8 @@ tracker refresh.
 shell. Its current hierarchy includes `AtlasSidebarView` and `SavedPanel`.
 Those legacy panels can invoke `refreshSidebarData()`, whose current
 implementation calls `savedSearches()` and `trackerRecords()` and publishes the
-returned private saved-search and tracker state through `SearchViewModel`.
+returned private saved-search and tracker state through
+`AtlasSearchViewModel`.
 
 A locked shell must not fetch, publish, hydrate, retain, or display that private
 state. Merely hiding labels or panels after the fetch is insufficient: the
@@ -420,6 +425,14 @@ They must not read local stores, Keychain, Application Support, exports, private
 repository inputs, or user history. Preview data must never be reused as a
 production key, nonce, vault identifier, or path.
 
+The current `ATLAS_REFERENCE_CAPTURE` host route does not satisfy this boundary:
+`AtlasReferenceCaptureView.init` writes a fixture snapshot through
+`AtlasLocalCache.saveSnapshot` and seeds detail files into the normal
+Application Support cache. Production, test-host, and locked-shell integration
+must block that route until reference capture receives an injected in-memory
+cache or an isolated temporary root. The locked shell must never consume
+reference-capture artifacts from the normal cache.
+
 ## 43. UI Test Strategy
 
 Future UI tests should start with a locked launch state under a fake runtime
@@ -457,6 +470,14 @@ locked-shell gate requires these explicit tests:
     reviewed coexistence or cleanup policy exists.
 19. Side-effect-free launch presents `locked`; `noVault` appears only after an
     explicit store check reports `storeMissing`.
+20. Production, test-host, and locked-shell composition cannot select
+    `ATLAS_REFERENCE_CAPTURE` or instantiate `AtlasReferenceCaptureView`.
+21. Reference capture cannot write fixtures to the normal public-cache root.
+22. Reference fixtures use an injected in-memory cache or isolated temporary
+    root.
+23. Locked-shell cache reads cannot consume reference-capture artifacts.
+24. Source guards reject `ATLAS_REFERENCE_CAPTURE` and
+    `AtlasReferenceCaptureView` references in the test host and locked shell.
 
 Save-failure containment requires these explicit tests:
 
@@ -493,7 +514,9 @@ Tests should cover actor-to-main ordering, generation rejection, task teardown,
 temporary-root encrypted load/save, and zero production app-entry references.
 The selected host arbitration policy must prevent competing activation attempts
 for the same vault while still preserving per-request cancellation and cleanup.
-The test host must also spy on `SearchViewModel` or its injected client and
+The test host must not reuse the disk-writing `ATLAS_REFERENCE_CAPTURE` route;
+all fixture storage must be injected in memory or under an isolated temporary
+root. It must also spy on `AtlasSearchViewModel` or its injected client and
 prove that locked public search makes no `savedSearches()`,
 `trackerRecords()`, `api/saved-searches`, or `api/tracker` request and publishes
 no corresponding private state.
@@ -517,7 +540,7 @@ separately reviewed compatibility or migration flow exists.
 
 ## 47. Legacy Plaintext Coexistence
 
-Existing `SearchViewModel` saved-search and saved-job behavior remains on its
+Existing `AtlasSearchViewModel` saved-search and saved-job behavior remains on its
 legacy path. The encrypted runtime does not consume, rewrite, or delete that
 state in this sequence. Coexistence can produce two sources of private truth,
 so UI integration must not claim migration or silently prefer one source. The
@@ -630,7 +653,9 @@ remain deferred.
    dependency ownership.
 4. Phase 2D-46: test-host integration with fake platform inputs and no
    production app entry point. It must prove locked public search performs no
-   legacy private endpoint call or state publication.
+   legacy private endpoint call or state publication, and it must use injected
+   in-memory or isolated temporary fixture storage rather than
+   `ATLAS_REFERENCE_CAPTURE`.
 5. Phase 2D-47: first locked-state-only SwiftUI shell, using one of two reviewed
    strategies:
    - Strategy A, preferred: create a dedicated public-only shell that exposes
@@ -671,6 +696,7 @@ current architecture and evidence.
 | Atomic writes | Ready with constraints | Atomic replacement is tested; platform protection and crash-recovery policy remain. |
 | Public snapshot while locked | Ready | `AtlasPublicLocalSnapshot` is separate from private membership and may support locked public search. |
 | Public detail cache while locked | Design required | Legacy saved-only tracker navigation can write a detail file keyed by private membership; public-only provenance/namespace isolation and an existing-artifact policy are required. |
+| Reference-capture host route | Blocked | `AtlasReferenceCaptureView` writes fixtures into the normal cache; host integration requires injected in-memory or isolated temporary storage and source guards. |
 | Public job search while locked | Ready with constraints | It remains available only through a path that cannot call `refreshSidebarData()` or private compatibility endpoints. |
 | Locked-shell use of private compatibility endpoints | Blocked | The locked path must make zero `api/saved-searches` and `api/tracker` requests regardless of endpoint reachability. |
 | LAN or remote private compatibility access | Blocked | Plaintext private models require a separately reviewed authentication, TLS, authorization, endpoint-trust, and threat boundary. |
