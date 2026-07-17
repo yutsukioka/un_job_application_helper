@@ -1,0 +1,902 @@
+import Foundation
+@testable import AtlasUI
+
+enum AtlasVaultTestHostError:
+    Error,
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case notStarted
+    case privateOperationsUnavailable
+
+    var description: String {
+        switch self {
+        case .notStarted: "notStarted"
+        case .privateOperationsUnavailable: "privateOperationsUnavailable"
+        }
+    }
+
+    var debugDescription: String {
+        description
+    }
+}
+
+enum AtlasVaultTestEndpointCall: Equatable, Sendable {
+    case publicSearch
+    case savedSearchCompatibility
+    case trackerCompatibility
+    case privateSidebarRefresh
+}
+
+actor AtlasVaultTestEndpointCallRecorder {
+    private var calls: [AtlasVaultTestEndpointCall] = []
+
+    func record(_ call: AtlasVaultTestEndpointCall) {
+        calls.append(call)
+    }
+
+    func snapshot() -> [AtlasVaultTestEndpointCall] {
+        calls
+    }
+
+    func count(_ call: AtlasVaultTestEndpointCall) -> Int {
+        calls.filter { $0 == call }.count
+    }
+}
+
+struct AtlasVaultTestPublicJob: Equatable, Sendable {
+    let identifier: String
+    let title: String
+}
+
+protocol AtlasVaultTestPublicJobSearching: Sendable {
+    func search(query: String) async throws -> [AtlasVaultTestPublicJob]
+}
+
+actor AtlasVaultFakePublicJobSearchService: AtlasVaultTestPublicJobSearching {
+    private let recorder: AtlasVaultTestEndpointCallRecorder
+    private let results: [AtlasVaultTestPublicJob]
+    private var callCount = 0
+
+    init(
+        recorder: AtlasVaultTestEndpointCallRecorder,
+        results: [AtlasVaultTestPublicJob]
+    ) {
+        self.recorder = recorder
+        self.results = results
+    }
+
+    func search(query: String) async throws -> [AtlasVaultTestPublicJob] {
+        callCount += 1
+        await recorder.record(.publicSearch)
+        return results
+    }
+
+    func calls() -> Int {
+        callCount
+    }
+}
+
+final class AtlasVaultTestFakeKeyStore:
+    AtlasVaultKeyStore,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var key: Data?
+    private var loadCountValue = 0
+    private var saveCountValue = 0
+    private var deleteCountValue = 0
+
+    init(key: Data?) {
+        self.key = key
+    }
+
+    func loadVaultKey(for vaultID: String) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        loadCountValue += 1
+        return key
+    }
+
+    func saveVaultKey(_ key: Data, for vaultID: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        saveCountValue += 1
+        self.key = key
+    }
+
+    func deleteVaultKey(for vaultID: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        deleteCountValue += 1
+        key = nil
+    }
+
+    var callCounts: (load: Int, save: Int, delete: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (loadCountValue, saveCountValue, deleteCountValue)
+    }
+}
+
+final class AtlasVaultTestRootProvider:
+    AtlasVaultRootDirectoryProviding,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let rootURL: URL
+    private var callCountValue = 0
+
+    init(rootURL: URL) {
+        self.rootURL = rootURL
+    }
+
+    func rootDirectory() throws -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        callCountValue += 1
+        return rootURL
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return callCountValue
+    }
+}
+
+struct AtlasVaultTestHostEnvironment: Sendable {
+    let temporaryRootURL: URL
+    let keyStore: any AtlasVaultKeyStore
+}
+
+protocol AtlasVaultTestHostRuntime:
+    AtlasVaultRuntimeFacading,
+    AtlasVaultPrivateStateReading,
+    AtlasVaultLifecycleRuntimeControlling
+{}
+
+extension AtlasVaultRuntimeFacade: AtlasVaultTestHostRuntime {}
+
+actor AtlasVaultTestPresentationUpdateSource:
+    AtlasVaultPresentationUpdateSourcing
+{
+    private var continuation:
+        AsyncStream<AtlasVaultPresentationUpdate>.Continuation?
+    private var bufferedUpdate: AtlasVaultPresentationUpdate?
+    private var nextSequence: UInt64 = 1
+    private var observationStartCount = 0
+
+    func updates() -> AsyncStream<AtlasVaultPresentationUpdate> {
+        observationStartCount += 1
+        let pair = AsyncStream.makeStream(
+            of: AtlasVaultPresentationUpdate.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        continuation?.finish()
+        continuation = pair.continuation
+        if let bufferedUpdate {
+            pair.continuation.yield(bufferedUpdate)
+            self.bufferedUpdate = nil
+        }
+        return pair.stream
+    }
+
+    func send(_ snapshot: AtlasVaultPresentationSnapshot) {
+        let update = AtlasVaultPresentationUpdate(
+            sequence: nextSequence,
+            snapshot: snapshot
+        )
+        nextSequence &+= 1
+        if let continuation {
+            continuation.yield(update)
+        } else {
+            bufferedUpdate = update
+        }
+    }
+
+    func finish() {
+        continuation?.finish()
+        continuation = nil
+        bufferedUpdate = nil
+    }
+
+    func startCount() -> Int {
+        observationStartCount
+    }
+}
+
+actor AtlasVaultTestHost:
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private struct ActiveUnlock {
+        let epoch: UInt64
+        let request: AtlasVaultUnlockRequest
+    }
+
+    private let runtime: any AtlasVaultTestHostRuntime
+    private let lifecycle: any AtlasVaultLifecycleCoordinating
+    private let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
+    private let publicSearch: any AtlasVaultTestPublicJobSearching
+    private let environment: AtlasVaultTestHostEnvironment
+    private let projectionAdapter = AtlasVaultPresentationAdapter()
+    private let updateSource: AtlasVaultTestPresentationUpdateSource
+    private let observablePresentation: AtlasVaultObservablePresentationAdapter
+
+    private var started = false
+    private var privatePresentationAllowed = false
+    private var lifecycleIsActive = true
+    private var protectedDataIsAvailable = true
+    private var isTerminated = false
+    private var unlockAdmissionAllowed = true
+    private var unlockEpoch: UInt64 = 0
+    private var activeUnlock: ActiveUnlock?
+    private var generation: AtlasVaultPresentationGeneration?
+    private var privateState: AtlasVaultHydratedState?
+
+    init(
+        runtime: any AtlasVaultTestHostRuntime,
+        lifecycle: any AtlasVaultLifecycleCoordinating,
+        unlockCoordinator: any AtlasVaultUnlockRequestCoordinating,
+        publicSearch: any AtlasVaultTestPublicJobSearching,
+        environment: AtlasVaultTestHostEnvironment
+    ) {
+        let updateSource = AtlasVaultTestPresentationUpdateSource()
+        self.runtime = runtime
+        self.lifecycle = lifecycle
+        self.unlockCoordinator = unlockCoordinator
+        self.publicSearch = publicSearch
+        self.environment = environment
+        self.updateSource = updateSource
+        self.observablePresentation = AtlasVaultObservablePresentationAdapter(
+            source: updateSource
+        )
+    }
+
+    func presentationObserver() -> any AtlasVaultPresentationObserving {
+        observablePresentation
+    }
+
+    func start() async {
+        guard !started else {
+            return
+        }
+        started = true
+        await synchronizePresentation()
+    }
+
+    func searchPublicJobs(
+        query: String
+    ) async throws -> [AtlasVaultTestPublicJob] {
+        guard started else {
+            throw AtlasVaultTestHostError.notStarted
+        }
+        return try await publicSearch.search(query: query)
+    }
+
+    func unlock(_ request: AtlasVaultUnlockRequest) async throws {
+        guard started else {
+            throw AtlasVaultTestHostError.notStarted
+        }
+        let lifecycleStatus = await lifecycle.status()
+        let runtimeStatus = await runtime.status()
+        guard unlockAdmissionAllowed,
+              !lifecycleStatus.hasPendingGraceLock,
+              runtimeStatus == .locked || runtimeStatus.isAtlasVaultTestFailure
+        else {
+            throw AtlasVaultTestHostError.privateOperationsUnavailable
+        }
+
+        unlockEpoch &+= 1
+        let epoch = unlockEpoch
+        activeUnlock = ActiveUnlock(epoch: epoch, request: request)
+        closePrivatePresentation()
+        await publishControlStatus(.activating)
+        do {
+            guard activeUnlock?.epoch == epoch,
+                  unlockAdmissionAllowed else {
+                throw AtlasVaultUnlockRequestError.cancelled
+            }
+            try await unlockCoordinator.dispatch(request)
+            guard activeUnlock?.epoch == epoch,
+                  unlockAdmissionAllowed else {
+                await runtime.lock()
+                throw AtlasVaultUnlockRequestError.cancelled
+            }
+            activeUnlock = nil
+            privatePresentationAllowed = true
+            generation = AtlasVaultPresentationGeneration()
+            await synchronizePresentation()
+        } catch {
+            if activeUnlock?.epoch == epoch {
+                activeUnlock = nil
+            }
+            closePrivatePresentation()
+            if error as? AtlasVaultUnlockRequestError == .cancelled
+                || error as? AtlasVaultRuntimeFacadeError == .cancelled {
+                await runtime.lock()
+                await synchronizePresentation(commandState: .cancelled)
+            } else {
+                await synchronizePresentation()
+            }
+            throw error
+        }
+    }
+
+    func apply(
+        _ request: AtlasVaultRuntimeMutationRequest
+    ) async throws -> AtlasVaultSaveOutcome {
+        guard started else {
+            throw AtlasVaultTestHostError.notStarted
+        }
+        guard privatePresentationAllowed,
+              let admissionGeneration = generation else {
+            throw AtlasVaultTestHostError.privateOperationsUnavailable
+        }
+        let runtimeStatus = await runtime.status()
+        guard runtimeStatus == .unlocked,
+              privatePresentationAllowed,
+              generation == admissionGeneration else {
+            throw AtlasVaultTestHostError.privateOperationsUnavailable
+        }
+
+        await publish(
+            runtimeStatus: .saving,
+            privateState: privateState,
+            generation: generation,
+            commandState: .none
+        )
+        guard privatePresentationAllowed,
+              generation == admissionGeneration else {
+            throw AtlasVaultTestHostError.privateOperationsUnavailable
+        }
+
+        do {
+            let outcome = try await runtime.apply(request)
+            switch outcome {
+            case .committed:
+                await synchronizePresentation()
+            case .committedDurabilityUnconfirmed:
+                await synchronizePresentation(
+                    commandState: .saveDurabilityUnconfirmed
+                )
+            }
+            return outcome
+        } catch {
+            let status = await runtime.status()
+            if status == .locked || status == .locking {
+                closePrivatePresentation()
+            }
+            let commandState: AtlasVaultPresentationCommandState
+            switch error as? AtlasVaultRuntimeFacadeError {
+            case .saveFailed:
+                commandState = .saveFailed
+            case .cancelled:
+                commandState = status == .unlocked ? .cancelled : .none
+            default:
+                commandState = .none
+            }
+            await synchronizePresentation(commandState: commandState)
+            throw error
+        }
+    }
+
+    func lock() async {
+        await cancelActiveUnlock()
+        closePrivatePresentation()
+        await publishControlStatus(.locking)
+        await runtime.lock()
+        await synchronizePresentation()
+    }
+
+    func handleLifecycle(_ event: AtlasVaultLifecycleEvent) async {
+        updateLifecycleState(for: event)
+        if event.closesAtlasVaultTestHostPrivatePresentation {
+            await cancelActiveUnlock()
+            closePrivatePresentation()
+            await publishControlStatus(.locking)
+        }
+
+        await lifecycle.handle(event)
+        let lifecycleStatus = await lifecycle.status()
+        let runtimeStatus = await runtime.status()
+        unlockAdmissionAllowed =
+            !isTerminated
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && !lifecycleStatus.hasPendingGraceLock
+
+        if event == .didBecomeActive,
+           unlockAdmissionAllowed,
+           !lifecycleStatus.hasPendingGraceLock,
+           runtimeStatus == .unlocked {
+            privatePresentationAllowed = true
+            generation = AtlasVaultPresentationGeneration()
+            await synchronizePresentation()
+            return
+        }
+
+        if lifecycleStatus.hasPendingGraceLock,
+           runtimeStatus == .unlocked || runtimeStatus == .saving {
+            await publishControlStatus(.locking)
+            return
+        }
+        await synchronizePresentation()
+    }
+
+    func synchronizePresentation(
+        commandState: AtlasVaultPresentationCommandState = .none
+    ) async {
+        let runtimeStatus = await runtime.status()
+        switch runtimeStatus {
+        case .locked, .locking, .activating, .failed:
+            closePrivatePresentation()
+        case .unlocked:
+            guard privatePresentationAllowed else {
+                await publishControlStatus(.locking)
+                return
+            }
+            if generation == nil {
+                generation = AtlasVaultPresentationGeneration()
+            }
+            guard let projectionGeneration = generation else {
+                await publishControlStatus(.locking)
+                return
+            }
+            let currentPrivateState = try? await runtime.privateState().state
+            guard privatePresentationAllowed,
+                  generation == projectionGeneration else {
+                await publishControlStatus(.locking)
+                return
+            }
+            privateState = currentPrivateState
+        case .saving:
+            guard privatePresentationAllowed else {
+                await publishControlStatus(.locking)
+                return
+            }
+        }
+
+        let projectedState = commandState == .cancelled ? nil : privateState
+        await publish(
+            runtimeStatus: runtimeStatus,
+            privateState: projectedState,
+            generation: generation,
+            commandState: commandState
+        )
+    }
+
+    func presentationSourceStartCount() async -> Int {
+        await updateSource.startCount()
+    }
+
+    func temporaryRootIsFileURL() -> Bool {
+        environment.temporaryRootURL.isFileURL
+    }
+
+    nonisolated var description: String {
+        "AtlasVaultTestHost(state: <redacted>, dependencies: <redacted>)"
+    }
+
+    nonisolated var debugDescription: String {
+        description
+    }
+
+    private func closePrivatePresentation() {
+        privatePresentationAllowed = false
+        generation = nil
+        privateState = nil
+    }
+
+    private func cancelActiveUnlock() async {
+        guard let activeUnlock else {
+            return
+        }
+        unlockEpoch &+= 1
+        self.activeUnlock = nil
+        _ = await unlockCoordinator.cancel(activeUnlock.request)
+    }
+
+    private func updateLifecycleState(for event: AtlasVaultLifecycleEvent) {
+        switch event {
+        case .didBecomeActive:
+            lifecycleIsActive = true
+        case .willResignActive, .didEnterBackground:
+            lifecycleIsActive = false
+            unlockAdmissionAllowed = false
+        case .willTerminate:
+            lifecycleIsActive = false
+            isTerminated = true
+            unlockAdmissionAllowed = false
+        case .protectedDataBecameUnavailable:
+            protectedDataIsAvailable = false
+            unlockAdmissionAllowed = false
+        case .protectedDataBecameAvailable:
+            protectedDataIsAvailable = true
+        }
+    }
+
+    private func publishControlStatus(
+        _ status: AtlasVaultRuntimeStatus
+    ) async {
+        await publish(
+            runtimeStatus: status,
+            privateState: nil,
+            generation: nil,
+            commandState: .none
+        )
+    }
+
+    private func publish(
+        runtimeStatus: AtlasVaultRuntimeStatus,
+        privateState: AtlasVaultHydratedState?,
+        generation: AtlasVaultPresentationGeneration?,
+        commandState: AtlasVaultPresentationCommandState
+    ) async {
+        let snapshot = projectionAdapter.makeSnapshot(
+            runtimeStatus: runtimeStatus,
+            privateState: privateState,
+            generation: generation,
+            commandState: commandState
+        )
+        await updateSource.send(snapshot)
+    }
+}
+
+enum AtlasVaultScriptedActivationBehavior: Sendable {
+    case succeed(AtlasVaultHydratedState)
+    case fail(AtlasVaultActivationFailure)
+}
+
+enum AtlasVaultScriptedSaveBehavior: Sendable {
+    case committed(AtlasVaultHydratedState)
+    case committedDurabilityUnconfirmed(AtlasVaultHydratedState)
+    case recoverableFailure(AtlasVaultScriptedRecoverableSaveFailure)
+    case fatalFailure
+    case committedStateUnavailable
+    case cancelled
+}
+
+enum AtlasVaultScriptedRecoverableSaveFailure: Sendable {
+    case atomicWrite
+    case staleRevision
+}
+
+actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
+    private var runtimeStatus: AtlasVaultRuntimeStatus = .locked
+    private var installedState: AtlasVaultHydratedState?
+    private var activationBehavior: AtlasVaultScriptedActivationBehavior
+    private var saveBehavior: AtlasVaultScriptedSaveBehavior =
+        .recoverableFailure(.atomicWrite)
+    private var activationGate: AtlasVaultTestSuspensionGate?
+    private var saveGate: AtlasVaultTestSuspensionGate?
+    private var nextStatusGate: AtlasVaultTestSuspensionGate?
+    private var operationEpoch: UInt64 = 0
+    private var recordedEvents: [String] = []
+
+    init(activationState: AtlasVaultHydratedState) {
+        self.activationBehavior = .succeed(activationState)
+    }
+
+    func status() async -> AtlasVaultRuntimeStatus {
+        recordedEvents.append("status")
+        let gate = nextStatusGate
+        nextStatusGate = nil
+        if let gate {
+            try? await gate.wait()
+        }
+        return runtimeStatus
+    }
+
+    func activate(_ request: AtlasVaultRuntimeActivationRequest) async throws {
+        guard runtimeStatus == .locked || runtimeStatus.isAtlasVaultTestFailure else {
+            throw AtlasVaultRuntimeFacadeError.operationInProgress
+        }
+        operationEpoch &+= 1
+        let epoch = operationEpoch
+        runtimeStatus = .activating
+        recordedEvents.append("activate")
+        let gate = activationGate
+
+        do {
+            if let gate {
+                try await gate.wait()
+            }
+            try Task.checkCancellation()
+        } catch {
+            if operationEpoch == epoch {
+                installedState = nil
+                runtimeStatus = .locked
+            }
+            throw AtlasVaultRuntimeFacadeError.cancelled
+        }
+
+        guard operationEpoch == epoch,
+              runtimeStatus == .activating else {
+            throw AtlasVaultRuntimeFacadeError.cancelled
+        }
+        switch activationBehavior {
+        case let .succeed(state):
+            installedState = state
+            runtimeStatus = .unlocked
+        case let .fail(failure):
+            installedState = nil
+            runtimeStatus = .failed(.activation(failure))
+            throw AtlasVaultRuntimeFacadeError.activationFailed(failure)
+        }
+    }
+
+    func lock() async {
+        operationEpoch &+= 1
+        runtimeStatus = .locking
+        recordedEvents.append("lock")
+        await activationGate?.open()
+        await saveGate?.open()
+        installedState = nil
+        runtimeStatus = .locked
+    }
+
+    func cancelActivationIfInProgress() async -> Bool {
+        recordedEvents.append("cancelActivation")
+        guard runtimeStatus == .activating else {
+            return false
+        }
+        operationEpoch &+= 1
+        installedState = nil
+        runtimeStatus = .locked
+        await activationGate?.open()
+        return true
+    }
+
+    func privateState() async throws -> AtlasVaultPrivateStateSnapshot {
+        recordedEvents.append("privateState")
+        guard runtimeStatus == .unlocked,
+              let installedState else {
+            throw AtlasVaultRuntimeFacadeError.privateStateUnavailable
+        }
+        return AtlasVaultPrivateStateSnapshot(state: installedState)
+    }
+
+    func apply(
+        _ request: AtlasVaultRuntimeMutationRequest
+    ) async throws -> AtlasVaultSaveOutcome {
+        guard runtimeStatus == .unlocked else {
+            throw AtlasVaultRuntimeFacadeError.locked
+        }
+        operationEpoch &+= 1
+        let epoch = operationEpoch
+        runtimeStatus = .saving
+        recordedEvents.append("apply")
+        let gate = saveGate
+
+        do {
+            if let gate {
+                try await gate.wait()
+            }
+            try Task.checkCancellation()
+        } catch {
+            if operationEpoch == epoch {
+                runtimeStatus = .unlocked
+            }
+            throw AtlasVaultRuntimeFacadeError.cancelled
+        }
+        guard operationEpoch == epoch,
+              runtimeStatus == .saving else {
+            throw AtlasVaultRuntimeFacadeError.cancelled
+        }
+
+        switch saveBehavior {
+        case let .committed(state):
+            installedState = state
+            runtimeStatus = .unlocked
+            return .committed
+        case let .committedDurabilityUnconfirmed(state):
+            installedState = state
+            runtimeStatus = .unlocked
+            return .committedDurabilityUnconfirmed
+        case .recoverableFailure:
+            runtimeStatus = .unlocked
+            throw AtlasVaultRuntimeFacadeError.saveFailed
+        case .fatalFailure:
+            installedState = nil
+            runtimeStatus = .locked
+            throw AtlasVaultRuntimeFacadeError.saveIntegrityUnknown
+        case .committedStateUnavailable:
+            installedState = nil
+            runtimeStatus = .locked
+            throw AtlasVaultRuntimeFacadeError.committedStateUnavailable(
+                .committed
+            )
+        case .cancelled:
+            runtimeStatus = .unlocked
+            throw AtlasVaultRuntimeFacadeError.cancelled
+        }
+    }
+
+    func setActivationBehavior(
+        _ behavior: AtlasVaultScriptedActivationBehavior
+    ) {
+        activationBehavior = behavior
+    }
+
+    func setSaveBehavior(_ behavior: AtlasVaultScriptedSaveBehavior) {
+        saveBehavior = behavior
+    }
+
+    func setActivationGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        activationGate = gate
+    }
+
+    func setSaveGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        saveGate = gate
+    }
+
+    func setNextStatusGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        nextStatusGate = gate
+    }
+
+    func events() -> [String] {
+        recordedEvents
+    }
+
+    func applyCallCount() -> Int {
+        recordedEvents.filter { $0 == "apply" }.count
+    }
+}
+
+actor AtlasVaultTestSuspensionGate {
+    private var entered = false
+    private var isOpen = false
+    private var isCancelled = false
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    func wait() async throws {
+        entered = true
+        guard !isOpen else {
+            return
+        }
+        if isCancelled {
+            throw CancellationError()
+        }
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if isOpen {
+                    continuation.resume()
+                } else if isCancelled || Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    precondition(
+                        self.continuation == nil,
+                        "AtlasVaultTestSuspensionGate supports one waiter"
+                    )
+                    self.continuation = continuation
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancel()
+            }
+        }
+    }
+
+    func waitUntilEntered() async -> Bool {
+        for _ in 0..<2_000 {
+            if entered {
+                return true
+            }
+            await Task.yield()
+        }
+        return entered
+    }
+
+    func open() {
+        guard !isOpen, !isCancelled else {
+            return
+        }
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func cancel() {
+        guard !isOpen, !isCancelled else {
+            return
+        }
+        isCancelled = true
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
+actor AtlasVaultTestManualTime:
+    AtlasVaultLifecycleClock,
+    AtlasVaultLifecycleSleeper
+{
+    private struct Waiter {
+        let deadline: Duration
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
+    private var current: Duration = .zero
+    private var waiters: [UUID: Waiter] = [:]
+    private var nextNowGate: AtlasVaultTestSuspensionGate?
+
+    func now() async -> Duration {
+        let gate = nextNowGate
+        nextNowGate = nil
+        if let gate {
+            try? await gate.wait()
+        }
+        return current
+    }
+
+    func sleep(until deadline: Duration) async throws {
+        guard deadline > current else {
+            return
+        }
+        let identifier = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters[identifier] = Waiter(
+                    deadline: deadline,
+                    continuation: continuation
+                )
+                if Task.isCancelled {
+                    cancel(identifier)
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancel(identifier)
+            }
+        }
+    }
+
+    func advance(by duration: Duration) {
+        current += duration
+        let ready = waiters.filter { $0.value.deadline <= current }
+        for (identifier, waiter) in ready {
+            waiters.removeValue(forKey: identifier)
+            waiter.continuation.resume()
+        }
+    }
+
+    func setNextNowGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        nextNowGate = gate
+    }
+
+    private func cancel(_ identifier: UUID) {
+        guard let waiter = waiters.removeValue(forKey: identifier) else {
+            return
+        }
+        waiter.continuation.resume(throwing: CancellationError())
+    }
+}
+
+private extension AtlasVaultLifecycleEvent {
+    var closesAtlasVaultTestHostPrivatePresentation: Bool {
+        switch self {
+        case .willResignActive,
+             .didEnterBackground,
+             .willTerminate,
+             .protectedDataBecameUnavailable:
+            true
+        case .didBecomeActive,
+             .protectedDataBecameAvailable:
+            false
+        }
+    }
+}
+
+private extension AtlasVaultRuntimeStatus {
+    var isAtlasVaultTestFailure: Bool {
+        if case .failed = self {
+            return true
+        }
+        return false
+    }
+}
