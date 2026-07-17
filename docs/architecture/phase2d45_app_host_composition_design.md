@@ -10,10 +10,11 @@ available only as in-memory presentation after explicit unlock.
 
 ## 2. Design-Only Scope
 
-This phase adds no host protocol, app entry point, SwiftUI view, lifecycle
-subscription, activation call, local-store operation, or public-search call.
-It does not implement migration, plaintext cleanup, cloud sync, recovery,
-onboarding, key rotation, or production launch.
+This phase implements no Swift host protocol or other executable host type. It
+proposes future host protocols in this document only and adds no app entry
+point, SwiftUI view, lifecycle subscription, activation call, local-store
+operation, or public-search call. It does not implement migration, plaintext
+cleanup, cloud sync, recovery, onboarding, key rotation, or production launch.
 
 ## 3. Existing Runtime Composition
 
@@ -95,7 +96,7 @@ host-level commands and snapshots, for example:
 - public-search requests through the public-only service;
 - unlock-request dispatch and cancellation through
   `AtlasVaultUnlockRequestCoordinating`;
-- lock and save commands through the runtime facade;
+- lock and mutation `apply` commands through `AtlasVaultRuntimeFacading`;
 - lifecycle-event delivery;
 - a UI-safe presentation subscription.
 
@@ -226,6 +227,13 @@ The future process host owns the adapter that translates platform events into
 scene signals before calling the lifecycle coordinator. Platform notification
 registration and removal are deferred to a later app-host implementation phase.
 
+The host also serializes lifecycle delivery with unlock-request ownership. For
+an event whose policy can lock or cancel activation, it first invalidates and
+awaits cancellation of the active `AtlasVaultUnlockRequest`, then delivers the
+event to `AtlasVaultLifecycleCoordinating`. This closes the pre-activation
+window in which secret derivation is running but the runtime facade is still
+locked and therefore has no activation operation to cancel.
+
 ## 23. Host-Owned Observable Adapter Subscription
 
 The process host owns the single observable adapter and the upstream source
@@ -267,6 +275,12 @@ background policy, protected-data loss, or user cancellation must propagate to
 `AtlasVaultUnlockRequestCoordinating.dispatch`; its injected activation closure
 is the only bridge to the runtime facade. Late derivation or activation
 completion must not restore private state after cancellation, timeout, or lock.
+
+The host retains the active request identity until dispatch reaches a terminal
+state. A lock-producing lifecycle event and dispatch completion are serialized
+under host ownership: cancellation reserves the request's terminal state before
+the lifecycle event may return. A derivation dependency that completes late
+must not invoke facade activation.
 
 ## 28. Save Task Coordination
 
@@ -418,6 +432,10 @@ Phase 2D-46 must cover:
   presentation;
 - single-use unlock, cancellation, timeout, failure cleanup, and rejection of
   direct host-to-facade activation;
+- a real unlock coordinator paused during secret derivation, followed by a
+  background or protected-data lock event, proving the host cancels the active
+  request before lifecycle delivery completes, late derivation never calls
+  facade activation, and presentation remains locked and private-free;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
