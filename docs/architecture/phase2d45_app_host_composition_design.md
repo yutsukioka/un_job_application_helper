@@ -32,6 +32,29 @@ activation controller, private-state store, persistence coordinator, or record
 crypto directly. Its actor serialization remains authoritative for competing
 activation, save, and lock operations.
 
+The current pull-based `status()` method is insufficient for fatal
+presentation containment because `apply` awaits environment teardown before
+returning its fatal error. Future host integration therefore requires a
+runtime-neutral, sequenced transition seam, such as
+`AtlasVaultRuntimeTransitionObserving`. The facade must emit a non-sensitive
+`locking` transition for the matching operation generation when it begins
+fatal containment. It enqueues that transition before its first suspension on
+environment teardown, then permits the host observer to run concurrently while
+lock remains in progress. The transition contains only a monotonic sequence,
+an opaque operation correlation token, and a non-sensitive phase; it contains
+no mutation, record type, payload, key, path, or embedded save outcome.
+
+The future mutation-admission API must either accept the host's opaque token or
+return one before save work begins; the current `apply` signature and the
+facade's private operation epoch do not yet provide this correlation. The host
+completes a race-free observation-ready handshake before admitting a mutation
+and binds the token to its active host generation. Polling `status()` is not an
+equivalent guarantee. Loss or completion of the transition source while
+private commands are admitted is a fail-closed host condition; stale
+generations cannot mutate current presentation, and an unexpected future
+generation requires lock rather than guesswork. This phase defines the seam
+and required API evolution only and does not modify the facade.
+
 ## 5. Lifecycle Coordinator
 
 `AtlasVaultLifecycleCoordinator` accepts explicit, platform-neutral lifecycle
@@ -289,6 +312,28 @@ closed for the entire inactive interval, including every pending
 `afterGracePeriod` timer, even when an already-unlocked runtime is temporarily
 allowed to remain unlocked.
 
+The host owns a separate private-mutation admission gate under the same
+serialized authority. It closes this gate before every inactivity,
+backgrounding, protected-data-loss, termination, stop, or explicit-lock
+transition. A queued mutation that has not crossed the facade boundary is
+cancelled without calling `apply`; its private request is released and never
+logged. A new mutation is rejected with a fixed non-sensitive result for the
+entire inactive or grace interval.
+
+If `apply` is already in flight when the gate closes, grace is no longer
+permitted for that transition. The host invalidates the mutation and
+presentation generations, cancels the host task, invokes and awaits
+`AtlasVaultRuntimeFacading.lock()` so the facade cancels and supersedes its
+active save, and rejects any late save result. Presentation clearing proceeds
+immediately through the owner-reset barrier while runtime lock is in progress.
+The lifecycle event does not report completion until the mutation has reached
+this terminal locked barrier. The host records an immediate-lock disposition
+for that lifecycle generation and the lifecycle coordinator must not also arm
+a grace timer for it; duplicate lock requests coalesce on the same barrier.
+Task cancellation is not rollback and no late save outcome may reopen the
+generation. If no mutation is active, the reviewed grace policy may preserve
+the runtime session internally, but mutation admission remains closed.
+
 Unlock eligibility and private-presentation authorization are separate gates
 that close in the same serialized lifecycle transition. Before an inactivity,
 background, protected-data-loss, or termination event returns, the host
@@ -325,6 +370,13 @@ cancelled on active while the runtime remains stably unlocked. A superseded,
 stale, or merely timer-free generation cannot reopen either gate. No replacement
 request may consume or derive a single-use secret while the lifecycle lock is
 pending or in flight.
+
+Mutation admission follows the same lifecycle-quiescence rule. It may reopen
+only for a stable unlocked runtime with an active, protected-data-available
+host, no lifecycle lock pending or in flight, no stop or containment in
+progress, and a fresh authorized presentation generation. Non-cancellable
+grace ends locked and therefore requires explicit reactivation before mutation
+admission can reopen.
 
 Deferred grace expiry therefore cannot race with a newly dispatched unlock.
 Private-presentation authorization follows the same fail-closed rule. If an
@@ -411,6 +463,19 @@ and tracks only non-sensitive command state. Lock and fatal containment take
 precedence over pending presentation updates. Mutation contents and record
 types must not enter task labels, logs, errors, analytics, or public status.
 
+Mutation admission is checked and reserved atomically under host lifecycle
+authority before the request crosses the facade boundary. Closing admission
+invalidates queued work and prevents a concurrent `apply` from starting. An
+accepted mutation retains a non-sensitive host generation until it reaches a
+terminal save or lock result; cancellation alone does not authorize a late
+result to update presentation.
+
+If inactivity wins the serialization race, the mutation never starts or is
+superseded by immediate runtime lock as described in Section 22. If save
+completion wins, the host records only its typed outcome, then the lifecycle
+transition still closes presentation and command admission. Grace never
+coexists with an admitted or in-flight private mutation.
+
 ## 29. Fatal Save Lock Behavior
 
 An integrity-unknown or unclassified save failure triggers runtime fail-closed
@@ -419,12 +484,22 @@ fatal presentation-containment result: the encrypted write committed, but the
 activation controller could not reload the committed store, so the runtime
 locks even though the error carries an `AtlasVaultSaveOutcome`.
 
-For all of these cases, the host closes private-presentation authorization,
-invalidates the generation, invokes and awaits the private-free
-presentation-owner reset, rejects late private updates, awaits runtime teardown,
-and requires explicit reactivation. It must not offer an unlocked retry, invent
-rollback, or interpret the outcome embedded in `committedStateUnavailable` as a
-warning-only result.
+Waiting for `apply` to throw is too late because the current facade returns
+these errors only after awaiting teardown. For all fatal cases, the future
+facade first emits the admitted operation token's sequenced `locking`
+transition.
+The host immediately closes mutation and presentation admission, invalidates
+the generation, invokes the private-free owner reset, and publishes the
+private-free control update while runtime teardown remains in progress. It then
+rejects late private updates, awaits both owner acknowledgement and the
+terminal runtime lock, and requires explicit reactivation.
+
+The containment-start transition and eventual thrown error must correlate to
+the same opaque operation token. Duplicate matching transitions are idempotent;
+stale transitions cannot clear a newer generation, and a sequence gap or
+unknown token fails closed. The host must not offer an unlocked retry,
+invent rollback, or interpret the outcome embedded in
+`committedStateUnavailable` as a warning-only result.
 
 ## 30. Recoverable Save Behavior
 
@@ -520,6 +595,18 @@ the host contract rather than invoking the real facade directly from tests.
 Neither configuration may set `ATLAS_REFERENCE_CAPTURE` or instantiate
 `AtlasReferenceCaptureView`.
 
+Phase 2D-46 may define the runtime-neutral transition-source protocol in its
+host coordination seam and exercise pre-teardown timing with a scripted source.
+The existing real facade configuration may verify terminal encrypted
+load/save/lock behavior, but it must not claim production pre-teardown
+containment timing until the facade itself implements the transition source in
+a separately allowlisted executable phase. That implementation must also add
+the opaque admission-token correlation and observation-ready handshake defined
+in Section 4. Status polling is not an acceptable substitute. This open
+prerequisite blocks production private-mutation host integration, but does not
+block a runtime-neutral scripted test host or the later public-only locked
+shell, neither of which admits private mutations.
+
 ## 39. Fake Public-Search Service
 
 The fake public-search service implements only the narrow public protocol. It
@@ -534,6 +621,12 @@ locked, activating, unlocked, saving, locking, and failed transitions. It may
 use fake private sentinels solely inside in-memory test snapshots and must use
 fixed redacted descriptions. This is the focused unit configuration only; it
 does not replace the required real-facade integration configuration.
+
+Its injected transition source emits deterministic sequenced transitions before
+scripted fatal teardown, can pause teardown after `locking`, and supports
+observation-readiness delay, duplicate, stale, gap, wrong-token, and
+source-completion cases. Recorded events contain only non-sensitive phase,
+sequence, and opaque-token labels.
 
 The scripted host also injects a fake unlock coordinator. Secret-lifetime tests
 use the real unlock coordinator with fake derivation and activation
@@ -614,6 +707,19 @@ Phase 2D-46 must cover:
   until lifecycle status reports matching completed runtime locking, not merely
   no pending timer, and the stale timer cannot later lock a newly activated
   session;
+- a queued mutation racing inactivity, proving lifecycle gate closure wins
+  before facade admission, `apply` receives zero calls, the request is released,
+  and no private mutation value enters diagnostics;
+- an in-flight mutation followed by inactivity under a nonzero grace policy,
+  proving the host cancels and invalidates the mutation, escalates to immediate
+  runtime lock rather than preserving grace, rejects the late result, and
+  reports lifecycle completion only after the locked barrier;
+- mutation attempts throughout inactivity and pending grace, proving zero new
+  `apply` calls and fixed non-sensitive rejection until lifecycle quiescence,
+  stable unlock, and a fresh presentation generation permit admission;
+- a mutation completion/inactivity race with only the two serialized outcomes
+  described in Section 28 and no path that installs private state after gate
+  closure;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
@@ -621,6 +727,17 @@ Phase 2D-46 must cover:
   durability-unconfirmed outcome, proving both paths close presentation,
   acknowledge the owner reset, remain locked, and never show the warning-only
   state;
+- fatal containment with environment lock deliberately suspended, proving a
+  matching sequenced `locking` transition closes both private gates and
+  acknowledges the presentation-owner reset before `apply` returns;
+- mutation admission waiting for the transition source's ready handshake,
+  proving containment cannot occur in a subscription-start race and the opaque
+  token identifies the admitted operation without exposing mutation content;
+- stale, duplicate, missing, wrong-token, and source-completion containment
+  cases,
+  proving matching duplicates are idempotent, stale events cannot affect a
+  newer generation, and source loss or unknown tokens fail closed without
+  exposing private values;
 - fatal or integrity-unknown save failure locking and clearing;
 - explicit user lock while an unlocked snapshot is published, proving the host
   closes both gates, invalidates the presentation generation, resets and awaits
