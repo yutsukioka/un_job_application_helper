@@ -48,8 +48,17 @@ presentation boundary rather than runtime actors or private compatibility
 models.
 
 The adapter's cancellation-safe stream, monotonic sequence, and fail-closed
-source-completion behavior remain in force. Host teardown cancels its
-subscription; it does not persist the last snapshot.
+source-completion behavior remain in force. Cancelling a subscriber alone is
+not host teardown: the adapter can continue observing its source and retain its
+latest snapshot without subscribers.
+
+Before `stop()` returns, the host must cancel active unlock, mutation, and
+public-search work; invalidate the active presentation generation; await
+`AtlasVaultRuntimeFacading.lock()`; and require the current-generation
+presentation source to publish or finish as a locked, private-free snapshot.
+It then verifies `currentSnapshot()` is locked with no private projection before
+cancelling the UI-facing subscription. A later `start()` must use a fresh
+presentation generation and may not replay a prior private snapshot.
 
 ## 7. Public Job-Search Service Boundary
 
@@ -123,12 +132,13 @@ single-use request ownership, secret cleanup, or timeout behavior.
 ## 11. Proposed Test-Host Protocol
 
 A future `AtlasVaultTestHosting` protocol should expose deterministic start,
-stop, lifecycle-event, unlock-request dispatch/cancellation, save, lock,
-public-search, and snapshot observation seams. It may expose non-sensitive call
-counts and ordered event labels for assertions, but never private request
-bodies, secrets, paths, or payload descriptions. A raw facade activation seam
-may exist only inside lower-level fake wiring; it is not part of the host
-contract.
+stop, lifecycle-event, unlock-request dispatch/cancellation, mutation `apply`,
+lock, public-search, and snapshot observation seams. Its mutation seam delegates
+to `AtlasVaultRuntimeFacading.apply` and returns `AtlasVaultSaveOutcome`; it is
+not a separate `save()` API. It may expose non-sensitive call counts and ordered
+event labels for assertions, but never private request bodies, secrets, paths,
+or payload descriptions. A raw facade activation seam may exist only inside
+lower-level fake wiring; it is not part of the host contract.
 
 ## 12. Construction Versus Start
 
@@ -136,6 +146,10 @@ Construction assembles injected dependencies only and performs zero service
 calls. `start()` may begin the fake or reviewed public snapshot path and create
 an explicit observable presentation subscription. It must still present
 locked, private-free state and must not activate the vault.
+
+`stop()` is a fail-closed private-state transition, not subscription cleanup.
+It must be idempotent, complete the cancellation and lock sequence in Section
+6, and leave no reusable presentation generation containing private state.
 
 Filesystem root resolution, Keychain lookup, vault load, decryption, and
 hydration occur only after an explicit activation request crosses the runtime
@@ -284,10 +298,10 @@ must not invoke facade activation.
 
 ## 28. Save Task Coordination
 
-The host permits one active private save through the runtime facade and tracks
-only non-sensitive command state. Lock and fatal containment take precedence
-over pending presentation updates. Mutation contents and record types must not
-enter task labels, logs, errors, analytics, or public status.
+The host permits one active private mutation `apply` through the runtime facade
+and tracks only non-sensitive command state. Lock and fatal containment take
+precedence over pending presentation updates. Mutation contents and record
+types must not enter task labels, logs, errors, analytics, or public status.
 
 ## 29. Fatal Save Lock Behavior
 
@@ -355,8 +369,8 @@ constraint for Phase 2D-47.
 
 Phase 2D-46 should build a runtime-neutral test host from injected fakes and
 temporary roots. It should model process start, stop, public search, activation,
-save, lock, lifecycle delivery, and presentation observation without importing
-SwiftUI or changing a production app entry point.
+mutation `apply`, lock, lifecycle delivery, and presentation observation
+without importing SwiftUI or changing a production app entry point.
 
 The test host should preserve the same construction/start split and own task
 identities so late public and private results can be rejected deterministically.
@@ -441,6 +455,11 @@ Phase 2D-46 must cover:
 - committed durability warning installing refreshed state;
 - fatal or integrity-unknown save failure locking and clearing;
 - lock propagation to every subscriber and rejection of late updates;
+- stop while unlocked cancelling active unlock, mutation, and public-search
+  work, awaiting runtime lock, invalidating the presentation generation, and
+  leaving `currentSnapshot()` locked with no private projection before return;
+- restart or resubscribe after stop never replaying the prior private snapshot,
+  including when the old source completes or yields late;
 - public and private task cancellation independence;
 - one active vault and one process runtime;
 - real-facade encrypted load and save through the host over fake lower-level
