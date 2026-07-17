@@ -83,7 +83,7 @@ runtime composition. It does not reveal whether a credential or vault exists.
 The production panel may offer a neutral "Use local key" action only when its
 injected capability snapshot marks the runtime path available. Dispatch
 creates a `.localKey` request. Missing item, inaccessible item, invalid key, or
-store failure maps to a non-sensitive status without revealing Keychain
+store failure map to a non-sensitive status without revealing Keychain
 details or automatically trying another method.
 
 ## 12. Passphrase Option
@@ -135,8 +135,12 @@ load metadata, resolve a root, read Keychain, derive a key, or start activation.
 ## 19. Cancel Action
 
 Cancel clears local secret input before dismissing the panel, cancels any
-owned task/request, and returns to the current public-only locked shell.
-Cancellation publishes no secret or private state.
+owned task/request, closes presentation authorization for that request, and
+returns to the current public-only locked shell. Cancellation publishes no
+secret or private state. If activation has already committed despite
+cancellation, the host treats that runtime outcome as authoritative but
+immediately locks it and awaits the private-free barrier; the cancelled panel
+must not publish unlocked presentation.
 
 ## 20. Lock Action
 
@@ -166,12 +170,16 @@ does not serialize distinct request IDs created by different views or windows.
 
 ### Process-Wide Unlock Admission
 
-A future process host must own one per-vault unlock-admission token before any
-view creates or dispatches a request. The token serializes distinct requests
-across windows and presentation owners, remains held through derivation,
+A future process host must own one process-global unlock-admission token before
+any view creates or dispatches a request. The first host has one runtime and
+one active-vault slot, so requests for different vault IDs must not derive or
+activate concurrently. The global token serializes distinct requests across
+vault IDs, windows, and presentation owners, remains held through derivation,
 activation, cancellation, timeout reconciliation, and private-free lock
 acknowledgement, and is released only after one authoritative terminal state.
-Per-view disabling is defense in depth, not the concurrency authority.
+Per-view disabling and any per-vault bookkeeping are defense in depth, not the
+concurrency authority. Supporting parallel vault runtimes would require a
+separate reviewed architecture.
 
 If admission is already held, another submit fails with a fixed busy state
 before reading or transferring input. It must not start a second derivation,
@@ -259,14 +267,20 @@ selection. Text is never carried between passphrase and recovery controls.
 ## 38. Input Clearing On Disappearance
 
 `onDisappear` or an equivalent owner callback clears local input and cancels
-the panel-owned task. A disappeared panel cannot receive a late completion and
-restore input or private state.
+the panel-owned task, closes that request's presentation authorization, and
+leaves the public-only shell private-free. If cancellation loses to committed
+activation, the host immediately locks the runtime and awaits the private-free
+barrier. A disappeared panel cannot receive a late completion and restore input
+or private state.
 
 ## 39. Input Clearing On Lifecycle Lock
 
 Background, protected-data, explicit, or fatal-containment lock closes unlock
 admission, clears the binding, cancels requests, and replaces presentation with
-a public-only locked snapshot before rendering resumes.
+a public-only locked snapshot before rendering resumes. A late committed
+activation remains a real runtime outcome, but it cannot reopen presentation;
+the host immediately locks it and keeps admission closed until every
+presentation owner and the observable adapter acknowledge private-free state.
 
 ## 40. Input Clearing On Timeout
 
@@ -274,9 +288,12 @@ Timeout requests cancellation and clears UI-owned input immediately, but it
 does not by itself prove that activation failed to commit. The process host
 keeps unlock admission closed and awaits the coordinator's authoritative
 terminal result. If an injected activation ignores cancellation and commits,
-the coordinator's success remains authoritative and the host publishes the
-unlocked result. Otherwise the host may publish an expired locked result only
-after runtime status confirms locked/private-free state.
+the coordinator's success remains authoritative. The host may publish the
+unlocked result only when presentation and lifecycle authorization for that
+request are still open. If either authorization has closed, it immediately
+locks the committed runtime and awaits the private-free barrier instead.
+Otherwise the host may publish an expired locked result only after runtime
+status confirms locked/private-free state.
 
 If the UI owner cannot await that terminal result, it delegates cleanup to the
 process host, which must execute and await the existing runtime lock plus
@@ -354,9 +371,13 @@ The presentation owner stores one task/request identity. Cancel, disappearance,
 method change, lock, timeout, and replacement submission invalidate it.
 Generation checks prevent a stale view from restoring input or panel-local
 state, but they must not discard an authoritative runtime outcome. The
-process host continues terminal reconciliation: a committed activation
-publishes unlocked state, while any abandoned or failed attempt must complete
-the runtime lock and private-free presentation barrier before retry is enabled.
+process host continues terminal reconciliation. A committed activation may
+publish unlocked state only while the matching presentation and lifecycle
+authorization remain open. Cancel, disappearance, method replacement, explicit
+lock, or lifecycle closure revoke that authorization; if any of them loses to a
+committed activation, the host immediately locks the runtime and completes the
+private-free presentation barrier. Any abandoned or failed attempt must reach
+the same locked/private-free barrier before retry is enabled.
 
 ## 52. Runtime Facade Interaction
 
@@ -432,10 +453,16 @@ Future phases must test:
 - repeated and concurrent submit are serialized;
 - distinct request IDs from separate windows admit only one derivation and
   activation through the process host;
+- requests for different vault IDs still admit only one derivation and
+  activation through the single process-global runtime;
 - an activation that ignores timeout cancellation and commits is reported as
-  unlocked, never as retry-safe locked;
+  unlocked only while matching presentation and lifecycle authorization remain
+  open, never as retry-safe locked;
 - an owner that stops awaiting timeout completes the runtime lock and
   private-free acknowledgement before retry admission reopens;
+- cancel, disappearance, method replacement, explicit lock, and lifecycle lock
+  that lose to committed activation immediately lock the runtime and keep every
+  presentation owner private-free;
 - late completion cannot restore input or private presentation;
 - accessibility, descriptions, and errors contain no fake secret;
 - public search remains usable and private endpoint counters stay zero;
@@ -452,7 +479,7 @@ Future phases must test:
 | Raw-key production UI | Prohibited | Test-only forever |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
 | Dedicated unwired unlock panel | Design ready | Capability-driven controls and clearing tests |
-| Multi-window or distinct-request unlock | Design/implementation required | Process-wide per-vault admission and terminal reconciliation |
+| Multi-window, multi-vault-ID, or distinct-request unlock | Design/implementation required | One process-global admission token for the single runtime plus terminal reconciliation |
 | Locked-shell test-host flow | Design required | Phase 2D-52 endpoint, admission, timeout, and lifecycle tests |
 | Production navigation/app entry | Blocked | Phase 2D-53 or later reviewed host-wiring design |
 | Automatic unlock | Prohibited | No current planned exception |
@@ -463,10 +490,10 @@ Future phases must test:
 AtlasVault explicit unlock UI is not implemented or production-ready. Local
 Keychain activation is technically present only behind runtime protocols and
 still lacks production host/navigation integration and process-wide unlock
-admission. Passphrase and recovery unlock are unavailable without reviewed
-Swift providers. Memory zeroization, screen capture, accessibility, file
-protection, backup, migration, cleanup, cloud, recovery, onboarding, and key
-rotation remain unresolved or deferred.
+admission for the single runtime. Passphrase and recovery unlock are
+unavailable without reviewed Swift providers. Memory zeroization, screen
+capture, accessibility, file protection, backup, migration, cleanup, cloud,
+recovery, onboarding, and key rotation remain unresolved or deferred.
 
 ## 65. Recommended Phase 2D-49
 
