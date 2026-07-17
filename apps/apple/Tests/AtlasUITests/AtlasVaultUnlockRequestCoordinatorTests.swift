@@ -45,6 +45,23 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertTrue(isCleared)
     }
 
+    func testEmptyPassphraseFailsBeforeDependenciesAndClearsBuffer() async {
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(spy: spy)
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Data())
+
+        await assertDispatchThrows(.invalidRequest) {
+            try await coordinator.dispatch(
+                self.request(input: .passphrase(buffer))
+            )
+        }
+
+        let isCleared = await buffer.isClearedForTesting
+        let snapshot = await spy.snapshot()
+        XCTAssertTrue(isCleared)
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
     func testRecoveryKeyDispatchUsesInjectedDerivationAndClearsBuffer() async throws {
         let spy = UnlockDependencySpy()
         let coordinator = makeCoordinator(spy: spy)
@@ -143,6 +160,32 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.activationCalls, 1)
     }
 
+    func testConcurrentCopiesStaySingleUseDuringStorageClaim() async throws {
+        let claimGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            storageClaimGate: claimGate
+        )
+        let original = request(input: .localKey)
+        let copy = original
+
+        let first = Task {
+            try await coordinator.dispatch(original)
+        }
+        let didReachClaimGate = await claimGate.waitUntilEntered()
+        XCTAssertTrue(didReachClaimGate)
+
+        await assertDispatchThrows(.alreadyUsed) {
+            try await coordinator.dispatch(copy)
+        }
+        await claimGate.open()
+        try await first.value
+
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot.activationCalls, 1)
+    }
+
     func testCancellationBeforeDispatchClearsBufferAndInvokesNothing() async {
         let spy = UnlockDependencySpy()
         let coordinator = makeCoordinator(spy: spy)
@@ -157,6 +200,57 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
             try await coordinator.dispatch(request)
         }
         let snapshot = await spy.snapshot()
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
+    func testCancellationDuringStorageClaimCannotBeLost() async {
+        let claimGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            storageClaimGate: claimGate
+        )
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+        let request = request(input: .passphrase(buffer))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReachClaimGate = await claimGate.waitUntilEntered()
+        XCTAssertTrue(didReachClaimGate)
+
+        let didCancel = await coordinator.cancel(request)
+        XCTAssertTrue(didCancel)
+        await claimGate.open()
+
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let isCleared = await buffer.isClearedForTesting
+        let snapshot = await spy.snapshot()
+        XCTAssertTrue(isCleared)
+        XCTAssertEqual(snapshot, UnlockDependencySnapshot())
+    }
+
+    func testCallerCancellationDuringStorageClaimCannotBeLost() async {
+        let claimGate = UnlockGate(honorCancellation: false)
+        let spy = UnlockDependencySpy()
+        let coordinator = makeCoordinator(
+            spy: spy,
+            storageClaimGate: claimGate
+        )
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Self.fakePassphrase)
+        let request = request(input: .passphrase(buffer))
+        let dispatch = Task {
+            try await coordinator.dispatch(request)
+        }
+        let didReachClaimGate = await claimGate.waitUntilEntered()
+        XCTAssertTrue(didReachClaimGate)
+
+        dispatch.cancel()
+        await claimGate.open()
+
+        await assertTaskThrows(.cancelled, task: dispatch)
+        let isCleared = await buffer.isClearedForTesting
+        let snapshot = await spy.snapshot()
+        XCTAssertTrue(isCleared)
         XCTAssertEqual(snapshot, UnlockDependencySnapshot())
     }
 
@@ -794,6 +888,7 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         spy: UnlockDependencySpy,
         sleeper: UnlockManualSleeper? = nil,
+        storageClaimGate: UnlockGate? = nil,
         beforeCancellationHandlerGate: UnlockGate? = nil,
         operationStartGate: UnlockGate? = nil,
         activationReturnGate: UnlockGate? = nil,
@@ -814,6 +909,11 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
                     try await sleeper.sleep(for: duration)
                 } else {
                     try await Task.sleep(for: duration)
+                }
+            },
+            afterStorageClaimTransition: {
+                if let storageClaimGate {
+                    try? await storageClaimGate.enter()
                 }
             },
             beforeCancellationHandler: {

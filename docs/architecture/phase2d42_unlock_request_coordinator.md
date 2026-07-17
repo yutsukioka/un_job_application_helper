@@ -40,9 +40,14 @@ derivation.
 ## Coordinator Behavior
 
 `AtlasVaultUnlockRequestCoordinator` serializes request claims in an actor and
-commits the dispatching state before the first dependency call. It delegates
-passphrase and recovery-key processing to injected closures, validates the
-resulting fake key length, and delegates activation through the existing
+registers a non-secret pending-claim gate before awaiting request storage. This
+keeps explicit and caller cancellation authoritative if storage has entered its
+dispatching state but the coordinator has not yet installed the active
+dispatch. The pending entry becomes the active entry in one actor-isolated
+turn. The coordinator commits that state before the first dependency call. It
+delegates passphrase and recovery-key processing to injected closures, rejects
+an empty passphrase before derivation, validates the resulting fake key length,
+and delegates activation through the existing
 `AtlasVaultRuntimeActivationRequest` boundary. A local-key request passes no
 supplied key and reveals no Keychain implementation detail.
 
@@ -90,14 +95,15 @@ modify `AtlasPublicLocalSnapshot`. It invokes no logging or analytics API.
 
 ## Tests
 
-Fake-only tests cover construction, all four input sources, request-copy and
-concurrent single-use enforcement, cancellation before and during dispatch,
-pre-operation cancellation and timeout cleanup, caller cancellation, late
-dependency completion, cancellation before handler installation, an already
-cancelled caller, timeout during activation, timeout after activation return,
-non-owner cancellation, dependency error normalization, success and failure
-cleanup, redacted descriptions, non-persistability, actor serialization, no
-public snapshot mutation, no filesystem artifacts, and source guards for UI,
+Fake-only tests cover construction, all four input sources, empty-passphrase
+rejection, request-copy and concurrent single-use enforcement, cancellation
+before and during the storage claim and active dispatch, pre-operation
+cancellation and timeout cleanup, caller cancellation, late dependency
+completion, cancellation before handler installation, an already cancelled
+caller, timeout during activation, timeout after activation return, non-owner
+cancellation, dependency error normalization, success and failure cleanup,
+redacted descriptions, non-persistability, actor serialization, no public
+snapshot mutation, no filesystem artifacts, and source guards for UI,
 platform, persistence, networking, and encoding coupling.
 
 ## Deferred

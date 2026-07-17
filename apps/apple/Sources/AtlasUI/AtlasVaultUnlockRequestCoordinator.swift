@@ -102,6 +102,7 @@ public struct AtlasVaultUnlockRequest:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
+    fileprivate let id: UUID
     fileprivate let storage: AtlasVaultUnlockRequestStorage
 
     public init(
@@ -109,8 +110,10 @@ public struct AtlasVaultUnlockRequest:
         input: AtlasVaultUnlockInputSource,
         timeout: Duration? = nil
     ) {
+        let id = UUID()
+        self.id = id
         self.storage = AtlasVaultUnlockRequestStorage(
-            id: UUID(),
+            id: id,
             vaultID: vaultID,
             input: AtlasVaultUnlockRequestInput(input),
             timeout: timeout
@@ -122,8 +125,10 @@ public struct AtlasVaultUnlockRequest:
         suppliedTestVaultKey: any AtlasVaultSecretBuffer,
         timeout: Duration? = nil
     ) {
+        let id = UUID()
+        self.id = id
         self.storage = AtlasVaultUnlockRequestStorage(
-            id: UUID(),
+            id: id,
             vaultID: vaultID,
             input: .suppliedTestVaultKey(suppliedTestVaultKey),
             timeout: timeout
@@ -177,6 +182,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
     fileprivate let deriveRecoveryVaultKey: @Sendable (Data) async throws -> Data
     fileprivate let activate: @Sendable (AtlasVaultRuntimeActivationRequest) async throws -> Void
     fileprivate let sleep: @Sendable (Duration) async throws -> Void
+    fileprivate let afterStorageClaimTransition: @Sendable () async -> Void
     fileprivate let beforeCancellationHandler: @Sendable () async -> Void
     fileprivate let beforeOperationStart: @Sendable () async -> Void
     fileprivate let afterActivationReturn: @Sendable () async -> Void
@@ -197,6 +203,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             deriveRecoveryVaultKey: deriveRecoveryVaultKey,
             activate: activate,
             sleep: sleep,
+            afterStorageClaimTransition: {},
             beforeCancellationHandler: {},
             beforeOperationStart: {},
             afterActivationReturn: {},
@@ -211,6 +218,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
             AtlasVaultRuntimeActivationRequest
         ) async throws -> Void,
         sleep: @escaping @Sendable (Duration) async throws -> Void,
+        afterStorageClaimTransition: @escaping @Sendable () async -> Void,
         beforeCancellationHandler: @escaping @Sendable () async -> Void,
         beforeOperationStart: @escaping @Sendable () async -> Void,
         afterActivationReturn: @escaping @Sendable () async -> Void,
@@ -220,6 +228,7 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
         self.deriveRecoveryVaultKey = deriveRecoveryVaultKey
         self.activate = activate
         self.sleep = sleep
+        self.afterStorageClaimTransition = afterStorageClaimTransition
         self.beforeCancellationHandler = beforeCancellationHandler
         self.beforeOperationStart = beforeOperationStart
         self.afterActivationReturn = afterActivationReturn
@@ -232,6 +241,11 @@ public actor AtlasVaultUnlockRequestCoordinator:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
+    private struct PendingClaim {
+        let storage: AtlasVaultUnlockRequestStorage
+        let terminalGate: AtlasVaultUnlockTerminalGate
+    }
+
     private struct ActiveDispatch {
         let storage: AtlasVaultUnlockRequestStorage
         let input: AtlasVaultUnlockRequestInput
@@ -241,6 +255,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
     }
 
     private let dependencies: AtlasVaultUnlockRequestDependencies
+    private var pendingClaims: [UUID: PendingClaim] = [:]
     private var activeDispatches: [UUID: ActiveDispatch] = [:]
 
     public init(dependencies: AtlasVaultUnlockRequestDependencies) {
@@ -259,27 +274,64 @@ public actor AtlasVaultUnlockRequestCoordinator:
     }
 
     public func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        let id = request.id
+        let storage = request.storage
+        let dependencies = dependencies
+        let terminalGate = AtlasVaultUnlockTerminalGate()
+        guard pendingClaims[id] == nil, activeDispatches[id] == nil else {
+            throw AtlasVaultUnlockRequestError.alreadyUsed
+        }
+        pendingClaims[id] = PendingClaim(
+            storage: storage,
+            terminalGate: terminalGate
+        )
+
         let claim: AtlasVaultUnlockRequestClaim
         do {
-            claim = try await request.storage.claim()
+            claim = try await withTaskCancellationHandler {
+                try await storage.claim(
+                    afterTransition: dependencies.afterStorageClaimTransition
+                )
+            } onCancel: {
+                if terminalGate.reserveTermination(.cancelled) {
+                    Task {
+                        _ = await storage.cancelPending()
+                    }
+                }
+            }
         } catch let error as AtlasVaultUnlockRequestError {
+            pendingClaims.removeValue(forKey: id)
             throw error
         } catch {
+            pendingClaims.removeValue(forKey: id)
             throw AtlasVaultUnlockRequestError.invalidRequest
         }
 
-        let storage = request.storage
+        do {
+            try terminalGate.requireOpen()
+        } catch {
+            pendingClaims.removeValue(forKey: id)
+            await claim.input.clearSecret()
+            _ = await storage.cancelActive()
+            throw error
+        }
+
         if let timeout = claim.timeout, timeout <= .zero {
+            guard terminalGate.reserveTermination(.expired) else {
+                pendingClaims.removeValue(forKey: id)
+                await claim.input.clearSecret()
+                _ = await storage.cancelActive()
+                try terminalGate.requireOpen()
+                throw AtlasVaultUnlockRequestError.expired
+            }
             let didExpire = await storage.expire()
             await claim.input.clearSecret()
+            pendingClaims.removeValue(forKey: id)
             guard didExpire else {
                 throw await storage.finishFailure(default: .expired)
             }
             throw AtlasVaultUnlockRequestError.expired
         }
-
-        let dependencies = dependencies
-        let terminalGate = AtlasVaultUnlockTerminalGate()
         let operationStartGate = AtlasVaultUnlockOperationStartGate()
         let operation = Task {
             await operationStartGate.wait()
@@ -299,6 +351,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             terminalGate: terminalGate,
             timeout: nil
         )
+        pendingClaims.removeValue(forKey: id)
         scheduleTimeout(for: claim)
         await dependencies.beforeCancellationHandler()
 
@@ -339,7 +392,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
     }
 
     public func cancel(_ request: AtlasVaultUnlockRequest) async -> Bool {
-        let id = await request.storage.idValue()
+        let id = request.id
         if let active = activeDispatches[id] {
             guard active.terminalGate.reserveTermination(.cancelled) else {
                 return false
@@ -352,6 +405,14 @@ public actor AtlasVaultUnlockRequestCoordinator:
             await active.input.clearSecret()
             active.operation.cancel()
             active.timeout?.cancel()
+            return true
+        }
+
+        if let pending = pendingClaims[id] {
+            guard pending.terminalGate.reserveTermination(.cancelled) else {
+                return false
+            }
+            _ = await pending.storage.cancelPending()
             return true
         }
 
@@ -426,6 +487,7 @@ public actor AtlasVaultUnlockRequestCoordinator:
             case let .passphrase(buffer):
                 var key = try await consumeSecret(
                     buffer,
+                    rejectEmpty: true,
                     transform: dependencies.derivePassphraseVaultKey
                 )
                 defer { wipe(&key) }
@@ -501,9 +563,15 @@ public actor AtlasVaultUnlockRequestCoordinator:
 
     private static func consumeSecret(
         _ buffer: any AtlasVaultSecretBuffer,
+        rejectEmpty: Bool = false,
         transform: @Sendable (Data) async throws -> Data
     ) async throws -> Data {
         var secret = try await takeSecret(from: buffer)
+        if rejectEmpty, secret.isEmpty {
+            wipe(&secret)
+            await buffer.clear()
+            throw AtlasVaultUnlockRequestInternalError.invalidRequest
+        }
 
         do {
             let result = try await transform(secret)
@@ -610,6 +678,21 @@ private final class AtlasVaultUnlockTerminalGate: @unchecked Sendable {
         }
     }
 
+    func requireOpen() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        switch state {
+        case .open:
+            return
+        case .cancelled:
+            throw AtlasVaultUnlockRequestError.cancelled
+        case .expired:
+            throw AtlasVaultUnlockRequestError.expired
+        case .activationReserved, .activationCompleted:
+            throw AtlasVaultUnlockRequestError.alreadyUsed
+        }
+    }
+
     func completeActivation() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -688,11 +771,9 @@ private actor AtlasVaultUnlockRequestStorage {
         self.timeout = timeout
     }
 
-    func idValue() -> UUID {
-        id
-    }
-
-    func claim() async throws -> AtlasVaultUnlockRequestClaim {
+    func claim(
+        afterTransition: @Sendable () async -> Void
+    ) async throws -> AtlasVaultUnlockRequestClaim {
         switch state {
         case .pending:
             guard let input else {
@@ -701,6 +782,7 @@ private actor AtlasVaultUnlockRequestStorage {
             }
             state = .dispatching
             self.input = nil
+            await afterTransition()
             return AtlasVaultUnlockRequestClaim(
                 id: id,
                 vaultID: vaultID,
