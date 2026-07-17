@@ -119,10 +119,20 @@ private-free snapshot, finishes the old presentation source, and rotates to a
 fresh locked presentation pipeline. A later start or subscription cannot
 replay the prior private generation.
 
+Public-search work is registered as a host-owned task for stop-time teardown.
+Caller cancellation also cancels that registered task and removes its
+registration before the host operation returns, so a cancelled caller cannot
+leave public work running in the background.
+
 ## 7. Save Outcomes
 
 The host projects save progress from its current in-memory generation and then
 delegates the mutation to the runtime.
+
+The host reserves one process-local mutation token synchronously before its
+first suspension. A concurrent mutation is rejected before any runtime status
+read or save call. The reservation is released on terminal completion and is
+invalidated whenever private presentation closes, including lock and stop.
 
 - A proven recoverable save failure preserves the prior unlocked private
   projection and reports a fixed save-failed status.
@@ -203,9 +213,13 @@ Tests cover:
 - overlapping save-progress and background-lock publications complete through
   monotonic sequence acknowledgement even when the private-free update
   supersedes the buffered save update;
+- mutation admission is reserved before a suspended status read, concurrent
+  mutation is rejected before a runtime save call, and terminal completion
+  reopens admission;
 - scripted session mismatch rejection before save-state mutation;
 - idempotent stop while unlocked and private-free restart without replay;
 - stop cancellation of in-flight unlock, save, and public-search work;
+- caller cancellation cancels and unregisters in-flight public-search work;
 - recoverable, durability-warning, and fatal save outcomes;
 - cancellation and late-result rejection;
 - lifecycle cancellation that loses to committed activation locks the runtime

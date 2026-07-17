@@ -464,6 +464,7 @@ actor AtlasVaultTestHost:
     private var unlockAdmissionAllowed = true
     private var unlockEpoch: UInt64 = 0
     private var activeUnlock: ActiveUnlock?
+    private var activeMutationID: UUID?
     private var generation: AtlasVaultPresentationGeneration?
     private var privateState: AtlasVaultHydratedState?
 
@@ -515,22 +516,25 @@ actor AtlasVaultTestHost:
         guard started, !isStopping else {
             throw AtlasVaultTestHostError.notStarted
         }
+        try Task.checkCancellation()
         let identifier = UUID()
         let service = publicSearch
         let task = Task {
             try await service.search(query: query)
         }
         publicSearchTasks[identifier] = task
-        do {
-            let jobs = try await task.value
+        defer {
             publicSearchTasks.removeValue(forKey: identifier)
+        }
+        return try await withTaskCancellationHandler {
+            let jobs = try await task.value
+            try Task.checkCancellation()
             guard started, !isStopping else {
                 throw CancellationError()
             }
             return jobs
-        } catch {
-            publicSearchTasks.removeValue(forKey: identifier)
-            throw error
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -600,8 +604,16 @@ actor AtlasVaultTestHost:
             throw AtlasVaultTestHostError.notStarted
         }
         guard privatePresentationAllowed,
-              let admissionGeneration = generation else {
+              let admissionGeneration = generation,
+              activeMutationID == nil else {
             throw AtlasVaultTestHostError.privateOperationsUnavailable
+        }
+        let mutationID = UUID()
+        activeMutationID = mutationID
+        defer {
+            if activeMutationID == mutationID {
+                activeMutationID = nil
+            }
         }
         let runtimeStatus = await runtime.status()
         guard runtimeStatus == .unlocked,
@@ -843,6 +855,10 @@ actor AtlasVaultTestHost:
         environment.temporaryRootURL.isFileURL
     }
 
+    func activePublicSearchCountForTesting() -> Int {
+        publicSearchTasks.count
+    }
+
     nonisolated var description: String {
         "AtlasVaultTestHost(state: <redacted>, dependencies: <redacted>)"
     }
@@ -855,6 +871,7 @@ actor AtlasVaultTestHost:
         clearSessionAuthorization: Bool = true
     ) {
         privatePresentationAllowed = false
+        activeMutationID = nil
         generation = nil
         privateState = nil
         if clearSessionAuthorization {

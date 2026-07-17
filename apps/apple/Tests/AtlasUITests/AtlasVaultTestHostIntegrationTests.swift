@@ -267,6 +267,49 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testMutationAdmissionIsReservedBeforeFirstSuspension() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let statusGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        await harness.runtime.setSaveBehavior(
+            .committed(privateState(marker: "UPDATED"))
+        )
+        await harness.runtime.setNextStatusGate(statusGate)
+
+        let firstMutation = Task {
+            try await harness.host.apply(self.mutationRequest())
+        }
+        let firstStatusReadEntered = await statusGate.waitUntilEntered()
+        XCTAssertTrue(firstStatusReadEntered)
+
+        do {
+            _ = try await harness.host.apply(mutationRequest())
+            XCTFail("Expected the concurrent mutation to be rejected")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+        let callsBeforeFirstResumes =
+            await harness.runtime.applyCallCount()
+        XCTAssertEqual(callsBeforeFirstResumes, 0)
+
+        await statusGate.open()
+        let firstOutcome = try await firstMutation.value
+        XCTAssertEqual(firstOutcome, .committed)
+
+        let laterOutcome = try await harness.host.apply(mutationRequest())
+        XCTAssertEqual(laterOutcome, .committed)
+        let finalApplyCalls = await harness.runtime.applyCallCount()
+        XCTAssertEqual(finalApplyCalls, 2)
+        await subscription.cancel()
+    }
+
     func testStopIsIdempotentPrivateFreeAndRestartDoesNotReplay() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
@@ -414,6 +457,37 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         let stopped = await harness.observer.currentSnapshot()
         XCTAssertEqual(stopped.status, .locked)
         XCTAssertNil(stopped.privateState)
+    }
+
+    func testCallerCancellationCancelsAndUnregistersPublicSearch() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let searchGate = AtlasVaultTestSuspensionGate()
+        await harness.publicSearch.setNextSearchGate(searchGate)
+        await harness.host.start()
+
+        let search = Task {
+            try await harness.host.searchPublicJobs(
+                query: "FAKE_PUBLIC_CALLER_CANCEL_QUERY"
+            )
+        }
+        let searchEntered = await searchGate.waitUntilEntered()
+        XCTAssertTrue(searchEntered)
+
+        search.cancel()
+
+        do {
+            _ = try await search.value
+            XCTFail("Expected caller cancellation to stop public search")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        let activeSearches =
+            await harness.host.activePublicSearchCountForTesting()
+        XCTAssertEqual(activeSearches, 0)
+        let publicSearchCalls = await harness.publicSearch.calls()
+        XCTAssertEqual(publicSearchCalls, 1)
+        await assertNoPrivateCompatibilityCalls(harness.recorder)
     }
 
     func testBackgroundAndProtectedDataLossClearPrivateState() async throws {
