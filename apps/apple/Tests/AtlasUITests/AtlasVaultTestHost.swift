@@ -166,6 +166,10 @@ actor AtlasVaultTestPresentationUpdateSource:
     private var continuation:
         AsyncStream<AtlasVaultPresentationUpdate>.Continuation?
     private var bufferedUpdate: AtlasVaultPresentationUpdate?
+    private var latestSentSnapshot = AtlasVaultPresentationSnapshot(
+        status: .locked,
+        privateState: nil
+    )
     private var nextSequence: UInt64 = 1
     private var observationStartCount = 0
 
@@ -185,6 +189,7 @@ actor AtlasVaultTestPresentationUpdateSource:
     }
 
     func send(_ snapshot: AtlasVaultPresentationSnapshot) {
+        latestSentSnapshot = snapshot
         let update = AtlasVaultPresentationUpdate(
             sequence: nextSequence,
             snapshot: snapshot
@@ -205,6 +210,10 @@ actor AtlasVaultTestPresentationUpdateSource:
 
     func startCount() -> Int {
         observationStartCount
+    }
+
+    func latestSnapshot() -> AtlasVaultPresentationSnapshot {
+        latestSentSnapshot
     }
 }
 
@@ -461,7 +470,11 @@ actor AtlasVaultTestHost:
     func synchronizePresentation(
         commandState: AtlasVaultPresentationCommandState = .none
     ) async {
+        let synchronizationGeneration = generation
         let runtimeStatus = await runtime.status()
+        guard generation == synchronizationGeneration else {
+            return
+        }
         switch runtimeStatus {
         case .locked, .locking, .activating, .failed:
             closePrivatePresentation()
@@ -480,7 +493,6 @@ actor AtlasVaultTestHost:
             let currentPrivateState = try? await runtime.privateState().state
             guard privatePresentationAllowed,
                   generation == projectionGeneration else {
-                await publishControlStatus(.locking)
                 return
             }
             privateState = currentPrivateState
@@ -502,6 +514,10 @@ actor AtlasVaultTestHost:
 
     func presentationSourceStartCount() async -> Int {
         await updateSource.startCount()
+    }
+
+    func latestPublishedSnapshot() async -> AtlasVaultPresentationSnapshot {
+        await updateSource.latestSnapshot()
     }
 
     func temporaryRootIsFileURL() -> Bool {
@@ -646,6 +662,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
     private var saveGate: AtlasVaultTestSuspensionGate?
     private var nextStaleSaveCompletionGate: AtlasVaultTestSuspensionGate?
     private var nextStatusGate: AtlasVaultTestSuspensionGate?
+    private var nextPrivateStateGate: AtlasVaultTestSuspensionGate?
     private var operationEpoch: UInt64 = 0
     private var recordedEvents: [String] = []
 
@@ -725,6 +742,11 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
     func privateState() async throws -> AtlasVaultPrivateStateSnapshot {
         recordedEvents.append("privateState")
+        let gate = nextPrivateStateGate
+        nextPrivateStateGate = nil
+        if let gate {
+            try? await gate.wait()
+        }
         guard runtimeStatus == .unlocked,
               let installedState else {
             throw AtlasVaultRuntimeFacadeError.privateStateUnavailable
@@ -819,6 +841,10 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
     func setNextStatusGate(_ gate: AtlasVaultTestSuspensionGate?) {
         nextStatusGate = gate
+    }
+
+    func setNextPrivateStateGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        nextPrivateStateGate = gate
     }
 
     func events() -> [String] {

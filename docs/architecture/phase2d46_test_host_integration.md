@@ -150,11 +150,13 @@ Tests cover:
 - cancellation and late-result rejection;
 - stale unlock failure rejection after a replacement session activates;
 - stale save completion rejection after a replacement presentation generation;
+- stale private-state reads cannot publish over a completed lock transition;
 - lifecycle-grace presentation closure and mutation rejection;
 - fresh explicit unlock after a retained foreground grace timer completes;
 - suspended mutation admission and stale active-transition race rejection;
 - reactivation after fatal containment;
 - real encrypted load, save, and rehydration under a temporary root;
+- state-aware observable waits distinguish same-status private-state updates;
 - public snapshot immutability;
 - fake key-store usage and no `.atlasvault` artifact;
 - source guards against UI frameworks, app entry, view-model/cache coupling,

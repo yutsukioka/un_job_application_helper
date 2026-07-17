@@ -311,6 +311,39 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testStalePrivateStateReadCannotPublishLockingAfterCompletedLock() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let privateStateGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        await harness.runtime.setNextPrivateStateGate(privateStateGate)
+
+        let staleSynchronization = Task {
+            await harness.host.synchronizePresentation()
+        }
+        let privateStateReadEntered =
+            await privateStateGate.waitUntilEntered()
+        XCTAssertTrue(privateStateReadEntered)
+
+        await harness.host.lock()
+        let locked = await waitForSnapshot(
+            harness.observer,
+            status: .locked
+        )
+        XCTAssertNil(locked.privateState)
+
+        await privateStateGate.open()
+        await staleSynchronization.value
+
+        let latestPublished = await harness.host.latestPublishedSnapshot()
+        XCTAssertEqual(latestPublished.status, .locked)
+        XCTAssertNil(latestPublished.privateState)
+        await subscription.cancel()
+    }
+
     func testRecoverableSaveFailurePreservesUnlockedProjection() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
@@ -878,8 +911,17 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             )
         )
         XCTAssertEqual(outcome, .committed)
-        let afterSave = await waitForSnapshot(observer, status: .unlocked)
+        let afterSave = await waitForSnapshot(
+            observer,
+            status: .unlocked,
+            matching: { snapshot in
+                snapshot.privateState?.savedSearches.count == 2
+            }
+        )
         XCTAssertEqual(afterSave.privateState?.savedSearches.count, 2)
+        let savedPresentationID = try XCTUnwrap(
+            afterSave.privateState?.savedSearches.first?.id
+        )
 
         let serializedStore = String(
             decoding: try Data(contentsOf: storeURL),
@@ -896,7 +938,15 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                 input: .localKey
             )
         )
-        let rehydrated = await waitForSnapshot(observer, status: .unlocked)
+        let rehydrated = await waitForSnapshot(
+            observer,
+            status: .unlocked,
+            matching: { snapshot in
+                snapshot.privateState?.savedSearches.count == 2
+                    && snapshot.privateState?.savedSearches.first?.id
+                        != savedPresentationID
+            }
+        )
         XCTAssertEqual(rehydrated.privateState?.savedSearches.count, 2)
         XCTAssertEqual(keyStore.callCounts.load, 2)
         XCTAssertEqual(keyStore.callCounts.save, 0)
@@ -1128,18 +1178,22 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
 
     private func waitForSnapshot(
         _ observer: any AtlasVaultPresentationObserving,
-        status: AtlasVaultPresentationStatus
+        status: AtlasVaultPresentationStatus,
+        matching predicate: (AtlasVaultPresentationSnapshot) -> Bool = { _ in
+            true
+        }
     ) async -> AtlasVaultPresentationSnapshot {
         var latest = await observer.currentSnapshot()
         for _ in 0..<2_000 {
             latest = await observer.currentSnapshot()
-            if latest.status == status {
+            if latest.status == status,
+               predicate(latest) {
                 return latest
             }
             await Task.yield()
         }
         XCTFail(
-            "Timed out waiting for presentation status \(status); "
+            "Timed out waiting for presentation status/state \(status); "
                 + "latest was \(latest.status)"
         )
         return latest
