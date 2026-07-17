@@ -54,8 +54,10 @@ the adapter, expose `SecItem` details, or probe whether an item exists.
 The Python `vaultsync` reference implements Argon2id derivation and
 AES-256-GCM vault-key unwrap. Apple Swift code has no reviewed Argon2id
 provider, wrapped-key parser connected to activation, or production
-passphrase-unwrapping dependency. Passphrase unlock is therefore unavailable
-in production today.
+passphrase-unwrapping dependency. The current coordinator derivation closure
+receives secret bytes only; it does not receive the validated vault ID or
+selected wrapped-key envelope. Passphrase unlock is therefore unavailable in
+production today.
 
 ## 8. Current Recovery-Key Capability Audit
 
@@ -101,14 +103,20 @@ details or automatically trying another method.
 The production panel must not render or enable a passphrase field while the
 capability is unavailable. A future reviewed provider may enable it through
 the same capability boundary; the view then transfers one-shot UTF-8 bytes to
-the coordinator and never invokes Argon2id or AES-GCM itself.
+the coordinator and never invokes Argon2id or AES-GCM itself. Before production
+enablement, the coordinator/provider boundary must also receive explicit
+trusted unwrap context containing the validated non-semantic vault ID and the
+wrapped-key metadata selected for that vault. A shared provider must not infer
+the target from hidden mutable state.
 
 ## 13. Recovery-Key Option
 
 The production panel must not render or enable a recovery-key field while the
 capability is unavailable. Enabling it requires a separately reviewed format,
-parser, unwrap provider, vectors, and generic failure behavior. It must never
-be treated as a passphrase by fallback.
+parser, context-aware unwrap provider, vectors, and generic failure behavior.
+The trusted boundary selects and passes the validated vault ID and matching
+recovery-wrapped metadata explicitly; the view never selects metadata. Recovery
+input must never be treated as a passphrase by fallback.
 
 ## 14. Unsupported Or Unavailable Method Behavior
 
@@ -414,7 +422,8 @@ an injected command.
 
 The view does not derive, wrap, unwrap, decrypt, hash, parse KDF metadata, or
 select cryptographic parameters. It transfers one-shot input only to a
-reviewed provider boundary.
+reviewed provider boundary. A trusted host/coordinator boundary, not the view,
+selects the wrapped-key envelope and passes it with the validated vault ID.
 
 ## 56. No Direct Filesystem Call From View
 
@@ -464,6 +473,10 @@ Future phases must test:
   API is narrowed;
 - unsupported selection and submission fail before secret access;
 - local-key action delegates without direct Keychain work;
+- unwrap providers receive the validated non-semantic vault ID and the exact
+  wrapped-key envelope selected by the trusted host/coordinator;
+- a cross-vault or mismatched wrapped-key context fails before activation, and
+  no provider relies on hidden mutable current-vault state;
 - input clears on submit, cancel, method change, disappearance, lock, and
   timeout;
 - wrong secret produces one generic failure and no fallback;
@@ -491,8 +504,8 @@ Future phases must test:
 | Capability | Decision | Prerequisite |
 | --- | --- | --- |
 | Explicit local-key request through runtime | Ready with constraints | Injected capability, explicit action, generic missing-key result |
-| Production passphrase UI | No-go | Reviewed Swift wrapped-key parser and Argon2id/AES-GCM provider |
-| Production recovery-key UI | No-go | Reviewed recovery format, vectors, parser, and provider |
+| Production passphrase UI | No-go | Reviewed Swift wrapped-key parser, context-aware provider boundary, and Argon2id/AES-GCM provider |
+| Production recovery-key UI | No-go | Reviewed recovery format, vectors, parser, and context-aware provider |
 | Raw-key production UI or host command | Prohibited | Host policy and source/dependency guards; the current public runtime argument is not an access-control guarantee |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
 | Dedicated unwired unlock panel | Design ready | Capability-driven controls and clearing tests |
@@ -520,3 +533,13 @@ metadata models, a one-shot key-unwrapping protocol boundary, and shared fake
 Python/Swift compatibility vectors. It must not implement Argon2id or add an
 unreviewed dependency. In the absence of a reviewed Swift provider,
 passphrase and recovery production capabilities remain unavailable.
+
+The key-unwrapping protocol must accept explicit trusted context, such as a
+validated non-semantic vault ID plus the selected `AtlasVaultWrappedKeyEnvelope`,
+alongside the one-shot secret buffer. It must not rely on an implicitly
+vault-bound singleton or mutable provider state. Because the existing
+coordinator derivation closures accept only `Data`, later production integration
+must evolve that dependency boundary or construct a request-scoped,
+context-bound provider before dispatch under the process-global admission
+token. Phase 2D-49 defines and tests the boundary; it does not enable production
+unwrapping.
