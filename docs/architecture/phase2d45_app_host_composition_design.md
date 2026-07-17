@@ -61,10 +61,10 @@ and public-search work, and command the `@MainActor` owner to install a locked,
 private-free snapshot for that generation. The owner acknowledgement must
 complete before the host cancels its UI-facing subscription. The host also
 awaits `AtlasVaultRuntimeFacading.lock()`, requires its host-controlled source
-to emit a monotonic private-free control update that cannot be rejected with the
-invalidated private generation (or to finish private-free), and verifies the
-observable adapter is private-free. Stream delivery or adapter inspection is
-defense in depth; neither substitutes for the owner acknowledgement.
+to emit a monotonic private-free control update that remains admissible after
+the private generation is invalidated (or to finish private-free), and verifies
+the observable adapter is private-free. Stream delivery or adapter inspection
+is defense in depth; neither substitutes for the owner acknowledgement.
 
 The generation gate closes before the `@MainActor` hop, so late or buffered
 private updates cannot race the reset. The host must not hold an isolation
@@ -288,17 +288,31 @@ lock-producing event returns. A request arriving after closure is rejected or
 cancelled with a fixed non-sensitive result, clears its secret ownership, and
 must not invoke derivation or facade activation. `didBecomeActive` may reopen
 the gate only after lifecycle handling completes, protected data is available,
-and lifecycle status confirms that no grace lock remains pending. An active
-event is not sufficient by itself. With
-`afterGracePeriod(..., cancelOnActive: false)`, the gate stays closed until the
-non-cancelled timer fires or is explicitly invalidated through the lifecycle
-coordinator. Deferred grace expiry therefore cannot race with a newly
-dispatched unlock. Private-presentation authorization follows the same
-fail-closed rule. If an active transition validly cancels grace and the runtime
-remains unlocked, the host may expose private state only through a fresh
-generation built from current runtime state after all lifecycle checks pass; it
-must never replay the obscured snapshot. If grace is not cancelled, presentation
-stays private-free until the timer locks the runtime and a later explicit
+and the lifecycle coordinator confirms a terminal disposition for the matching
+grace generation. An active event and
+`AtlasVaultLifecycleStatus.hasPendingGraceLock == false` are not sufficient by
+themselves: the current coordinator clears its pending fields before awaiting
+`runtime.lock()`, so actor reentrancy can expose no pending timer while locking
+is still in flight.
+
+Future host integration therefore requires an explicit lifecycle-quiescence
+seam, such as a matching completion generation plus a lock-transition phase.
+For `afterGracePeriod(..., cancelOnActive: false)`, unlock eligibility remains
+closed through timer expiry and until the coordinator reports that its awaited
+runtime lock completed and the facade is stably locked. For cancellable grace,
+the coordinator may instead report that the matching grace generation was
+cancelled on active while the runtime remains stably unlocked. A superseded,
+stale, or merely timer-free generation cannot reopen either gate. No replacement
+request may consume or derive a single-use secret while the lifecycle lock is
+pending or in flight.
+
+Deferred grace expiry therefore cannot race with a newly dispatched unlock.
+Private-presentation authorization follows the same fail-closed rule. If an
+active transition validly cancels grace and the runtime remains unlocked, the
+host may expose private state only through a fresh generation built from
+current runtime state after all lifecycle checks pass; it must never replay the
+obscured snapshot. If grace is not cancelled, presentation stays private-free
+until the timer's runtime lock is confirmed complete and a later explicit
 activation succeeds.
 
 ## 23. Host-Owned Observable Adapter Subscription
@@ -374,9 +388,17 @@ types must not enter task labels, logs, errors, analytics, or public status.
 ## 29. Fatal Save Lock Behavior
 
 An integrity-unknown or unclassified save failure triggers runtime fail-closed
-containment. The host must stop presenting private state as soon as locking is
-published, reject late private updates, await teardown, and require explicit
-reactivation. It must not offer an unlocked retry or invent rollback.
+containment. `AtlasVaultRuntimeFacadeError.committedStateUnavailable` is also a
+fatal presentation-containment result: the encrypted write committed, but the
+activation controller could not reload the committed store, so the runtime
+locks even though the error carries an `AtlasVaultSaveOutcome`.
+
+For all of these cases, the host closes private-presentation authorization,
+invalidates the generation, invokes and awaits the private-free
+presentation-owner reset, rejects late private updates, awaits runtime teardown,
+and requires explicit reactivation. It must not offer an unlocked retry, invent
+rollback, or interpret the outcome embedded in `committedStateUnavailable` as a
+warning-only result.
 
 ## 30. Recoverable Save Behavior
 
@@ -387,10 +409,17 @@ recoverability from arbitrary errors.
 
 ## 31. Durability-Unconfirmed Warning Behavior
 
-`committedDurabilityUnconfirmed` is a committed save outcome, not a rollback
-request. The host installs the refreshed current-generation projection and
-presents the fixed durability warning. It must not retry automatically or
+A successfully returned `committedDurabilityUnconfirmed` outcome is not a
+rollback request. After the runtime has reloaded the committed store and
+provided refreshed current-generation state, the host installs that projection
+and presents the fixed durability warning. It must not retry automatically or
 restore the pre-save projection.
+
+The same commit-state value embedded in
+`AtlasVaultRuntimeFacadeError.committedStateUnavailable` is not this warning
+path. That error means refreshed committed state is unavailable and the runtime
+has locked; Section 29's fatal presentation containment applies regardless of
+the embedded outcome.
 
 ## 32. Multiple-Window Policy
 
@@ -542,7 +571,12 @@ Phase 2D-46 must cover:
 - return to active with cancellable grace, proving any private re-projection
   uses a fresh generation only after lifecycle and protected-data checks pass;
 - return to active with non-cancellable grace, proving presentation remains
-  private-free through timer expiry and runtime lock;
+  private-free through timer expiry and confirmed runtime-lock completion;
+- a grace timer whose runtime lock is deliberately suspended after the
+  coordinator clears its pending fields, proving the host still rejects a
+  replacement unlock, consumes no secret, and performs no derivation until a
+  matching lifecycle-completion generation and stable locked facade are
+  observed;
 - advancing the grace clock past expiry while a post-event fake derivation
   would otherwise complete, proving the runtime and presentation remain locked
   and private-free until a processed active/protected-data-available transition
@@ -550,11 +584,16 @@ Phase 2D-46 must cover:
 - returning active before a
   `afterGracePeriod(..., cancelOnActive: false)` timer expires, then locking or
   entering fatal containment, proving a replacement unlock remains rejected
-  until lifecycle status reports no pending grace lock and the stale timer
-  cannot later lock a newly activated session;
+  until lifecycle status reports matching completed runtime locking, not merely
+  no pending timer, and the stale timer cannot later lock a newly activated
+  session;
 - lifecycle background, protected-data, and terminate locking;
 - recoverable pre-commit save failure preserving the active generation;
 - committed durability warning installing refreshed state;
+- `committedStateUnavailable` carrying either a committed or
+  durability-unconfirmed outcome, proving both paths close presentation,
+  acknowledge the owner reset, remain locked, and never show the warning-only
+  state;
 - fatal or integrity-unknown save failure locking and clearing;
 - lock propagation to every subscriber and rejection of late updates;
 - stop while unlocked cancelling active unlock, mutation, and public-search
