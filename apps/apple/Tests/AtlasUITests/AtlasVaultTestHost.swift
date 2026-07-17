@@ -237,6 +237,7 @@ actor AtlasVaultTestHost:
 
     private var started = false
     private var privatePresentationAllowed = false
+    private var privateSessionAuthorizedByHost = false
     private var lifecycleIsActive = true
     private var protectedDataIsAvailable = true
     private var isTerminated = false
@@ -316,10 +317,13 @@ actor AtlasVaultTestHost:
                   unlockAdmissionAllowed else {
                 throw AtlasVaultUnlockRequestError.cancelled
             }
-            activeUnlock = nil
+            privateSessionAuthorizedByHost = true
             privatePresentationAllowed = true
             generation = AtlasVaultPresentationGeneration()
-            await synchronizePresentation()
+            guard await synchronizePresentation() else {
+                throw AtlasVaultTestHostError.privateOperationsUnavailable
+            }
+            activeUnlock = nil
         } catch {
             guard activeUnlock?.epoch == epoch else {
                 throw error
@@ -440,7 +444,7 @@ actor AtlasVaultTestHost:
         updateLifecycleState(for: event)
         if event.closesAtlasVaultTestHostPrivatePresentation {
             await cancelActiveUnlock()
-            closePrivatePresentation()
+            closePrivatePresentation(clearSessionAuthorization: false)
             await publishControlStatus(.locking)
         }
 
@@ -450,6 +454,7 @@ actor AtlasVaultTestHost:
         refreshUnlockAdmission(from: lifecycleStatus)
 
         if event == .didBecomeActive,
+           privateSessionAuthorizedByHost,
            unlockAdmissionAllowed,
            !lifecycleStatus.hasPendingGraceLock,
            runtimeStatus == .unlocked {
@@ -467,39 +472,41 @@ actor AtlasVaultTestHost:
         await synchronizePresentation()
     }
 
+    @discardableResult
     func synchronizePresentation(
         commandState: AtlasVaultPresentationCommandState = .none
-    ) async {
+    ) async -> Bool {
         let synchronizationGeneration = generation
         let runtimeStatus = await runtime.status()
         guard generation == synchronizationGeneration else {
-            return
+            return false
         }
         switch runtimeStatus {
         case .locked, .locking, .activating, .failed:
             closePrivatePresentation()
         case .unlocked:
-            guard privatePresentationAllowed else {
+            guard privatePresentationAllowed,
+                  privateSessionAuthorizedByHost else {
                 await publishControlStatus(.locking)
-                return
-            }
-            if generation == nil {
-                generation = AtlasVaultPresentationGeneration()
+                return false
             }
             guard let projectionGeneration = generation else {
                 await publishControlStatus(.locking)
-                return
+                return false
             }
-            let currentPrivateState = try? await runtime.privateState().state
-            guard privatePresentationAllowed,
-                  generation == projectionGeneration else {
-                return
+            guard let currentPrivateState =
+                await readPrivateStateForPresentation(
+                    expectedGeneration: projectionGeneration
+                )
+            else {
+                return false
             }
             privateState = currentPrivateState
         case .saving:
-            guard privatePresentationAllowed else {
+            guard privatePresentationAllowed,
+                  privateSessionAuthorizedByHost else {
                 await publishControlStatus(.locking)
-                return
+                return false
             }
         }
 
@@ -510,6 +517,7 @@ actor AtlasVaultTestHost:
             generation: generation,
             commandState: commandState
         )
+        return true
     }
 
     func presentationSourceStartCount() async -> Int {
@@ -532,10 +540,15 @@ actor AtlasVaultTestHost:
         description
     }
 
-    private func closePrivatePresentation() {
+    private func closePrivatePresentation(
+        clearSessionAuthorization: Bool = true
+    ) {
         privatePresentationAllowed = false
         generation = nil
         privateState = nil
+        if clearSessionAuthorization {
+            privateSessionAuthorizedByHost = false
+        }
     }
 
     private func cancelActiveUnlock() async {
@@ -598,12 +611,15 @@ actor AtlasVaultTestHost:
         let runtimeStatus = await runtime.status()
         guard runtimeStatus == .unlocked,
               privatePresentationAllowed,
+              privateSessionAuthorizedByHost,
               generation == expectedGeneration else {
             return false
         }
-        let currentPrivateState = try? await runtime.privateState().state
-        guard privatePresentationAllowed,
-              generation == expectedGeneration else {
+        guard let currentPrivateState =
+            await readPrivateStateForPresentation(
+                expectedGeneration: expectedGeneration
+            )
+        else {
             return false
         }
         privateState = currentPrivateState
@@ -614,7 +630,46 @@ actor AtlasVaultTestHost:
             commandState: commandState
         )
         return privatePresentationAllowed
+            && privateSessionAuthorizedByHost
             && generation == expectedGeneration
+    }
+
+    private func readPrivateStateForPresentation(
+        expectedGeneration: AtlasVaultPresentationGeneration
+    ) async -> AtlasVaultHydratedState? {
+        do {
+            let currentPrivateState = try await runtime.privateState().state
+            guard privatePresentationAllowed,
+                  privateSessionAuthorizedByHost,
+                  generation == expectedGeneration else {
+                return nil
+            }
+            return currentPrivateState
+        } catch {
+            guard privatePresentationAllowed,
+                  privateSessionAuthorizedByHost,
+                  generation == expectedGeneration else {
+                return nil
+            }
+            await containPrivateStateReadFailure(
+                expectedGeneration: expectedGeneration
+            )
+            return nil
+        }
+    }
+
+    private func containPrivateStateReadFailure(
+        expectedGeneration: AtlasVaultPresentationGeneration
+    ) async {
+        guard privatePresentationAllowed,
+              privateSessionAuthorizedByHost,
+              generation == expectedGeneration else {
+            return
+        }
+        closePrivatePresentation()
+        await publishControlStatus(.locking)
+        await runtime.lock()
+        await synchronizePresentation()
     }
 
     private func publish(
@@ -663,6 +718,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
     private var nextStaleSaveCompletionGate: AtlasVaultTestSuspensionGate?
     private var nextStatusGate: AtlasVaultTestSuspensionGate?
     private var nextPrivateStateGate: AtlasVaultTestSuspensionGate?
+    private var failNextPrivateStateRead = false
     private var operationEpoch: UInt64 = 0
     private var recordedEvents: [String] = []
 
@@ -746,6 +802,10 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         nextPrivateStateGate = nil
         if let gate {
             try? await gate.wait()
+        }
+        if failNextPrivateStateRead {
+            failNextPrivateStateRead = false
+            throw AtlasVaultRuntimeFacadeError.privateStateUnavailable
         }
         guard runtimeStatus == .unlocked,
               let installedState else {
@@ -845,6 +905,10 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
 
     func setNextPrivateStateGate(_ gate: AtlasVaultTestSuspensionGate?) {
         nextPrivateStateGate = gate
+    }
+
+    func setFailNextPrivateStateRead(_ shouldFail: Bool) {
+        failNextPrivateStateRead = shouldFail
     }
 
     func events() -> [String] {

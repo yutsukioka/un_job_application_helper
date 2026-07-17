@@ -10,6 +10,10 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         "FAKE_PRIVATE_TEST_HOST_SEARCH_DO_NOT_LEAK"
     private static let updatedPrivateSentinel =
         "FAKE_UPDATED_TEST_HOST_SEARCH_DO_NOT_LEAK"
+    private static let initialPrivateQuerySentinel =
+        "FAKE_PRIVATE_INITIAL_QUERY_DO_NOT_LEAK"
+    private static let updatedPrivateQuerySentinel =
+        "FAKE_PRIVATE_UPDATED_QUERY_DO_NOT_LEAK"
 
     func testConstructionAndStartRemainLockedAndSideEffectFree() async throws {
         let harness = try await makeScriptedHarness()
@@ -83,6 +87,40 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         XCTAssertFalse(events.contains("privateState"))
         XCTAssertFalse(events.contains("activate"))
         await assertNoPrivateCompatibilityCalls(harness.recorder)
+        await subscription.cancel()
+    }
+
+    func testActiveEventCannotAuthorizeExternallyUnlockedRuntime() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        try await harness.runtime.activate(
+            AtlasVaultRuntimeActivationRequest(
+                vaultID: Self.vaultID,
+                suppliedVaultKey: Self.vaultKey
+            )
+        )
+
+        await harness.host.handleLifecycle(.didBecomeActive)
+
+        let privateFree = await waitForSnapshot(
+            harness.observer,
+            status: .locking
+        )
+        let events = await harness.runtime.events()
+        XCTAssertNil(privateFree.privateState)
+        XCTAssertFalse(events.contains("privateState"))
+        do {
+            _ = try await harness.host.apply(mutationRequest())
+            XCTFail("Expected externally unlocked runtime to remain unauthorized")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+        await harness.host.lock()
         await subscription.cancel()
     }
 
@@ -336,11 +374,79 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         XCTAssertNil(locked.privateState)
 
         await privateStateGate.open()
-        await staleSynchronization.value
+        _ = await staleSynchronization.value
 
         let latestPublished = await harness.host.latestPublishedSnapshot()
         XCTAssertEqual(latestPublished.status, .locked)
         XCTAssertNil(latestPublished.privateState)
+        await subscription.cancel()
+    }
+
+    func testUnlockPrivateStateReadFailureLocksAndClearsPresentation() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        await harness.runtime.setFailNextPrivateStateRead(true)
+
+        do {
+            try await harness.host.unlock(unlockRequest())
+            XCTFail("Expected private-state projection failure")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+
+        let locked = await waitForSnapshot(
+            harness.observer,
+            status: .locked
+        )
+        let runtimeStatus = await harness.runtime.status()
+        XCTAssertNil(locked.privateState)
+        XCTAssertEqual(runtimeStatus, .locked)
+        do {
+            _ = try await harness.host.apply(mutationRequest())
+            XCTFail("Expected private operations to remain unavailable")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+        await subscription.cancel()
+    }
+
+    func testSaveRefreshPrivateStateReadFailureLocksAndFailsClosed() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        await harness.runtime.setSaveBehavior(
+            .committed(privateState(marker: "UPDATED"))
+        )
+        await harness.runtime.setFailNextPrivateStateRead(true)
+
+        do {
+            _ = try await harness.host.apply(mutationRequest())
+            XCTFail("Expected private-state refresh failure")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultTestHostError,
+                .privateOperationsUnavailable
+            )
+        }
+
+        let locked = await waitForSnapshot(
+            harness.observer,
+            status: .locked
+        )
+        let runtimeStatus = await harness.runtime.status()
+        XCTAssertNil(locked.privateState)
+        XCTAssertEqual(runtimeStatus, .locked)
         await subscription.cancel()
     }
 
@@ -799,7 +905,7 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                         payload: .savedSearch(
                             savedSearchEnvelope(
                                 name: Self.privateSentinel,
-                                text: "FAKE_PRIVATE_INITIAL_QUERY_DO_NOT_LEAK"
+                                text: Self.initialPrivateQuerySentinel
                             )
                         ),
                         keyID: "fake-key-id"
@@ -902,7 +1008,7 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                         payload: .savedSearch(
                             savedSearchEnvelope(
                                 name: Self.updatedPrivateSentinel,
-                                text: "FAKE_PRIVATE_UPDATED_QUERY_DO_NOT_LEAK"
+                                text: Self.updatedPrivateQuerySentinel
                             )
                         ),
                         keyID: "fake-key-id"
@@ -929,6 +1035,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         )
         XCTAssertFalse(serializedStore.contains(Self.privateSentinel))
         XCTAssertFalse(serializedStore.contains(Self.updatedPrivateSentinel))
+        XCTAssertFalse(
+            serializedStore.contains(Self.initialPrivateQuerySentinel)
+        )
+        XCTAssertFalse(
+            serializedStore.contains(Self.updatedPrivateQuerySentinel)
+        )
         XCTAssertFalse(serializedStore.contains("saved_search"))
 
         await host.lock()

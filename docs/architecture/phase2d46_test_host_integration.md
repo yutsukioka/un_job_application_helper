@@ -56,6 +56,11 @@ dispatches facade activation. The host reads the facade's in-memory private
 snapshot, creates a process-local presentation generation, and sends the
 projected snapshot through the observable adapter.
 
+The host records separate process-local authorization for a session activated
+through its own unlock coordinator. An active lifecycle event may restore a
+grace-hidden projection only for that previously authorized session; it cannot
+adopt a runtime that another owner unlocked.
+
 Activation failure or cancellation clears the cached test projection and
 publishes no private state. Timeout fails before facade activation. Lifecycle
 gate closure cancels the active unlock request before lifecycle delivery. No
@@ -73,7 +78,9 @@ keeps presentation private-free and rejects private mutation admission until a
 processed active transition confirms that no grace lock remains. When policy
 retains a grace timer after foregrounding, each later explicit unlock attempt
 re-reads lifecycle status so timer completion can reopen admission only after
-the runtime is locked.
+the runtime is locked. Grace cancellation can reopen private presentation only
+when this host authorized the still-running session before the lifecycle
+closure.
 
 ## 7. Save Outcomes
 
@@ -89,7 +96,10 @@ delegates the mutation to the runtime.
 - Reactivation after fatal containment creates a fresh presentation generation.
 
 Private mutations are rejected before the runtime call whenever lifecycle or
-presentation authorization is closed.
+presentation authorization is closed. A failed private-state read during
+activation or post-save refresh is not converted to an unlocked projection
+with missing state: the host closes authorization, clears presentation, locks
+the runtime, and reports failure.
 
 ## 8. Temporary-Root Real Facade
 
@@ -104,8 +114,8 @@ One integration configuration uses:
 The fixture writes only an encrypted local-store JSON envelope below that
 temporary root. It proves encrypted load, encrypted save, lock, and rehydration
 without using Application Support or the real Keychain. Store JSON must not
-contain fake private sentinels or plaintext record-type strings, and no
-`.atlasvault` export is created.
+contain fake private name or query sentinels or plaintext record-type strings,
+and no `.atlasvault` export is created.
 
 ## 9. Public Snapshot Invariant
 
@@ -151,11 +161,15 @@ Tests cover:
 - stale unlock failure rejection after a replacement session activates;
 - stale save completion rejection after a replacement presentation generation;
 - stale private-state reads cannot publish over a completed lock transition;
+- private-state read failure during activation or save refresh locks and clears
+  presentation rather than publishing an incomplete unlocked snapshot;
 - lifecycle-grace presentation closure and mutation rejection;
+- an active event cannot authorize a runtime session unlocked outside the host;
 - fresh explicit unlock after a retained foreground grace timer completes;
 - suspended mutation admission and stale active-transition race rejection;
 - reactivation after fatal containment;
 - real encrypted load, save, and rehydration under a temporary root;
+- encrypted JSON excludes both fake private name and query sentinels;
 - state-aware observable waits distinguish same-status private-state updates;
 - public snapshot immutability;
 - fake key-store usage and no `.atlasvault` artifact;
