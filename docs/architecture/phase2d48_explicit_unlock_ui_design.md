@@ -30,8 +30,11 @@ the activation controller's stored-key loader. The facade does not derive a
 key from passphrase or recovery material and must not receive those inputs.
 `AtlasVaultRuntimeActivationRequest.init(vaultID:suppliedVaultKey:)` is public,
 so Swift access control does not enforce the raw-key path's test-only policy.
-Future production host and presentation boundaries must not expose or construct
-that argument; narrowing the runtime API requires a separate reviewed change.
+Future production host and presentation boundaries must not expose or directly
+construct that argument. The unlock coordinator may construct it only as the
+trusted bridge from a reviewed one-shot unwrap result to facade activation.
+Narrowing the runtime API while preserving that coordinator bridge requires a
+separate reviewed change.
 
 ## 5. Existing Unlock Request Coordinator
 
@@ -72,11 +75,13 @@ production today.
 The runtime and unlock coordinator support an already-unwrapped fake 32-byte
 key for deterministic tests. The coordinator request initializer is
 module-internal, but the runtime activation request has a public
-`suppliedVaultKey` argument. Test-only status is therefore an architectural
-host policy, not a compiler-enforced visibility boundary. Production
-composition, presentation, and navigation code must never expose or construct
-the raw-key argument. It must never appear as a production method, text field,
-accessibility action, preview command, or fallback.
+`suppliedVaultKey` argument. The raw-key *input method* is test-only; the
+runtime argument is also the trusted coordinator bridge for a future reviewed
+passphrase or recovery unwrap result. Production composition, presentation,
+host, and navigation code must never expose a direct raw-key command or
+construct the argument outside that coordinator bridge. The raw-key input
+method must never appear as production UI, an accessibility action, preview
+command, or fallback.
 
 ## 10. Capability Matrix
 
@@ -85,7 +90,8 @@ accessibility action, preview command, or fallback.
 | Local Keychain key | Reviewed Swift key-store and runtime path | Available with constraints | Explicit request through presentation/coordinator/facade only |
 | Passphrase-wrapped key | Python reference only; injected Swift test seam | Unavailable | Requires reviewed Swift metadata/parser/unwrap provider |
 | Recovery-key-wrapped key | Contract intent only | Unavailable | Requires reviewed format, parser, vectors, and Swift provider |
-| Supplied raw fake key | Internal coordinator test request; public runtime request argument | Prohibited | Host-enforced test-only policy; production code must not expose or construct the raw-key argument |
+| Supplied raw fake key input | Internal coordinator test request | Prohibited | Never a production capability or direct command |
+| Unwrapped-key runtime bridge | Public runtime request argument used by the trusted coordinator | Internal bridge only | Coordinator may construct it after reviewed unwrap; UI, host, and navigation may not expose or construct it directly |
 
 Capability availability means the method is implemented by the injected
 runtime composition. It does not reveal whether a credential or vault exists.
@@ -402,8 +408,10 @@ the same locked/private-free barrier before retry is enabled.
 The view never calls the facade. A presentation/controller layer creates the
 single-use request and delegates activation through the existing coordinator,
 which alone constructs the already-unwrapped runtime activation request. The
-production controller exposes no raw-key method and must not bypass the
-coordinator by constructing the facade's public `suppliedVaultKey` argument.
+coordinator may use the facade's public `suppliedVaultKey` argument only after
+its reviewed one-shot unwrap path or for the internal supplied-test-key request.
+The production controller exposes no raw-key method and must not bypass this
+bridge.
 
 ## 53. Observable Presentation Interaction
 
@@ -468,9 +476,11 @@ Future phases must test:
 - raw supplied keys never render;
 - production capability, presentation, host, and navigation code never
   construct `AtlasVaultRuntimeActivationRequest` with `suppliedVaultKey`;
-- test composition is the only code permitted to exercise the public raw-key
-  argument, and source/dependency guards enforce that policy until the runtime
-  API is narrowed;
+- the trusted coordinator may construct `suppliedVaultKey` only from a reviewed
+  one-shot unwrap result or the internal supplied-test-key request;
+- source/dependency guards allowlist that coordinator bridge and fake test
+  composition while rejecting every direct production raw-key command until
+  the runtime API is narrowed;
 - unsupported selection and submission fail before secret access;
 - local-key action delegates without direct Keychain work;
 - unwrap providers receive the validated non-semantic vault ID and the exact
@@ -506,7 +516,8 @@ Future phases must test:
 | Explicit local-key request through runtime | Ready with constraints | Injected capability, explicit action, generic missing-key result |
 | Production passphrase UI | No-go | Reviewed Swift wrapped-key parser, context-aware provider boundary, and Argon2id/AES-GCM provider |
 | Production recovery-key UI | No-go | Reviewed recovery format, vectors, parser, and context-aware provider |
-| Raw-key production UI or host command | Prohibited | Host policy and source/dependency guards; the current public runtime argument is not an access-control guarantee |
+| Raw-key production UI or host command | Prohibited | Source/dependency guards reject direct construction; the public runtime argument is not an access-control guarantee |
+| Coordinator unwrapped-key bridge | Design required | Allowed only after reviewed context-aware unwrap; no public input capability |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
 | Dedicated unwired unlock panel | Design ready | Capability-driven controls and clearing tests |
 | Multi-window, multi-vault-ID, or distinct-request unlock | Design/implementation required | One process-global admission token for the single runtime plus terminal reconciliation |
@@ -523,8 +534,9 @@ still lacks production host/navigation integration and process-wide unlock
 admission for the single runtime. Passphrase and recovery unlock are
 unavailable without reviewed Swift providers. Memory zeroization, screen
 capture, accessibility, file protection, backup, and narrowing the public
-runtime raw-key argument remain unresolved. Migration, cleanup, cloud,
-recovery, onboarding, and key rotation remain deferred.
+runtime raw-key argument around the trusted coordinator bridge remain
+unresolved. Migration, cleanup, cloud, recovery, onboarding, and key rotation
+remain deferred.
 
 ## 65. Recommended Phase 2D-49
 
