@@ -183,6 +183,40 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         await subscription.cancel()
     }
 
+    func testRetainedGraceCompletionAllowsFreshExplicitUnlock() async throws {
+        let harness = try await makeScriptedHarness(
+            lockPolicy: .afterGracePeriod(
+                .seconds(60),
+                cancelOnActive: false
+            )
+        )
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+
+        await harness.host.handleLifecycle(.didEnterBackground)
+        _ = await waitForSnapshot(harness.observer, status: .locking)
+        await harness.host.handleLifecycle(.didBecomeActive)
+        await harness.time.advance(by: .seconds(60))
+
+        let graceLockCompleted = await waitForGraceLockCompletion(
+            lifecycle: harness.lifecycle,
+            runtime: harness.runtime
+        )
+        XCTAssertTrue(graceLockCompleted)
+
+        try await harness.host.unlock(unlockRequest())
+
+        let unlocked = await waitForSnapshot(
+            harness.observer,
+            status: .unlocked
+        )
+        XCTAssertNotNil(unlocked.privateState)
+        await subscription.cancel()
+    }
+
     func testGraceClosureWinsWhileMutationAdmissionStatusIsSuspended() async throws {
         let harness = try await makeScriptedHarness(
             lockPolicy: .afterGracePeriod(
@@ -940,6 +974,7 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         let keyStore: AtlasVaultTestFakeKeyStore
         let runtime: AtlasVaultScriptedTestRuntime
         let time: AtlasVaultTestManualTime
+        let lifecycle: AtlasVaultLifecycleCoordinator
         let host: AtlasVaultTestHost
         let observer: any AtlasVaultPresentationObserving
     }
@@ -1004,6 +1039,7 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             keyStore: keyStore,
             runtime: runtime,
             time: time,
+            lifecycle: lifecycle,
             host: host,
             observer: observer
         )
@@ -1126,6 +1162,22 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         }
         XCTFail("Timed out waiting for private-free presentation")
         return latest
+    }
+
+    private func waitForGraceLockCompletion(
+        lifecycle: AtlasVaultLifecycleCoordinator,
+        runtime: AtlasVaultScriptedTestRuntime
+    ) async -> Bool {
+        for _ in 0..<2_000 {
+            let lifecycleStatus = await lifecycle.status()
+            let runtimeStatus = await runtime.status()
+            if !lifecycleStatus.hasPendingGraceLock,
+               runtimeStatus == .locked {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
     }
 
     private func assertNoPrivateCompatibilityCalls(

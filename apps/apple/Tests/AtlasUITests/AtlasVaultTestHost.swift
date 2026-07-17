@@ -282,6 +282,7 @@ actor AtlasVaultTestHost:
             throw AtlasVaultTestHostError.notStarted
         }
         let lifecycleStatus = await lifecycle.status()
+        refreshUnlockAdmission(from: lifecycleStatus)
         let runtimeStatus = await runtime.status()
         guard unlockAdmissionAllowed,
               activeUnlock == nil,
@@ -437,11 +438,7 @@ actor AtlasVaultTestHost:
         await lifecycle.handle(event)
         let lifecycleStatus = await lifecycle.status()
         let runtimeStatus = await runtime.status()
-        unlockAdmissionAllowed =
-            !isTerminated
-            && lifecycleIsActive
-            && protectedDataIsAvailable
-            && !lifecycleStatus.hasPendingGraceLock
+        refreshUnlockAdmission(from: lifecycleStatus)
 
         if event == .didBecomeActive,
            unlockAdmissionAllowed,
@@ -551,6 +548,16 @@ actor AtlasVaultTestHost:
         case .protectedDataBecameAvailable:
             protectedDataIsAvailable = true
         }
+    }
+
+    private func refreshUnlockAdmission(
+        from lifecycleStatus: AtlasVaultLifecycleStatus
+    ) {
+        unlockAdmissionAllowed =
+            !isTerminated
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && !lifecycleStatus.hasPendingGraceLock
     }
 
     private func publishControlStatus(

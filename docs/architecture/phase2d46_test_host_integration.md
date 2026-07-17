@@ -70,7 +70,10 @@ inactivity do the same before lifecycle delivery.
 Immediate lock clears the runtime state and presentation. A grace-period
 lifecycle may leave the scripted runtime unlocked temporarily, but the host
 keeps presentation private-free and rejects private mutation admission until a
-processed active transition confirms that no grace lock remains.
+processed active transition confirms that no grace lock remains. When policy
+retains a grace timer after foregrounding, each later explicit unlock attempt
+re-reads lifecycle status so timer completion can reopen admission only after
+the runtime is locked.
 
 ## 7. Save Outcomes
 
@@ -148,6 +151,7 @@ Tests cover:
 - stale unlock failure rejection after a replacement session activates;
 - stale save completion rejection after a replacement presentation generation;
 - lifecycle-grace presentation closure and mutation rejection;
+- fresh explicit unlock after a retained foreground grace timer completes;
 - suspended mutation admission and stale active-transition race rejection;
 - reactivation after fatal containment;
 - real encrypted load, save, and rehydration under a temporary root;
