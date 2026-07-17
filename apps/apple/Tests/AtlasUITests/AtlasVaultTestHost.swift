@@ -121,6 +121,7 @@ actor AtlasVaultFakePublicJobSearchService: AtlasVaultTestPublicJobSearching {
     private let publicStateStore: any AtlasVaultTestPublicStateStoring
     private let results: [AtlasVaultTestPublicJob]
     private var callCount = 0
+    private var nextSearchGate: AtlasVaultTestSuspensionGate?
 
     init(
         recorder: AtlasVaultTestEndpointCallRecorder,
@@ -136,11 +137,21 @@ actor AtlasVaultFakePublicJobSearchService: AtlasVaultTestPublicJobSearching {
         callCount += 1
         await recorder.record(.publicSearch)
         _ = await publicStateStore.loadPublicStateBytes()
+        let gate = nextSearchGate
+        nextSearchGate = nil
+        if let gate {
+            try await gate.wait()
+        }
+        try Task.checkCancellation()
         return results
     }
 
     func calls() -> Int {
         callCount
+    }
+
+    func setNextSearchGate(_ gate: AtlasVaultTestSuspensionGate?) {
+        nextSearchGate = gate
     }
 }
 
@@ -300,10 +311,16 @@ actor AtlasVaultTestHost:
     private let publicSearch: any AtlasVaultTestPublicJobSearching
     private let environment: AtlasVaultTestHostEnvironment
     private let projectionAdapter = AtlasVaultPresentationAdapter()
-    private let updateSource: AtlasVaultTestPresentationUpdateSource
-    private let observablePresentation: AtlasVaultObservablePresentationAdapter
+    private var updateSource: AtlasVaultTestPresentationUpdateSource
+    private var observablePresentation: AtlasVaultObservablePresentationAdapter
 
     private var started = false
+    private var isStopping = false
+    private var hostEpoch: UInt64 = 0
+    private var hostObservation: AtlasVaultPresentationSubscription?
+    private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private var publicSearchTasks:
+        [UUID: Task<[AtlasVaultTestPublicJob], Error>] = [:]
     private var privatePresentationAllowed = false
     private var privateSessionAuthorizedByHost = false
     private var lifecycleIsActive = true
@@ -339,24 +356,51 @@ actor AtlasVaultTestHost:
     }
 
     func start() async {
-        guard !started else {
+        guard !started, !isStopping else {
             return
         }
         started = true
+        hostEpoch &+= 1
+        let epoch = hostEpoch
+        let observer = observablePresentation
+        let subscription = await observer.subscribe()
+        guard started,
+              !isStopping,
+              hostEpoch == epoch else {
+            await subscription.cancel()
+            return
+        }
+        hostObservation = subscription
         await synchronizePresentation()
     }
 
     func searchPublicJobs(
         query: String
     ) async throws -> [AtlasVaultTestPublicJob] {
-        guard started else {
+        guard started, !isStopping else {
             throw AtlasVaultTestHostError.notStarted
         }
-        return try await publicSearch.search(query: query)
+        let identifier = UUID()
+        let service = publicSearch
+        let task = Task {
+            try await service.search(query: query)
+        }
+        publicSearchTasks[identifier] = task
+        do {
+            let jobs = try await task.value
+            publicSearchTasks.removeValue(forKey: identifier)
+            guard started, !isStopping else {
+                throw CancellationError()
+            }
+            return jobs
+        } catch {
+            publicSearchTasks.removeValue(forKey: identifier)
+            throw error
+        }
     }
 
     func unlock(_ request: AtlasVaultUnlockRequest) async throws {
-        guard started else {
+        guard started, !isStopping else {
             throw AtlasVaultTestHostError.notStarted
         }
         let lifecycleStatus = await lifecycle.status()
@@ -417,7 +461,7 @@ actor AtlasVaultTestHost:
     func apply(
         _ request: AtlasVaultRuntimeMutationRequest
     ) async throws -> AtlasVaultSaveOutcome {
-        guard started else {
+        guard started, !isStopping else {
             throw AtlasVaultTestHostError.notStarted
         }
         guard privatePresentationAllowed,
@@ -501,6 +545,9 @@ actor AtlasVaultTestHost:
     }
 
     func lock() async {
+        guard started, !isStopping else {
+            return
+        }
         _ = await cancelActiveUnlock()
         closePrivatePresentation()
         await publishControlStatus(.locking)
@@ -509,6 +556,9 @@ actor AtlasVaultTestHost:
     }
 
     func handleLifecycle(_ event: AtlasVaultLifecycleEvent) async {
+        guard started, !isStopping else {
+            return
+        }
         updateLifecycleState(for: event)
         if event.closesAtlasVaultTestHostPrivatePresentation {
             let activationMayHaveCommitted = await cancelActiveUnlock()
@@ -541,6 +591,45 @@ actor AtlasVaultTestHost:
             return
         }
         await synchronizePresentation()
+    }
+
+    func stop() async {
+        if isStopping {
+            await waitForStopCompletion()
+            return
+        }
+        guard started else {
+            return
+        }
+
+        isStopping = true
+        started = false
+        hostEpoch &+= 1
+        unlockAdmissionAllowed = false
+
+        let searches = Array(publicSearchTasks.values)
+        publicSearchTasks.removeAll()
+        for search in searches {
+            search.cancel()
+        }
+
+        _ = await cancelActiveUnlock()
+        closePrivatePresentation()
+        await publishControlStatus(.locking)
+        await runtime.lock()
+        for search in searches {
+            _ = await search.result
+        }
+        await synchronizePresentation()
+
+        let source = updateSource
+        let observation = hostObservation
+        hostObservation = nil
+        await source.finish()
+        await observation?.cancel()
+        resetPresentationPipeline()
+        isStopping = false
+        resumeStopWaiters()
     }
 
     @discardableResult
@@ -757,7 +846,47 @@ actor AtlasVaultTestHost:
             generation: generation,
             commandState: commandState
         )
-        await updateSource.send(snapshot)
+        let source = updateSource
+        let observer = observablePresentation
+        await source.send(snapshot)
+        await acknowledge(snapshot, from: observer)
+    }
+
+    private func acknowledge(
+        _ expected: AtlasVaultPresentationSnapshot,
+        from observer: AtlasVaultObservablePresentationAdapter
+    ) async {
+        for _ in 0..<2_000 {
+            if await observer.currentSnapshot() == expected {
+                return
+            }
+            await Task.yield()
+        }
+        preconditionFailure(
+            "AtlasVault test presentation acknowledgement unavailable"
+        )
+    }
+
+    private func waitForStopCompletion() async {
+        await withCheckedContinuation { continuation in
+            stopWaiters.append(continuation)
+        }
+    }
+
+    private func resumeStopWaiters() {
+        let waiters = stopWaiters
+        stopWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resetPresentationPipeline() {
+        let source = AtlasVaultTestPresentationUpdateSource()
+        updateSource = source
+        observablePresentation = AtlasVaultObservablePresentationAdapter(
+            source: source
+        )
     }
 }
 
@@ -783,6 +912,7 @@ enum AtlasVaultScriptedRecoverableSaveFailure: Sendable {
 actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
     private var runtimeStatus: AtlasVaultRuntimeStatus = .locked
     private var installedState: AtlasVaultHydratedState?
+    private var activeVaultID: String?
     private var activationBehavior: AtlasVaultScriptedActivationBehavior
     private var saveBehavior: AtlasVaultScriptedSaveBehavior =
         .recoverableFailure(.atomicWrite)
@@ -827,6 +957,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         } catch {
             if operationEpoch == epoch {
                 installedState = nil
+                activeVaultID = nil
                 runtimeStatus = .locked
             }
             throw AtlasVaultRuntimeFacadeError.cancelled
@@ -839,9 +970,11 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         switch activationBehavior {
         case let .succeed(state):
             installedState = state
+            activeVaultID = request.vaultID
             runtimeStatus = .unlocked
         case let .fail(failure):
             installedState = nil
+            activeVaultID = nil
             runtimeStatus = .failed(.activation(failure))
             throw AtlasVaultRuntimeFacadeError.activationFailed(failure)
         }
@@ -854,6 +987,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         await activationGate?.open()
         await saveGate?.open()
         installedState = nil
+        activeVaultID = nil
         runtimeStatus = .locked
     }
 
@@ -864,6 +998,7 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         }
         operationEpoch &+= 1
         installedState = nil
+        activeVaultID = nil
         runtimeStatus = .locked
         await activationGate?.open()
         return true
@@ -893,10 +1028,13 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
         guard runtimeStatus == .unlocked else {
             throw AtlasVaultRuntimeFacadeError.locked
         }
+        recordedEvents.append("apply")
+        guard request.expectedVaultID == activeVaultID else {
+            throw AtlasVaultRuntimeFacadeError.sessionMismatch
+        }
         operationEpoch &+= 1
         let epoch = operationEpoch
         runtimeStatus = .saving
-        recordedEvents.append("apply")
         let gate = saveGate
         let staleCompletionGate = nextStaleSaveCompletionGate
         nextStaleSaveCompletionGate = nil
@@ -934,10 +1072,12 @@ actor AtlasVaultScriptedTestRuntime: AtlasVaultTestHostRuntime {
             throw AtlasVaultRuntimeFacadeError.saveFailed
         case .fatalFailure:
             installedState = nil
+            activeVaultID = nil
             runtimeStatus = .locked
             throw AtlasVaultRuntimeFacadeError.saveIntegrityUnknown
         case .committedStateUnavailable:
             installedState = nil
+            activeVaultID = nil
             runtimeStatus = .locked
             throw AtlasVaultRuntimeFacadeError.committedStateUnavailable(
                 .committed

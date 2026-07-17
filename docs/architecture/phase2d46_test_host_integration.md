@@ -28,7 +28,7 @@ onboarding, recovery UX, or key rotation.
 - the real single-use `AtlasVaultUnlockRequestCoordinator`;
 - `AtlasVaultPresentationAdapter`;
 - `AtlasVaultObservablePresentationAdapter`;
-- an in-memory presentation update source;
+- an in-memory presentation update source and host-owned observation;
 - a temporary-root environment;
 - a fake `AtlasVaultKeyStore`;
 - an instrumented mutable public-state store shared with public search;
@@ -37,7 +37,9 @@ onboarding, recovery UX, or key rotation.
   fakes.
 
 Construction invokes none of those services. Observation starts only after an
-explicit subscription, and host start does not activate a vault.
+explicit subscription or host start, and host start does not activate a vault.
+The host-owned subscription gives every presentation publication an awaitable
+observable-adapter acknowledgement.
 
 ## 4. Locked Public Boundary
 
@@ -67,6 +69,11 @@ through its own unlock coordinator. An active lifecycle event may restore a
 grace-hidden projection only for that previously authorized session; it cannot
 adopt a runtime that another owner unlocked.
 
+The scripted runtime binds the non-semantic vault ID supplied by successful
+activation and rejects any mutation whose `expectedVaultID` differs. This
+matches the real facade's session-mismatch boundary and prevents scripted tests
+from accepting requests that production rejects.
+
 Activation failure or cancellation clears the cached test projection and
 publishes no private state. Timeout fails before facade activation. Lifecycle
 gate closure cancels the active unlock request before lifecycle delivery. If
@@ -80,6 +87,13 @@ Explicit lock closes private presentation authorization before awaiting runtime
 lock. Backgrounding, protected-data loss, termination, and configured
 inactivity do the same before lifecycle delivery.
 
+Every presentation update is acknowledged by the observable adapter before the
+host command that published it returns. Explicit lock and lifecycle-closing
+paths therefore cannot return while the adapter's current snapshot or bounded
+subscriber buffer still contains the prior private projection. This
+test-target acknowledgement does not replace the future production
+`@MainActor` presentation-owner reset described in Phase 2D-45.
+
 Immediate lock clears the runtime state and presentation. A grace-period
 lifecycle may leave the scripted runtime unlocked temporarily, but the host
 keeps presentation private-free and rejects private mutation admission until a
@@ -89,6 +103,13 @@ re-reads lifecycle status so timer completion can reopen admission only after
 the runtime is locked. Grace cancellation can reopen private presentation only
 when this host authorized the still-running session before the lifecycle
 closure.
+
+`stop()` is idempotent and fail closed. It closes host admission, cancels an
+active unlock and all host-owned public-search tasks, invalidates in-flight
+private work through runtime lock, publishes and acknowledges a locked
+private-free snapshot, finishes the old presentation source, and rotates to a
+fresh locked presentation pipeline. A later start or subscription cannot
+replay the prior private generation.
 
 ## 7. Save Outcomes
 
@@ -169,7 +190,11 @@ Tests cover:
 - side-effect-free construction and explicit locked start;
 - locked public search with zero private compatibility categories;
 - explicit private activation and observable projection;
-- explicit, background, and protected-data lock clearing;
+- explicit, background, and protected-data lock clearing acknowledged before
+  the host command returns;
+- scripted session mismatch rejection before save-state mutation;
+- idempotent stop while unlocked and private-free restart without replay;
+- stop cancellation of in-flight unlock, save, and public-search work;
 - recoverable, durability-warning, and fatal save outcomes;
 - cancellation and late-result rejection;
 - lifecycle cancellation that loses to committed activation locks the runtime

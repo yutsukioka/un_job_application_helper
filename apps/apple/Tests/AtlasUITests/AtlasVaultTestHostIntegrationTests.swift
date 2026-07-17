@@ -177,6 +177,8 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
         let subscription = await harness.observer.subscribe()
+        var snapshots = subscription.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
         await harness.host.start()
 
         try await harness.host.unlock(unlockRequest())
@@ -191,14 +193,164 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         XCTAssertEqual(unlocked.privateState?.savedJobs.count, 1)
 
         await harness.host.lock()
-        let locked = await waitForSnapshot(
-            harness.observer,
-            status: .locked
-        )
+        let locked = await harness.observer.currentSnapshot()
+        let deliveredLocked = await snapshots.next()
+        XCTAssertEqual(locked.status, .locked)
         XCTAssertNil(locked.privateState)
+        XCTAssertEqual(deliveredLocked?.status, .locked)
+        XCTAssertNil(deliveredLocked?.privateState)
         let runtimeStatus = await harness.runtime.status()
         XCTAssertEqual(runtimeStatus, .locked)
         await subscription.cancel()
+    }
+
+    func testStopIsIdempotentPrivateFreeAndRestartDoesNotReplay() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        var snapshots = subscription.snapshots.makeAsyncIterator()
+        _ = await snapshots.next()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+
+        await harness.host.stop()
+
+        let stopped = await harness.observer.currentSnapshot()
+        let deliveredStopped = await snapshots.next()
+        let firstLockCount = await harness.runtime.events()
+            .filter { $0 == "lock" }
+            .count
+        XCTAssertEqual(stopped.status, .locked)
+        XCTAssertNil(stopped.privateState)
+        XCTAssertEqual(deliveredStopped?.status, .locked)
+        XCTAssertNil(deliveredStopped?.privateState)
+        let stoppedRuntimeStatus = await harness.runtime.status()
+        XCTAssertEqual(stoppedRuntimeStatus, .locked)
+
+        await harness.host.stop()
+
+        let secondLockCount = await harness.runtime.events()
+            .filter { $0 == "lock" }
+            .count
+        XCTAssertEqual(secondLockCount, firstLockCount)
+
+        let restartedObserver = await harness.host.presentationObserver()
+        await harness.host.start()
+        let restartedSubscription = await restartedObserver.subscribe()
+        var restartedSnapshots =
+            restartedSubscription.snapshots.makeAsyncIterator()
+        let restarted = await restartedSnapshots.next()
+        XCTAssertEqual(restarted?.status, .locked)
+        XCTAssertNil(restarted?.privateState)
+        let activationCount = await harness.runtime.events()
+            .filter { $0 == "activate" }
+            .count
+        XCTAssertEqual(activationCount, 1)
+
+        await restartedSubscription.cancel()
+        await subscription.cancel()
+    }
+
+    func testStopCancelsInFlightUnlockAndReturnsLocked() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let activationGate = AtlasVaultTestSuspensionGate()
+        await harness.runtime.setActivationGate(activationGate)
+        await harness.host.start()
+
+        let unlock = Task {
+            try await harness.host.unlock(self.unlockRequest())
+        }
+        let activationEntered = await activationGate.waitUntilEntered()
+        XCTAssertTrue(activationEntered)
+
+        await harness.host.stop()
+
+        do {
+            try await unlock.value
+            XCTFail("Expected stop to cancel the active unlock")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultUnlockRequestError,
+                .cancelled
+            )
+        }
+        let stopped = await harness.observer.currentSnapshot()
+        XCTAssertEqual(stopped.status, .locked)
+        XCTAssertNil(stopped.privateState)
+        let stoppedRuntimeStatus = await harness.runtime.status()
+        XCTAssertEqual(stoppedRuntimeStatus, .locked)
+        await subscription.cancel()
+    }
+
+    func testStopInvalidatesInFlightSaveAndReturnsLocked() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        let saveGate = AtlasVaultTestSuspensionGate()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+        await harness.runtime.setSaveBehavior(
+            .committed(privateState(marker: "UPDATED"))
+        )
+        await harness.runtime.setSaveGate(saveGate)
+
+        let save = Task {
+            try await harness.host.apply(self.mutationRequest())
+        }
+        let saveEntered = await saveGate.waitUntilEntered()
+        XCTAssertTrue(saveEntered)
+
+        await harness.host.stop()
+
+        do {
+            _ = try await save.value
+            XCTFail("Expected stop to invalidate the active save")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultRuntimeFacadeError,
+                .cancelled
+            )
+        }
+        let stopped = await harness.observer.currentSnapshot()
+        XCTAssertEqual(stopped.status, .locked)
+        XCTAssertNil(stopped.privateState)
+        let stoppedRuntimeStatus = await harness.runtime.status()
+        XCTAssertEqual(stoppedRuntimeStatus, .locked)
+        await subscription.cancel()
+    }
+
+    func testStopCancelsInFlightPublicSearch() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let searchGate = AtlasVaultTestSuspensionGate()
+        await harness.publicSearch.setNextSearchGate(searchGate)
+        await harness.host.start()
+
+        let search = Task {
+            try await harness.host.searchPublicJobs(
+                query: "FAKE_PUBLIC_STOP_QUERY"
+            )
+        }
+        let searchEntered = await searchGate.waitUntilEntered()
+        XCTAssertTrue(searchEntered)
+
+        await harness.host.stop()
+
+        do {
+            _ = try await search.value
+            XCTFail("Expected stop to cancel the active public search")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        let stoppedRuntimeStatus = await harness.runtime.status()
+        XCTAssertEqual(stoppedRuntimeStatus, .locked)
+        let stopped = await harness.observer.currentSnapshot()
+        XCTAssertEqual(stopped.status, .locked)
+        XCTAssertNil(stopped.privateState)
     }
 
     func testBackgroundAndProtectedDataLossClearPrivateState() async throws {
@@ -215,11 +367,9 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
 
             await harness.host.handleLifecycle(event)
 
-            let locked = await waitForSnapshot(
-                harness.observer,
-                status: .locked
-            )
+            let locked = await harness.observer.currentSnapshot()
             let runtimeStatus = await harness.runtime.status()
+            XCTAssertEqual(locked.status, .locked)
             XCTAssertNil(locked.privateState)
             XCTAssertEqual(runtimeStatus, .locked)
             await subscription.cancel()
@@ -241,11 +391,9 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
 
         await harness.host.handleLifecycle(.didEnterBackground)
 
-        let privateFree = await waitForSnapshot(
-            harness.observer,
-            status: .locking
-        )
+        let privateFree = await harness.observer.currentSnapshot()
         let runtimeDuringGrace = await harness.runtime.status()
+        XCTAssertEqual(privateFree.status, .locking)
         XCTAssertNil(privateFree.privateState)
         XCTAssertEqual(runtimeDuringGrace, .unlocked)
 
@@ -542,6 +690,36 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             XCTAssertEqual(publicAfter, publicBefore)
             XCTAssertEqual(publicStateCalls.replacements, 0)
         }
+        await subscription.cancel()
+    }
+
+    func testScriptedRuntimeRejectsMutationForDifferentVaultID() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+        let subscription = await harness.observer.subscribe()
+        await harness.host.start()
+        try await harness.host.unlock(unlockRequest())
+        _ = await waitForSnapshot(harness.observer, status: .unlocked)
+
+        do {
+            _ = try await harness.host.apply(
+                mutationRequest(expectedVaultID: "vault_other_test_host_46")
+            )
+            XCTFail("Expected scripted session mismatch")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultRuntimeFacadeError,
+                .sessionMismatch
+            )
+        }
+
+        let snapshot = await harness.observer.currentSnapshot()
+        XCTAssertEqual(snapshot.status, .unlocked)
+        XCTAssertNotNil(snapshot.privateState)
+        let runtimeStatus = await harness.runtime.status()
+        let applyCalls = await harness.runtime.applyCallCount()
+        XCTAssertEqual(runtimeStatus, .unlocked)
+        XCTAssertEqual(applyCalls, 1)
         await subscription.cancel()
     }
 
@@ -1345,9 +1523,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         )
     }
 
-    private func mutationRequest() -> AtlasVaultRuntimeMutationRequest {
+    private func mutationRequest(
+        expectedVaultID: String =
+            AtlasVaultTestHostIntegrationTests.vaultID
+    ) -> AtlasVaultRuntimeMutationRequest {
         AtlasVaultRuntimeMutationRequest(
-            expectedVaultID: Self.vaultID,
+            expectedVaultID: expectedVaultID,
             mutations: AtlasVaultMutationSet(
                 deletes: [AtlasVaultDeleteMutation(
                     recordID: "fake-record-id",
