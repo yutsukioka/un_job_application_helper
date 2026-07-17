@@ -50,15 +50,27 @@ models.
 The adapter's cancellation-safe stream, monotonic sequence, and fail-closed
 source-completion behavior remain in force. Cancelling a subscriber alone is
 not host teardown: the adapter can continue observing its source and retain its
-latest snapshot without subscribers.
+latest snapshot without subscribers. Conversely, checking only
+`currentSnapshot()` does not prove that a suspended `@MainActor` presentation
+owner has replaced its previously published private snapshot.
 
-Before `stop()` returns, the host must cancel active unlock, mutation, and
-public-search work; invalidate the active presentation generation; await
-`AtlasVaultRuntimeFacading.lock()`; and require the current-generation
-presentation source to publish or finish as a locked, private-free snapshot.
-It then verifies `currentSnapshot()` is locked with no private projection before
-cancelling the UI-facing subscription. A later `start()` must use a fresh
-presentation generation and may not replay a prior private snapshot.
+The future host therefore owns an explicit, awaitable presentation-owner reset
+seam. Before `stop()` returns, it must close private-presentation authorization,
+invalidate the active presentation generation, cancel active unlock, mutation,
+and public-search work, and command the `@MainActor` owner to install a locked,
+private-free snapshot for that generation. The owner acknowledgement must
+complete before the host cancels its UI-facing subscription. The host also
+awaits `AtlasVaultRuntimeFacading.lock()`, requires its host-controlled source
+to emit a monotonic private-free control update that cannot be rejected with the
+invalidated private generation (or to finish private-free), and verifies the
+observable adapter is private-free. Stream delivery or adapter inspection is
+defense in depth; neither substitutes for the owner acknowledgement.
+
+The generation gate closes before the `@MainActor` hop, so late or buffered
+private updates cannot race the reset. The host must not hold an isolation
+critical section that can deadlock with the owner while awaiting that hop. A
+later `start()` uses a fresh presentation generation and may not replay a prior
+private snapshot.
 
 ## 7. Public Job-Search Service Boundary
 
@@ -257,6 +269,19 @@ closed for the entire inactive interval, including every pending
 `afterGracePeriod` timer, even when an already-unlocked runtime is temporarily
 allowed to remain unlocked.
 
+Unlock eligibility and private-presentation authorization are separate gates
+that close in the same serialized lifecycle transition. Before an inactivity,
+background, protected-data-loss, or termination event returns, the host
+invalidates the private presentation generation, suppresses further private
+source updates, directly commands the `@MainActor` owner to install a locked,
+private-free snapshot, and awaits acknowledgement. It also publishes that
+private-free state through the observable adapter as a monotonic control update
+that remains admissible after invalidating the private generation. This
+presentation barrier is immediate and independent of the runtime lock policy: a
+grace period may keep the in-memory runtime session alive internally, but it
+must not leave private presentation visible, retained by the UI owner, available
+to a new subscriber, or eligible for scene or app-switcher capture.
+
 Unlock dispatch and lifecycle delivery are serialized under the same host
 authority. A request accepted before the gate closes is cancelled before the
 lock-producing event returns. A request arriving after closure is rejected or
@@ -268,7 +293,13 @@ event is not sufficient by itself. With
 `afterGracePeriod(..., cancelOnActive: false)`, the gate stays closed until the
 non-cancelled timer fires or is explicitly invalidated through the lifecycle
 coordinator. Deferred grace expiry therefore cannot race with a newly
-dispatched unlock.
+dispatched unlock. Private-presentation authorization follows the same
+fail-closed rule. If an active transition validly cancels grace and the runtime
+remains unlocked, the host may expose private state only through a fresh
+generation built from current runtime state after all lifecycle checks pass; it
+must never replay the obscured snapshot. If grace is not cancelled, presentation
+stays private-free until the timer locks the runtime and a later explicit
+activation succeeds.
 
 ## 23. Host-Owned Observable Adapter Subscription
 
@@ -280,6 +311,15 @@ publishes one immutable snapshot at a time.
 Scene consumers may subscribe to that process authority, but they must not
 create independent runtime or private-state graphs. Cancellation must prevent
 buffered private snapshots from being rendered.
+
+The owner also implements a narrow future host-only reset operation such as
+`installPrivateFreeSnapshot(generation:) async`. It atomically replaces its
+published snapshot, discards buffered values from invalidated generations, and
+returns only after the replacement is visible to its consumers. This operation
+accepts no private payload and is not a general runtime mutation API. Host stop,
+inactivity, backgrounding, protected-data loss, termination, and fatal
+containment use it before cancelling subscriptions or returning control to a
+caller that assumes presentation is cleared.
 
 ## 24. MainActor Boundary
 
@@ -359,6 +399,11 @@ adapter, and active vault. Windows may maintain public navigation state and
 subscribe to the same presentation authority. Any window may request lock, and
 all windows must remove private presentation when the process generation or
 status changes.
+
+The preferred first host has one process-wide `@MainActor` presentation owner
+that every window renders. If a later design permits window-local owners, the
+host must register them and await a private-free acknowledgement from every
+current owner before lifecycle handling or stop reports completion.
 
 ## 33. Single Active Vault Policy
 
@@ -485,6 +530,19 @@ Phase 2D-46 must cover:
 - a concurrent unlock/background race proving the request is either accepted
   before gate closure and cancelled before event return, or rejected after
   closure, with no third ordering that permits late activation;
+- an already-unlocked runtime entering inactivity under a nonzero grace policy,
+  proving the `@MainActor` owner and observable adapter become private-free
+  before event delivery returns even though the runtime remains unlocked;
+- a delayed or suspended presentation-owner consumer, proving the host awaits
+  the direct private-free acknowledgement rather than relying on
+  `currentSnapshot()` or stream delivery;
+- private source updates arriving during lifecycle grace, proving the closed
+  presentation gate rejects them and a new subscriber receives no prior private
+  projection;
+- return to active with cancellable grace, proving any private re-projection
+  uses a fresh generation only after lifecycle and protected-data checks pass;
+- return to active with non-cancellable grace, proving presentation remains
+  private-free through timer expiry and runtime lock;
 - advancing the grace clock past expiry while a post-event fake derivation
   would otherwise complete, proving the runtime and presentation remain locked
   and private-free until a processed active/protected-data-available transition
@@ -500,8 +558,13 @@ Phase 2D-46 must cover:
 - fatal or integrity-unknown save failure locking and clearing;
 - lock propagation to every subscriber and rejection of late updates;
 - stop while unlocked cancelling active unlock, mutation, and public-search
-  work, awaiting runtime lock, invalidating the presentation generation, and
-  leaving `currentSnapshot()` locked with no private projection before return;
+  work, closing presentation authorization, invalidating the presentation
+  generation, awaiting direct `@MainActor` private-free acknowledgement,
+  awaiting runtime lock, and leaving both the UI owner and `currentSnapshot()`
+  locked with no private projection before subscription cancellation or return;
+- stop with the UI owner suspended after publishing an unlocked snapshot,
+  proving cancellation cannot strand that snapshot and every registered owner
+  acknowledges clearing before stop completes;
 - restart or resubscribe after stop never replaying the prior private snapshot,
   including when the old source completes or yields late;
 - public and private task cancellation independence;
