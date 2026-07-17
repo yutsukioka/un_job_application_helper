@@ -60,10 +60,13 @@ remove its presentation projection before a locked view is rendered.
 ## 7. Unlock Request Coordinator Readiness
 
 The unlock request coordinator is ready as a test-only, runtime-neutral secret
-handoff seam. Requests are single-use, concurrent dispatch is serialized, and
-owned references are cleared on success, failure, cancellation, and timeout.
-Production passphrase derivation, recovery-key parsing, and UI capture remain
-unimplemented.
+handoff seam. Requests are single-use and concurrent reuse of the same request
+is rejected, but distinct request IDs are not globally serialized and may
+overlap injected derivation or activation work. A future host must provide
+reviewed global or per-vault arbitration before multi-window integration.
+Owned references are cleared on success, failure, cancellation, and timeout.
+Production passphrase derivation, recovery-key parsing, host arbitration, and
+UI capture remain unimplemented.
 
 ## 8. Private-State Store Readiness
 
@@ -460,6 +463,8 @@ Phase 2D-46 should provide a test host that composes real runtime-neutral
 services with fake root, key, clock, lifecycle, and secret-derivation seams.
 Tests should cover actor-to-main ordering, generation rejection, task teardown,
 temporary-root encrypted load/save, and zero production app-entry references.
+The selected host arbitration policy must prevent competing activation attempts
+for the same vault while still preserving per-request cancellation and cleanup.
 The test host must also spy on `SearchViewModel` or its injected client and
 prove that locked public search makes no `savedSearches()`,
 `trackerRecords()`, `api/saved-searches`, or `api/tracker` request and publishes
@@ -624,7 +629,7 @@ current architecture and evidence.
 | Runtime facade | Ready with constraints | Actor API and tests exist; an `@MainActor` owner and host lifetime do not. |
 | Presentation adapter | Ready with constraints | Stateless projection exists; observable ownership and stale-update orchestration belong to 2D-44. |
 | Lifecycle coordinator | Ready with constraints | Neutral policy is tested; platform event subscription and scene aggregation are absent. |
-| Unlock request coordinator | Ready with constraints | Single-use cleanup is tested; production derivation, parsing, and UI capture are absent. |
+| Unlock request coordinator | Ready with constraints | Per-request single-use cleanup is tested; distinct requests are not globally serialized, so host arbitration, production derivation, parsing, and UI capture are absent. |
 | Keychain | Ready with constraints | Protocol and adapter exist; explicit host action, accessibility policy, and prompt policy remain. |
 | Encrypted store load | Ready with constraints | Activation and hydration are tested; host wiring, file protection, and backup behavior remain. |
 | Encrypted save | Design required | Saver, merger, coordinator, and facade paths exist, but generic save failures do not yet carry the typed containment proof required for safe integration. |
