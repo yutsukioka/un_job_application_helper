@@ -31,7 +31,10 @@ onboarding, recovery UX, or key rotation.
 - an in-memory presentation update source;
 - a temporary-root environment;
 - a fake `AtlasVaultKeyStore`;
-- an endpoint-category recorder.
+- an instrumented mutable public-state store shared with public search;
+- an injected private-compatibility endpoint spy;
+- an endpoint-category recorder shared by the public and private endpoint
+  fakes.
 
 Construction invokes none of those services. Observation starts only after an
 explicit subscription, and host start does not activate a vault.
@@ -45,8 +48,11 @@ and it never invokes the legacy sidebar refresh path.
 
 The endpoint recorder distinguishes public search, saved-search compatibility,
 tracker compatibility, and private-sidebar refresh categories without storing
-URLs, query text, job keys, or payloads. Tests require zero private categories
-while locked.
+URLs, query text, job keys, or payloads. Each private endpoint method records
+its category, and a contract test invokes all three methods to prove the
+tripwire is live before host tests require zero private categories while
+locked. The host also excludes direct production API-client, view-model, and
+cache types, so it cannot bypass the instrumented test boundary.
 
 ## 5. Explicit Activation
 
@@ -121,9 +127,15 @@ and no `.atlasvault` export is created.
 
 ## 9. Public Snapshot Invariant
 
-The test host has no public-snapshot mutation dependency. Integration tests
-encode a fake `AtlasPublicLocalSnapshot` before and after activation, save,
-failure, lifecycle, and lock operations and require byte equality.
+The test environment injects one mutable in-memory public-state store into the
+host and shares that same instance with public search. Public search reads the
+store, proving that it is connected rather than an unrelated local fixture.
+Tests capture bytes and replacement-call counts from this shared dependency
+before and after activation, save, failure, lifecycle, and lock operations.
+They require byte equality and zero replacements. A separate contract test
+mutates the store and proves that both the changed bytes and replacement count
+are observable. The host source remains forbidden from referencing the
+production public snapshot or cache directly.
 
 ## 10. Failure Injection
 
@@ -175,7 +187,9 @@ Tests cover:
 - real encrypted load, save, and rehydration under a temporary root;
 - encrypted JSON excludes both fake private name and query sentinels;
 - state-aware observable waits distinguish same-status private-state updates;
-- public snapshot immutability;
+- shared public-state bytes remain unchanged with zero replacement calls;
+- public-state and private-endpoint tripwires record deliberate test
+  invocations before host tests rely on them;
 - fake key-store usage and no `.atlasvault` artifact;
 - source guards against UI frameworks, app entry, view-model/cache coupling,
   platform authentication, networking, Application Support, migration, and

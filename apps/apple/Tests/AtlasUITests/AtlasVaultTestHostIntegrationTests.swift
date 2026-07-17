@@ -22,9 +22,13 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
 
         let constructionEvents = await harness.runtime.events()
         let publicSearchCalls = await harness.publicSearch.calls()
+        let publicStateCalls =
+            await harness.publicStateStore.callCountsForTesting()
         let sourceStarts = await harness.host.presentationSourceStartCount()
         XCTAssertEqual(constructionEvents, [])
         XCTAssertEqual(publicSearchCalls, 0)
+        XCTAssertEqual(publicStateCalls.loads, 0)
+        XCTAssertEqual(publicStateCalls.replacements, 0)
         XCTAssertEqual(sourceStarts, 0)
         XCTAssertEqual(harness.keyStore.callCounts.load, 0)
         XCTAssertEqual(try relativePaths(at: harness.rootURL), entriesBefore)
@@ -43,10 +47,48 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         XCTAssertEqual(try relativePaths(at: harness.rootURL), entriesBefore)
     }
 
+    func testPublicStateAndPrivateEndpointTripwiresAreInstrumented() async throws {
+        let harness = try await makeScriptedHarness()
+        defer { try? FileManager.default.removeItem(at: harness.rootURL) }
+
+        _ = try await harness.publicSearch.search(query: "FAKE_PUBLIC_QUERY")
+        await harness.privateCompatibilityEndpoints
+            .loadSavedSearchCompatibility()
+        await harness.privateCompatibilityEndpoints
+            .loadTrackerCompatibility()
+        await harness.privateCompatibilityEndpoints.refreshPrivateSidebar()
+
+        let endpointCalls = await harness.recorder.snapshot()
+        let publicStateCalls =
+            await harness.publicStateStore.callCountsForTesting()
+        XCTAssertEqual(
+            endpointCalls,
+            [
+                .publicSearch,
+                .savedSearchCompatibility,
+                .trackerCompatibility,
+                .privateSidebarRefresh,
+            ]
+        )
+        XCTAssertEqual(publicStateCalls.loads, 1)
+        XCTAssertEqual(publicStateCalls.replacements, 0)
+
+        let replacement = Data("FAKE_PUBLIC_REPLACEMENT".utf8)
+        await harness.publicStateStore.replacePublicStateBytes(replacement)
+        let replacedBytes =
+            await harness.publicStateStore.snapshotForTesting()
+        let replacedCalls =
+            await harness.publicStateStore.callCountsForTesting()
+        XCTAssertEqual(replacedBytes, replacement)
+        XCTAssertEqual(replacedCalls.replacements, 1)
+    }
+
     func testLockedPublicSearchUsesOnlyPublicEndpointCategory() async throws {
         let harness = try await makeScriptedHarness()
         defer { try? FileManager.default.removeItem(at: harness.rootURL) }
         let subscription = await harness.observer.subscribe()
+        let publicBefore =
+            await harness.publicStateStore.snapshotForTesting()
         await harness.host.start()
 
         let jobs = try await harness.host.searchPublicJobs(
@@ -67,6 +109,13 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(endpointCalls, [.publicSearch])
         XCTAssertNil(snapshot.privateState)
+        let publicAfter =
+            await harness.publicStateStore.snapshotForTesting()
+        let publicStateCalls =
+            await harness.publicStateStore.callCountsForTesting()
+        XCTAssertEqual(publicAfter, publicBefore)
+        XCTAssertEqual(publicStateCalls.loads, 1)
+        XCTAssertEqual(publicStateCalls.replacements, 0)
         await assertNoPrivateCompatibilityCalls(harness.recorder)
         await subscription.cancel()
     }
@@ -456,8 +505,8 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         let subscription = await harness.observer.subscribe()
         await harness.host.start()
         try await harness.host.unlock(unlockRequest())
-        let publicSnapshot = try makePublicSnapshot()
-        let publicBefore = try encodedPublicSnapshot(publicSnapshot)
+        let publicBefore =
+            await harness.publicStateStore.snapshotForTesting()
 
         for failure in [
             AtlasVaultScriptedRecoverableSaveFailure.atomicWrite,
@@ -486,10 +535,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                 snapshot.privateState?.savedSearches.first?.name,
                 Self.privateSentinel
             )
-            XCTAssertEqual(
-                try encodedPublicSnapshot(publicSnapshot),
-                publicBefore
-            )
+            let publicAfter =
+                await harness.publicStateStore.snapshotForTesting()
+            let publicStateCalls =
+                await harness.publicStateStore.callCountsForTesting()
+            XCTAssertEqual(publicAfter, publicBefore)
+            XCTAssertEqual(publicStateCalls.replacements, 0)
         }
         await subscription.cancel()
     }
@@ -916,13 +967,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             (.unsupportedVersion, .unsupportedVersion),
             (.vaultUnavailable, .failed),
         ]
-        let publicSnapshot = try makePublicSnapshot()
-        let publicBefore = try encodedPublicSnapshot(publicSnapshot)
-
         for (failure, expectedStatus) in failures {
             let harness = try await makeScriptedHarness()
             defer { try? FileManager.default.removeItem(at: harness.rootURL) }
             let subscription = await harness.observer.subscribe()
+            let publicBefore =
+                await harness.publicStateStore.snapshotForTesting()
             await harness.runtime.setActivationBehavior(.fail(failure))
             await harness.host.start()
 
@@ -941,10 +991,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                 status: expectedStatus
             )
             XCTAssertNil(snapshot.privateState)
-            XCTAssertEqual(
-                try encodedPublicSnapshot(publicSnapshot),
-                publicBefore
-            )
+            let publicAfter =
+                await harness.publicStateStore.snapshotForTesting()
+            let publicStateCalls =
+                await harness.publicStateStore.callCountsForTesting()
+            XCTAssertEqual(publicAfter, publicBefore)
+            XCTAssertEqual(publicStateCalls.replacements, 0)
             await subscription.cancel()
         }
     }
@@ -1023,8 +1075,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             sleeper: time
         )
         let recorder = AtlasVaultTestEndpointCallRecorder()
+        let publicStateStore = try makePublicStateStore()
+        let privateCompatibilityEndpoints =
+            AtlasVaultTestPrivateCompatibilityEndpointSpy(recorder: recorder)
         let publicSearch = AtlasVaultFakePublicJobSearchService(
             recorder: recorder,
+            publicStateStore: publicStateStore,
             results: [AtlasVaultTestPublicJob(
                 identifier: "fake-public-job",
                 title: "Fake public job"
@@ -1037,13 +1093,14 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             publicSearch: publicSearch,
             environment: AtlasVaultTestHostEnvironment(
                 temporaryRootURL: rootURL,
-                keyStore: keyStore
+                keyStore: keyStore,
+                publicStateStore: publicStateStore,
+                privateCompatibilityEndpoints: privateCompatibilityEndpoints
             )
         )
         let observer = await host.presentationObserver()
         let subscription = await observer.subscribe()
-        let publicSnapshot = try makePublicSnapshot()
-        let publicBefore = try encodedPublicSnapshot(publicSnapshot)
+        let publicBefore = await publicStateStore.snapshotForTesting()
 
         await host.start()
         try await host.unlock(
@@ -1122,10 +1179,10 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
         XCTAssertEqual(keyStore.callCounts.save, 0)
         XCTAssertEqual(keyStore.callCounts.delete, 0)
         XCTAssertEqual(rootProvider.callCount, 2)
-        XCTAssertEqual(
-            try encodedPublicSnapshot(publicSnapshot),
-            publicBefore
-        )
+        let publicAfter = await publicStateStore.snapshotForTesting()
+        let publicStateCalls = await publicStateStore.callCountsForTesting()
+        XCTAssertEqual(publicAfter, publicBefore)
+        XCTAssertEqual(publicStateCalls.replacements, 0)
         XCTAssertFalse(
             try relativePaths(at: rootURL).contains {
                 $0.hasSuffix(".atlasvault")
@@ -1172,8 +1229,10 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             "LAContext",
             "LocalAuthentication",
             "URLSession",
+            "AtlasAPIClient",
             "SearchViewModel",
             "AtlasLocalCache",
+            "AtlasPublicLocalSnapshot",
             "applicationSupportDirectory",
             "AtlasApplicationSupport",
             "refreshSidebarData",
@@ -1190,6 +1249,9 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
     private struct ScriptedHarness {
         let rootURL: URL
         let recorder: AtlasVaultTestEndpointCallRecorder
+        let publicStateStore: AtlasVaultTestPublicStateStore
+        let privateCompatibilityEndpoints:
+            AtlasVaultTestPrivateCompatibilityEndpointSpy
         let publicSearch: AtlasVaultFakePublicJobSearchService
         let keyStore: AtlasVaultTestFakeKeyStore
         let runtime: AtlasVaultScriptedTestRuntime
@@ -1208,8 +1270,12 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
     ) async throws -> ScriptedHarness {
         let rootURL = try temporaryRoot()
         let recorder = AtlasVaultTestEndpointCallRecorder()
+        let publicStateStore = try makePublicStateStore()
+        let privateCompatibilityEndpoints =
+            AtlasVaultTestPrivateCompatibilityEndpointSpy(recorder: recorder)
         let publicSearch = AtlasVaultFakePublicJobSearchService(
             recorder: recorder,
+            publicStateStore: publicStateStore,
             results: [AtlasVaultTestPublicJob(
                 identifier: "fake-public-job",
                 title: "Fake public job"
@@ -1248,13 +1314,17 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
             publicSearch: publicSearch,
             environment: AtlasVaultTestHostEnvironment(
                 temporaryRootURL: rootURL,
-                keyStore: keyStore
+                keyStore: keyStore,
+                publicStateStore: publicStateStore,
+                privateCompatibilityEndpoints: privateCompatibilityEndpoints
             )
         )
         let observer = await host.presentationObserver()
         return ScriptedHarness(
             rootURL: rootURL,
             recorder: recorder,
+            publicStateStore: publicStateStore,
+            privateCompatibilityEndpoints: privateCompatibilityEndpoints,
             publicSearch: publicSearch,
             keyStore: keyStore,
             runtime: runtime,
@@ -1445,6 +1515,13 @@ final class AtlasVaultTestHostIntegrationTests: XCTestCase {
                 url.path.dropFirst(rootURL.path.count + 1)
             )
         }.sorted()
+    }
+
+    private func makePublicStateStore() throws -> AtlasVaultTestPublicStateStore {
+        let snapshot = try makePublicSnapshot()
+        return try AtlasVaultTestPublicStateStore(
+            bytes: encodedPublicSnapshot(snapshot)
+        )
     }
 
     private func makePublicSnapshot() throws -> AtlasPublicLocalSnapshot {

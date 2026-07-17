@@ -46,6 +46,67 @@ actor AtlasVaultTestEndpointCallRecorder {
     }
 }
 
+protocol AtlasVaultTestPublicStateStoring: Sendable {
+    func loadPublicStateBytes() async -> Data
+    func replacePublicStateBytes(_ bytes: Data) async
+}
+
+actor AtlasVaultTestPublicStateStore: AtlasVaultTestPublicStateStoring {
+    private var bytes: Data
+    private var loadCount = 0
+    private var replacementCount = 0
+
+    init(bytes: Data) {
+        self.bytes = bytes
+    }
+
+    func loadPublicStateBytes() -> Data {
+        loadCount += 1
+        return bytes
+    }
+
+    func replacePublicStateBytes(_ bytes: Data) {
+        replacementCount += 1
+        self.bytes = bytes
+    }
+
+    func snapshotForTesting() -> Data {
+        bytes
+    }
+
+    func callCountsForTesting() -> (loads: Int, replacements: Int) {
+        (loadCount, replacementCount)
+    }
+}
+
+protocol AtlasVaultTestPrivateCompatibilityAccessing: Sendable {
+    func loadSavedSearchCompatibility() async
+    func loadTrackerCompatibility() async
+    func refreshPrivateSidebar() async
+}
+
+actor AtlasVaultTestPrivateCompatibilityEndpointSpy:
+    AtlasVaultTestPrivateCompatibilityAccessing
+{
+    private let recorder: AtlasVaultTestEndpointCallRecorder
+
+    init(recorder: AtlasVaultTestEndpointCallRecorder) {
+        self.recorder = recorder
+    }
+
+    func loadSavedSearchCompatibility() async {
+        await recorder.record(.savedSearchCompatibility)
+    }
+
+    func loadTrackerCompatibility() async {
+        await recorder.record(.trackerCompatibility)
+    }
+
+    func refreshPrivateSidebar() async {
+        await recorder.record(.privateSidebarRefresh)
+    }
+}
+
 struct AtlasVaultTestPublicJob: Equatable, Sendable {
     let identifier: String
     let title: String
@@ -57,20 +118,24 @@ protocol AtlasVaultTestPublicJobSearching: Sendable {
 
 actor AtlasVaultFakePublicJobSearchService: AtlasVaultTestPublicJobSearching {
     private let recorder: AtlasVaultTestEndpointCallRecorder
+    private let publicStateStore: any AtlasVaultTestPublicStateStoring
     private let results: [AtlasVaultTestPublicJob]
     private var callCount = 0
 
     init(
         recorder: AtlasVaultTestEndpointCallRecorder,
+        publicStateStore: any AtlasVaultTestPublicStateStoring,
         results: [AtlasVaultTestPublicJob]
     ) {
         self.recorder = recorder
+        self.publicStateStore = publicStateStore
         self.results = results
     }
 
     func search(query: String) async throws -> [AtlasVaultTestPublicJob] {
         callCount += 1
         await recorder.record(.publicSearch)
+        _ = await publicStateStore.loadPublicStateBytes()
         return results
     }
 
@@ -150,6 +215,9 @@ final class AtlasVaultTestRootProvider:
 struct AtlasVaultTestHostEnvironment: Sendable {
     let temporaryRootURL: URL
     let keyStore: any AtlasVaultKeyStore
+    let publicStateStore: any AtlasVaultTestPublicStateStoring
+    let privateCompatibilityEndpoints:
+        any AtlasVaultTestPrivateCompatibilityAccessing
 }
 
 protocol AtlasVaultTestHostRuntime:
