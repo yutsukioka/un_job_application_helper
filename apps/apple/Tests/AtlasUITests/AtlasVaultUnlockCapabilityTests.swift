@@ -154,6 +154,62 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         XCTAssertTrue(isCleared)
     }
 
+    func testValidatedProviderPreservesCancellationAfterSecretCleanup() async throws {
+        let context = try await capabilityContext()
+        let provider = CapabilityCancellationUnwrapper()
+        let clearGate = CapabilityClearGate()
+        let buffer = CapabilityGatedClearSecretBuffer(
+            bytes: Data("fake".utf8),
+            clearGate: clearGate
+        )
+        let completion = CapabilityCompletionFlag()
+
+        let operation = Task {
+            do {
+                _ = try await provider.validatedVaultKey(
+                    context: context,
+                    secret: buffer
+                )
+                await completion.markCompleted()
+                XCTFail("Expected cancellation")
+            } catch {
+                await completion.markCompleted()
+                guard error is CancellationError else {
+                    XCTFail("Expected CancellationError, got \(error)")
+                    return
+                }
+            }
+        }
+
+        await buffer.waitUntilClearStarted()
+        let completedBeforeClear = await completion.isCompleted
+        XCTAssertFalse(completedBeforeClear)
+
+        await clearGate.open()
+        await operation.value
+        let isCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(isCleared)
+    }
+
+    func testValidatedProviderMapsUnavailableSecretBufferToInvalidSecret() async throws {
+        let context = try await capabilityContext()
+        let provider = CapabilitySecretTakingUnwrapper()
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+        await buffer.clear()
+
+        do {
+            _ = try await provider.validatedVaultKey(
+                context: context,
+                secret: buffer
+            )
+            XCTFail("Expected invalid secret")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultKeyUnwrapError, .invalidSecret)
+        }
+        let isCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(isCleared)
+    }
+
     func testCapabilityTypesAreSendableAndNotCodable() {
         assertSendable(AtlasVaultUnlockMethod.self)
         assertSendable(AtlasVaultUnlockCapabilityStatus.self)
@@ -227,6 +283,25 @@ private struct CapabilityResultUnwrapper: AtlasVaultKeyUnwrapping {
 
 private enum CapabilityPrivateProviderError: Error, Sendable {
     case secret(String)
+}
+
+private struct CapabilityCancellationUnwrapper: AtlasVaultKeyUnwrapping {
+    func unwrapVaultKey(
+        context: AtlasVaultKeyUnwrapContext,
+        secret: any AtlasVaultSecretBuffer
+    ) async throws -> Data {
+        throw CancellationError()
+    }
+}
+
+private struct CapabilitySecretTakingUnwrapper: AtlasVaultKeyUnwrapping {
+    func unwrapVaultKey(
+        context: AtlasVaultKeyUnwrapContext,
+        secret: any AtlasVaultSecretBuffer
+    ) async throws -> Data {
+        _ = try await secret.takeSecretBytes()
+        return Data(repeating: 7, count: 32)
+    }
 }
 
 private actor CapabilityCompletionFlag {
