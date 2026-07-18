@@ -382,16 +382,13 @@ public actor AtlasVaultUnlockPresentationController:
         selectedMethod = nextMethod
         status = nextStatus
 
-        let didCancel = await coordinator.cancel(attempt.request)
+        _ = await coordinator.cancel(attempt.request)
         guard pendingCancellationAuthorization == cancellationAuthorization else {
             return snapshot()
         }
         pendingCancellationAuthorization = nil
         guard authorization == cancellationAuthorization else {
             return snapshot()
-        }
-        if !didCancel, requireHostReconciliationIfCommitted {
-            status = .hostReconciliationRequired
         }
         return snapshot()
     }

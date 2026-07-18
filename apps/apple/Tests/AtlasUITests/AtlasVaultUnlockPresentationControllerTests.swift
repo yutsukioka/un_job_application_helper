@@ -358,7 +358,7 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertTrue(didDispatch)
 
         let cancelled = await controller.cancel()
-        XCTAssertEqual(cancelled.status, .hostReconciliationRequired)
+        XCTAssertEqual(cancelled.status, .cancelled)
 
         await coordinator.resolve(.success)
         let staleCompletion = await submission.value
@@ -382,17 +382,22 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         let didDispatch = await waitForDispatch(coordinator)
         XCTAssertTrue(didDispatch)
         let reconciliation = await controller.cancel()
-        XCTAssertEqual(reconciliation.status, .hostReconciliationRequired)
+        XCTAssertEqual(reconciliation.status, .cancelled)
 
         let repeatedCancel = await controller.cancel()
         let disappeared = await controller.didDisappear()
 
-        XCTAssertEqual(repeatedCancel.status, .hostReconciliationRequired)
-        XCTAssertEqual(disappeared.status, .hostReconciliationRequired)
+        XCTAssertEqual(repeatedCancel.status, .cancelled)
+        XCTAssertEqual(disappeared.status, .locked)
 
         await coordinator.resolve(.success)
         let terminal = await submission.value
         XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+
+        let retainedCancel = await controller.cancel()
+        let retainedDisappearance = await controller.didDisappear()
+        XCTAssertEqual(retainedCancel.status, .hostReconciliationRequired)
+        XCTAssertEqual(retainedDisappearance.status, .hostReconciliationRequired)
     }
 
     func testRepeatedCancelDuringPendingCancellationPreservesReconciliation() async {
@@ -420,11 +425,43 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
 
         await coordinator.resolveCancellation(false)
         let cancellationResult = await cancellation.value
-        XCTAssertEqual(cancellationResult.status, .hostReconciliationRequired)
+        XCTAssertEqual(cancellationResult.status, .cancelled)
 
         await coordinator.resolveDispatch(.success)
         let terminal = await submission.value
         XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
+    func testFailedRequestRacingCancellationDoesNotRequireHostReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let cancellationState = await cancellation.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .cancelled)
+        XCTAssertEqual(cancellationState.status, .cancelled)
+        XCTAssertEqual(retained.status, .cancelled)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
     }
 
     func testDisappearanceDuringPendingCancellationRequiresHostReconciliation() async {
@@ -485,6 +522,41 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertTrue(bufferSnapshot.isCleared)
     }
 
+    func testFailedRequestRacingMethodChangeRetainsNewSelection() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let methodChange = Task {
+            await controller.select(.recoveryKey)
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let changed = await methodChange.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .ready)
+        XCTAssertEqual(changed.status, .ready)
+        XCTAssertEqual(retained.status, .ready)
+        XCTAssertEqual(retained.selectedMethod, .recoveryKey)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
+    }
+
     func testMethodChangeReconcilesWhenAcceptedCancellationStillCommits() async {
         let coordinator = CancellationGatedUnlockCoordinator()
         let capabilities = fakeCapabilities(passphrase: true, recovery: true)
@@ -535,10 +607,10 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertTrue(didDispatch)
 
         let disappeared = await controller.didDisappear()
+        XCTAssertEqual(disappeared.status, .locked)
         await coordinator.resolve(.success)
         let terminal = await submission.value
 
-        XCTAssertEqual(disappeared.status, .hostReconciliationRequired)
         XCTAssertEqual(terminal.status, .hostReconciliationRequired)
         XCTAssertNil(terminal.selectedMethod)
         let bufferState = await buffer.snapshot()
@@ -577,6 +649,41 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertEqual(staleCompletion.status, .hostReconciliationRequired)
         XCTAssertEqual(retained.status, .hostReconciliationRequired)
         XCTAssertNil(retained.selectedMethod)
+    }
+
+    func testExpiredRequestRacingDisappearanceRemainsLocked() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let disappearance = Task {
+            await controller.didDisappear()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.expired))
+        let expiredCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let disappeared = await disappearance.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(expiredCompletion.status, .locked)
+        XCTAssertEqual(disappeared.status, .locked)
+        XCTAssertEqual(retained.status, .locked)
+        XCTAssertNil(retained.selectedMethod)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
     }
 
     func testHostLockInvalidatesAttemptAndOverridesLateSuccess() async {
