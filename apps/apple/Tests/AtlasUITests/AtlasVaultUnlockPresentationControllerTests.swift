@@ -81,6 +81,64 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertEqual(dispatchCount, 0)
     }
 
+    func testUnavailableSubmissionCannotClobberNewerUnlockDuringCleanup() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        let rejectedBuffer = GatedClearPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+
+        let rejectedSubmission = Task {
+            await controller.submit(.passphrase(rejectedBuffer))
+        }
+        let didStartClear = await waitForClear(rejectedBuffer)
+        XCTAssertTrue(didStartClear)
+
+        _ = await controller.select(.localKey)
+        let unlocked = await controller.submit(.localKey)
+        await rejectedBuffer.releaseClear()
+        let rejectedResult = await rejectedSubmission.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(unlocked.status, .unlocked)
+        XCTAssertEqual(rejectedResult.status, .unlocked)
+        XCTAssertEqual(retained.status, .unlocked)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+    }
+
+    func testMismatchedSubmissionCannotClobberNewerUnlockDuringCleanup() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: fakeCapabilities(passphrase: true, recovery: false),
+            coordinator: coordinator
+        )
+        let rejectedBuffer = GatedClearPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+        _ = await controller.select(.localKey)
+
+        let rejectedSubmission = Task {
+            await controller.submit(.passphrase(rejectedBuffer))
+        }
+        let didStartClear = await waitForClear(rejectedBuffer)
+        XCTAssertTrue(didStartClear)
+
+        let unlocked = await controller.submit(.localKey)
+        await rejectedBuffer.releaseClear()
+        let rejectedResult = await rejectedSubmission.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(unlocked.status, .unlocked)
+        XCTAssertEqual(rejectedResult.status, .unlocked)
+        XCTAssertEqual(retained.status, .unlocked)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+    }
+
     func testLocalKeyDispatchUsesExistingCoordinatorRequest() async {
         let spy = PresentationDispatchSpy()
         let coordinator = functionalCoordinator(spy: spy)

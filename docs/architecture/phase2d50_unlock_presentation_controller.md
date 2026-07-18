@@ -54,7 +54,9 @@ wrapped-key metadata, key, path, private state, or failure detail.
 Unavailable methods cannot be selected. Submission requires both current
 availability and an exact selected-method match. Rejected, mismatched, or
 concurrent duplicate secret submissions are cleared without taking their
-bytes and never reach the coordinator.
+bytes and never reach the coordinator. Sanitized rejection state is published
+before awaiting secret cleanup, so an older rejected call cannot overwrite a
+newer selection or completed unlock when cleanup suspends.
 
 An accepted submission creates one `AtlasVaultUnlockRequest` with the
 controller's non-semantic vault ID. The controller retains that request only
@@ -150,6 +152,7 @@ Fake tests cover:
 - local-key and explicitly fake passphrase/recovery dispatch;
 - raw-key absence and redacted, non-Codable state;
 - one controller-local in-flight request;
+- rejected-submission cleanup races cannot overwrite newer presentation state;
 - success and generic failure;
 - timeout and explicit cancellation;
 - cancellation losing to committed success;

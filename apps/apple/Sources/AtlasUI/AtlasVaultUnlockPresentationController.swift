@@ -238,14 +238,14 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         guard capabilities.status(for: method) == .available else {
-            await submission.clearSecret()
             selectedMethod = nil
             status = .methodUnavailable
+            await submission.clearSecret()
             return snapshot()
         }
         guard selectedMethod == method else {
-            await submission.clearSecret()
             status = .failed
+            await submission.clearSecret()
             return snapshot()
         }
 
