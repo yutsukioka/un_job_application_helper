@@ -686,7 +686,7 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
     }
 
-    func testHostLockInvalidatesAttemptAndOverridesLateSuccess() async {
+    func testHostLockRequiresReconciliationWhenLateActivationSucceeds() async {
         let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
         let capabilities = fakeCapabilities(passphrase: true, recovery: false)
         let controller = AtlasVaultUnlockPresentationController(
@@ -707,10 +707,107 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         let terminal = await submission.value
 
         XCTAssertEqual(locked.status, .locked)
-        XCTAssertEqual(terminal.status, .locked)
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
         XCTAssertNil(terminal.selectedMethod)
         let bufferState = await buffer.snapshot()
         XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testHostLockRemainsLockedWhenInvalidatedDispatchFails() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let lock = Task {
+            await controller.hostDidLock()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let locked = await lock.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .locked)
+        XCTAssertEqual(locked.status, .locked)
+        XCTAssertEqual(retained.status, .locked)
+        XCTAssertNil(retained.selectedMethod)
+    }
+
+    func testHostLockReconcilesWhenAcceptedCancellationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let lock = Task {
+            await controller.hostDidLock()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let locked = await lock.value
+        XCTAssertEqual(locked.status, .locked)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testHostLockPreservesPriorInvalidatedAttemptUntilCompletion() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let cancelled = await cancellation.value
+        XCTAssertEqual(cancelled.status, .cancelled)
+
+        let locked = await controller.hostDidLock()
+        XCTAssertEqual(locked.status, .locked)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
     }
 
     func testControllerReleasesRequestAndSecretOwnershipAfterCompletion() async {

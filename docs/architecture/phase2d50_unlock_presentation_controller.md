@@ -101,7 +101,10 @@ controller does not call the runtime facade.
 
 `hostDidLock()` is a notification that the host lock boundary has been
 applied. It clears selection, publishes locked state, and attempts request
-cancellation without allowing a late completion to reopen presentation.
+cancellation. The invalidated attempt remains tracked until dispatch
+termination because activation could still commit after the host lock. A late
+failure retains locked state; a late success requires another host
+reconciliation and cannot publish unlocked presentation.
 
 ## Failure Behavior
 

@@ -332,7 +332,6 @@ public actor AtlasVaultUnlockPresentationController:
 
     public func hostDidLock() async -> AtlasVaultUnlockPresentationState {
         authorization &+= 1
-        invalidatedAttempt = nil
         selectedMethod = nil
         status = .locked
 
@@ -343,6 +342,10 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         activeAttempt = nil
+        invalidatedAttempt = InvalidatedAttempt(
+            authorization: attempt.authorization,
+            requiresHostReconciliationOnSuccess: true
+        )
         let cancellationAuthorization = authorization
         pendingCancellationAuthorization = cancellationAuthorization
         _ = await coordinator.cancel(attempt.request)
