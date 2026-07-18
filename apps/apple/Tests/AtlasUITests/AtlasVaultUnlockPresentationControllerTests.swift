@@ -301,6 +301,33 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertNotEqual(retained.status, .unlocked)
     }
 
+    func testHostReconciliationSurvivesRepeatedCancelAndDisappearance() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+        let reconciliation = await controller.cancel()
+        XCTAssertEqual(reconciliation.status, .hostReconciliationRequired)
+
+        let repeatedCancel = await controller.cancel()
+        let disappeared = await controller.didDisappear()
+
+        XCTAssertEqual(repeatedCancel.status, .hostReconciliationRequired)
+        XCTAssertEqual(disappeared.status, .hostReconciliationRequired)
+
+        await coordinator.resolve(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
     func testMethodChangeCancelsAttemptAndPreservesNewSelection() async {
         let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
         let capabilities = fakeCapabilities(passphrase: true, recovery: true)
@@ -506,12 +533,15 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let enumerator = FileManager.default.enumerator(
-            at: repositoryRoot,
-            includingPropertiesForKeys: nil
+        let enumerator = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: repositoryRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
         )
         var artifacts: [String] = []
-        while let url = enumerator?.nextObject() as? URL {
+        while let url = enumerator.nextObject() as? URL {
             if url.pathExtension == "atlasvault" {
                 artifacts.append(url.path)
             }

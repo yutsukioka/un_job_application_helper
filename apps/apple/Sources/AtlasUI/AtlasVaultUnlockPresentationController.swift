@@ -258,6 +258,9 @@ public actor AtlasVaultUnlockPresentationController:
     }
 
     public func cancel() async -> AtlasVaultUnlockPresentationState {
+        guard status != .hostReconciliationRequired else {
+            return snapshot()
+        }
         guard pendingCancellationAuthorization == nil else {
             authorization &+= 1
             status = .cancelled
@@ -278,6 +281,9 @@ public actor AtlasVaultUnlockPresentationController:
     }
 
     public func didDisappear() async -> AtlasVaultUnlockPresentationState {
+        guard status != .hostReconciliationRequired else {
+            return snapshot()
+        }
         guard pendingCancellationAuthorization == nil else {
             authorization &+= 1
             selectedMethod = nil
