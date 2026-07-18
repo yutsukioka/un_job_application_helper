@@ -506,6 +506,20 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(source.contains("activeAction?.cancel()"))
     }
 
+    func testViewOwnedStateCleanupIsExplicitlyMainActorIsolated() throws {
+        let source = try source(named: "AtlasExplicitUnlockView.swift")
+
+        XCTAssertTrue(
+            source.contains("@MainActor\npublic struct AtlasExplicitUnlockView")
+        )
+        XCTAssertEqual(
+            source.components(
+                separatedBy: "Task { @MainActor in"
+            ).count - 1,
+            3
+        )
+    }
+
     func testViewSourceUsesSecureFieldsAndOmitsRawTestKey() throws {
         let source = try source(named: "AtlasExplicitUnlockView.swift")
 

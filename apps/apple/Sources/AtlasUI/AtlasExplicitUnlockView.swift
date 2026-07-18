@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 public struct AtlasExplicitUnlockView: View {
     private let state: AtlasExplicitUnlockViewState
     private let actions: AtlasExplicitUnlockViewActions
@@ -185,7 +186,7 @@ public struct AtlasExplicitUnlockView: View {
         let actions = actions
         let actionID = UUID()
         activeActionID = actionID
-        activeAction = Task {
+        activeAction = Task { @MainActor in
             await actions.select(.localKey)
             guard !Task.isCancelled else {
                 await submission.clearExplicitUnlockSecret()
@@ -217,7 +218,7 @@ public struct AtlasExplicitUnlockView: View {
         let actions = actions
         let actionID = UUID()
         activeActionID = actionID
-        activeAction = Task {
+        activeAction = Task { @MainActor in
             guard !Task.isCancelled else {
                 await submission.clearExplicitUnlockSecret()
                 return
@@ -274,7 +275,7 @@ public struct AtlasExplicitUnlockView: View {
         activeAction?.cancel()
         let actionID = UUID()
         activeActionID = actionID
-        activeAction = Task {
+        activeAction = Task { @MainActor in
             await operation()
             guard
                 !Task.isCancelled,
