@@ -262,8 +262,6 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         guard pendingCancellationAuthorization == nil else {
-            authorization &+= 1
-            status = .cancelled
             return snapshot()
         }
         guard activeAttempt != nil else {
@@ -285,9 +283,8 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         guard pendingCancellationAuthorization == nil else {
-            authorization &+= 1
             selectedMethod = nil
-            status = .locked
+            status = .hostReconciliationRequired
             return snapshot()
         }
         guard activeAttempt != nil else {

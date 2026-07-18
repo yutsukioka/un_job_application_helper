@@ -328,6 +328,70 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertEqual(terminal.status, .hostReconciliationRequired)
     }
 
+    func testRepeatedCancelDuringPendingCancellationPreservesReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        let repeatedCancel = await controller.cancel()
+        XCTAssertEqual(repeatedCancel.status, .cancelled)
+
+        await coordinator.resolveCancellation(false)
+        let cancellationResult = await cancellation.value
+        XCTAssertEqual(cancellationResult.status, .hostReconciliationRequired)
+
+        await coordinator.resolveDispatch(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
+    func testDisappearanceDuringPendingCancellationRequiresHostReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        let disappeared = await controller.didDisappear()
+        XCTAssertEqual(disappeared.status, .hostReconciliationRequired)
+
+        await coordinator.resolveCancellation(false)
+        let cancellationResult = await cancellation.value
+        XCTAssertEqual(cancellationResult.status, .hostReconciliationRequired)
+
+        await coordinator.resolveDispatch(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
     func testMethodChangeCancelsAttemptAndPreservesNewSelection() async {
         let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
         let capabilities = fakeCapabilities(passphrase: true, recovery: true)
@@ -590,6 +654,30 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         return false
     }
 
+    private func waitForDispatch(
+        _ coordinator: CancellationGatedUnlockCoordinator
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await coordinator.dispatchCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForCancellation(
+        _ coordinator: CancellationGatedUnlockCoordinator
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await coordinator.cancelCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
     private func sourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -767,6 +855,43 @@ private actor ControlledUnlockCoordinator: AtlasVaultUnlockRequestCoordinating {
             continuation.resume()
         case let .failure(error):
             continuation.resume(throwing: error)
+        }
+    }
+}
+
+private actor CancellationGatedUnlockCoordinator: AtlasVaultUnlockRequestCoordinating {
+    private var dispatchContinuation: CheckedContinuation<Void, Error>?
+    private var cancellationContinuation: CheckedContinuation<Bool, Never>?
+    private(set) var dispatchCount = 0
+    private(set) var cancelCount = 0
+
+    func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        dispatchCount += 1
+        try await withCheckedThrowingContinuation { continuation in
+            dispatchContinuation = continuation
+        }
+    }
+
+    func cancel(_ request: AtlasVaultUnlockRequest) async -> Bool {
+        cancelCount += 1
+        return await withCheckedContinuation { continuation in
+            cancellationContinuation = continuation
+        }
+    }
+
+    func resolveCancellation(_ didCancel: Bool) {
+        cancellationContinuation?.resume(returning: didCancel)
+        cancellationContinuation = nil
+    }
+
+    func resolveDispatch(_ resolution: ControlledUnlockCoordinator.Resolution) {
+        guard let dispatchContinuation else { return }
+        self.dispatchContinuation = nil
+        switch resolution {
+        case .success:
+            dispatchContinuation.resume()
+        case let .failure(error):
+            dispatchContinuation.resume(throwing: error)
         }
     }
 }
