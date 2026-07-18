@@ -175,6 +175,27 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         XCTAssertTrue(isCleared)
     }
 
+    func testGatedSecretBufferConsumesBytesOnFirstTake() async throws {
+        let expected = Data("fake".utf8)
+        let buffer = CapabilityGatedClearSecretBuffer(
+            bytes: expected,
+            clearGate: CapabilityClearGate()
+        )
+
+        let firstTake = try await buffer.takeSecretBytes()
+        XCTAssertEqual(firstTake, expected)
+
+        do {
+            _ = try await buffer.takeSecretBytes()
+            XCTFail("Expected one-shot buffer to reject a second take")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultSecretBufferError, .unavailable)
+        }
+
+        let isCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(isCleared)
+    }
+
     func testValidatedProviderPreservesCancellationAfterSecretCleanup() async throws {
         let context = try await capabilityContext()
         let provider = CapabilityCancellationUnwrapper()
@@ -405,10 +426,20 @@ private actor CapabilityGatedClearSecretBuffer: AtlasVaultSecretBuffer {
     }
 
     func takeSecretBytes() throws -> Data {
-        guard let bytes else {
+        guard var retainedBytes = bytes else {
             throw AtlasVaultSecretBufferError.unavailable
         }
-        return Data(bytes)
+        bytes = nil
+        let result = retainedBytes.withUnsafeBytes { rawBuffer -> Data in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: rawBuffer.count)
+        }
+        for index in retainedBytes.indices {
+            retainedBytes[index] = 0
+        }
+        return result
     }
 
     func clear() async {
