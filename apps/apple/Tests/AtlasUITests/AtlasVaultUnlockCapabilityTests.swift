@@ -117,6 +117,43 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         await assertEventuallyCleared(buffer)
     }
 
+    func testValidatedProviderWaitsForSecretCleanupBeforeReturning() async throws {
+        let context = try await capabilityContext()
+        let provider = CapabilityResultUnwrapper(
+            result: .success(Data(repeating: 7, count: 32))
+        )
+        let clearGate = CapabilityClearGate()
+        let buffer = CapabilityGatedClearSecretBuffer(
+            bytes: Data("fake".utf8),
+            clearGate: clearGate
+        )
+        let completion = CapabilityCompletionFlag()
+
+        let operation = Task {
+            do {
+                let key = try await provider.validatedVaultKey(
+                    context: context,
+                    secret: buffer
+                )
+                await completion.markCompleted()
+                return key
+            } catch {
+                await completion.markCompleted()
+                throw error
+            }
+        }
+
+        await buffer.waitUntilClearStarted()
+        let completedBeforeClear = await completion.isCompleted
+        XCTAssertFalse(completedBeforeClear)
+
+        await clearGate.open()
+        let key = try await operation.value
+        XCTAssertEqual(key.count, 32)
+        let isCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(isCleared)
+    }
+
     func testCapabilityTypesAreSendableAndNotCodable() {
         assertSendable(AtlasVaultUnlockMethod.self)
         assertSendable(AtlasVaultUnlockCapabilityStatus.self)
@@ -190,4 +227,79 @@ private struct CapabilityResultUnwrapper: AtlasVaultKeyUnwrapping {
 
 private enum CapabilityPrivateProviderError: Error, Sendable {
     case secret(String)
+}
+
+private actor CapabilityCompletionFlag {
+    private(set) var isCompleted = false
+
+    func markCompleted() {
+        isCompleted = true
+    }
+}
+
+private actor CapabilityClearGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+}
+
+private actor CapabilityGatedClearSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: [UInt8]?
+    private let clearGate: CapabilityClearGate
+    private var didStartClear = false
+    private var clearStartWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(bytes: Data, clearGate: CapabilityClearGate) {
+        self.bytes = Array(bytes)
+        self.clearGate = clearGate
+    }
+
+    func takeSecretBytes() throws -> Data {
+        guard let bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        return Data(bytes)
+    }
+
+    func clear() async {
+        didStartClear = true
+        let waiters = clearStartWaiters
+        clearStartWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await clearGate.wait()
+        guard var retainedBytes = bytes else { return }
+        bytes = nil
+        for index in retainedBytes.indices {
+            retainedBytes[index] = 0
+        }
+    }
+
+    func waitUntilClearStarted() async {
+        guard !didStartClear else { return }
+        await withCheckedContinuation { continuation in
+            clearStartWaiters.append(continuation)
+        }
+    }
+
+    var isClearedForTesting: Bool {
+        bytes == nil
+    }
 }

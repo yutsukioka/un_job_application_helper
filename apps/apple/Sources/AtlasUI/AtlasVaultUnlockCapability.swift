@@ -82,29 +82,17 @@ public extension AtlasVaultKeyUnwrapping {
         context: AtlasVaultKeyUnwrapContext,
         secret: any AtlasVaultSecretBuffer
     ) async throws -> Data {
-        defer {
-            scheduleAtlasVaultKeyUnwrapSecretCleanup(secret)
-        }
-        let key: Data
+        let outcome: Result<Data, AtlasVaultKeyUnwrapError>
         do {
-            key = try await unwrapVaultKey(context: context, secret: secret)
+            let key = try await unwrapVaultKey(context: context, secret: secret)
+            outcome = key.count == 32 ? .success(key) : .failure(.invalidKeyLength)
         } catch let error as AtlasVaultKeyUnwrapError {
-            throw error
+            outcome = .failure(error)
         } catch {
-            throw AtlasVaultKeyUnwrapError.unwrapFailed
+            outcome = .failure(.unwrapFailed)
         }
-        guard key.count == 32 else {
-            throw AtlasVaultKeyUnwrapError.invalidKeyLength
-        }
-        return key
-    }
-}
-
-private func scheduleAtlasVaultKeyUnwrapSecretCleanup(
-    _ secret: any AtlasVaultSecretBuffer
-) {
-    Task.detached {
         await secret.clear()
+        return try outcome.get()
     }
 }
 
