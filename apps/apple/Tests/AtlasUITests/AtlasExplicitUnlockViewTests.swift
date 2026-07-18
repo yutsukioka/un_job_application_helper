@@ -374,6 +374,28 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         )
     }
 
+    func testConsumeWipesIntermediateDataAfterBufferCopy() throws {
+        let source = try source(
+            named: "AtlasExplicitUnlockViewState.swift"
+        )
+        let wipe = """
+                    bytes.resetBytes(
+                        in: bytes.startIndex..<bytes.endIndex
+                    )
+        """
+
+        XCTAssertEqual(
+            source.components(separatedBy: wipe).count - 1,
+            2
+        )
+        XCTAssertEqual(
+            source.components(
+                separatedBy: "let buffer = AtlasVaultInMemorySecretBuffer("
+            ).count - 1,
+            2
+        )
+    }
+
     func testSubmissionGateBlocksDuplicateUntilExactAttemptFinishes() throws {
         var gate = AtlasExplicitUnlockSubmissionGate()
 

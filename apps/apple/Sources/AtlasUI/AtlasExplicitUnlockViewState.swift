@@ -157,11 +157,15 @@ struct AtlasExplicitUnlockInputDraft:
                 clear()
                 return nil
             }
-            let bytes = Data(passphrase.utf8)
+            var bytes = Data(passphrase.utf8)
             clear()
-            return .passphrase(
-                AtlasVaultInMemorySecretBuffer(bytes: bytes)
+            let buffer = AtlasVaultInMemorySecretBuffer(
+                bytes: bytes
             )
+            bytes.resetBytes(
+                in: bytes.startIndex..<bytes.endIndex
+            )
+            return .passphrase(buffer)
         case .recoveryKey:
             guard
                 state.selectedMethod == .recoveryKey,
@@ -171,11 +175,15 @@ struct AtlasExplicitUnlockInputDraft:
                 clear()
                 return nil
             }
-            let bytes = Data(recoveryKey.utf8)
+            var bytes = Data(recoveryKey.utf8)
             clear()
-            return .recoveryKey(
-                AtlasVaultInMemorySecretBuffer(bytes: bytes)
+            let buffer = AtlasVaultInMemorySecretBuffer(
+                bytes: bytes
             )
+            bytes.resetBytes(
+                in: bytes.startIndex..<bytes.endIndex
+            )
+            return .recoveryKey(buffer)
         }
     }
 

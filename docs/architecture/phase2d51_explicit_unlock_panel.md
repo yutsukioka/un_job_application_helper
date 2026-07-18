@@ -161,9 +161,11 @@ view does not read or monitor the clipboard.
 ## 19. Swift Memory-Clearing Limitations
 
 The implementation minimizes secret ownership and lifetime, clears local
-bindings synchronously, and uses the existing one-shot byte buffer. Swift
-`String`, `Data`, framework bindings, and intermediate copies cannot be
-universally zeroized. This phase makes no universal memory-erasure claim.
+bindings synchronously, and uses the existing one-shot byte buffer. After that
+buffer copies the UTF-8 input, the draft resets the temporary `Data` bytes
+before returning the submission. Swift `String`, `Data`, framework bindings,
+and intermediate copies cannot be universally zeroized. This phase makes no
+universal memory-erasure claim.
 
 ## 20. No Provider Integration
 
