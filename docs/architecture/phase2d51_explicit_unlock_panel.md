@@ -88,7 +88,9 @@ verify the draft is already empty and a duplicate attempt is rejected.
 ## 11. Submit Behavior
 
 Local-key submission clears residual input, explicitly selects local key
-through the injected boundary, and then submits the local-key request.
+through the injected boundary, and then submits the local-key request. Its task
+checks cancellation before selection, so a panel dismissed before the task
+starts cannot leave a stale selected method.
 Passphrase and recovery submission require an available, selected method and
 non-empty input. One non-secret gate permits only one active submission.
 
@@ -112,10 +114,12 @@ Passphrase text is never reused as recovery input or vice versa.
 ## 14. Disappearance Behavior
 
 Disappearance clears local input, cancels the view-owned submission task, and
-resets local admission state. A shared action-boundary authorization gate waits
-for any in-flight submission result before delegating disappearance. It
-suppresses the callback only when that result is `unlocked`; failed submissions
-still delegate disappearance.
+resets local admission state. A shared, non-secret authorization reference is
+stored in view-owned state so it survives parent rerenders and rebuilt action
+values. Submission registers with it synchronously before creating the async
+task. Disappearance waits for any in-flight result before delegation, suppresses
+the callback only when that result is `unlocked`, and still delegates after
+failure or pre-dispatch cancellation.
 
 This authorization lives outside the rendered view-state value, so removal
 after committed activation does not depend on an `.activating` render closure

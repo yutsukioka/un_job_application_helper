@@ -9,6 +9,8 @@ public struct AtlasExplicitUnlockView: View {
     @State private var submissionGate = AtlasExplicitUnlockSubmissionGate()
     @State private var activeAction: Task<Void, Never>?
     @State private var activeActionID: UUID?
+    @State private var disappearanceAuthorization =
+        AtlasExplicitUnlockDisappearanceAuthorization()
 
     public init(
         state: AtlasExplicitUnlockViewState,
@@ -184,15 +186,30 @@ public struct AtlasExplicitUnlockView: View {
         }
         cancelActiveAction()
         let actions = actions
+        let disappearanceAuthorization = disappearanceAuthorization
+        let disappearanceID =
+            disappearanceAuthorization.beginSubmission()
         let actionID = UUID()
         activeActionID = actionID
         activeAction = Task { @MainActor in
+            var completionStatus: AtlasVaultUnlockPresentationStatus =
+                .cancelled
+            defer {
+                disappearanceAuthorization.finishSubmission(
+                    disappearanceID,
+                    status: completionStatus
+                )
+            }
+            guard !Task.isCancelled else {
+                await submission.clearExplicitUnlockSecret()
+                return
+            }
             await actions.select(.localKey)
             guard !Task.isCancelled else {
                 await submission.clearExplicitUnlockSecret()
                 return
             }
-            _ = await actions.submit(submission)
+            completionStatus = await actions.submit(submission)
             await submission.clearExplicitUnlockSecret()
             guard
                 !Task.isCancelled,
@@ -216,14 +233,25 @@ public struct AtlasExplicitUnlockView: View {
         }
         cancelActiveAction()
         let actions = actions
+        let disappearanceAuthorization = disappearanceAuthorization
+        let disappearanceID =
+            disappearanceAuthorization.beginSubmission()
         let actionID = UUID()
         activeActionID = actionID
         activeAction = Task { @MainActor in
+            var completionStatus: AtlasVaultUnlockPresentationStatus =
+                .cancelled
+            defer {
+                disappearanceAuthorization.finishSubmission(
+                    disappearanceID,
+                    status: completionStatus
+                )
+            }
             guard !Task.isCancelled else {
                 await submission.clearExplicitUnlockSecret()
                 return
             }
-            _ = await actions.submit(submission)
+            completionStatus = await actions.submit(submission)
             await submission.clearExplicitUnlockSecret()
             guard
                 !Task.isCancelled,
@@ -251,7 +279,13 @@ public struct AtlasExplicitUnlockView: View {
             return
         }
         let actions = actions
+        let disappearanceAuthorization = disappearanceAuthorization
         Task {
+            guard await disappearanceAuthorization
+                .shouldNotifyDisappearance()
+            else {
+                return
+            }
             await actions.didDisappear()
         }
     }
