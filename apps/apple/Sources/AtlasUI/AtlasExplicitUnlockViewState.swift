@@ -81,6 +81,10 @@ public struct AtlasExplicitUnlockViewState:
             && !controlsDisabled
     }
 
+    public var shouldNotifyDisappearance: Bool {
+        status != .unlocked
+    }
+
     public var description: String {
         "AtlasExplicitUnlockViewState(status: \(status), content: <redacted>)"
     }

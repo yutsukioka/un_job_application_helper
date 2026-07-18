@@ -436,6 +436,27 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertEqual(snapshot.disappearanceCount, 0)
     }
 
+    func testSuccessfulUnlockSuppressesDisappearanceNotification() throws {
+        let locked = makeViewState(
+            capabilities: .currentProduction,
+            selectedMethod: nil,
+            status: .locked
+        )
+        let unlocked = makeViewState(
+            capabilities: .currentProduction,
+            selectedMethod: .localKey,
+            status: .unlocked
+        )
+
+        XCTAssertTrue(locked.shouldNotifyDisappearance)
+        XCTAssertFalse(unlocked.shouldNotifyDisappearance)
+
+        let source = try source(named: "AtlasExplicitUnlockView.swift")
+        XCTAssertTrue(
+            source.contains("guard state.shouldNotifyDisappearance")
+        )
+    }
+
     func testViewSourceUsesSecureFieldsAndOmitsRawTestKey() throws {
         let source = try source(named: "AtlasExplicitUnlockView.swift")
 
@@ -561,7 +582,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         let enumerator = FileManager.default.enumerator(
             at: repositoryRootURL(),
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: []
         )
         guard let enumerator else {
             XCTFail("Unable to enumerate the worktree")

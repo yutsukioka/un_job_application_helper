@@ -238,6 +238,9 @@ public struct AtlasExplicitUnlockView: View {
 
     private func handleDisappearance() {
         clearInputAndCancelAction()
+        guard state.shouldNotifyDisappearance else {
+            return
+        }
         let actions = actions
         Task {
             await actions.didDisappear()
