@@ -75,22 +75,26 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         let context = try await capabilityContext()
         let valid = CapabilityResultUnwrapper(result: .success(Data(repeating: 7, count: 32)))
         let invalid = CapabilityResultUnwrapper(result: .success(Data(repeating: 7, count: 31)))
+        let validBuffer = AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+        let invalidBuffer = AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
 
         let key = try await valid.validatedVaultKey(
             context: context,
-            secret: AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+            secret: validBuffer
         )
         XCTAssertEqual(key.count, 32)
+        await assertEventuallyCleared(validBuffer)
 
         do {
             _ = try await invalid.validatedVaultKey(
                 context: context,
-                secret: AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+                secret: invalidBuffer
             )
             XCTFail("Expected invalid key length")
         } catch {
             XCTAssertEqual(error as? AtlasVaultKeyUnwrapError, .invalidKeyLength)
         }
+        await assertEventuallyCleared(invalidBuffer)
     }
 
     func testValidatedProviderResultRedactsUnknownProviderFailure() async throws {
@@ -98,17 +102,19 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         let provider = CapabilityResultUnwrapper(
             result: .failure(CapabilityPrivateProviderError.secret("FAKE_PROVIDER_SECRET"))
         )
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
 
         do {
             _ = try await provider.validatedVaultKey(
                 context: context,
-                secret: AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+                secret: buffer
             )
             XCTFail("Expected unwrap failure")
         } catch {
             XCTAssertEqual(error as? AtlasVaultKeyUnwrapError, .unwrapFailed)
             XCTAssertFalse(String(describing: error).contains("FAKE_PROVIDER_SECRET"))
         }
+        await assertEventuallyCleared(buffer)
     }
 
     func testCapabilityTypesAreSendableAndNotCodable() {
@@ -120,6 +126,20 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
     }
 
     private func assertSendable<T: Sendable>(_ type: T.Type) {}
+
+    private func assertEventuallyCleared(
+        _ buffer: AtlasVaultInMemorySecretBuffer,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<100 {
+            if await buffer.isClearedForTesting {
+                return
+            }
+            await Task.yield()
+        }
+        XCTFail("Expected secret buffer cleanup", file: file, line: line)
+    }
 
     private func capabilityContext() async throws -> AtlasVaultKeyUnwrapContext {
         let json = Data("""
@@ -158,7 +178,7 @@ private actor CapabilityNeverCalledUnwrapper: AtlasVaultKeyUnwrapping {
 }
 
 private struct CapabilityResultUnwrapper: AtlasVaultKeyUnwrapping {
-    let result: Result<Data, Error>
+    let result: Result<Data, CapabilityPrivateProviderError>
 
     func unwrapVaultKey(
         context: AtlasVaultKeyUnwrapContext,
@@ -168,6 +188,6 @@ private struct CapabilityResultUnwrapper: AtlasVaultKeyUnwrapping {
     }
 }
 
-private enum CapabilityPrivateProviderError: Error {
+private enum CapabilityPrivateProviderError: Error, Sendable {
     case secret(String)
 }
