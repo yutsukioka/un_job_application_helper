@@ -175,6 +175,32 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertTrue(firstSnapshot.isCleared)
     }
 
+    func testSameMethodSelectionIsIdempotentDuringActivation() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let retained = await controller.select(.localKey)
+        let cancelCount = await coordinator.cancelCount
+
+        XCTAssertEqual(retained.status, .activating)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+        XCTAssertEqual(cancelCount, 0)
+
+        await coordinator.resolve(.success)
+        let completed = await submission.value
+        XCTAssertEqual(completed.status, .unlocked)
+    }
+
     func testRejectedSubmissionCannotDowngradeUnlockedState() async {
         let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
         let controller = AtlasVaultUnlockPresentationController(
@@ -277,6 +303,44 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertEqual(dispatch.keyedActivationCount, 0)
         XCTAssertEqual(bufferState.takeCount, 0)
         XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testPresentationTimeoutRequiresReconciliationWhenActivationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let timeoutGate = PresentationTimeoutGate()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator,
+            sleep: { _ in
+                await timeoutGate.sleep()
+            }
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey, timeout: .seconds(30))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        let didStartTimeout = await waitForTimeout(timeoutGate)
+        XCTAssertTrue(didDispatch)
+        XCTAssertTrue(didStartTimeout)
+
+        await timeoutGate.fire()
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+
+        let timedOut = await controller.currentState()
+        let blockedSelection = await controller.select(.localKey)
+        XCTAssertEqual(timedOut.status, .timedOut)
+        XCTAssertEqual(blockedSelection.status, .timedOut)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+        XCTAssertNotEqual(retained.status, .unlocked)
     }
 
     func testCancellationInvalidatesLateCompletion() async {
@@ -1028,6 +1092,18 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         return false
     }
 
+    private func waitForTimeout(
+        _ gate: PresentationTimeoutGate
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await gate.sleepCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
     private func sourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1091,6 +1167,23 @@ private actor TrackingPresentationSecretBuffer: AtlasVaultSecretBuffer {
             value[index] = 0
         }
         value.removeAll(keepingCapacity: false)
+    }
+}
+
+private actor PresentationTimeoutGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var sleepCount = 0
+
+    func sleep() async {
+        sleepCount += 1
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func fire() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

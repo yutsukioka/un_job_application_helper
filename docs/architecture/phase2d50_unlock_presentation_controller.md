@@ -76,6 +76,9 @@ it makes no stronger platform-memory claim.
 
 The actor admits one active submission at a time. A second submission is
 rejected and any supplied secret is cleared before coordinator dispatch.
+Re-selecting the already active method is idempotent and does not cancel or
+replace the in-flight request. Selecting a different method remains an explicit
+invalidation.
 
 This is deliberately not process-global or multi-window admission. A future
 app host must separately coordinate multiple presentation owners before
@@ -98,6 +101,13 @@ cancelled, ready, or locked presentation state. A successful dispatch publishes
 `hostReconciliationRequired` instead of unlocked state. A future host must
 reconcile authoritative runtime state and perform any required lock; this
 controller does not call the runtime facade.
+
+For a positive timeout, the controller also schedules a presentation
+authorization deadline. When it fires, the attempt moves to timed-out state and
+uses the same request-cancellation and terminal-outcome path. A later failure
+retains timed-out state; a later successful activation requires host
+reconciliation. This prevents a coordinator success that commits after its own
+timeout race from publishing unlocked presentation.
 
 `hostDidLock()` is a notification that the host lock boundary has been
 applied. It clears selection, publishes locked state, and attempts request

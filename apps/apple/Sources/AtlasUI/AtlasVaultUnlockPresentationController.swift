@@ -142,6 +142,7 @@ public actor AtlasVaultUnlockPresentationController:
     private let vaultID: String
     private let capabilities: AtlasVaultUnlockCapabilities
     private let coordinator: any AtlasVaultUnlockRequestCoordinating
+    private let sleep: @Sendable (Duration) async throws -> Void
     private var selectedMethod: AtlasVaultUnlockMethod?
     private var status: AtlasVaultUnlockPresentationStatus = .locked
     private var authorization: UInt64 = 0
@@ -157,6 +158,21 @@ public actor AtlasVaultUnlockPresentationController:
         self.vaultID = vaultID
         self.capabilities = capabilities
         self.coordinator = coordinator
+        self.sleep = { duration in
+            try await Task.sleep(for: duration)
+        }
+    }
+
+    init(
+        vaultID: String,
+        capabilities: AtlasVaultUnlockCapabilities,
+        coordinator: any AtlasVaultUnlockRequestCoordinating,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
+    ) {
+        self.vaultID = vaultID
+        self.capabilities = capabilities
+        self.coordinator = coordinator
+        self.sleep = sleep
     }
 
     public func currentState() async -> AtlasVaultUnlockPresentationState {
@@ -173,6 +189,9 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         guard status != .unlocked, status != .hostReconciliationRequired else {
+            return snapshot()
+        }
+        guard activeAttempt == nil || method != selectedMethod else {
             return snapshot()
         }
 
@@ -242,6 +261,10 @@ public actor AtlasVaultUnlockPresentationController:
             request: request
         )
         status = .activating
+        let timeoutTask = makeTimeoutTask(
+            timeout,
+            attemptAuthorization: attemptAuthorization
+        )
 
         let result: Result<Void, AtlasVaultUnlockRequestError>
         do {
@@ -252,6 +275,7 @@ public actor AtlasVaultUnlockPresentationController:
         } catch {
             result = .failure(.unlockFailed)
         }
+        timeoutTask?.cancel()
 
         guard
             authorization == attemptAuthorization,
@@ -394,6 +418,38 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         return snapshot()
+    }
+
+    private func makeTimeoutTask(
+        _ timeout: Duration?,
+        attemptAuthorization: UInt64
+    ) -> Task<Void, Never>? {
+        guard let timeout, timeout > .zero else {
+            return nil
+        }
+        let sleep = self.sleep
+        return Task { [weak self] in
+            do {
+                try await sleep(timeout)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            await self?.timeoutAttempt(attemptAuthorization)
+        }
+    }
+
+    private func timeoutAttempt(_ attemptAuthorization: UInt64) async {
+        guard activeAttempt?.authorization == attemptAuthorization else {
+            return
+        }
+        _ = await invalidateActiveAttempt(
+            selectedMethod: selectedMethod,
+            status: .timedOut,
+            requireHostReconciliationIfCommitted: true
+        )
     }
 
     private func publishInvalidatedCompletion(
