@@ -82,7 +82,7 @@ public extension AtlasVaultKeyUnwrapping {
         context: AtlasVaultKeyUnwrapContext,
         secret: any AtlasVaultSecretBuffer
     ) async throws -> Data {
-        let key: Data
+        var key: Data
         do {
             key = try await unwrapVaultKey(context: context, secret: secret)
         } catch is CancellationError {
@@ -100,6 +100,8 @@ public extension AtlasVaultKeyUnwrapping {
         }
         await secret.clear()
         guard key.count == 32 else {
+            key.resetBytes(in: key.startIndex..<key.endIndex)
+            key.removeAll(keepingCapacity: false)
             throw AtlasVaultKeyUnwrapError.invalidKeyLength
         }
         return key

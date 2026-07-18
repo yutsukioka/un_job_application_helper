@@ -97,6 +97,27 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         await assertEventuallyCleared(invalidBuffer)
     }
 
+    func testValidatedProviderWipesRejectedKeyMaterialBeforeThrowing() async throws {
+        let context = try await capabilityContext()
+        let storage = CapabilityTrackedInvalidKeyStorage(byteCount: 31)
+        let provider = CapabilityTrackedInvalidKeyUnwrapper(storage: storage)
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: Data("fake".utf8))
+
+        do {
+            _ = try await provider.validatedVaultKey(
+                context: context,
+                secret: buffer
+            )
+            XCTFail("Expected invalid key length")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultKeyUnwrapError, .invalidKeyLength)
+        }
+
+        XCTAssertTrue(storage.allBytesAreZero)
+        let isCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(isCleared)
+    }
+
     func testValidatedProviderResultRedactsUnknownProviderFailure() async throws {
         let context = try await capabilityContext()
         let provider = CapabilityResultUnwrapper(
@@ -301,6 +322,44 @@ private struct CapabilitySecretTakingUnwrapper: AtlasVaultKeyUnwrapping {
     ) async throws -> Data {
         _ = try await secret.takeSecretBytes()
         return Data(repeating: 7, count: 32)
+    }
+}
+
+private struct CapabilityTrackedInvalidKeyUnwrapper: AtlasVaultKeyUnwrapping {
+    let storage: CapabilityTrackedInvalidKeyStorage
+
+    func unwrapVaultKey(
+        context: AtlasVaultKeyUnwrapContext,
+        secret: any AtlasVaultSecretBuffer
+    ) async throws -> Data {
+        storage.makeData()
+    }
+}
+
+private final class CapabilityTrackedInvalidKeyStorage: @unchecked Sendable {
+    private let pointer: UnsafeMutableRawPointer
+    private let byteCount: Int
+
+    init(byteCount: Int) {
+        self.byteCount = byteCount
+        pointer = UnsafeMutableRawPointer.allocate(
+            byteCount: byteCount,
+            alignment: MemoryLayout<UInt8>.alignment
+        )
+        pointer.initializeMemory(as: UInt8.self, repeating: 0xA7, count: byteCount)
+    }
+
+    deinit {
+        pointer.deallocate()
+    }
+
+    func makeData() -> Data {
+        Data(bytesNoCopy: pointer, count: byteCount, deallocator: .none)
+    }
+
+    var allBytesAreZero: Bool {
+        let bytes = pointer.bindMemory(to: UInt8.self, capacity: byteCount)
+        return (0..<byteCount).allSatisfy { bytes[$0] == 0 }
     }
 }
 
