@@ -92,9 +92,10 @@ through the injected boundary, and then submits the local-key request.
 Passphrase and recovery submission require an available, selected method and
 non-empty input. One non-secret gate permits only one active submission.
 
-The view idempotently clears a submitted secret buffer after the injected
-action returns. Request and controller layers retain their own mandatory
-cleanup responsibilities.
+The injected submit action returns the exact non-sensitive terminal status.
+The view idempotently clears a submitted secret buffer after that action
+returns. Request and controller layers retain their own mandatory cleanup
+responsibilities.
 
 ## 12. Cancel Behavior
 
@@ -110,9 +111,15 @@ Passphrase text is never reused as recovery input or vice versa.
 
 ## 14. Disappearance Behavior
 
-Disappearance clears local input, cancels the view-owned submission task,
-resets local admission state, and delegates the disappearance event. View
-construction itself invokes no action.
+Disappearance clears local input, cancels the view-owned submission task, and
+resets local admission state. A shared action-boundary authorization gate waits
+for any in-flight submission result before delegating disappearance. It
+suppresses the callback only when that result is `unlocked`; failed submissions
+still delegate disappearance.
+
+This authorization lives outside the rendered view-state value, so removal
+after committed activation does not depend on an `.activating` render closure
+observing a later `.unlocked` value. View construction itself invokes no action.
 
 ## 15. Host-Reconciliation Behavior
 

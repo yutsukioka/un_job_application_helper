@@ -192,7 +192,7 @@ public struct AtlasExplicitUnlockView: View {
                 await submission.clearExplicitUnlockSecret()
                 return
             }
-            await actions.submit(submission)
+            _ = await actions.submit(submission)
             await submission.clearExplicitUnlockSecret()
             guard
                 !Task.isCancelled,
@@ -223,7 +223,7 @@ public struct AtlasExplicitUnlockView: View {
                 await submission.clearExplicitUnlockSecret()
                 return
             }
-            await actions.submit(submission)
+            _ = await actions.submit(submission)
             await submission.clearExplicitUnlockSecret()
             guard
                 !Task.isCancelled,

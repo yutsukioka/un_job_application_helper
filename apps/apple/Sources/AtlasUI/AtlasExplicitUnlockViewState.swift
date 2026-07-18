@@ -196,9 +196,13 @@ public struct AtlasExplicitUnlockViewActions:
     private let selectAction:
         @Sendable (AtlasVaultUnlockMethod?) async -> Void
     private let submitAction:
-        @Sendable (AtlasVaultUnlockSubmission) async -> Void
+        @Sendable (
+            AtlasVaultUnlockSubmission
+        ) async -> AtlasVaultUnlockPresentationStatus
     private let cancelAction: @Sendable () async -> Void
     private let disappearanceAction: @Sendable () async -> Void
+    private let disappearanceAuthorization =
+        AtlasExplicitUnlockDisappearanceAuthorization()
 
     public init(
         select: @escaping @Sendable (
@@ -206,7 +210,7 @@ public struct AtlasExplicitUnlockViewActions:
         ) async -> Void,
         submit: @escaping @Sendable (
             AtlasVaultUnlockSubmission
-        ) async -> Void,
+        ) async -> AtlasVaultUnlockPresentationStatus,
         cancel: @escaping @Sendable () async -> Void,
         didDisappear: @escaping @Sendable () async -> Void
     ) {
@@ -220,8 +224,16 @@ public struct AtlasExplicitUnlockViewActions:
         await selectAction(method)
     }
 
-    public func submit(_ submission: AtlasVaultUnlockSubmission) async {
-        await submitAction(submission)
+    public func submit(
+        _ submission: AtlasVaultUnlockSubmission
+    ) async -> AtlasVaultUnlockPresentationStatus {
+        let identifier = await disappearanceAuthorization.beginSubmission()
+        let status = await submitAction(submission)
+        await disappearanceAuthorization.finishSubmission(
+            identifier,
+            status: status
+        )
+        return status
     }
 
     public func cancel() async {
@@ -229,6 +241,9 @@ public struct AtlasExplicitUnlockViewActions:
     }
 
     public func didDisappear() async {
+        guard await disappearanceAuthorization.shouldNotifyDisappearance() else {
+            return
+        }
         await disappearanceAction()
     }
 
@@ -238,6 +253,60 @@ public struct AtlasExplicitUnlockViewActions:
 
     public var debugDescription: String {
         description
+    }
+}
+
+private actor AtlasExplicitUnlockDisappearanceAuthorization {
+    private var activeSubmissions: Set<UUID> = []
+    private var committedUnlock = false
+    private var suppressNextDisappearance = false
+    private var disappearanceWaiters: [
+        CheckedContinuation<Bool, Never>
+    ] = []
+
+    func beginSubmission() -> UUID {
+        let identifier = UUID()
+        if activeSubmissions.isEmpty {
+            committedUnlock = false
+        }
+        activeSubmissions.insert(identifier)
+        suppressNextDisappearance = false
+        return identifier
+    }
+
+    func finishSubmission(
+        _ identifier: UUID,
+        status: AtlasVaultUnlockPresentationStatus
+    ) {
+        guard activeSubmissions.remove(identifier) != nil else {
+            return
+        }
+        committedUnlock = committedUnlock || status == .unlocked
+        guard activeSubmissions.isEmpty else {
+            return
+        }
+
+        let shouldNotify = !committedUnlock
+        let waiters = disappearanceWaiters
+        disappearanceWaiters.removeAll()
+        suppressNextDisappearance = committedUnlock && waiters.isEmpty
+        committedUnlock = false
+        for waiter in waiters {
+            waiter.resume(returning: shouldNotify)
+        }
+    }
+
+    func shouldNotifyDisappearance() async -> Bool {
+        if !activeSubmissions.isEmpty {
+            return await withCheckedContinuation { continuation in
+                disappearanceWaiters.append(continuation)
+            }
+        }
+        if suppressNextDisappearance {
+            suppressNextDisappearance = false
+            return false
+        }
+        return true
     }
 }
 

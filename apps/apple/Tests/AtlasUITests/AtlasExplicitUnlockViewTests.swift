@@ -428,7 +428,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertNil(gate.begin())
 
         await recorder.release()
-        await task.value
+        _ = await task.value
         gate.finish(attempt)
         XCTAssertFalse(gate.isActive)
     }
@@ -438,7 +438,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         let actions = makeActions(recorder: recorder)
 
         await actions.select(.passphrase)
-        await actions.submit(.localKey)
+        _ = await actions.submit(.localKey)
         await actions.cancel()
         await actions.didDisappear()
 
@@ -488,6 +488,94 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(
             source.contains("guard state.shouldNotifyDisappearance")
         )
+    }
+
+    func testDisappearanceWaitsForCommittedUnlockOutsideStaleViewState() async {
+        let recorder = ExplicitUnlockActionRecorder()
+        let submitRecorder = GatedExplicitUnlockSubmitRecorder(
+            result: .unlocked
+        )
+        let actions = AtlasExplicitUnlockViewActions(
+            select: { _ in },
+            submit: { submission in
+                await submitRecorder.submit(submission)
+            },
+            cancel: {},
+            didDisappear: {
+                await recorder.recordDisappearance()
+            }
+        )
+
+        let submitTask = Task {
+            await actions.submit(.localKey)
+        }
+        let didStart = await waitForSubmitStart(submitRecorder)
+        XCTAssertTrue(didStart)
+        let disappearanceTask = Task {
+            await actions.didDisappear()
+        }
+
+        await submitRecorder.release()
+        let result = await submitTask.value
+        XCTAssertEqual(result, .unlocked)
+        await disappearanceTask.value
+
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.disappearanceCount, 0)
+    }
+
+    func testDisappearanceStillDelegatesAfterFailedSubmission() async {
+        let recorder = ExplicitUnlockActionRecorder()
+        let submitRecorder = GatedExplicitUnlockSubmitRecorder(result: .failed)
+        let actions = AtlasExplicitUnlockViewActions(
+            select: { _ in },
+            submit: { submission in
+                await submitRecorder.submit(submission)
+            },
+            cancel: {},
+            didDisappear: {
+                await recorder.recordDisappearance()
+            }
+        )
+
+        let submitTask = Task {
+            await actions.submit(.localKey)
+        }
+        let didStart = await waitForSubmitStart(submitRecorder)
+        XCTAssertTrue(didStart)
+        let disappearanceTask = Task {
+            await actions.didDisappear()
+        }
+
+        await submitRecorder.release()
+        let result = await submitTask.value
+        XCTAssertEqual(result, .failed)
+        await disappearanceTask.value
+
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.disappearanceCount, 1)
+    }
+
+    func testCompletedUnlockSuppressesNextDisappearance() async {
+        let recorder = ExplicitUnlockActionRecorder()
+        let actions = AtlasExplicitUnlockViewActions(
+            select: { _ in },
+            submit: { submission in
+                await recorder.record(submission: submission)
+                return .unlocked
+            },
+            cancel: {},
+            didDisappear: {
+                await recorder.recordDisappearance()
+            }
+        )
+
+        let result = await actions.submit(.localKey)
+        await actions.didDisappear()
+
+        XCTAssertEqual(result, .unlocked)
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.disappearanceCount, 0)
     }
 
     func testSubmissionCancelsPriorViewOwnedActionBeforeReplacement() throws {
@@ -721,6 +809,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
             },
             submit: { submission in
                 await recorder.record(submission: submission)
+                return .failed
             },
             cancel: {
                 await recorder.recordCancel()
@@ -832,24 +921,32 @@ private actor ExplicitUnlockActionRecorder {
 }
 
 private actor GatedExplicitUnlockSubmitRecorder {
+    private let result: AtlasVaultUnlockPresentationStatus
     private var started = false
     private var continuation: CheckedContinuation<Void, Never>?
+
+    init(result: AtlasVaultUnlockPresentationStatus = .failed) {
+        self.result = result
+    }
 
     var hasStarted: Bool {
         started
     }
 
-    func submit(_ submission: AtlasVaultUnlockSubmission) async {
+    func submit(
+        _ submission: AtlasVaultUnlockSubmission
+    ) async -> AtlasVaultUnlockPresentationStatus {
         started = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
         switch submission {
         case .localKey:
-            return
+            break
         case let .passphrase(buffer), let .recoveryKey(buffer):
             await buffer.clear()
         }
+        return result
     }
 
     func release() {
