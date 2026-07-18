@@ -165,6 +165,27 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         )
     }
 
+    func testRejectsNonCanonicalBase64Padding() throws {
+        let root = try loadVectorJSONObject()
+        let vector = try dictionary(try array(root["vectors"]).first)
+        let metadata = try dictionary(vector["vault_metadata"])
+        let wrapped = try dictionary(try array(metadata["key_wraps"]).first)
+        let kdf = try dictionary(wrapped["kdf"])
+
+        try assertMetadataMutationRejected(
+            path: [.key("key_wraps"), .index(0), .key("kdf"), .key("salt")],
+            value: try string(kdf["salt"]) + "="
+        )
+        try assertMetadataMutationRejected(
+            path: [.key("key_wraps"), .index(0), .key("nonce")],
+            value: try string(wrapped["nonce"]) + "="
+        )
+        try assertMetadataMutationRejected(
+            path: [.key("key_wraps"), .index(0), .key("ciphertext")],
+            value: try string(wrapped["ciphertext"]) + "="
+        )
+    }
+
     func testRejectsInvalidSaltLength() throws {
         try assertMetadataMutationRejected(
             path: [.key("key_wraps"), .index(0), .key("kdf"), .key("salt")],

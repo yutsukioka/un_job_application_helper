@@ -1,5 +1,12 @@
 import Foundation
 
+private func atlasVaultCanonicalBase64Decoded(_ value: String) -> Data? {
+    guard let data = Data(base64Encoded: value, options: []) else {
+        return nil
+    }
+    return data.base64EncodedString() == value ? data : nil
+}
+
 public struct AtlasVaultArgon2idParameters:
     Decodable,
     Equatable,
@@ -36,7 +43,10 @@ public struct AtlasVaultArgon2idParameters:
                 debugDescription: "Unsupported key-wrap KDF"
             )
         }
-        guard let salt = Data(base64Encoded: saltText, options: []), salt.count >= 16 else {
+        guard
+            let salt = atlasVaultCanonicalBase64Decoded(saltText),
+            salt.count >= 16
+        else {
             throw DecodingError.dataCorruptedError(
                 forKey: .salt,
                 in: container,
@@ -169,7 +179,7 @@ public struct AtlasVaultWrappedKeyEnvelope:
             )
         }
         guard
-            let nonce = Data(base64Encoded: nonceText, options: []),
+            let nonce = atlasVaultCanonicalBase64Decoded(nonceText),
             nonce.count == Self.nonceByteCount
         else {
             throw DecodingError.dataCorruptedError(
@@ -179,7 +189,7 @@ public struct AtlasVaultWrappedKeyEnvelope:
             )
         }
         guard
-            let ciphertext = Data(base64Encoded: ciphertextText, options: []),
+            let ciphertext = atlasVaultCanonicalBase64Decoded(ciphertextText),
             ciphertext.count == Self.ciphertextAndTagByteCount
         else {
             throw DecodingError.dataCorruptedError(
