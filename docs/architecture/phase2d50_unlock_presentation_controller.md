@@ -105,7 +105,10 @@ The coordinator exposes only fixed request errors. The controller maps:
 
 - cancellation to cancelled;
 - expiry to timed out;
-- invalid, reused, unknown, and unlock failures to one generic failed status.
+- `invalidRequest`, `alreadyUsed`, and `unlockFailed` to one generic failed
+  status;
+- unexpected non-`AtlasVaultUnlockRequestError` throws to that same generic
+  failed status.
 
 It does not distinguish wrong secret, missing local key, corrupt vault, path
 failure, or provider failure. This avoids a presentation oracle and reflects
