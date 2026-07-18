@@ -1,0 +1,1449 @@
+import Foundation
+import XCTest
+@testable import AtlasUI
+
+final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
+    fileprivate static let vaultID = "00000000-0000-4000-8000-000000000550"
+    fileprivate static let fakePassphrase = Data("FAKE_PRESENTATION_PASSPHRASE".utf8)
+    fileprivate static let fakeRecoveryKey = Data("FAKE_PRESENTATION_RECOVERY_KEY".utf8)
+    fileprivate static let fakeVaultKey = Data(repeating: 0x55, count: 32)
+    private static let privateSentinel = "FAKE_PRESENTATION_PRIVATE_SENTINEL"
+
+    func testConstructionIsSideEffectFreeAndProjectsExactCapabilities() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let provider = PresentationNeverCalledUnwrapper()
+        let capabilities = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: true,
+            passphraseProvider: provider,
+            recoveryKeyProvider: nil
+        )
+
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+
+        let state = await controller.currentState()
+        let dispatchCount = await coordinator.dispatchCount
+        let cancelCount = await coordinator.cancelCount
+        let providerCalls = await provider.callCount
+        XCTAssertEqual(state.capabilities, capabilities)
+        XCTAssertEqual(state.selectedMethod, nil)
+        XCTAssertEqual(state.status, .locked)
+        XCTAssertEqual(dispatchCount, 0)
+        XCTAssertEqual(cancelCount, 0)
+        XCTAssertEqual(providerCalls, 0)
+    }
+
+    func testUnavailableSelectionAndSubmissionRejectBeforeSecretConsumption() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+
+        let selected = await controller.select(.passphrase)
+        let submitted = await controller.submit(.passphrase(buffer))
+
+        let bufferState = await buffer.snapshot()
+        let dispatchCount = await coordinator.dispatchCount
+        XCTAssertEqual(selected.selectedMethod, nil)
+        XCTAssertEqual(selected.status, .methodUnavailable)
+        XCTAssertEqual(submitted.status, .methodUnavailable)
+        XCTAssertEqual(bufferState.takeCount, 0)
+        XCTAssertEqual(bufferState.clearCount, 1)
+        XCTAssertTrue(bufferState.isCleared)
+        XCTAssertEqual(dispatchCount, 0)
+    }
+
+    func testMismatchedSubmissionRejectsBeforeSecretConsumption() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakeRecoveryKey)
+        _ = await controller.select(.passphrase)
+
+        let state = await controller.submit(.recoveryKey(buffer))
+
+        let bufferState = await buffer.snapshot()
+        let dispatchCount = await coordinator.dispatchCount
+        XCTAssertEqual(state.status, .failed)
+        XCTAssertEqual(state.selectedMethod, .passphrase)
+        XCTAssertEqual(bufferState.takeCount, 0)
+        XCTAssertEqual(bufferState.clearCount, 1)
+        XCTAssertEqual(dispatchCount, 0)
+    }
+
+    func testUnavailableSubmissionCannotClobberNewerUnlockDuringCleanup() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        let rejectedBuffer = GatedClearPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+
+        let rejectedSubmission = Task {
+            await controller.submit(.passphrase(rejectedBuffer))
+        }
+        let didStartClear = await waitForClear(rejectedBuffer)
+        XCTAssertTrue(didStartClear)
+
+        _ = await controller.select(.localKey)
+        let unlocked = await controller.submit(.localKey)
+        await rejectedBuffer.releaseClear()
+        let rejectedResult = await rejectedSubmission.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(unlocked.status, .unlocked)
+        XCTAssertEqual(rejectedResult.status, .unlocked)
+        XCTAssertEqual(retained.status, .unlocked)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+    }
+
+    func testMismatchedSubmissionCannotClobberNewerUnlockDuringCleanup() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: fakeCapabilities(passphrase: true, recovery: false),
+            coordinator: coordinator
+        )
+        let rejectedBuffer = GatedClearPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+        _ = await controller.select(.localKey)
+
+        let rejectedSubmission = Task {
+            await controller.submit(.passphrase(rejectedBuffer))
+        }
+        let didStartClear = await waitForClear(rejectedBuffer)
+        XCTAssertTrue(didStartClear)
+
+        let unlocked = await controller.submit(.localKey)
+        await rejectedBuffer.releaseClear()
+        let rejectedResult = await rejectedSubmission.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(unlocked.status, .unlocked)
+        XCTAssertEqual(rejectedResult.status, .unlocked)
+        XCTAssertEqual(retained.status, .unlocked)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+    }
+
+    func testLocalKeyDispatchUsesExistingCoordinatorRequest() async {
+        let spy = PresentationDispatchSpy()
+        let coordinator = functionalCoordinator(spy: spy)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+
+        let state = await controller.submit(.localKey)
+
+        let snapshot = await spy.snapshot()
+        XCTAssertEqual(state.status, .unlocked)
+        XCTAssertEqual(snapshot.localActivationCount, 1)
+        XCTAssertEqual(snapshot.passphraseDerivationCount, 0)
+        XCTAssertEqual(snapshot.recoveryDerivationCount, 0)
+        XCTAssertTrue(snapshot.vaultIDMatched)
+    }
+
+    func testFakePassphraseAndRecoveryDispatchOnlyWhenExplicitlyAvailable() async {
+        let spy = PresentationDispatchSpy()
+        let provider = PresentationNeverCalledUnwrapper()
+        let capabilities = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseProvider: provider,
+            recoveryKeyProvider: provider
+        )
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: functionalCoordinator(spy: spy)
+        )
+        let passphrase = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        let recovery = TrackingPresentationSecretBuffer(bytes: Self.fakeRecoveryKey)
+
+        _ = await controller.select(.passphrase)
+        let passphraseState = await controller.submit(.passphrase(passphrase))
+        _ = await controller.hostDidLock()
+        _ = await controller.select(.recoveryKey)
+        let recoveryState = await controller.submit(.recoveryKey(recovery))
+
+        let dispatch = await spy.snapshot()
+        let passphraseBuffer = await passphrase.snapshot()
+        let recoveryBuffer = await recovery.snapshot()
+        let providerCalls = await provider.callCount
+        XCTAssertEqual(passphraseState.status, .unlocked)
+        XCTAssertEqual(recoveryState.status, .unlocked)
+        XCTAssertEqual(dispatch.passphraseDerivationCount, 1)
+        XCTAssertEqual(dispatch.recoveryDerivationCount, 1)
+        XCTAssertEqual(dispatch.keyedActivationCount, 2)
+        XCTAssertTrue(dispatch.passphraseMatched)
+        XCTAssertTrue(dispatch.recoveryMatched)
+        XCTAssertEqual(passphraseBuffer.takeCount, 1)
+        XCTAssertEqual(recoveryBuffer.takeCount, 1)
+        XCTAssertTrue(passphraseBuffer.isCleared)
+        XCTAssertTrue(recoveryBuffer.isCleared)
+        XCTAssertEqual(providerCalls, 0)
+    }
+
+    func testOneInFlightRequestRejectsDuplicateAndClearsRejectedSecret() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let firstBuffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        let duplicateBuffer = TrackingPresentationSecretBuffer(bytes: Self.fakeRecoveryKey)
+        _ = await controller.select(.passphrase)
+
+        let first = Task {
+            await controller.submit(.passphrase(firstBuffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let duplicateState = await controller.submit(.recoveryKey(duplicateBuffer))
+
+        let duplicateSnapshot = await duplicateBuffer.snapshot()
+        let dispatchCount = await coordinator.dispatchCount
+        XCTAssertEqual(duplicateState.status, .activating)
+        XCTAssertEqual(duplicateSnapshot.takeCount, 0)
+        XCTAssertEqual(duplicateSnapshot.clearCount, 1)
+        XCTAssertEqual(dispatchCount, 1)
+
+        await coordinator.resolve(.success)
+        let finalState = await first.value
+        XCTAssertEqual(finalState.status, .unlocked)
+        let firstSnapshot = await firstBuffer.snapshot()
+        XCTAssertTrue(firstSnapshot.isCleared)
+    }
+
+    func testSameMethodSelectionIsIdempotentDuringActivation() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let retained = await controller.select(.localKey)
+        let cancelCount = await coordinator.cancelCount
+
+        XCTAssertEqual(retained.status, .activating)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+        XCTAssertEqual(cancelCount, 0)
+
+        await coordinator.resolve(.success)
+        let completed = await submission.value
+        XCTAssertEqual(completed.status, .unlocked)
+    }
+
+    func testRejectedSubmissionCannotDowngradeUnlockedState() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let unlocked = await controller.submit(.localKey)
+        let rejectedBuffer = TrackingPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+
+        let retained = await controller.submit(.passphrase(rejectedBuffer))
+
+        let rejectedSnapshot = await rejectedBuffer.snapshot()
+        let dispatchCount = await coordinator.dispatchCount
+        XCTAssertEqual(unlocked.status, .unlocked)
+        XCTAssertEqual(retained.status, .unlocked)
+        XCTAssertEqual(retained.selectedMethod, .localKey)
+        XCTAssertEqual(rejectedSnapshot.takeCount, 0)
+        XCTAssertTrue(rejectedSnapshot.isCleared)
+        XCTAssertEqual(dispatchCount, 1)
+    }
+
+    func testGenericCoordinatorFailureDoesNotExposeFailureCause() async {
+        let coordinator = ControlledUnlockCoordinator(
+            mode: .immediateFailure(.unlockFailed)
+        )
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(
+            bytes: Data(Self.privateSentinel.utf8)
+        )
+        _ = await controller.select(.passphrase)
+
+        let state = await controller.submit(.passphrase(buffer))
+
+        XCTAssertEqual(state.status, .failed)
+        XCTAssertFalse(state.description.contains(Self.privateSentinel))
+        XCTAssertFalse(state.debugDescription.contains(Self.privateSentinel))
+        let snapshot = await buffer.snapshot()
+        XCTAssertTrue(snapshot.isCleared)
+    }
+
+    func testCompletedFailurePublishesBeforeSecretCleanupSuspends() async {
+        let coordinator = ControlledUnlockCoordinator(
+            mode: .immediateFailure(.unlockFailed)
+        )
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = GatedClearPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didStartClear = await waitForClear(buffer)
+        XCTAssertTrue(didStartClear)
+
+        let completedState = await controller.currentState()
+        let cancellation = await controller.cancel()
+
+        XCTAssertEqual(completedState.status, .failed)
+        XCTAssertEqual(cancellation.status, .cancelled)
+        XCTAssertNotEqual(cancellation.status, .hostReconciliationRequired)
+
+        await buffer.releaseClear()
+        let terminal = await submission.value
+        let bufferState = await buffer.snapshot()
+        XCTAssertEqual(terminal.status, .cancelled)
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testCoordinatorTimeoutInvalidatesPresentationAuthorization() async {
+        let spy = PresentationDispatchSpy()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: functionalCoordinator(spy: spy)
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+
+        let state = await controller.submit(.passphrase(buffer), timeout: .zero)
+
+        let dispatch = await spy.snapshot()
+        let bufferState = await buffer.snapshot()
+        XCTAssertEqual(state.status, .timedOut)
+        XCTAssertEqual(dispatch.localActivationCount, 0)
+        XCTAssertEqual(dispatch.keyedActivationCount, 0)
+        XCTAssertEqual(bufferState.takeCount, 0)
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testPresentationTimeoutRequiresReconciliationWhenActivationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let timeoutGate = PresentationTimeoutGate()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator,
+            sleep: { _ in
+                await timeoutGate.sleep()
+            }
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey, timeout: .seconds(30))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        let didStartTimeout = await waitForTimeout(timeoutGate)
+        XCTAssertTrue(didDispatch)
+        XCTAssertTrue(didStartTimeout)
+
+        await timeoutGate.fire()
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+
+        let timedOut = await controller.currentState()
+        let blockedSelection = await controller.select(.localKey)
+        XCTAssertEqual(timedOut.status, .timedOut)
+        XCTAssertEqual(blockedSelection.status, .timedOut)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+        XCTAssertNotEqual(retained.status, .unlocked)
+    }
+
+    func testCancellationInvalidatesLateCompletion() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancelled = await controller.cancel()
+        let terminal = await submission.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(cancelled.status, .cancelled)
+        XCTAssertEqual(terminal.status, .cancelled)
+        XCTAssertEqual(retained.status, .cancelled)
+        XCTAssertNotEqual(retained.status, .unlocked)
+        let bufferState = await buffer.snapshot()
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testAcceptedCancellationThatStillCommitsRequiresHostReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let cancellationState = await cancellation.value
+
+        let blockedSelection = await controller.select(.localKey)
+        XCTAssertEqual(cancellationState.status, .cancelled)
+        XCTAssertEqual(blockedSelection.status, .cancelled)
+
+        await coordinator.resolveDispatch(.success)
+        let staleCompletion = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(staleCompletion.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+        XCTAssertNotEqual(retained.status, .unlocked)
+    }
+
+    func testCancellationLosingToCommittedSuccessRequiresHostReconciliation() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancelled = await controller.cancel()
+        XCTAssertEqual(cancelled.status, .cancelled)
+
+        await coordinator.resolve(.success)
+        let staleCompletion = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(staleCompletion.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+        XCTAssertNotEqual(retained.status, .unlocked)
+    }
+
+    func testHostReconciliationSurvivesRepeatedCancelAndDisappearance() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+        let reconciliation = await controller.cancel()
+        XCTAssertEqual(reconciliation.status, .cancelled)
+
+        let repeatedCancel = await controller.cancel()
+        let disappeared = await controller.didDisappear()
+
+        XCTAssertEqual(repeatedCancel.status, .cancelled)
+        XCTAssertEqual(disappeared.status, .locked)
+
+        await coordinator.resolve(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+
+        let retainedCancel = await controller.cancel()
+        let retainedDisappearance = await controller.didDisappear()
+        XCTAssertEqual(retainedCancel.status, .hostReconciliationRequired)
+        XCTAssertEqual(retainedDisappearance.status, .hostReconciliationRequired)
+    }
+
+    func testRepeatedCancelDuringPendingCancellationPreservesReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        let repeatedCancel = await controller.cancel()
+        XCTAssertEqual(repeatedCancel.status, .cancelled)
+
+        await coordinator.resolveCancellation(false)
+        let cancellationResult = await cancellation.value
+        XCTAssertEqual(cancellationResult.status, .cancelled)
+
+        await coordinator.resolveDispatch(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
+    func testFailedRequestRacingCancellationDoesNotRequireHostReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let cancellationState = await cancellation.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .cancelled)
+        XCTAssertEqual(cancellationState.status, .cancelled)
+        XCTAssertEqual(retained.status, .cancelled)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testDisappearanceDuringPendingCancellationRequiresHostReconciliation() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        let disappeared = await controller.didDisappear()
+        XCTAssertEqual(disappeared.status, .hostReconciliationRequired)
+
+        await coordinator.resolveCancellation(false)
+        let cancellationResult = await cancellation.value
+        XCTAssertEqual(cancellationResult.status, .hostReconciliationRequired)
+
+        await coordinator.resolveDispatch(.success)
+        let terminal = await submission.value
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+    }
+
+    func testMethodChangeCancelsAttemptAndPreservesNewSelection() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: true))
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let changed = await controller.select(.recoveryKey)
+        let terminal = await submission.value
+
+        XCTAssertEqual(changed.status, .ready)
+        XCTAssertEqual(changed.selectedMethod, .recoveryKey)
+        XCTAssertEqual(terminal, changed)
+        let bufferSnapshot = await buffer.snapshot()
+        XCTAssertTrue(bufferSnapshot.isCleared)
+    }
+
+    func testFailedRequestRacingMethodChangeRetainsNewSelection() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let methodChange = Task {
+            await controller.select(.recoveryKey)
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let changed = await methodChange.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .ready)
+        XCTAssertEqual(changed.status, .ready)
+        XCTAssertEqual(retained.status, .ready)
+        XCTAssertEqual(retained.selectedMethod, .recoveryKey)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testMethodChangeReconcilesWhenAcceptedCancellationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: true)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let methodChange = Task {
+            await controller.select(.recoveryKey)
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let changed = await methodChange.value
+        XCTAssertEqual(changed.status, .ready)
+        XCTAssertEqual(changed.selectedMethod, .recoveryKey)
+
+        await coordinator.resolveDispatch(.success)
+        let staleCompletion = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(staleCompletion.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testDisappearanceInvalidatesAttemptWithoutPublishingUnlocked() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let disappeared = await controller.didDisappear()
+        XCTAssertEqual(disappeared.status, .locked)
+        await coordinator.resolve(.success)
+        let terminal = await submission.value
+
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+        XCTAssertNil(terminal.selectedMethod)
+        let bufferState = await buffer.snapshot()
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testDisappearanceReconcilesWhenAcceptedCancellationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let disappearance = Task {
+            await controller.didDisappear()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let disappeared = await disappearance.value
+        XCTAssertEqual(disappeared.status, .locked)
+        XCTAssertNil(disappeared.selectedMethod)
+
+        await coordinator.resolveDispatch(.success)
+        let staleCompletion = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(staleCompletion.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+        XCTAssertNil(retained.selectedMethod)
+    }
+
+    func testExpiredRequestRacingDisappearanceRemainsLocked() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let disappearance = Task {
+            await controller.didDisappear()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.expired))
+        let expiredCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let disappeared = await disappearance.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(expiredCompletion.status, .locked)
+        XCTAssertEqual(disappeared.status, .locked)
+        XCTAssertEqual(retained.status, .locked)
+        XCTAssertNil(retained.selectedMethod)
+        XCTAssertNotEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testHostLockRequiresReconciliationWhenLateActivationSucceeds() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .gated(cancelSucceeds: false))
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let locked = await controller.hostDidLock()
+        await coordinator.resolve(.success)
+        let terminal = await submission.value
+
+        XCTAssertEqual(locked.status, .locked)
+        XCTAssertEqual(terminal.status, .hostReconciliationRequired)
+        XCTAssertNil(terminal.selectedMethod)
+        let bufferState = await buffer.snapshot()
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
+    func testHostLockRemainsLockedWhenInvalidatedDispatchFails() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let lock = Task {
+            await controller.hostDidLock()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+
+        await coordinator.resolveDispatch(.failure(.unlockFailed))
+        let failedCompletion = await submission.value
+        await coordinator.resolveCancellation(false)
+        let locked = await lock.value
+        let retained = await controller.currentState()
+
+        XCTAssertEqual(failedCompletion.status, .locked)
+        XCTAssertEqual(locked.status, .locked)
+        XCTAssertEqual(retained.status, .locked)
+        XCTAssertNil(retained.selectedMethod)
+    }
+
+    func testHostLockReconcilesWhenAcceptedCancellationStillCommits() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let lock = Task {
+            await controller.hostDidLock()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let locked = await lock.value
+        XCTAssertEqual(locked.status, .locked)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testHostLockPreservesPriorInvalidatedAttemptUntilCompletion() async {
+        let coordinator = CancellationGatedUnlockCoordinator()
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.localKey)
+        let submission = Task {
+            await controller.submit(.localKey)
+        }
+        let didDispatch = await waitForDispatch(coordinator)
+        XCTAssertTrue(didDispatch)
+
+        let cancellation = Task {
+            await controller.cancel()
+        }
+        let didStartCancellation = await waitForCancellation(coordinator)
+        XCTAssertTrue(didStartCancellation)
+        await coordinator.resolveCancellation(true)
+        let cancelled = await cancellation.value
+        XCTAssertEqual(cancelled.status, .cancelled)
+
+        let locked = await controller.hostDidLock()
+        XCTAssertEqual(locked.status, .locked)
+
+        await coordinator.resolveDispatch(.success)
+        let lateSuccess = await submission.value
+        let retained = await controller.currentState()
+        XCTAssertEqual(lateSuccess.status, .hostReconciliationRequired)
+        XCTAssertEqual(retained.status, .hostReconciliationRequired)
+    }
+
+    func testControllerReleasesRequestAndSecretOwnershipAfterCompletion() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        _ = await controller.select(.passphrase)
+        var buffer: TrackingPresentationSecretBuffer? = TrackingPresentationSecretBuffer(
+            bytes: Self.fakePassphrase
+        )
+        weak let weakBuffer = buffer
+
+        let state = await controller.submit(.passphrase(buffer!))
+        buffer = nil
+        for _ in 0..<100 where weakBuffer != nil {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(state.status, .unlocked)
+        XCTAssertNil(weakBuffer)
+    }
+
+    func testPublicTypesAndDescriptionsAreSanitizedAndNonCodable() async {
+        let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: coordinator
+        )
+        let buffer = TrackingPresentationSecretBuffer(
+            bytes: Data(Self.privateSentinel.utf8)
+        )
+        let submission = AtlasVaultUnlockSubmission.passphrase(buffer)
+        let state = await controller.currentState()
+        let descriptions = [
+            state.description,
+            state.debugDescription,
+            state.status.description,
+            state.status.debugDescription,
+            submission.description,
+            submission.debugDescription,
+            controller.description,
+            controller.debugDescription,
+        ]
+
+        for description in descriptions {
+            XCTAssertFalse(description.contains(Self.privateSentinel))
+            XCTAssertFalse(description.contains(Self.vaultID))
+            XCTAssertFalse(description.contains("/"))
+        }
+        XCTAssertFalse(AtlasVaultUnlockPresentationState.self is any Encodable.Type)
+        XCTAssertFalse(AtlasVaultUnlockPresentationState.self is any Decodable.Type)
+        XCTAssertFalse(AtlasVaultUnlockSubmission.self is any Encodable.Type)
+        XCTAssertFalse(AtlasVaultUnlockSubmission.self is any Decodable.Type)
+        await buffer.clear()
+    }
+
+    func testSourceHasNoRawKeyOrForbiddenRuntimeDependencies() throws {
+        let source = try String(contentsOf: sourceURL(), encoding: .utf8)
+        let forbidden = [
+            "SwiftUI",
+            "ObservableObject",
+            "@Published",
+            "@State",
+            "@Environment",
+            "@AppStorage",
+            "@SceneStorage",
+            "UserDefaults",
+            "FileManager",
+            "SecItem",
+            "LAContext",
+            "LocalAuthentication",
+            "URLSession",
+            "Data.write",
+            "createFile",
+            "AtlasVaultRuntimeFacade",
+            "AtlasVaultRuntimeActivationRequest",
+            "suppliedVaultKey",
+            "suppliedTestVaultKey",
+            "rawKey",
+            "AtlasAPIClient",
+            "SearchViewModel",
+            "AtlasLocalCache",
+            "refreshSidebarData",
+            "/api/saved-searches",
+            "/api/tracker",
+            "AtlasVaultPresentationSnapshot",
+            "AtlasVaultMutation",
+            "AtlasVaultSave",
+        ]
+
+        for token in forbidden {
+            XCTAssertFalse(source.contains(token), "Unexpected production dependency: \(token)")
+        }
+        XCTAssertTrue(source.contains("case localKey"))
+        XCTAssertTrue(source.contains("case passphrase"))
+        XCTAssertTrue(source.contains("case recoveryKey"))
+    }
+
+    func testControllerCannotMutatePublicSnapshotOrCreateVaultArtifacts() async throws {
+        let publicSnapshot = AtlasVaultPresentationSnapshot(
+            status: .locked,
+            privateState: nil
+        )
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: .currentProduction,
+            coordinator: ControlledUnlockCoordinator(mode: .immediateSuccess)
+        )
+        _ = await controller.select(.localKey)
+        _ = await controller.submit(.localKey)
+
+        XCTAssertEqual(
+            publicSnapshot,
+            AtlasVaultPresentationSnapshot(status: .locked, privateState: nil)
+        )
+
+        let repositoryRoot = sourceURL()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let enumerator = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: repositoryRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        )
+        var artifacts: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            if url.pathExtension == "atlasvault" {
+                artifacts.append(url.path)
+            }
+        }
+        XCTAssertEqual(artifacts, [])
+    }
+
+    private func fakeCapabilities(
+        passphrase: Bool,
+        recovery: Bool
+    ) -> AtlasVaultUnlockCapabilities {
+        AtlasVaultUnlockCapabilities(
+            localKeyAvailable: true,
+            passphraseProvider: passphrase ? PresentationNeverCalledUnwrapper() : nil,
+            recoveryKeyProvider: recovery ? PresentationNeverCalledUnwrapper() : nil
+        )
+    }
+
+    private func functionalCoordinator(
+        spy: PresentationDispatchSpy
+    ) -> AtlasVaultUnlockRequestCoordinator {
+        AtlasVaultUnlockRequestCoordinator(
+            dependencies: AtlasVaultUnlockRequestDependencies(
+                derivePassphraseVaultKey: { secret in
+                    await spy.derivePassphrase(secret)
+                },
+                deriveRecoveryVaultKey: { secret in
+                    await spy.deriveRecovery(secret)
+                },
+                activate: { request in
+                    await spy.activate(request)
+                }
+            )
+        )
+    }
+
+    private func waitForDispatch(
+        _ coordinator: ControlledUnlockCoordinator
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await coordinator.dispatchCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForDispatch(
+        _ coordinator: CancellationGatedUnlockCoordinator
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await coordinator.dispatchCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForCancellation(
+        _ coordinator: CancellationGatedUnlockCoordinator
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await coordinator.cancelCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForClear(
+        _ buffer: GatedClearPresentationSecretBuffer
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await buffer.didStartClear {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForTimeout(
+        _ gate: PresentationTimeoutGate
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await gate.sleepCount > 0 {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func sourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "Sources/AtlasUI/AtlasVaultUnlockPresentationController.swift"
+            )
+    }
+}
+
+private struct PresentationSecretSnapshot: Equatable, Sendable {
+    let takeCount: Int
+    let clearCount: Int
+    let isCleared: Bool
+}
+
+private actor TrackingPresentationSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: [UInt8]?
+    private(set) var takeCount = 0
+    private(set) var clearCount = 0
+
+    init(bytes: Data) {
+        self.bytes = Array(bytes)
+    }
+
+    deinit {
+        guard var bytes else { return }
+        self.bytes = nil
+        Self.wipe(&bytes)
+    }
+
+    func takeSecretBytes() async throws -> Data {
+        guard var bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        self.bytes = nil
+        takeCount += 1
+        let result = Data(bytes)
+        Self.wipe(&bytes)
+        return result
+    }
+
+    func clear() async {
+        clearCount += 1
+        guard var bytes else { return }
+        self.bytes = nil
+        Self.wipe(&bytes)
+    }
+
+    func snapshot() -> PresentationSecretSnapshot {
+        PresentationSecretSnapshot(
+            takeCount: takeCount,
+            clearCount: clearCount,
+            isCleared: bytes == nil
+        )
+    }
+
+    private static func wipe(_ value: inout [UInt8]) {
+        for index in value.indices {
+            value[index] = 0
+        }
+        value.removeAll(keepingCapacity: false)
+    }
+}
+
+private actor PresentationTimeoutGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var sleepCount = 0
+
+    func sleep() async {
+        sleepCount += 1
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func fire() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor PresentationNeverCalledUnwrapper: AtlasVaultKeyUnwrapping {
+    private(set) var callCount = 0
+
+    func unwrapVaultKey(
+        context: AtlasVaultKeyUnwrapContext,
+        secret: any AtlasVaultSecretBuffer
+    ) async throws -> Data {
+        callCount += 1
+        throw AtlasVaultKeyUnwrapError.providerUnavailable
+    }
+}
+
+private actor GatedClearPresentationSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: [UInt8]?
+    private var clearContinuation: CheckedContinuation<Void, Never>?
+    private(set) var didStartClear = false
+    private var cleared = false
+
+    init(bytes: Data) {
+        self.bytes = Array(bytes)
+    }
+
+    func takeSecretBytes() async throws -> Data {
+        guard var bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        self.bytes = nil
+        defer {
+            _ = bytes.withUnsafeMutableBytes { rawBuffer in
+                rawBuffer.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+        }
+        return Data(bytes)
+    }
+
+    func clear() async {
+        didStartClear = true
+        await withCheckedContinuation { continuation in
+            clearContinuation = continuation
+        }
+        if var bytes {
+            self.bytes = nil
+            _ = bytes.withUnsafeMutableBytes { rawBuffer in
+                rawBuffer.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+        }
+        cleared = true
+    }
+
+    func releaseClear() {
+        clearContinuation?.resume()
+        clearContinuation = nil
+    }
+
+    func snapshot() -> PresentationSecretSnapshot {
+        PresentationSecretSnapshot(
+            takeCount: 0,
+            clearCount: didStartClear ? 1 : 0,
+            isCleared: cleared
+        )
+    }
+}
+
+private struct PresentationDispatchSnapshot: Equatable, Sendable {
+    var passphraseDerivationCount = 0
+    var recoveryDerivationCount = 0
+    var localActivationCount = 0
+    var keyedActivationCount = 0
+    var passphraseMatched = false
+    var recoveryMatched = false
+    var vaultIDMatched = false
+}
+
+private actor PresentationDispatchSpy {
+    private var value = PresentationDispatchSnapshot()
+
+    func derivePassphrase(_ secret: Data) -> Data {
+        value.passphraseDerivationCount += 1
+        value.passphraseMatched =
+            secret == AtlasVaultUnlockPresentationControllerTests.fakePassphrase
+        return AtlasVaultUnlockPresentationControllerTests.fakeVaultKey
+    }
+
+    func deriveRecovery(_ secret: Data) -> Data {
+        value.recoveryDerivationCount += 1
+        value.recoveryMatched =
+            secret == AtlasVaultUnlockPresentationControllerTests.fakeRecoveryKey
+        return AtlasVaultUnlockPresentationControllerTests.fakeVaultKey
+    }
+
+    func activate(_ request: AtlasVaultRuntimeActivationRequest) {
+        value.vaultIDMatched =
+            request.vaultID == AtlasVaultUnlockPresentationControllerTests.vaultID
+        if let key = request.suppliedVaultKeyValue {
+            value.keyedActivationCount += 1
+            precondition(key == AtlasVaultUnlockPresentationControllerTests.fakeVaultKey)
+        } else {
+            value.localActivationCount += 1
+        }
+    }
+
+    func snapshot() -> PresentationDispatchSnapshot {
+        value
+    }
+}
+
+private actor ControlledUnlockCoordinator: AtlasVaultUnlockRequestCoordinating {
+    enum Resolution: Sendable {
+        case success
+        case failure(AtlasVaultUnlockRequestError)
+    }
+
+    enum Mode: Sendable {
+        case immediateSuccess
+        case immediateFailure(AtlasVaultUnlockRequestError)
+        case gated(cancelSucceeds: Bool)
+    }
+
+    private let mode: Mode
+    private var continuation: CheckedContinuation<Void, Error>?
+    private(set) var dispatchCount = 0
+    private(set) var cancelCount = 0
+
+    init(mode: Mode) {
+        self.mode = mode
+    }
+
+    func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        dispatchCount += 1
+        switch mode {
+        case .immediateSuccess:
+            return
+        case let .immediateFailure(error):
+            throw error
+        case .gated:
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func cancel(_ request: AtlasVaultUnlockRequest) async -> Bool {
+        cancelCount += 1
+        guard case let .gated(cancelSucceeds) = mode else {
+            return false
+        }
+        guard cancelSucceeds else {
+            return false
+        }
+        continuation?.resume(throwing: AtlasVaultUnlockRequestError.cancelled)
+        continuation = nil
+        return true
+    }
+
+    func resolve(_ resolution: Resolution) {
+        guard let continuation else { return }
+        self.continuation = nil
+        switch resolution {
+        case .success:
+            continuation.resume()
+        case let .failure(error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private actor CancellationGatedUnlockCoordinator: AtlasVaultUnlockRequestCoordinating {
+    private var dispatchContinuation: CheckedContinuation<Void, Error>?
+    private var cancellationContinuation: CheckedContinuation<Bool, Never>?
+    private(set) var dispatchCount = 0
+    private(set) var cancelCount = 0
+
+    func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        dispatchCount += 1
+        try await withCheckedThrowingContinuation { continuation in
+            dispatchContinuation = continuation
+        }
+    }
+
+    func cancel(_ request: AtlasVaultUnlockRequest) async -> Bool {
+        cancelCount += 1
+        return await withCheckedContinuation { continuation in
+            cancellationContinuation = continuation
+        }
+    }
+
+    func resolveCancellation(_ didCancel: Bool) {
+        cancellationContinuation?.resume(returning: didCancel)
+        cancellationContinuation = nil
+    }
+
+    func resolveDispatch(_ resolution: ControlledUnlockCoordinator.Resolution) {
+        guard let dispatchContinuation else { return }
+        self.dispatchContinuation = nil
+        switch resolution {
+        case .success:
+            dispatchContinuation.resume()
+        case let .failure(error):
+            dispatchContinuation.resume(throwing: error)
+        }
+    }
+}
