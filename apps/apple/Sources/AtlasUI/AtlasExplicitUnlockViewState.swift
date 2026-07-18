@@ -76,7 +76,7 @@ public struct AtlasExplicitUnlockViewState:
     }
 
     public var permitsSubmission: Bool {
-        status == .ready
+        statusPermitsSubmission
             && selectedMethod.map(availableMethods.contains) == true
             && !controlsDisabled
     }
@@ -91,6 +91,19 @@ public struct AtlasExplicitUnlockViewState:
 
     public var debugDescription: String {
         description
+    }
+
+    private var statusPermitsSubmission: Bool {
+        switch status {
+        case .ready, .failed, .cancelled, .timedOut:
+            true
+        case .locked,
+             .methodUnavailable,
+             .activating,
+             .unlocked,
+             .hostReconciliationRequired:
+            false
+        }
     }
 }
 
@@ -138,7 +151,7 @@ struct AtlasExplicitUnlockInputDraft:
         case .passphrase:
             guard
                 state.selectedMethod == .passphrase,
-                state.status == .ready,
+                state.permitsSubmission,
                 !passphrase.isEmpty
             else {
                 clear()
@@ -152,7 +165,7 @@ struct AtlasExplicitUnlockInputDraft:
         case .recoveryKey:
             guard
                 state.selectedMethod == .recoveryKey,
-                state.status == .ready,
+                state.permitsSubmission,
                 !recoveryKey.isEmpty
             else {
                 clear()

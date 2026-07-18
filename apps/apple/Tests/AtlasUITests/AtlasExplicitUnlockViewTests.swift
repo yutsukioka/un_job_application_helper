@@ -68,6 +68,39 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(recovery.showsRecoveryKeyInput)
     }
 
+    func testSelectedSecretMethodCanRetryAfterGenericTerminalStates()
+        async throws
+    {
+        let capabilities = fakeCapabilities(
+            localKey: false,
+            passphrase: true,
+            recovery: false
+        )
+
+        for status in [
+            AtlasVaultUnlockPresentationStatus.failed,
+            .cancelled,
+            .timedOut,
+        ] {
+            let state = makeViewState(
+                capabilities: capabilities,
+                selectedMethod: .passphrase,
+                status: status
+            )
+            var draft = AtlasExplicitUnlockInputDraft(
+                passphrase: Self.fakePassphrase
+            )
+
+            XCTAssertTrue(state.showsPassphraseInput, status.description)
+            XCTAssertTrue(state.permitsSubmission, status.description)
+            let submission = try XCTUnwrap(
+                draft.consume(for: .passphrase, state: state)
+            )
+            XCTAssertTrue(draft.isEmpty, status.description)
+            await submission.clearExplicitUnlockSecret()
+        }
+    }
+
     func testEveryMergedStatusMapsToFixedPresentationBehavior() {
         let cases: [
             (
