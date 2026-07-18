@@ -457,6 +457,22 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         )
     }
 
+    func testSubmissionCancelsPriorViewOwnedActionBeforeReplacement() throws {
+        let source = try source(named: "AtlasExplicitUnlockView.swift")
+        let cancellationBeforeSubmission = """
+                cancelActiveAction()
+                let actions = actions
+        """
+
+        XCTAssertEqual(
+            source.components(
+                separatedBy: cancellationBeforeSubmission
+            ).count - 1,
+            2
+        )
+        XCTAssertTrue(source.contains("activeAction?.cancel()"))
+    }
+
     func testViewSourceUsesSecureFieldsAndOmitsRawTestKey() throws {
         let source = try source(named: "AtlasExplicitUnlockView.swift")
 

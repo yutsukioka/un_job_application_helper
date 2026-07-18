@@ -175,6 +175,7 @@ public struct AtlasExplicitUnlockView: View {
             submissionGate.finish(identifier)
             return
         }
+        cancelActiveAction()
         let actions = actions
         let actionID = UUID()
         activeActionID = actionID
@@ -206,6 +207,7 @@ public struct AtlasExplicitUnlockView: View {
             submissionGate.finish(identifier)
             return
         }
+        cancelActiveAction()
         let actions = actions
         let actionID = UUID()
         activeActionID = actionID
@@ -249,10 +251,14 @@ public struct AtlasExplicitUnlockView: View {
 
     private func clearInputAndCancelAction() {
         draft.clear()
+        cancelActiveAction()
+        submissionGate.cancel()
+    }
+
+    private func cancelActiveAction() {
         activeActionID = nil
         activeAction?.cancel()
         activeAction = nil
-        submissionGate.cancel()
     }
 
     private func replaceActiveAction(
