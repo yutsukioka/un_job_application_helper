@@ -36,13 +36,18 @@ def decode_base64(value: Any, context: str) -> bytes:
         raise KeyWrapVectorValidationError(f"{context} must be valid base64") from exc
 
 
-def decode_fake_text(value: Any, context: str) -> str:
+def decode_fake_utf8(value: Any, context: str) -> str:
+    if not isinstance(value, list) or not value:
+        raise KeyWrapVectorValidationError(f"{context} must be a non-empty byte array")
+    if any(
+        isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 255
+        for item in value
+    ):
+        raise KeyWrapVectorValidationError(f"{context} must contain bytes")
     try:
-        decoded = decode_base64(value, context).decode("utf-8")
+        decoded = bytes(value).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise KeyWrapVectorValidationError(f"{context} must be UTF-8") from exc
-    if not decoded:
-        raise KeyWrapVectorValidationError(f"{context} must not be empty")
     return decoded
 
 
@@ -86,10 +91,10 @@ def validate_vector(vector: Any) -> None:
     vault_key = decode_base64(vector.get("test_only_vault_key_b64"), "test_only_vault_key_b64")
     if len(vault_key) != 32:
         raise KeyWrapVectorValidationError("test-only vault key must be 32 bytes")
-    passphrase = decode_fake_text(vector.get("test_only_passphrase_b64"), "test_only_passphrase_b64")
-    wrong_passphrase = decode_fake_text(
-        vector.get("wrong_test_only_passphrase_b64"),
-        "wrong_test_only_passphrase_b64",
+    passphrase = decode_fake_utf8(vector.get("test_only_input_utf8"), "test_only_input_utf8")
+    wrong_passphrase = decode_fake_utf8(
+        vector.get("wrong_test_only_input_utf8"),
+        "wrong_test_only_input_utf8",
     )
     if passphrase == wrong_passphrase:
         raise KeyWrapVectorValidationError("wrong test passphrase must differ")
@@ -145,7 +150,7 @@ def test_python_recomputes_and_unwraps_vector() -> None:
     vector = first_vector(data)
     metadata = metadata_from(vector)
     wrapped = metadata.key_wraps[0]
-    passphrase = decode_fake_text(vector["test_only_passphrase_b64"], "test_only_passphrase_b64")
+    passphrase = decode_fake_utf8(vector["test_only_input_utf8"], "test_only_input_utf8")
     expected_key = decode_base64(vector["test_only_vault_key_b64"], "test_only_vault_key_b64")
 
     recomputed = wrap_vault_key(
@@ -165,9 +170,9 @@ def test_wrong_passphrase_fails_without_secret_output() -> None:
     validate_vectors(data)
     vector = first_vector(data)
     wrapped = metadata_from(vector).key_wraps[0]
-    wrong = decode_fake_text(
-        vector["wrong_test_only_passphrase_b64"],
-        "wrong_test_only_passphrase_b64",
+    wrong = decode_fake_utf8(
+        vector["wrong_test_only_input_utf8"],
+        "wrong_test_only_input_utf8",
     )
 
     with pytest.raises(VaultKeyUnwrapError) as raised:
@@ -184,7 +189,7 @@ def test_serialized_metadata_excludes_fake_key_and_passphrase() -> None:
     validate_vectors(data)
     vector = first_vector(data)
     serialized = json.dumps(vector["vault_metadata"], sort_keys=True)
-    passphrase = decode_fake_text(vector["test_only_passphrase_b64"], "test_only_passphrase_b64")
+    passphrase = decode_fake_utf8(vector["test_only_input_utf8"], "test_only_input_utf8")
     vault_key = decode_base64(vector["test_only_vault_key_b64"], "test_only_vault_key_b64")
 
     assert passphrase not in serialized
@@ -237,6 +242,11 @@ def test_v1_key_wrap_aad_excludes_vault_id() -> None:
             ("vectors", 0, "test_only_vault_key_b64"),
             base64.b64encode(b"x" * 31).decode("ascii"),
             "test-only vault key must be 32 bytes",
+        ),
+        (
+            ("vectors", 0, "test_only_input_utf8"),
+            [256],
+            "test_only_input_utf8 must contain bytes",
         ),
     ],
 )

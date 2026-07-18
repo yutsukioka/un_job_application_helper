@@ -32,6 +32,8 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         XCTAssertEqual(wrapped.kdf.parallelism, 1)
         XCTAssertEqual(wrapped.nonce.count, 12)
         XCTAssertEqual(wrapped.ciphertext.count, 48)
+        XCTAssertFalse(vector.testOnlyInputUTF8.isEmpty)
+        XCTAssertFalse(vector.wrongTestOnlyInputUTF8.isEmpty)
         XCTAssertEqual(try strictBase64(vector.testOnlyVaultKeyBase64).count, 32)
     }
 
@@ -83,7 +85,7 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         let metadata = try dictionary(vector["vault_metadata"])
         let serialized = try stableJSON(metadata)
         let passphrase = try String(
-            data: strictBase64(try string(vector["test_only_passphrase_b64"])),
+            data: Data(try byteArray(vector["test_only_input_utf8"])),
             encoding: .utf8
         ).unwrap()
         let rawKey = try strictBase64(try string(vector["test_only_vault_key_b64"]))
@@ -290,6 +292,22 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         return string
     }
 
+    private func byteArray(_ value: Any?) throws -> [UInt8] {
+        guard let values = value as? [Any], !values.isEmpty else {
+            throw KeyWrapVectorTestError.invalidFixture
+        }
+        return try values.map { value in
+            guard let number = value as? NSNumber else {
+                throw KeyWrapVectorTestError.invalidFixture
+            }
+            let integer = number.intValue
+            guard integer >= 0, integer <= 255, NSNumber(value: integer) == number else {
+                throw KeyWrapVectorTestError.invalidFixture
+            }
+            return UInt8(integer)
+        }
+    }
+
     private func assertSendable<T: Sendable>(_ type: T.Type) {}
 }
 
@@ -320,8 +338,8 @@ private struct KeyWrapVectorSuite: Decodable {
 private struct KeyWrapVector: Decodable {
     let name: String
     let testOnly: Bool
-    let testOnlyPassphraseBase64: String
-    let wrongTestOnlyPassphraseBase64: String
+    let testOnlyInputUTF8: [UInt8]
+    let wrongTestOnlyInputUTF8: [UInt8]
     let testOnlyVaultKeyBase64: String
     let vaultMetadata: AtlasVaultWrappedKeyMetadata
     let keyWrapAADBase64: String
@@ -329,8 +347,8 @@ private struct KeyWrapVector: Decodable {
     enum CodingKeys: String, CodingKey {
         case name
         case testOnly = "test_only"
-        case testOnlyPassphraseBase64 = "test_only_passphrase_b64"
-        case wrongTestOnlyPassphraseBase64 = "wrong_test_only_passphrase_b64"
+        case testOnlyInputUTF8 = "test_only_input_utf8"
+        case wrongTestOnlyInputUTF8 = "wrong_test_only_input_utf8"
         case testOnlyVaultKeyBase64 = "test_only_vault_key_b64"
         case vaultMetadata = "vault_metadata"
         case keyWrapAADBase64 = "key_wrap_aad_b64"

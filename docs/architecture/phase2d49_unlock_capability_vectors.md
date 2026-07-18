@@ -80,7 +80,9 @@ input, and use fixed redacted descriptions.
 - not a production key.
 
 It uses deterministic fake bytes and low-cost test-only Argon2id parameters.
-Those values must never be reused in production.
+Secret-like test inputs are represented as validated UTF-8 byte arrays rather
+than credential-shaped strings. Those values must never be reused in
+production.
 
 Python validates and recomputes the Argon2id/AES-GCM wrap, confirms correct
 unwrap, rejects the wrong fake passphrase, and verifies metadata excludes the
