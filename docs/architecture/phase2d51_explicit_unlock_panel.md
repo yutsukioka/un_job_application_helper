@@ -117,9 +117,16 @@ Disappearance clears local input, cancels the view-owned submission task, and
 resets local admission state. A shared, non-secret authorization reference is
 stored in view-owned state so it survives parent rerenders and rebuilt action
 values. Submission registers with it synchronously before creating the async
-task. Disappearance waits for any in-flight result before delegation, suppresses
-the callback only when that result is `unlocked`, and still delegates after
-failure or pre-dispatch cancellation.
+task. Disappearance during an active submission delegates immediately so the
+controller can invalidate the attempt; a late successful completion cannot
+retroactively suppress that callback. Only an `unlocked` result recorded before
+disappearance suppresses the next host-removal callback. Failure and
+pre-dispatch cancellation always delegate.
+
+The view records the returned status synchronously before secret cleanup can
+suspend. A future host must not remove the panel from inside the injected
+submission operation before it returns; host publication/removal must follow
+this result-recording boundary. Phase 2D-52 must test that ordering explicitly.
 
 This authorization lives outside the rendered view-state value, so removal
 after committed activation does not depend on an `.activating` render closure

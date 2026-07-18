@@ -252,19 +252,18 @@ final class AtlasExplicitUnlockDisappearanceAuthorization:
     private var activeSubmissions: Set<UUID> = []
     private var committedUnlock = false
     private var suppressNextDisappearance = false
-    private var disappearanceWaiters: [
-        CheckedContinuation<Bool, Never>
-    ] = []
+    private var disappearanceRequested = false
 
     func beginSubmission() -> UUID {
         let identifier = UUID()
         lock.lock()
+        defer { lock.unlock() }
         if activeSubmissions.isEmpty {
             committedUnlock = false
+            disappearanceRequested = false
         }
         activeSubmissions.insert(identifier)
         suppressNextDisappearance = false
-        lock.unlock()
         return identifier
     }
 
@@ -273,40 +272,34 @@ final class AtlasExplicitUnlockDisappearanceAuthorization:
         status: AtlasVaultUnlockPresentationStatus
     ) {
         lock.lock()
+        defer { lock.unlock() }
         guard activeSubmissions.remove(identifier) != nil else {
-            lock.unlock()
             return
         }
         committedUnlock = committedUnlock || status == .unlocked
         guard activeSubmissions.isEmpty else {
-            lock.unlock()
             return
         }
 
-        let shouldNotify = !committedUnlock
-        let waiters = disappearanceWaiters
-        disappearanceWaiters.removeAll()
-        suppressNextDisappearance = committedUnlock && waiters.isEmpty
+        suppressNextDisappearance =
+            committedUnlock && !disappearanceRequested
         committedUnlock = false
-        lock.unlock()
-        for waiter in waiters {
-            waiter.resume(returning: shouldNotify)
-        }
+        disappearanceRequested = false
     }
 
-    func shouldNotifyDisappearance() async -> Bool {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if !activeSubmissions.isEmpty {
-                disappearanceWaiters.append(continuation)
-                lock.unlock()
-                return
-            }
-            let shouldNotify = !suppressNextDisappearance
+    func shouldNotifyDisappearance() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if !activeSubmissions.isEmpty {
+            disappearanceRequested = true
             suppressNextDisappearance = false
-            lock.unlock()
-            continuation.resume(returning: shouldNotify)
+            return true
         }
+        if suppressNextDisappearance {
+            suppressNextDisappearance = false
+            return false
+        }
+        return true
     }
 }
 

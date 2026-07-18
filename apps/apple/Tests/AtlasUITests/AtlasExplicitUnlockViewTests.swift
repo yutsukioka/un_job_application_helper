@@ -490,7 +490,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         )
     }
 
-    func testDisappearanceWaitsForCommittedUnlockOutsideStaleViewState() async {
+    func testActiveDisappearanceDelegatesBeforeSubmissionReturns() async {
         let recorder = ExplicitUnlockActionRecorder()
         let submitRecorder = GatedExplicitUnlockSubmitRecorder(
             result: .unlocked
@@ -515,12 +515,13 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         let didStart = await waitForSubmitStart(submitRecorder)
         XCTAssertTrue(didStart)
         let disappearanceTask = Task {
-            guard await authorization.shouldNotifyDisappearance() else {
+            guard authorization.shouldNotifyDisappearance() else {
                 return
             }
             await actions.didDisappear()
         }
 
+        let notifiedBeforeCompletion = await waitForDisappearance(recorder)
         await submitRecorder.release()
         let result = await submitTask.value
         authorization.finishSubmission(identifier, status: result)
@@ -528,7 +529,8 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         await disappearanceTask.value
 
         let snapshot = await recorder.snapshot()
-        XCTAssertEqual(snapshot.disappearanceCount, 0)
+        XCTAssertTrue(notifiedBeforeCompletion)
+        XCTAssertEqual(snapshot.disappearanceCount, 1)
     }
 
     func testDisappearanceStillDelegatesAfterFailedSubmission() async {
@@ -554,7 +556,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         let didStart = await waitForSubmitStart(submitRecorder)
         XCTAssertTrue(didStart)
         let disappearanceTask = Task {
-            guard await authorization.shouldNotifyDisappearance() else {
+            guard authorization.shouldNotifyDisappearance() else {
                 return
             }
             await actions.didDisappear()
@@ -589,13 +591,65 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
 
         let result = await actions.submit(.localKey)
         authorization.finishSubmission(identifier, status: result)
-        if await authorization.shouldNotifyDisappearance() {
+        if authorization.shouldNotifyDisappearance() {
             await actions.didDisappear()
         }
 
         XCTAssertEqual(result, .unlocked)
         let snapshot = await recorder.snapshot()
         XCTAssertEqual(snapshot.disappearanceCount, 0)
+    }
+
+    func testActiveDisappearanceDelegatesBeforeLateUnlockCompletes() async {
+        let recorder = ExplicitUnlockActionRecorder()
+        let authorization =
+            AtlasExplicitUnlockDisappearanceAuthorization()
+        let identifier = authorization.beginSubmission()
+
+        let disappearanceTask = Task {
+            guard authorization.shouldNotifyDisappearance() else {
+                return
+            }
+            await recorder.recordDisappearance()
+        }
+
+        let notifiedBeforeCompletion = await waitForDisappearance(recorder)
+        authorization.finishSubmission(identifier, status: .unlocked)
+        await disappearanceTask.value
+
+        XCTAssertTrue(notifiedBeforeCompletion)
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.disappearanceCount, 1)
+        let shouldNotifyAgain =
+            authorization.shouldNotifyDisappearance()
+        XCTAssertTrue(shouldNotifyAgain)
+    }
+
+    func testAuthorizationUsesStructuredLockReleaseWithoutWaiters() throws {
+        let source = try source(
+            named: "AtlasExplicitUnlockViewState.swift"
+        )
+        let typeStart = try XCTUnwrap(
+            source.range(
+                of: "final class AtlasExplicitUnlockDisappearanceAuthorization"
+            )
+        )
+        let typeEnd = try XCTUnwrap(
+            source.range(
+                of: "struct AtlasExplicitUnlockSubmissionGate",
+                range: typeStart.upperBound..<source.endIndex
+            )
+        )
+        let authorizationSource = String(
+            source[typeStart.lowerBound..<typeEnd.lowerBound]
+        )
+
+        XCTAssertTrue(
+            authorizationSource.contains("defer { lock.unlock() }")
+        )
+        XCTAssertFalse(
+            authorizationSource.contains("disappearanceWaiters")
+        )
     }
 
     func testViewOwnedAuthorizationSpansRebuiltActionValues() async {
@@ -628,17 +682,13 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         }
         let didStart = await waitForSubmitStart(submitRecorder)
         XCTAssertTrue(didStart)
-        let disappearanceTask = Task {
-            guard await authorization.shouldNotifyDisappearance() else {
-                return
-            }
-            await rebuiltActions.didDisappear()
-        }
 
         await submitRecorder.release()
         let result = await submitTask.value
         authorization.finishSubmission(identifier, status: result)
-        await disappearanceTask.value
+        if authorization.shouldNotifyDisappearance() {
+            await rebuiltActions.didDisappear()
+        }
 
         XCTAssertEqual(result, .unlocked)
         let snapshot = await recorder.snapshot()
@@ -688,6 +738,25 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         ]
 
         XCTAssertTrue(beforeSelection.contains("guard !Task.isCancelled"))
+    }
+
+    func testSubmissionRecordsResultBeforeSecretCleanupCanSuspend() throws {
+        let source = try source(named: "AtlasExplicitUnlockView.swift")
+        let completionBeforeCleanup = """
+                    disappearanceAuthorization.finishSubmission(
+                        disappearanceID,
+                        status: completionStatus
+                    )
+                    didFinishAuthorization = true
+                    await submission.clearExplicitUnlockSecret()
+        """
+
+        XCTAssertEqual(
+            source.components(
+                separatedBy: completionBeforeCleanup
+            ).count - 1,
+            2
+        )
     }
 
     func testSubmissionCancelsPriorViewOwnedActionBeforeReplacement() throws {
@@ -937,6 +1006,18 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
     ) async -> Bool {
         for _ in 0..<200 {
             if await recorder.hasStarted {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForDisappearance(
+        _ recorder: ExplicitUnlockActionRecorder
+    ) async -> Bool {
+        for _ in 0..<200 {
+            if await recorder.snapshot().disappearanceCount > 0 {
                 return true
             }
             await Task.yield()
