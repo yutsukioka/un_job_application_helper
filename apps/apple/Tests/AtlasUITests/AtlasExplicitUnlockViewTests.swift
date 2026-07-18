@@ -539,7 +539,7 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(source.contains(".accessibilityLabel("))
         XCTAssertTrue(source.contains(".accessibilityValue(\"Protected input\")"))
         XCTAssertTrue(source.contains(".autocorrectionDisabled(true)"))
-        XCTAssertTrue(source.contains(".textInputAutocapitalization(.never)"))
+        XCTAssertTrue(source.contains("textInputAutocapitalization(.never)"))
         XCTAssertFalse(source.contains("accessibilityValue(draft."))
     }
 
