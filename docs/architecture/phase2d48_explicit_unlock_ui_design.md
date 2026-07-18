@@ -59,8 +59,9 @@ AES-256-GCM vault-key unwrap. Apple Swift code has no reviewed Argon2id
 provider, wrapped-key parser connected to activation, or production
 passphrase-unwrapping dependency. The current coordinator derivation closure
 receives secret bytes only; it does not receive the validated vault ID or
-selected wrapped-key envelope. Passphrase unlock is therefore unavailable in
-production today.
+selected wrapped-key envelope. AtlasVault v1 also does not authenticate vault
+ID in `WrappedKey` metadata or key-wrap associated data. Passphrase unlock is
+therefore unavailable in production today.
 
 ## 8. Current Recovery-Key Capability Audit
 
@@ -113,7 +114,24 @@ the coordinator and never invokes Argon2id or AES-GCM itself. Before production
 enablement, the coordinator/provider boundary must also receive explicit
 trusted unwrap context containing the validated non-semantic vault ID and the
 wrapped-key metadata selected for that vault. A shared provider must not infer
-the target from hidden mutable state.
+the target from hidden mutable state. In v1, this context supports explicit
+routing only; it does not cryptographically prove that the wrap belongs to the
+vault.
+
+### AtlasVault v1 Vault-Binding Limitation
+
+`VaultMetadata` stores `vault_id` beside `key_wraps`, but `WrappedKey` carries
+no vault ID and v1 key-wrap associated data does not authenticate vault ID.
+Plaintext adjacency is not cryptographic provenance. A swapped wrap may
+successfully unwrap and fail later when encrypted record authentication uses
+the wrong vault key.
+
+That later failure is not universal key confirmation: an empty store hydrates
+without opening a record. Production passphrase or recovery unlock therefore
+remains unavailable until a separate reviewed design adds either versioned
+authenticated vault-ID binding or an authenticated key-confirmation value. Any
+format transition must define compatibility for existing v1 wraps and must not
+silently reinterpret them.
 
 ## 13. Recovery-Key Option
 
@@ -122,7 +140,8 @@ capability is unavailable. Enabling it requires a separately reviewed format,
 parser, context-aware unwrap provider, vectors, and generic failure behavior.
 The trusted boundary selects and passes the validated vault ID and matching
 recovery-wrapped metadata explicitly; the view never selects metadata. Recovery
-input must never be treated as a passphrase by fallback.
+input must never be treated as a passphrase by fallback. Explicit routing does
+not overcome the v1 vault-binding limitation.
 
 ## 14. Unsupported Or Unavailable Method Behavior
 
@@ -485,8 +504,14 @@ Future phases must test:
 - local-key action delegates without direct Keychain work;
 - unwrap providers receive the validated non-semantic vault ID and the exact
   wrapped-key envelope selected by the trusted host/coordinator;
-- a cross-vault or mismatched wrapped-key context fails before activation, and
-  no provider relies on hidden mutable current-vault state;
+- v1 vector tests document that key-wrap metadata and associated data exclude
+  vault ID and make no pre-activation cross-vault rejection claim;
+- validated vault ID and wrapped-key envelope remain distinct explicit inputs,
+  and no provider relies on hidden mutable current-vault state;
+- a wrong unwrapped key fails record authentication when at least one encrypted
+  record exists, while an empty v1 vault is not treated as key confirmation;
+- future key-wrap versions or key-confirmation metadata fail closed until
+  explicitly supported;
 - input clears on submit, cancel, method change, disappearance, lock, and
   timeout;
 - wrong secret produces one generic failure and no fallback;
@@ -514,8 +539,8 @@ Future phases must test:
 | Capability | Decision | Prerequisite |
 | --- | --- | --- |
 | Explicit local-key request through runtime | Ready with constraints | Injected capability, explicit action, generic missing-key result |
-| Production passphrase UI | No-go | Reviewed Swift wrapped-key parser, context-aware provider boundary, and Argon2id/AES-GCM provider |
-| Production recovery-key UI | No-go | Reviewed recovery format, vectors, parser, and context-aware provider |
+| Production passphrase UI | No-go | Reviewed Swift parser/provider plus versioned authenticated vault binding or key confirmation |
+| Production recovery-key UI | No-go | Reviewed recovery format/provider plus versioned authenticated vault binding or key confirmation |
 | Raw-key production UI or host command | Prohibited | Source/dependency guards reject direct construction; the public runtime argument is not an access-control guarantee |
 | Coordinator unwrapped-key bridge | Design required | Allowed only after reviewed context-aware unwrap; no public input capability |
 | Secure input view-state helper | Design ready | Phase 2D-50 controller and Phase 2D-51 tests |
@@ -535,8 +560,9 @@ admission for the single runtime. Passphrase and recovery unlock are
 unavailable without reviewed Swift providers. Memory zeroization, screen
 capture, accessibility, file protection, backup, and narrowing the public
 runtime raw-key argument around the trusted coordinator bridge remain
-unresolved. Migration, cleanup, cloud, recovery, onboarding, and key rotation
-remain deferred.
+unresolved. AtlasVault v1 also lacks authenticated key-wrap-to-vault binding
+and universal key confirmation. Migration, cleanup, cloud, recovery,
+onboarding, and key rotation remain deferred.
 
 ## 65. Recommended Phase 2D-49
 
@@ -555,3 +581,11 @@ must evolve that dependency boundary or construct a request-scoped,
 context-bound provider before dispatch under the process-global admission
 token. Phase 2D-49 defines and tests the boundary; it does not enable production
 unwrapping.
+
+Phase 2D-49 must model v1 faithfully: vault ID and wrapped-key envelope are
+separate routing inputs, not an authenticated association. Shared vectors must
+record that v1 key-wrap associated data excludes vault ID. The phase must not
+invent v2 metadata, silently reinterpret v1, or claim that an empty vault
+confirms the unwrapped key. Authenticated vault binding or key confirmation
+requires its own format and compatibility design before production
+passphrase/recovery capability can become available.
