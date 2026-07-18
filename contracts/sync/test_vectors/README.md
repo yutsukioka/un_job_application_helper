@@ -84,3 +84,21 @@ AES-GCM seal/open behavior, but they still do not store vault keys, call
 Keychain, read or write vault files, run migrations, or perform sync. The fixed
 keys, nonces, and encrypted records in this directory remain fake test fixtures
 only.
+
+## Key-Wrap Vectors
+
+`atlasvault_key_wrap_vectors_v1.json` contains one fake, deterministic,
+test-only AtlasVault v1 passphrase-wrap fixture. It is not real user data, not
+a production vault, and not a production key.
+
+Python tests validate and recompute the Argon2id plus AES-256-GCM reference
+wrap, verify correct and wrong fake passphrase behavior, and prove serialized
+vault metadata excludes the fake passphrase and raw key. Swift tests decode
+the same v1 metadata and validate its lengths and algorithms; Swift does not
+implement Argon2id in this phase.
+
+The vector also documents a v1 limitation: key-wrap AAD excludes `vault_id`.
+The adjacent vault ID is routing context, not authenticated provenance.
+Production passphrase and recovery unlock therefore remain unavailable until
+a separately reviewed provider and versioned vault-binding or
+key-confirmation design exist.

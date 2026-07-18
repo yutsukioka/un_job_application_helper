@@ -1,0 +1,62 @@
+{
+  "format": "atlasvault-key-wrap-vectors",
+  "version": 1,
+  "description": "Fake test-only deterministic AtlasVault v1 key-wrap compatibility vectors.",
+  "warning": "TEST ONLY. Not real user data. Not a production vault. Not a production key. Never use these inputs in production.",
+  "suite": {
+    "kdf": "Argon2id",
+    "key_wrap_aead": "AES-256-GCM",
+    "ciphertext_layout": "base64(32-byte-vault-key ciphertext || 16-byte GCM tag); nonce stored separately",
+    "aad_json": "UTF-8 JSON with sorted keys, compact separators, and ASCII escaping",
+    "vault_binding": "AtlasVault v1 key-wrap AAD excludes vault_id; explicit vault context is routing only"
+  },
+  "vectors": [
+    {
+      "name": "fake_passphrase_wrap_v1",
+      "test_only": true,
+      "test_only_passphrase_b64": "RkFLRV9BVExBU1ZBVUxUX1BBU1NQSFJBU0VfVjFfT05MWQ==",
+      "wrong_test_only_passphrase_b64": "RkFLRV9XUk9OR19QQVNTUEhSQVNFX1YxX09OTFk=",
+      "test_only_vault_key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "vault_metadata": {
+        "format": "atlas-vault",
+        "version": 1,
+        "vault_id": "00000000-0000-4000-8000-000000000500",
+        "crypto": {
+          "record_aead": "AES-256-GCM",
+          "kdf": "Argon2id",
+          "subkey_kdf": "HKDF-SHA256",
+          "key_wrap_aead": "AES-256-GCM"
+        },
+        "key_wraps": [
+          {
+            "id": "primary-passphrase",
+            "type": "passphrase",
+            "kdf": {
+              "algorithm": "Argon2id",
+              "salt": "IiIiIiIiIiIiIiIiIiIiIg==",
+              "memory_kib": 1024,
+              "iterations": 2,
+              "parallelism": 1
+            },
+            "nonce": "MzMzMzMzMzMzMzMz",
+            "ciphertext": "JJzE300uvWP/iqioMFTRANtsnhXearJAsujEbtWYY1SyRNBUfZu+5bhYcHZvX87L"
+          }
+        ]
+      },
+      "key_wrap_aad_json": {
+        "format": "atlas-vault-key-wrap",
+        "version": 1,
+        "id": "primary-passphrase",
+        "type": "passphrase",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "salt": "IiIiIiIiIiIiIiIiIiIiIg==",
+          "memory_kib": 1024,
+          "iterations": 2,
+          "parallelism": 1
+        }
+      },
+      "key_wrap_aad_b64": "eyJmb3JtYXQiOiJhdGxhcy12YXVsdC1rZXktd3JhcCIsImlkIjoicHJpbWFyeS1wYXNzcGhyYXNlIiwia2RmIjp7ImFsZ29yaXRobSI6IkFyZ29uMmlkIiwiaXRlcmF0aW9ucyI6MiwibWVtb3J5X2tpYiI6MTAyNCwicGFyYWxsZWxpc20iOjEsInNhbHQiOiJJaUlpSWlJaUlpSWlJaUlpSWlJaUlnPT0ifSwidHlwZSI6InBhc3NwaHJhc2UiLCJ2ZXJzaW9uIjoxfQ=="
+    }
+  ]
+}
