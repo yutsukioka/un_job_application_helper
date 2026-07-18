@@ -224,6 +224,39 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertTrue(snapshot.isCleared)
     }
 
+    func testCompletedFailurePublishesBeforeSecretCleanupSuspends() async {
+        let coordinator = ControlledUnlockCoordinator(
+            mode: .immediateFailure(.unlockFailed)
+        )
+        let capabilities = fakeCapabilities(passphrase: true, recovery: false)
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+        let buffer = GatedClearPresentationSecretBuffer(bytes: Self.fakePassphrase)
+        _ = await controller.select(.passphrase)
+
+        let submission = Task {
+            await controller.submit(.passphrase(buffer))
+        }
+        let didStartClear = await waitForClear(buffer)
+        XCTAssertTrue(didStartClear)
+
+        let completedState = await controller.currentState()
+        let cancellation = await controller.cancel()
+
+        XCTAssertEqual(completedState.status, .failed)
+        XCTAssertEqual(cancellation.status, .cancelled)
+        XCTAssertNotEqual(cancellation.status, .hostReconciliationRequired)
+
+        await buffer.releaseClear()
+        let terminal = await submission.value
+        let bufferState = await buffer.snapshot()
+        XCTAssertEqual(terminal.status, .cancelled)
+        XCTAssertTrue(bufferState.isCleared)
+    }
+
     func testCoordinatorTimeoutInvalidatesPresentationAuthorization() async {
         let spy = PresentationDispatchSpy()
         let capabilities = fakeCapabilities(passphrase: true, recovery: false)
@@ -678,6 +711,18 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         return false
     }
 
+    private func waitForClear(
+        _ buffer: GatedClearPresentationSecretBuffer
+    ) async -> Bool {
+        for _ in 0..<1_000 {
+            if await buffer.didStartClear {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
     private func sourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -753,6 +798,57 @@ private actor PresentationNeverCalledUnwrapper: AtlasVaultKeyUnwrapping {
     ) async throws -> Data {
         callCount += 1
         throw AtlasVaultKeyUnwrapError.providerUnavailable
+    }
+}
+
+private actor GatedClearPresentationSecretBuffer: AtlasVaultSecretBuffer {
+    private var bytes: [UInt8]?
+    private var clearContinuation: CheckedContinuation<Void, Never>?
+    private(set) var didStartClear = false
+    private var cleared = false
+
+    init(bytes: Data) {
+        self.bytes = Array(bytes)
+    }
+
+    func takeSecretBytes() async throws -> Data {
+        guard var bytes else {
+            throw AtlasVaultSecretBufferError.unavailable
+        }
+        self.bytes = nil
+        defer {
+            _ = bytes.withUnsafeMutableBytes { rawBuffer in
+                rawBuffer.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+        }
+        return Data(bytes)
+    }
+
+    func clear() async {
+        didStartClear = true
+        await withCheckedContinuation { continuation in
+            clearContinuation = continuation
+        }
+        if var bytes {
+            self.bytes = nil
+            _ = bytes.withUnsafeMutableBytes { rawBuffer in
+                rawBuffer.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+        }
+        cleared = true
+    }
+
+    func releaseClear() {
+        clearContinuation?.resume()
+        clearContinuation = nil
+    }
+
+    func snapshot() -> PresentationSecretSnapshot {
+        PresentationSecretSnapshot(
+            takeCount: 0,
+            clearCount: didStartClear ? 1 : 0,
+            isCleared: cleared
+        )
     }
 }
 

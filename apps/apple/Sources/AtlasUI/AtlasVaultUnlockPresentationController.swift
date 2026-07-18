@@ -239,12 +239,12 @@ public actor AtlasVaultUnlockPresentationController:
         } catch {
             result = .failure(.unlockFailed)
         }
-        await submission.clearSecret()
 
         guard
             authorization == attemptAuthorization,
             activeAttempt?.authorization == attemptAuthorization
         else {
+            await submission.clearSecret()
             return snapshot()
         }
         activeAttempt = nil
@@ -254,6 +254,7 @@ public actor AtlasVaultUnlockPresentationController:
         case let .failure(error):
             status = Self.presentationStatus(for: error)
         }
+        await submission.clearSecret()
         return snapshot()
     }
 
