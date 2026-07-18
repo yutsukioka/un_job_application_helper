@@ -123,7 +123,9 @@ task. Disappearance during an active submission delegates immediately so the
 controller can invalidate the attempt; a late successful completion cannot
 retroactively suppress that callback. Only an `unlocked` result recorded before
 disappearance suppresses the next host-removal callback. Failure and
-pre-dispatch cancellation always delegate.
+pre-dispatch cancellation always delegate. Repeated disappearance callbacks
+for the same active submission set are coalesced so controller invalidation is
+requested only once.
 
 The view records the returned status synchronously before secret cleanup can
 suspend. A future host must not remove the panel from inside the injected

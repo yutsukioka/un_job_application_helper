@@ -299,6 +299,9 @@ final class AtlasExplicitUnlockDisappearanceAuthorization:
         lock.lock()
         defer { lock.unlock() }
         if !activeSubmissions.isEmpty {
+            guard !disappearanceRequested else {
+                return false
+            }
             disappearanceRequested = true
             suppressNextDisappearance = false
             return true

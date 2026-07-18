@@ -647,6 +647,18 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(shouldNotifyAgain)
     }
 
+    func testDuplicateActiveDisappearanceDelegatesOnlyOnce() {
+        let authorization =
+            AtlasExplicitUnlockDisappearanceAuthorization()
+        let identifier = authorization.beginSubmission()
+
+        XCTAssertTrue(authorization.shouldNotifyDisappearance())
+        XCTAssertFalse(authorization.shouldNotifyDisappearance())
+
+        authorization.finishSubmission(identifier, status: .cancelled)
+        XCTAssertTrue(authorization.shouldNotifyDisappearance())
+    }
+
     func testAuthorizationUsesStructuredLockReleaseWithoutWaiters() throws {
         let source = try source(
             named: "AtlasExplicitUnlockViewState.swift"
