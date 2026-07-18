@@ -578,6 +578,32 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         XCTAssertTrue(source.contains(".autocorrectionDisabled(true)"))
         XCTAssertTrue(source.contains("textInputAutocapitalization(.never)"))
         XCTAssertFalse(source.contains("accessibilityValue(draft."))
+
+        for placeholder in ["Passphrase", "Recovery key"] {
+            let fieldStart = try XCTUnwrap(
+                source.range(of: "SecureField(\"\(placeholder)\"")
+            )
+            let buttonStart = try XCTUnwrap(
+                source.range(
+                    of: "Button(\"Unlock\")",
+                    range: fieldStart.upperBound..<source.endIndex
+                )
+            )
+            let fieldSource = source[
+                fieldStart.lowerBound..<buttonStart.lowerBound
+            ]
+
+            XCTAssertTrue(
+                fieldSource.contains(".disabled("),
+                placeholder
+            )
+            XCTAssertTrue(
+                fieldSource.contains(
+                    "state.controlsDisabled || submissionGate.isActive"
+                ),
+                placeholder
+            )
+        }
     }
 
     func testNoInventedFailureSubtypeAppearsInPhaseSources() throws {

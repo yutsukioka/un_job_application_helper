@@ -102,6 +102,9 @@ public struct AtlasExplicitUnlockView: View {
                 SecureField("Passphrase", text: $draft.passphrase)
                     .textFieldStyle(.roundedBorder)
                     .atlasSecretInputPrivacy()
+                    .disabled(
+                        state.controlsDisabled || submissionGate.isActive
+                    )
                     .accessibilityLabel("Vault passphrase")
                     .accessibilityValue("Protected input")
 
@@ -121,6 +124,9 @@ public struct AtlasExplicitUnlockView: View {
                 SecureField("Recovery key", text: $draft.recoveryKey)
                     .textFieldStyle(.roundedBorder)
                     .atlasSecretInputPrivacy()
+                    .disabled(
+                        state.controlsDisabled || submissionGate.isActive
+                    )
                     .accessibilityLabel("Vault recovery key")
                     .accessibilityValue("Protected input")
 
