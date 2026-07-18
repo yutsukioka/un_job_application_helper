@@ -781,6 +781,32 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
         )
     }
 
+    func testSelectingCurrentMethodDoesNotClearDraftOrInvokeAction() throws {
+        let source = try source(named: "AtlasExplicitUnlockView.swift")
+        let selectionStart = try XCTUnwrap(
+            source.range(
+                of: "private func selectMethod("
+            )
+        )
+        let selectionEnd = try XCTUnwrap(
+            source.range(
+                of: "private func submitLocalKey()",
+                range: selectionStart.upperBound..<source.endIndex
+            )
+        )
+        let selectionSource = String(
+            source[selectionStart.lowerBound..<selectionEnd.lowerBound]
+        )
+        let guardBeforeClear = """
+                guard state.selectedMethod != method else {
+                    return
+                }
+                clearInputAndCancelAction()
+        """
+
+        XCTAssertTrue(selectionSource.contains(guardBeforeClear))
+    }
+
     func testSubmissionCancelsPriorViewOwnedActionBeforeReplacement() throws {
         let source = try source(named: "AtlasExplicitUnlockView.swift")
         let cancellationBeforeSubmission = """

@@ -169,6 +169,9 @@ public struct AtlasExplicitUnlockView: View {
     }
 
     private func selectMethod(_ method: AtlasVaultUnlockMethod) {
+        guard state.selectedMethod != method else {
+            return
+        }
         clearInputAndCancelAction()
         let actions = actions
         replaceActiveAction {

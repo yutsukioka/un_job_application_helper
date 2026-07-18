@@ -110,6 +110,8 @@ action. It does not infer or rewrite controller status.
 Selecting another available method first clears both input strings and cancels
 the current view-owned submission task. The view then delegates selection.
 Passphrase text is never reused as recovery input or vice versa.
+Selecting the already-selected method is a no-op, preserving the current draft
+and avoiding a redundant controller action.
 
 ## 14. Disappearance Behavior
 
