@@ -134,6 +134,11 @@ public actor AtlasVaultUnlockPresentationController:
         let request: AtlasVaultUnlockRequest
     }
 
+    private struct InvalidatedAttempt: Sendable {
+        let authorization: UInt64
+        let requiresHostReconciliationOnSuccess: Bool
+    }
+
     private let vaultID: String
     private let capabilities: AtlasVaultUnlockCapabilities
     private let coordinator: any AtlasVaultUnlockRequestCoordinating
@@ -141,6 +146,7 @@ public actor AtlasVaultUnlockPresentationController:
     private var status: AtlasVaultUnlockPresentationStatus = .locked
     private var authorization: UInt64 = 0
     private var activeAttempt: ActiveAttempt?
+    private var invalidatedAttempt: InvalidatedAttempt?
     private var pendingCancellationAuthorization: UInt64?
 
     public init(
@@ -160,7 +166,10 @@ public actor AtlasVaultUnlockPresentationController:
     public func select(
         _ method: AtlasVaultUnlockMethod?
     ) async -> AtlasVaultUnlockPresentationState {
-        guard pendingCancellationAuthorization == nil else {
+        guard
+            pendingCancellationAuthorization == nil,
+            invalidatedAttempt == nil
+        else {
             return snapshot()
         }
         guard status != .unlocked, status != .hostReconciliationRequired else {
@@ -197,7 +206,11 @@ public actor AtlasVaultUnlockPresentationController:
         timeout: Duration? = nil
     ) async -> AtlasVaultUnlockPresentationState {
         let method = submission.method
-        guard activeAttempt == nil, pendingCancellationAuthorization == nil else {
+        guard
+            activeAttempt == nil,
+            invalidatedAttempt == nil,
+            pendingCancellationAuthorization == nil
+        else {
             await submission.clearSecret()
             return snapshot()
         }
@@ -244,6 +257,10 @@ public actor AtlasVaultUnlockPresentationController:
             authorization == attemptAuthorization,
             activeAttempt?.authorization == attemptAuthorization
         else {
+            publishInvalidatedCompletion(
+                result,
+                attemptAuthorization: attemptAuthorization
+            )
             await submission.clearSecret()
             return snapshot()
         }
@@ -263,6 +280,9 @@ public actor AtlasVaultUnlockPresentationController:
             return snapshot()
         }
         guard pendingCancellationAuthorization == nil else {
+            return snapshot()
+        }
+        guard invalidatedAttempt == nil else {
             return snapshot()
         }
         guard activeAttempt != nil else {
@@ -288,6 +308,13 @@ public actor AtlasVaultUnlockPresentationController:
             status = .hostReconciliationRequired
             return snapshot()
         }
+        guard invalidatedAttempt == nil else {
+            selectedMethod = nil
+            if status != .hostReconciliationRequired {
+                status = .locked
+            }
+            return snapshot()
+        }
         guard activeAttempt != nil else {
             authorization &+= 1
             selectedMethod = nil
@@ -305,6 +332,7 @@ public actor AtlasVaultUnlockPresentationController:
 
     public func hostDidLock() async -> AtlasVaultUnlockPresentationState {
         authorization &+= 1
+        invalidatedAttempt = nil
         selectedMethod = nil
         status = .locked
 
@@ -346,6 +374,10 @@ public actor AtlasVaultUnlockPresentationController:
         authorization &+= 1
         let cancellationAuthorization = authorization
         activeAttempt = nil
+        invalidatedAttempt = InvalidatedAttempt(
+            authorization: attempt.authorization,
+            requiresHostReconciliationOnSuccess: requireHostReconciliationIfCommitted
+        )
         pendingCancellationAuthorization = cancellationAuthorization
         selectedMethod = nextMethod
         status = nextStatus
@@ -362,6 +394,21 @@ public actor AtlasVaultUnlockPresentationController:
             status = .hostReconciliationRequired
         }
         return snapshot()
+    }
+
+    private func publishInvalidatedCompletion(
+        _ result: Result<Void, AtlasVaultUnlockRequestError>,
+        attemptAuthorization: UInt64
+    ) {
+        guard invalidatedAttempt?.authorization == attemptAuthorization else {
+            return
+        }
+        let requiresHostReconciliation =
+            invalidatedAttempt?.requiresHostReconciliationOnSuccess == true
+        invalidatedAttempt = nil
+        if case .success = result, requiresHostReconciliation {
+            status = .hostReconciliationRequired
+        }
     }
 
     private func snapshot() -> AtlasVaultUnlockPresentationState {

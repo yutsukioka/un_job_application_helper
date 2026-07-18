@@ -88,12 +88,16 @@ Cancel, method change, disappearance, timeout, or host-lock notification
 invalidates that generation. A completion from an invalidated generation
 cannot publish unlocked state.
 
-Cancellation delegates to `AtlasVaultUnlockRequestCoordinating.cancel`. If
-that call returns `false`, activation may already have committed. The
-controller publishes `hostReconciliationRequired` and still rejects the late
-unlocked presentation. A future host must reconcile authoritative runtime
-state and perform any required lock; this controller does not call the runtime
-facade.
+Cancellation delegates to `AtlasVaultUnlockRequestCoordinating.cancel`. A
+`false` result means activation may already have committed, so the controller
+immediately publishes `hostReconciliationRequired`. A `true` result confirms
+that cancellation was accepted, but the existing coordinator contract does not
+guarantee that an activation dependency honored cancellation. The controller
+therefore blocks new selection and submission while that invalidated dispatch
+finishes. If it still completes successfully, the controller publishes
+`hostReconciliationRequired` instead of unlocked state. A future host must
+reconcile authoritative runtime state and perform any required lock; this
+controller does not call the runtime facade.
 
 `hostDidLock()` is a notification that the host lock boundary has been
 applied. It clears selection, publishes locked state, and attempts request
