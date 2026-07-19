@@ -263,6 +263,19 @@ final class AtlasLockedShellUnlockFlowTests: XCTestCase {
 
     func testExistingHostPublicSearchRemainsPublicOnlyWhileLocked() async throws {
         let harness = try await makeHarness()
+        let constructionEndpointCounts = await harness.endpointCounts()
+        let constructionPublicStoreCalls =
+            await harness.publicStateStore.callCountsForTesting()
+        let constructionAdapterCounts = await harness.unlockAdapter.snapshot()
+        XCTAssertEqual(constructionEndpointCounts.publicSearch, 0)
+        XCTAssertEqual(constructionEndpointCounts.savedSearch, 0)
+        XCTAssertEqual(constructionEndpointCounts.tracker, 0)
+        XCTAssertEqual(constructionEndpointCounts.privateSidebarRefresh, 0)
+        XCTAssertEqual(constructionPublicStoreCalls.loads, 0)
+        XCTAssertEqual(constructionPublicStoreCalls.replacements, 0)
+        XCTAssertEqual(constructionAdapterCounts.dispatches, 0)
+        XCTAssertEqual(constructionAdapterCounts.cancellations, 0)
+
         await harness.host.start()
         let initialRuntimeStatus = await harness.runtime.status()
         let initialSnapshot = await harness.host.latestPublishedSnapshot()
@@ -379,17 +392,21 @@ final class AtlasLockedShellUnlockFlowTests: XCTestCase {
     }
 
     func testExistingHostTypesRemainTheIntegrationAuthorities() throws {
-        let source = try String(
+        let existingHostSource = try String(
             contentsOf: testHostSourceURL(),
             encoding: .utf8
         )
 
-        XCTAssertTrue(source.contains("actor AtlasVaultTestHost:"))
+        XCTAssertTrue(existingHostSource.contains("actor AtlasVaultTestHost:"))
         XCTAssertTrue(
-            source.contains("actor AtlasVaultTestEndpointCallRecorder")
+            existingHostSource.contains(
+                "actor AtlasVaultTestEndpointCallRecorder"
+            )
         )
         XCTAssertTrue(
-            source.contains("actor AtlasVaultFakePublicJobSearchService")
+            existingHostSource.contains(
+                "actor AtlasVaultFakePublicJobSearchService"
+            )
         )
         XCTAssertFalse(
             try source(named: "AtlasLockedShellUnlockFlowView.swift")
