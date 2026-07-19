@@ -95,6 +95,36 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? AtlasPublicJobServiceError, .invalidResponse)
         }
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchResult(
+                jobs: [publicJob(), publicJob()],
+                total: 2,
+                limit: 1,
+                offset: 0
+            )
+        ) { error in
+            XCTAssertEqual(error as? AtlasPublicJobServiceError, .invalidResponse)
+        }
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchResult(
+                jobs: [],
+                total: 1,
+                limit: 1,
+                offset: 2
+            )
+        ) { error in
+            XCTAssertEqual(error as? AtlasPublicJobServiceError, .invalidResponse)
+        }
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchResult(
+                jobs: [publicJob()],
+                total: 1,
+                limit: 1,
+                offset: 1
+            )
+        ) { error in
+            XCTAssertEqual(error as? AtlasPublicJobServiceError, .invalidResponse)
+        }
 
         let rendered = [
             AtlasPublicJobServiceError.invalidRequest.description,
@@ -714,7 +744,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     func testNoAtlasVaultOrReviewEnvironmentArtifactExists() throws {
         let enumerator = FileManager.default.enumerator(
             at: repositoryRootURL(),
-            includingPropertiesForKeys: [.isDirectoryKey]
+            includingPropertiesForKeys: [.isDirectoryKey],
+            // Hidden review artifacts are required findings; `.git` is skipped below.
+            options: []
         )
         guard let enumerator else {
             XCTFail("Unable to enumerate the worktree")

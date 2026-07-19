@@ -105,7 +105,10 @@ public struct AtlasPublicJobSearchResult:
             total >= 0,
             total >= jobs.count,
             (1...AtlasPublicJobSearchRequest.maximumLimit).contains(limit),
-            offset >= 0
+            offset >= 0,
+            offset <= total,
+            jobs.count <= limit,
+            jobs.count <= total - offset
         else {
             throw AtlasPublicJobServiceError.invalidResponse
         }
