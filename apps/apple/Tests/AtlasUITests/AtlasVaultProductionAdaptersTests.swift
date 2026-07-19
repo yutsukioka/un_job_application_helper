@@ -256,6 +256,41 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 2))
     }
 
+    func testSearchRejectsNonOpenRowsBeforeAuthorizingDetail() async throws {
+        let response = try makeSearchResponse(
+            jobs: [
+                makeJob(id: Self.publicJobID, status: "closed"),
+            ],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [response],
+            details: [
+                Self.publicJobID: makeDetail(id: Self.publicJobID),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+
+        await assertPublicError(.invalidResponse) {
+            try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+        }
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: reference)
+        }
+
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 0)
+        XCTAssertEqual(counts, .init(search: 1))
+    }
+
     func testFailedSearchDoesNotAuthorizeDetail() async throws {
         let client = RecordingPublicJobClient(
             searchFailure: .transport(Self.transportSentinel)
@@ -1654,7 +1689,8 @@ private func makeJob(
     location: String = "Tokyo, Japan",
     closingDate: Date? = nil,
     score: Double? = nil,
-    description: String = "Public description"
+    description: String = "Public description",
+    status: String = "open"
 ) -> JobSearchResult {
     JobSearchResult(
         jobKey: id,
@@ -1672,7 +1708,8 @@ private func makeJob(
         score: score,
         scoreReasons: ["FAKE_SCORE_REASON_DO_NOT_PROJECT"],
         matchSummary: "FAKE_MATCH_SUMMARY_DO_NOT_PROJECT",
-        description: description
+        description: description,
+        status: status
     )
 }
 

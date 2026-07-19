@@ -91,7 +91,10 @@ Search rows project only:
 
 Score, score reasons, match evidence, membership, application status, notes,
 private classifications, URLs, and persistence details are discarded.
-Duplicate IDs, empty required values, and inconsistent pagination fail closed.
+Each response row must retain the exact reviewed `open` status requested by the
+adapter. Non-open rows fail before projection or provenance authorization.
+Duplicate IDs, empty required values, and inconsistent pagination also fail
+closed.
 
 ## Stable Public Date Representation
 
@@ -345,7 +348,7 @@ The focused suite covers:
 
 - construction call counts;
 - health/search/source/update/detail mapping;
-- duplicate and pagination validation;
+- non-open row, duplicate, and pagination validation;
 - deterministic dates;
 - bounded FIFO provenance;
 - detail identity and issuance;
