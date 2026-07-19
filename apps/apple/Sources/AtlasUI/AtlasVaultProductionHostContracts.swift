@@ -471,6 +471,7 @@ public protocol AtlasVaultProductionHosting: Sendable {
         timeout: Duration?
     ) async -> AtlasLockedShellUnlockFlowState
     func cancelUnlock() async -> AtlasLockedShellUnlockFlowState
+    func unlockPanelDidDisappear() async -> AtlasLockedShellUnlockFlowState
     func lock() async -> AtlasLockedShellUnlockFlowState
     func handleLifecycleEvent(
         _ event: AtlasVaultLifecycleEvent

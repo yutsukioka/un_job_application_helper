@@ -484,6 +484,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         _ = await typed.selectUnlockMethod(.localKey)
         _ = await typed.submitUnlock(.localKey, timeout: nil)
         _ = await typed.cancelUnlock()
+        _ = await typed.unlockPanelDidDisappear()
         _ = await typed.lock()
         _ = await typed.handleLifecycleEvent(.didEnterBackground)
         _ = await typed.stop()
@@ -496,6 +497,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertEqual(calls.select, 1)
         XCTAssertEqual(calls.submit, 1)
         XCTAssertEqual(calls.cancel, 1)
+        XCTAssertEqual(calls.disappearance, 1)
         XCTAssertEqual(calls.lock, 1)
         XCTAssertEqual(calls.lifecycle, 1)
         XCTAssertEqual(calls.stop, 1)
@@ -518,6 +520,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             "func selectUnlockMethod(",
             "func submitUnlock(",
             "func cancelUnlock(",
+            "func unlockPanelDidDisappear(",
             "func lock(",
             "func handleLifecycleEvent(",
             "AtlasLockedShellUnlockFlowState",
@@ -1397,6 +1400,7 @@ private actor FactoryProductionHostSpy: AtlasVaultProductionHosting {
     private var selectCalls = 0
     private var submitCalls = 0
     private var cancelCalls = 0
+    private var disappearanceCalls = 0
     private var lockCalls = 0
     private var lifecycleCalls = 0
 
@@ -1455,6 +1459,11 @@ private actor FactoryProductionHostSpy: AtlasVaultProductionHosting {
         return state
     }
 
+    func unlockPanelDidDisappear() async -> AtlasLockedShellUnlockFlowState {
+        disappearanceCalls += 1
+        return state
+    }
+
     func lock() async -> AtlasLockedShellUnlockFlowState {
         lockCalls += 1
         return state
@@ -1476,6 +1485,7 @@ private actor FactoryProductionHostSpy: AtlasVaultProductionHosting {
         select: Int,
         submit: Int,
         cancel: Int,
+        disappearance: Int,
         lock: Int,
         lifecycle: Int
     ) {
@@ -1488,6 +1498,7 @@ private actor FactoryProductionHostSpy: AtlasVaultProductionHosting {
             selectCalls,
             submitCalls,
             cancelCalls,
+            disappearanceCalls,
             lockCalls,
             lifecycleCalls
         )

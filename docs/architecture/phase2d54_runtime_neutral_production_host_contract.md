@@ -232,11 +232,16 @@ The host protocol contains:
 - unlock method selection;
 - unlock submission;
 - unlock cancellation;
+- unlock-panel disappearance;
 - explicit lock;
 - platform-neutral lifecycle-event delivery.
 
 The public-search operation constrains failures to
 `AtlasPublicJobServiceError`, matching the underlying public adapter contract.
+Disappearance remains distinct from cancellation because the merged unlock
+controller clears selection and returns to locked on disappearance, while an
+explicit cancel reports the cancelled status. A future host must forward each
+action to its matching controller operation.
 No operation is invoked by the contract itself.
 
 ## 18. Fixed Unlocked-Transition Boundary
