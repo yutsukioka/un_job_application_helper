@@ -207,7 +207,7 @@ public struct AtlasApplicationSupportPublicSnapshotRestorer:
             let health = try AtlasProductionPublicProjection.health(
                 snapshot.health
             )
-            let search = try AtlasProductionPublicProjection.searchResult(
+            let jobs = try AtlasProductionPublicProjection.snapshotJobs(
                 snapshot.searchResponse
             )
             let sources = try snapshot.sources.map(
@@ -219,7 +219,7 @@ public struct AtlasApplicationSupportPublicSnapshotRestorer:
             return AtlasProductionPublicSnapshot(
                 savedAt: snapshot.savedAt,
                 health: health,
-                jobs: search.jobs,
+                jobs: jobs,
                 sources: sources,
                 updates: updates
             )

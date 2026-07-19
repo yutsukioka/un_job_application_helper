@@ -166,6 +166,14 @@ inject a recorder.
 
 Construction resolves no root and reads no file.
 
+Snapshot job projection reuses the same status, identity, duplicate, and safe
+field validation as live search. It does not reuse the live-search page limit:
+the existing cache writer intentionally requests a large open-job snapshot, so
+the restorer validates the snapshot's own non-negative pagination and
+result-count consistency before projecting all reviewed public rows. A cache
+`limit` above the live 200-row request maximum therefore does not invalidate an
+otherwise valid snapshot.
+
 ## Application Support Path
 
 Explicit restore resolves the reviewed Application Support root and appends
@@ -304,6 +312,7 @@ Store:
 
 - adds one device-only generic-password item;
 - duplicate item updates only value data;
+- envelope encoding failure returns `unavailable` before any Keychain call;
 - any Keychain failure returns `unavailable`.
 
 Clear:
@@ -355,7 +364,9 @@ The focused suite covers:
 - error sentinel redaction;
 - missing, valid, malformed, private-key, unknown-key, path, symlink, and file
   status snapshot cases;
+- cache snapshot limits above the live-search page maximum;
 - registry load/store/update/clear and malformed envelope cases;
+- store-time envelope encoding failure before Keychain access;
 - fixed Keychain metadata and device-only accessibility;
 - source guards, allowlist, and artifact scans.
 

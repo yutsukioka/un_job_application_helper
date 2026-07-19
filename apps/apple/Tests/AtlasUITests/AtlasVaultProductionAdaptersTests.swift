@@ -762,6 +762,16 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(restored.jobs, apiResult.jobs)
     }
 
+    func testSnapshotAcceptsCacheLimitAboveLiveSearchPageMaximum() async throws {
+        let data = try snapshotData(
+            replacingSearchLimit: 10_000
+        )
+        let restoredValue = try await snapshotRestorer(data: data).restore()
+        let restored = try XCTUnwrap(restoredValue)
+
+        XCTAssertEqual(restored.jobs.map(\.id), [Self.publicJobID])
+    }
+
     func testSnapshotRejectsMalformedPrivateAndUnknownTopLevelKeys()
         async throws
     {
@@ -1142,6 +1152,22 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
     }
 
+    func testRegistryEncodingFailureMapsUnavailableBeforeKeychainCall()
+        async throws
+    {
+        let client = RecordingSelectionKeychainClient()
+        let registry = AtlasKeychainVaultSelectionRegistry(
+            client: client,
+            envelopeEncoder: FailingSelectionEnvelopeEncoder()
+        )
+        let selected = try AtlasSelectedVaultID(validating: Self.vaultID)
+
+        await assertSelectionError(.unavailable) {
+            try await registry.storeSelection(selected)
+        }
+        XCTAssertEqual(client.counts, .zero)
+    }
+
     func testRegistrySourceHasNoImplicitSelectionOrAlternateStorage() throws {
         let source = try source("AtlasVaultSelectionRegistry.swift")
 
@@ -1460,6 +1486,22 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
                 as? [String: Any]
         )
         object[key] = ["FAKE_PRIVATE_SENTINEL_DO_NOT_DECODE": true]
+        return try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+    }
+
+    private func snapshotData(replacingSearchLimit limit: Int) throws -> Data {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: validSnapshotData())
+                as? [String: Any]
+        )
+        var search = try XCTUnwrap(
+            object["searchResponse"] as? [String: Any]
+        )
+        search["limit"] = limit
+        object["searchResponse"] = search
         return try JSONSerialization.data(
             withJSONObject: object,
             options: [.sortedKeys]
@@ -1866,6 +1908,14 @@ private enum SnapshotTestError: Error, Sendable {
 }
 
 // MARK: - Keychain fake
+
+private struct FailingSelectionEnvelopeEncoder:
+    AtlasVaultSelectionEnvelopeEncoding
+{
+    func encode(vaultID: String) throws -> Data {
+        throw SnapshotTestError.unavailable
+    }
+}
 
 private final class RecordingSelectionKeychainClient:
     AtlasKeychainClient,

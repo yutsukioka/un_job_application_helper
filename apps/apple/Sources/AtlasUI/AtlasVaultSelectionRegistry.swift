@@ -8,6 +8,10 @@ public protocol AtlasVaultSelectionRegistering: Sendable {
     func clearSelection() async throws(AtlasVaultIDSelectionError)
 }
 
+protocol AtlasVaultSelectionEnvelopeEncoding: Sendable {
+    func encode(vaultID: String) throws -> Data
+}
+
 public struct AtlasKeychainVaultSelectionRegistry<
     Client: AtlasKeychainClient
 >:
@@ -25,9 +29,19 @@ public struct AtlasKeychainVaultSelectionRegistry<
     }
 
     private let client: Client
+    private let envelopeEncoder: any AtlasVaultSelectionEnvelopeEncoding
 
     public init(client: Client) {
         self.client = client
+        envelopeEncoder = AtlasJSONVaultSelectionEnvelopeEncoder()
+    }
+
+    init(
+        client: Client,
+        envelopeEncoder: any AtlasVaultSelectionEnvelopeEncoding
+    ) {
+        self.client = client
+        self.envelopeEncoder = envelopeEncoder
     }
 
     public var description: String {
@@ -84,13 +98,9 @@ public struct AtlasKeychainVaultSelectionRegistry<
     ) async throws(AtlasVaultIDSelectionError) {
         let data: Data
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            data = try encoder.encode(
-                RegistryEnvelope(vaultID: selection.vaultID)
-            )
+            data = try envelopeEncoder.encode(vaultID: selection.vaultID)
         } catch {
-            throw .invalidRegistry
+            throw .unavailable
         }
 
         let item = AtlasKeychainItem(
@@ -145,6 +155,18 @@ public extension AtlasKeychainVaultSelectionRegistry
 where Client == SecItemAtlasKeychainClient {
     init() {
         self.init(client: SecItemAtlasKeychainClient())
+    }
+}
+
+private struct AtlasJSONVaultSelectionEnvelopeEncoder:
+    AtlasVaultSelectionEnvelopeEncoding
+{
+    func encode(vaultID: String) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(
+            RegistryEnvelope(vaultID: vaultID)
+        )
     }
 }
 

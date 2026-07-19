@@ -207,16 +207,7 @@ enum AtlasProductionPublicProjection {
             throw .invalidResponse
         }
 
-        var seen = Set<String>()
-        var jobs: [AtlasLockedPublicJob] = []
-        jobs.reserveCapacity(response.results.count)
-        for value in response.results {
-            let projected = try job(value)
-            guard seen.insert(projected.id).inserted else {
-                throw .invalidResponse
-            }
-            jobs.append(projected)
-        }
+        let jobs = try projectedJobs(response.results)
         do {
             return try AtlasPublicJobSearchResult(
                 jobs: jobs,
@@ -227,6 +218,38 @@ enum AtlasProductionPublicProjection {
         } catch {
             throw .invalidResponse
         }
+    }
+
+    static func snapshotJobs(
+        _ response: AtlasSearchResponse
+    ) throws(AtlasPublicJobServiceError) -> [AtlasLockedPublicJob] {
+        guard
+            response.total >= 0,
+            response.limit > 0,
+            response.offset >= 0,
+            response.offset <= response.total,
+            response.results.count <= response.limit,
+            response.results.count <= response.total - response.offset
+        else {
+            throw .invalidResponse
+        }
+        return try projectedJobs(response.results)
+    }
+
+    private static func projectedJobs(
+        _ values: [JobSearchResult]
+    ) throws(AtlasPublicJobServiceError) -> [AtlasLockedPublicJob] {
+        var seen = Set<String>()
+        var jobs: [AtlasLockedPublicJob] = []
+        jobs.reserveCapacity(values.count)
+        for value in values {
+            let projected = try job(value)
+            guard seen.insert(projected.id).inserted else {
+                throw .invalidResponse
+            }
+            jobs.append(projected)
+        }
+        return jobs
     }
 
     static func job(
