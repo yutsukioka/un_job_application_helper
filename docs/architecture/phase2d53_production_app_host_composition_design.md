@@ -357,7 +357,7 @@ ID and uses it as a plaintext path component. Tests supply fixed fake or
 random IDs.
 
 No reviewed production vault registry, selector, or persistence source exists.
-No current production code selects the AtlasVault ID for the app host, and no
+No current production code selects the AtlasVault ID for the app-host, and no
 AtlasVault code was found storing it in `UserDefaults`, `@AppStorage`,
 `@SceneStorage`, or the public snapshot.
 
@@ -750,8 +750,8 @@ The staged replacement is:
 5. Replace only the normal `AtlasIOSHostApp` route after every prior gate
    passes.
 
-The new route must contain no `AtlasRootView`, `SavedPanel`,
-`AtlasSearchViewModel`, or `refreshSidebarData()` reference. Public search is
+The new route must contain no references to `AtlasRootView`, `SavedPanel`,
+`AtlasSearchViewModel`, or `refreshSidebarData()`. Public search is
 preserved through the new narrow boundary. Reference capture may retain its
 legacy fixture route because it bypasses the production host.
 
