@@ -291,6 +291,45 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 1))
     }
 
+    func testSearchRejectsDecoderFallbackFieldsBeforeAuthorizingDetail()
+        async throws
+    {
+        let responses = try [
+            "title",
+            "organization",
+            "duty_station",
+        ].map(rawSearchResponse(omittingPublicField:))
+        let client = RecordingPublicJobClient(
+            searchResponses: responses,
+            details: [
+                Self.publicJobID: makeDetail(id: Self.publicJobID),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let request = try AtlasPublicJobSearchRequest(
+            query: "",
+            limit: 1,
+            offset: 0
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+
+        for _ in responses {
+            await assertPublicError(.invalidResponse) {
+                try await adapter.search(request)
+            }
+        }
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: reference)
+        }
+
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 0)
+        XCTAssertEqual(counts, .init(search: 3))
+    }
+
     func testFailedSearchDoesNotAuthorizeDetail() async throws {
         let client = RecordingPublicJobClient(
             searchFailure: .transport(Self.transportSentinel)
@@ -1506,6 +1545,29 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             withJSONObject: object,
             options: [.sortedKeys]
         )
+    }
+
+    private func rawSearchResponse(
+        omittingPublicField field: String
+    ) throws -> AtlasSearchResponse {
+        var row: [String: Any] = [
+            "job_key": Self.publicJobID,
+            "title": "Public role",
+            "organization": "UNICEF",
+            "duty_station": "Tokyo, Japan",
+            "status": "open",
+        ]
+        row.removeValue(forKey: field)
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "total": 1,
+                "limit": 1,
+                "offset": 0,
+                "results": [row],
+            ],
+            options: [.sortedKeys]
+        )
+        return try JSONDecoder().decode(AtlasSearchResponse.self, from: data)
     }
 
     private func registryData(

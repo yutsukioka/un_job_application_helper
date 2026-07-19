@@ -93,8 +93,12 @@ Score, score reasons, match evidence, membership, application status, notes,
 private classifications, URLs, and persistence details are discarded.
 Each response row must retain the exact reviewed `open` status requested by the
 adapter. Non-open rows fail before projection or provenance authorization.
-Duplicate IDs, empty required values, and inconsistent pagination also fail
-closed.
+Decoder-synthesized placeholders for a missing title, organization, or duty
+station are not reviewed public values and also fail before provenance
+authorization. This deliberately rejects even a literal value equal to one of
+those fallback labels rather than accepting a row whose raw field presence can
+no longer be proven across the existing client seam. Duplicate IDs, empty
+required values, and inconsistent pagination also fail closed.
 
 ## Stable Public Date Representation
 
@@ -169,10 +173,10 @@ Construction resolves no root and reads no file.
 Snapshot job projection reuses the same status, identity, duplicate, and safe
 field validation as live search. It does not reuse the live-search page limit:
 the existing cache writer intentionally requests a large open-job snapshot, so
-the restorer validates the snapshot's own non-negative pagination and
-result-count consistency before projecting all reviewed public rows. A cache
-`limit` above the live 200-row request maximum therefore does not invalidate an
-otherwise valid snapshot.
+the restorer requires a positive snapshot limit, validates non-negative total
+and offset values plus result-count consistency, and then projects all reviewed
+public rows. A cache `limit` above the live 200-row request maximum therefore
+does not invalidate an otherwise valid snapshot.
 
 ## Application Support Path
 
@@ -357,7 +361,7 @@ The focused suite covers:
 
 - construction call counts;
 - health/search/source/update/detail mapping;
-- non-open row, duplicate, and pagination validation;
+- non-open row, decoder-fallback, duplicate, and pagination validation;
 - deterministic dates;
 - bounded FIFO provenance;
 - detail identity and issuance;

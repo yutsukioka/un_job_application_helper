@@ -267,8 +267,11 @@ enum AtlasProductionPublicProjection {
             !id.isEmpty,
             id == value.jobKey,
             !title.isEmpty,
+            title != "Untitled vacancy",
             !organization.isEmpty,
+            organization != "Unknown organization",
             !location.isEmpty,
+            location != "Location not classified",
             value.status == "open"
         else {
             throw .invalidResponse
