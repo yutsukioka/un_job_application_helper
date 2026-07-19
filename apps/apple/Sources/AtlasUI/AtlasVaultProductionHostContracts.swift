@@ -305,15 +305,18 @@ public struct AtlasPublicJobDetailResult:
 }
 
 public protocol AtlasPublicJobSearching: Sendable {
-    func health() async throws -> AtlasPublicServiceHealth
+    func health() async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicServiceHealth
     func search(
         _ request: AtlasPublicJobSearchRequest
-    ) async throws -> AtlasPublicJobSearchResult
-    func sources() async throws -> [AtlasPublicSourceStatus]
-    func updates() async throws -> [AtlasPublicUpdateStatus]
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobSearchResult
+    func sources() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicSourceStatus]
+    func updates() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicUpdateStatus]
     func detail(
         for reference: AtlasPublicJobReference
-    ) async throws -> AtlasPublicJobDetailResult
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobDetailResult
 }
 
 public enum AtlasPublicSnapshotRestoreError:
@@ -374,7 +377,8 @@ public struct AtlasProductionPublicSnapshot:
 }
 
 public protocol AtlasPublicSnapshotRestoring: Sendable {
-    func restore() async throws -> AtlasProductionPublicSnapshot?
+    func restore() async throws(AtlasPublicSnapshotRestoreError)
+        -> AtlasProductionPublicSnapshot?
 }
 
 public enum AtlasVaultIDSelectionError:
@@ -447,7 +451,8 @@ public enum AtlasVaultIDSelection:
 }
 
 public protocol AtlasVaultIDSelecting: Sendable {
-    func selectVaultID() async throws -> AtlasVaultIDSelection
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
 }
 
 public protocol AtlasVaultProductionHosting: Sendable {
@@ -485,14 +490,14 @@ public struct AtlasVaultProductionHostDependencies:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    let publicJobs: any AtlasPublicJobSearching
-    let publicSnapshotRestorer: any AtlasPublicSnapshotRestoring
-    let vaultIDSelector: any AtlasVaultIDSelecting
-    let runtime: any AtlasVaultRuntimeFacading
-    let lifecycle: any AtlasVaultLifecycleCoordinating
-    let presentation: any AtlasVaultPresentationObserving
-    let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
-    let unlockControllerBuilder:
+    public let publicJobs: any AtlasPublicJobSearching
+    public let publicSnapshotRestorer: any AtlasPublicSnapshotRestoring
+    public let vaultIDSelector: any AtlasVaultIDSelecting
+    public let runtime: any AtlasVaultRuntimeFacading
+    public let lifecycle: any AtlasVaultLifecycleCoordinating
+    public let presentation: any AtlasVaultPresentationObserving
+    public let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
+    public let unlockControllerBuilder:
         any AtlasVaultUnlockPresentationControllerBuilding
 
     public init(

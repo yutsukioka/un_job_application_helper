@@ -298,6 +298,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         ] {
             XCTAssertFalse(section.contains(forbidden), forbidden)
         }
+        XCTAssertTrue(
+            section.contains("throws(AtlasPublicJobServiceError)")
+        )
     }
 
     func testSnapshotRestorerReturnsNoneOrSafePublicSnapshot() async throws {
@@ -359,6 +362,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             XCTAssertFalse(section.contains(forbiddenMethod), forbiddenMethod)
         }
         XCTAssertFalse(section.contains("Codable"))
+        XCTAssertTrue(
+            section.contains("throws(AtlasPublicSnapshotRestoreError)")
+        )
     }
 
     func testVaultSelectionRepresentsNoneOrOneValidatedID() throws {
@@ -450,6 +456,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertFalse(section.contains("Codable"))
         XCTAssertFalse(section.contains("UserDefaults"))
         XCTAssertFalse(section.contains("FileManager"))
+        XCTAssertTrue(
+            section.contains("throws(AtlasVaultIDSelectionError)")
+        )
     }
 
     func testFakeHostConformsAndSupportsOnlyFirstJourneyCommands() async throws {
@@ -750,6 +759,18 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             "public struct AtlasVaultProductionHostDependencies",
         ] {
             XCTAssertTrue(contract.contains(required), required)
+        }
+        for property in [
+            "public let publicJobs:",
+            "public let publicSnapshotRestorer:",
+            "public let vaultIDSelector:",
+            "public let runtime:",
+            "public let lifecycle:",
+            "public let presentation:",
+            "public let unlockCoordinator:",
+            "public let unlockControllerBuilder:",
+        ] {
+            XCTAssertTrue(contract.contains(property), property)
         }
         let factory = try factorySource()
         XCTAssertTrue(
@@ -1089,31 +1110,37 @@ private actor FactoryPublicJobsSpy: AtlasPublicJobSearching {
         detailValue = detail
     }
 
-    func health() async throws -> AtlasPublicServiceHealth {
+    func health() async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicServiceHealth
+    {
         healthCalls += 1
         return healthValue
     }
 
     func search(
         _ request: AtlasPublicJobSearchRequest
-    ) async throws -> AtlasPublicJobSearchResult {
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobSearchResult {
         searchCalls += 1
         return searchValue
     }
 
-    func sources() async throws -> [AtlasPublicSourceStatus] {
+    func sources() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicSourceStatus]
+    {
         sourceCalls += 1
         return sourceValues
     }
 
-    func updates() async throws -> [AtlasPublicUpdateStatus] {
+    func updates() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicUpdateStatus]
+    {
         updateCalls += 1
         return updateValues
     }
 
     func detail(
         for reference: AtlasPublicJobReference
-    ) async throws -> AtlasPublicJobDetailResult {
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobDetailResult {
         detailCalls += 1
         return detailValue
     }
@@ -1147,7 +1174,9 @@ private actor FactorySnapshotRestorerSpy: AtlasPublicSnapshotRestoring {
         self.snapshot = snapshot
     }
 
-    func restore() async throws -> AtlasProductionPublicSnapshot? {
+    func restore() async throws(AtlasPublicSnapshotRestoreError)
+        -> AtlasProductionPublicSnapshot?
+    {
         calls += 1
         return snapshot
     }
@@ -1165,7 +1194,9 @@ private actor FactoryVaultSelectorSpy: AtlasVaultIDSelecting {
         self.selection = selection
     }
 
-    func selectVaultID() async throws -> AtlasVaultIDSelection {
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
+    {
         calls += 1
         return selection
     }

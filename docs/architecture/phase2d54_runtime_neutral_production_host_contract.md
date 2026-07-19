@@ -86,7 +86,8 @@ verify conformance to an already constrained boundary.
 Search requests carry query text, limit, and offset. Search results carry
 `AtlasLockedPublicJob` values and public pagination totals. All coordination
 values are `Sendable`, omit persistence conformance, and use fixed redacted
-descriptions.
+descriptions. Protocol operations use typed throws constrained to
+`AtlasPublicJobServiceError`.
 
 ## 7. Public Health Contract
 
@@ -134,7 +135,8 @@ public operations directly.
 
 ## 11. Public-Snapshot Restore-Only Contract
 
-`AtlasPublicSnapshotRestoring` has one operation: `restore()`.
+`AtlasPublicSnapshotRestoring` has one operation: `restore()`. Typed throws
+constrains failures to `AtlasPublicSnapshotRestoreError`.
 
 `AtlasProductionPublicSnapshot` contains:
 
@@ -166,8 +168,8 @@ reviewed phase.
 
 ## 13. Vault-ID Selection Contract
 
-`AtlasVaultIDSelecting` returns `AtlasVaultIDSelection`, which has exactly two
-states:
+`AtlasVaultIDSelecting` returns `AtlasVaultIDSelection` and constrains failures
+to `AtlasVaultIDSelectionError`. The result has exactly two states:
 
 - no selected vault;
 - one `AtlasSelectedVaultID`.
@@ -271,8 +273,11 @@ Write-side product behavior remains outside this phase.
 - `AtlasVaultUnlockRequestCoordinating`;
 - `AtlasVaultUnlockPresentationControllerBuilding`.
 
-Stored references are module-internal. The public initializer performs only
-assignments, and the public description is fixed and redacted.
+Stored references are public read-only because the host-builder protocol is
+public and must be implementable by a composition target. The bundle is never
+returned by `AtlasVaultProductionHosting` and must not be passed to views. The
+public initializer performs only assignments, and the public description is
+fixed and redacted.
 
 ## 22. Lazy Unlock-Controller Builder
 
@@ -376,9 +381,9 @@ cryptographic operation.
 
 ## 31. Error And Diagnostic Redaction
 
-Public service, snapshot, and vault-selection errors are fixed enums. They do
-not retain underlying errors, queries, identifiers, paths, responses, or
-server text.
+Public service, snapshot, and vault-selection protocols use typed throws with
+fixed error enums. Those errors do not retain underlying errors, queries,
+identifiers, paths, responses, or server text.
 
 Every new value that can be rendered diagnostically has a fixed
 `description` and `debugDescription`. Query text, public job IDs, detail text,
