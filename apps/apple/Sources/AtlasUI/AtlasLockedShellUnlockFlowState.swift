@@ -50,13 +50,17 @@ public struct AtlasLockedShellUnlockFlowState:
         case .cancelled:
             mode = .lockedPublic
             unlockPanelState = nil
+        case .hostReconciliationRequired:
+            mode = .unlockPanel
+            unlockPanelState = AtlasExplicitUnlockViewState(
+                presentationState: unlockPresentationState
+            )
         case .locked,
              .ready,
              .methodUnavailable,
              .activating,
              .failed,
-             .timedOut,
-             .hostReconciliationRequired:
+             .timedOut:
             if isUnlockPanelPresented {
                 mode = .unlockPanel
                 unlockPanelState = AtlasExplicitUnlockViewState(

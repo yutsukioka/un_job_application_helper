@@ -79,6 +79,20 @@ final class AtlasLockedShellUnlockFlowTests: XCTestCase {
         XCTAssertNil(state.unlockPanelState)
     }
 
+    func testHostReconciliationRemainsVisibleAfterPanelDismissal() {
+        let state = makeFlow(
+            status: .hostReconciliationRequired,
+            isUnlockPanelPresented: false
+        )
+
+        XCTAssertEqual(state.mode, .unlockPanel)
+        XCTAssertEqual(
+            state.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        XCTAssertEqual(state.unlockPanelState?.controlsDisabled, true)
+    }
+
     func testProductionCapabilitiesExposeLocalKeyOnly() {
         let state = makeFlow(
             status: .ready,
@@ -418,16 +432,25 @@ final class AtlasLockedShellUnlockFlowTests: XCTestCase {
         let root = repositoryRootURL()
         let enumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: [.isDirectoryKey]
         )
-        let urls = (enumerator?.allObjects as? [URL]) ?? []
-        let vaultArtifacts = urls.filter { $0.pathExtension == "atlasvault" }
-        let reviewEnvironments = urls.filter {
-            $0.lastPathComponent == ".venv-review"
+        guard let enumerator else {
+            XCTFail("Unable to enumerate the worktree")
+            return
         }
 
-        XCTAssertEqual(vaultArtifacts, [])
-        XCTAssertEqual(reviewEnvironments, [])
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == ".git" {
+                enumerator.skipDescendants()
+                continue
+            }
+            if url.pathExtension == "atlasvault"
+                || url.lastPathComponent == ".venv-review"
+            {
+                XCTFail("Unexpected review artifact: \(url.lastPathComponent)")
+                return
+            }
+        }
     }
 
     func testPhaseSourceSetIsExactlyTheExpectedFourFiles() {

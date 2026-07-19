@@ -61,9 +61,9 @@ view is the merged `AtlasLockedPublicShellView`.
 ## Unlock-Panel Mode
 
 An explicit owner request projects the panel for locked, ready,
-method-unavailable, activating, generic failed, timed-out, and
-host-reconciliation-required statuses. The exact Phase 2D-51 view state and
-actions are forwarded.
+method-unavailable, activating, generic failed, and timed-out statuses. Host
+reconciliation always projects the panel even if the owner previously
+dismissed it. The exact Phase 2D-51 view state and actions are forwarded.
 
 ## Unlocked-Transition Mode
 
@@ -128,8 +128,11 @@ cancellation semantics, retry, or activation.
 ## Host Reconciliation
 
 Host-reconciliation-required remains an unlock-panel status with the merged
-non-interactive, non-sensitive view behavior. The flow does not downgrade or
-reinterpret it.
+non-interactive, non-sensitive view behavior. A late committed activation can
+publish this status after the owner has dismissed the panel, so it takes
+precedence over the owner-supplied presentation flag. The flow never
+downgrades it to an ordinary locked shell while host and presentation state
+still require reconciliation.
 
 ## No Secret Ownership In Flow
 
