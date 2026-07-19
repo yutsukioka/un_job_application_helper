@@ -389,9 +389,18 @@ public enum AtlasVaultIDSelectionError:
     CustomDebugStringConvertible
 {
     case invalidVaultID
+    case unavailable
+    case invalidRegistry
 
     public var description: String {
-        "invalidVaultID"
+        switch self {
+        case .invalidVaultID:
+            "invalidVaultID"
+        case .unavailable:
+            "unavailable"
+        case .invalidRegistry:
+            "invalidRegistry"
+        }
     }
 
     public var debugDescription: String {

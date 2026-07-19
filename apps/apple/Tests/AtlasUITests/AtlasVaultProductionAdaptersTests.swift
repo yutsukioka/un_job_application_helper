@@ -1,34 +1,1758 @@
+import Foundation
 import Security
 import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultProductionAdaptersTests: XCTestCase {
-    func testPhaseTypesDefineTheThreeConcreteDependencyBoundaries() {
-        _ = AtlasAPIClientPublicJobAdapter.self
-        _ = AtlasApplicationSupportPublicSnapshotRestorer.self
-        _ = AtlasKeychainVaultSelectionRegistry<RedCheckpointKeychainClient>.self
+    private static let publicJobID = "PUBLIC_JOB_001"
+    private static let secondPublicJobID = "PUBLIC_JOB_002"
+    private static let thirdPublicJobID = "PUBLIC_JOB_003"
+    private static let vaultID = "vault_01_TEST_RANDOM"
+    private static let transportSentinel =
+        "FAKE_TRANSPORT_URL_AND_QUERY_DO_NOT_LEAK"
+    private static let bodySentinel =
+        "FAKE_HTTP_BODY_DO_NOT_LEAK"
+    private static let pathSentinel =
+        "FAKE_SNAPSHOT_PATH_DO_NOT_LEAK"
+
+    // MARK: - Public API adapter
+
+    func testAPIAdapterConstructionInvokesNothingAndIsRedacted() async {
+        let client = RecordingPublicJobClient()
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 2
+        )
+
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .zero)
+        XCTAssertEqual(
+            String(describing: adapter),
+            "AtlasAPIClientPublicJobAdapter(<redacted>)"
+        )
+        XCTAssertEqual(String(reflecting: adapter), String(describing: adapter))
+    }
+
+    func testHealthCallsOnlyHealthAndDropsDiagnostics() async throws {
+        let client = RecordingPublicJobClient(
+            health: makeHealth(
+                status: "ok",
+                dbPath: "/\(Self.pathSentinel)/jobs.sqlite3",
+                schemaVersion: "FAKE_SCHEMA_DIAGNOSTIC",
+                openJobs: 7,
+                enabledSources: 3,
+                lastSyncAt: "2026-07-19T01:02:03Z"
+            )
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let health = try await adapter.health()
+
+        XCTAssertEqual(health.availability, .available)
+        XCTAssertEqual(health.openJobCount, 7)
+        XCTAssertEqual(health.enabledSourceCount, 3)
+        XCTAssertEqual(
+            health.lastSyncAt,
+            try date("2026-07-19T01:02:03Z")
+        )
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(health: 1))
+        let labels = Set(Mirror(reflecting: health).children.compactMap(\.label))
+        XCTAssertFalse(labels.contains("dbPath"))
+        XCTAssertFalse(labels.contains("schemaVersion"))
+        XCTAssertFalse(String(reflecting: health).contains(Self.pathSentinel))
+        XCTAssertFalse(String(reflecting: health).contains("FAKE_SCHEMA"))
+    }
+
+    func testHealthUnavailableAndUnknownStatusMapping() async throws {
+        let unavailableClient = RecordingPublicJobClient(
+            health: makeHealth(status: "unavailable")
+        )
+        let unavailable = AtlasAPIClientPublicJobAdapter(
+            client: unavailableClient
+        )
+
+        let unavailableHealth = try await unavailable.health()
+        XCTAssertEqual(unavailableHealth.availability, .unavailable)
+
+        let missingClient = RecordingPublicJobClient(
+            health: makeHealth(status: "  ")
+        )
+        let missing = AtlasAPIClientPublicJobAdapter(client: missingClient)
+        let missingHealth = try await missing.health()
+        XCTAssertEqual(missingHealth.availability, .unavailable)
+
+        let unknownClient = RecordingPublicJobClient(
+            health: makeHealth(status: "FAKE_UNKNOWN_STATUS")
+        )
+        let unknown = AtlasAPIClientPublicJobAdapter(client: unknownClient)
+
+        await assertPublicError(.invalidResponse) {
+            try await unknown.health()
+        }
+    }
+
+    func testHealthAndDecodeErrorsAreFixedAndRedacted() async {
+        let transportClient = RecordingPublicJobClient(
+            healthFailure: .transport(Self.transportSentinel)
+        )
+        let transport = AtlasAPIClientPublicJobAdapter(client: transportClient)
+
+        await assertPublicError(.unavailable) {
+            try await transport.health()
+        }
+
+        let httpClient = RecordingPublicJobClient(
+            healthFailure: .http(Self.bodySentinel)
+        )
+        let http = AtlasAPIClientPublicJobAdapter(client: httpClient)
+
+        await assertPublicError(.unavailable) {
+            try await http.health()
+        }
+
+        let decodeClient = RecordingPublicJobClient(
+            healthFailure: .decoding(Self.bodySentinel)
+        )
+        let decode = AtlasAPIClientPublicJobAdapter(client: decodeClient)
+
+        await assertPublicError(.invalidResponse) {
+            try await decode.health()
+        }
+        for error in [
+            AtlasPublicJobServiceError.unavailable,
+            .invalidResponse,
+            .invalidRequest,
+        ] {
+            XCTAssertFalse(String(reflecting: error).contains(Self.bodySentinel))
+            XCTAssertFalse(
+                String(reflecting: error).contains(Self.transportSentinel)
+            )
+        }
+    }
+
+    func testSearchMapsOnlyPublicRequestAndSafeProjection() async throws {
+        let closingDate = try date("2026-08-01T12:34:56Z")
+        let response = try makeSearchResponse(
+            jobs: [
+                makeJob(
+                    id: Self.publicJobID,
+                    title: "Public Programme Officer",
+                    organization: "UNICEF PageUp",
+                    location: "Tokyo, Japan",
+                    closingDate: closingDate,
+                    score: 0.99,
+                    description: "FAKE_SCORE_REASON_PRIVATE_TO_ADAPTER"
+                ),
+            ],
+            total: 6,
+            limit: 25,
+            offset: 5
+        )
+        let client = RecordingPublicJobClient(searchResponses: [response])
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let request = try AtlasPublicJobSearchRequest(
+            query: "public programme",
+            limit: 25,
+            offset: 5
+        )
+
+        let result = try await adapter.search(request)
+
+        XCTAssertEqual(result.total, 6)
+        XCTAssertEqual(result.limit, 25)
+        XCTAssertEqual(result.offset, 5)
+        XCTAssertEqual(result.jobs.count, 1)
+        XCTAssertEqual(result.jobs[0].id, Self.publicJobID)
+        XCTAssertEqual(result.jobs[0].title, "Public Programme Officer")
+        XCTAssertEqual(result.jobs[0].organization, "UNICEF")
+        XCTAssertEqual(result.jobs[0].location, "Tokyo, Japan")
+        XCTAssertEqual(
+            result.jobs[0].closingDateText,
+            "2026-08-01T12:34:56Z"
+        )
+        let lastRequest = await client.lastSearchRequest()
+        let mapped = try XCTUnwrap(lastRequest)
+        XCTAssertEqual(mapped.text, "public programme")
+        XCTAssertEqual(mapped.limit, 25)
+        XCTAssertEqual(mapped.offset, 5)
+        XCTAssertEqual(mapped.status, ["open"])
+        XCTAssertFalse(mapped.includeFacets)
+        XCTAssertFalse(mapped.includeLowConfidence)
+        XCTAssertEqual(mapped.sort, "closing_date_asc")
+        XCTAssertTrue(mapped.organizations.isEmpty)
+        XCTAssertTrue(mapped.sourceIDs.isEmpty)
+        XCTAssertFalse(
+            String(reflecting: result).contains(
+                "FAKE_SCORE_REASON_PRIVATE_TO_ADAPTER"
+            )
+        )
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(search: 1))
+    }
+
+    func testSearchRejectsDuplicatesAndInconsistentPagination() async throws {
+        let duplicate = try makeSearchResponse(
+            jobs: [
+                makeJob(id: Self.publicJobID),
+                makeJob(id: Self.publicJobID),
+            ],
+            total: 2,
+            limit: 2,
+            offset: 0
+        )
+        let inconsistent = try makeSearchResponse(
+            jobs: [makeJob(id: Self.publicJobID)],
+            total: 1,
+            limit: 2,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [duplicate, inconsistent]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        await assertPublicError(.invalidResponse) {
+            try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 2, offset: 0)
+            )
+        }
+        await assertPublicError(.invalidResponse) {
+            try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(search: 2))
+    }
+
+    func testFailedSearchDoesNotAuthorizeDetail() async throws {
+        let client = RecordingPublicJobClient(
+            searchFailure: .transport(Self.transportSentinel)
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+
+        await assertPublicError(.unavailable) {
+            try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+        }
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: reference)
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(search: 1))
+    }
+
+    func testSourcesProjectSafeFieldsAndRejectInvalidValues() async throws {
+        let valid = AtlasSourceSummary(
+            sourceID: "public_source",
+            organization: "UNICEF",
+            totalJobs: 9,
+            openJobs: 7,
+            lastSeenAt: "2026-07-19T00:00:00Z",
+            healthStatus: "ok",
+            observedAt: "2026-07-19T00:00:00Z",
+            detailAttempted: 4,
+            detailFailed: 1,
+            missingTransitionAllowed: false
+        )
+        let invalid = AtlasSourceSummary(
+            sourceID: "",
+            organization: "UNICEF",
+            totalJobs: 0,
+            openJobs: -1,
+            lastSeenAt: nil,
+            healthStatus: "ok",
+            observedAt: nil,
+            detailAttempted: nil,
+            detailFailed: nil,
+            missingTransitionAllowed: nil
+        )
+        let client = RecordingPublicJobClient(
+            sourceResponses: [
+                AtlasSourcesResponse(sources: [valid]),
+                AtlasSourcesResponse(sources: [invalid]),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let sources = try await adapter.sources()
+
+        XCTAssertEqual(
+            sources,
+            [
+                try AtlasPublicSourceStatus(
+                    sourceID: "public_source",
+                    displayName: "UNICEF",
+                    availability: .available,
+                    openJobCount: 7
+                ),
+            ]
+        )
+        await assertPublicError(.invalidResponse) {
+            try await adapter.sources()
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(sources: 2))
+    }
+
+    func testUpdatesUseCheckedChangedCountAndRejectNegativeOrOverflow()
+        async throws
+    {
+        let valid = AtlasSourceRun(
+            sourceID: "public_source",
+            fetched: 9,
+            inserted: 2,
+            updated: 3,
+            missing: 1,
+            closed: 1,
+            observedAt: "2026-07-19T00:00:00Z"
+        )
+        let negative = AtlasSourceRun(
+            sourceID: "public_source",
+            fetched: -1,
+            inserted: 0,
+            updated: 0,
+            missing: 0,
+            closed: 0,
+            observedAt: nil
+        )
+        let overflow = AtlasSourceRun(
+            sourceID: "public_source",
+            fetched: Int.max,
+            inserted: Int.max,
+            updated: 1,
+            missing: 0,
+            closed: 0,
+            observedAt: nil
+        )
+        let invalidDate = AtlasSourceRun(
+            sourceID: "public_source",
+            fetched: 1,
+            inserted: 0,
+            updated: 0,
+            missing: 0,
+            closed: 0,
+            observedAt: "FAKE_INVALID_DATE"
+        )
+        let client = RecordingPublicJobClient(
+            updateResponses: [
+                AtlasUpdatesResponse(recentSourceRuns: [valid]),
+                AtlasUpdatesResponse(recentSourceRuns: [negative]),
+                AtlasUpdatesResponse(recentSourceRuns: [overflow]),
+                AtlasUpdatesResponse(recentSourceRuns: [invalidDate]),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let updates = try await adapter.updates()
+
+        XCTAssertEqual(updates[0].fetchedJobCount, 9)
+        XCTAssertEqual(updates[0].changedJobCount, 5)
+        XCTAssertEqual(updates[0].closedJobCount, 1)
+        XCTAssertEqual(
+            updates[0].observedAt,
+            try date("2026-07-19T00:00:00Z")
+        )
+        await assertPublicError(.invalidResponse) {
+            try await adapter.updates()
+        }
+        await assertPublicError(.invalidResponse) {
+            try await adapter.updates()
+        }
+        await assertPublicError(.invalidResponse) {
+            try await adapter.updates()
+        }
+    }
+
+    func testDetailRequiresIssuedReferenceAndUsesPriorProjection() async throws {
+        let publicJob = makeJob(
+            id: Self.publicJobID,
+            title: "Issued public title",
+            organization: "UNDP Oracle",
+            location: "Nairobi"
+        )
+        let response = try makeSearchResponse(
+            jobs: [publicJob],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            title: "Changed upstream title",
+            description: "Public detail body"
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [response],
+            details: [Self.publicJobID: detail]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let issued = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        let unissued = try AtlasPublicJobReference(
+            publicJobID: Self.secondPublicJobID
+        )
+
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: issued)
+        }
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: unissued)
+        }
+        let countsBeforeSearch = await client.counts()
+        XCTAssertEqual(countsBeforeSearch.detail, 0)
+
+        let search = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let result = try await adapter.detail(for: issued)
+
+        XCTAssertEqual(result.reference, issued)
+        XCTAssertEqual(result.job, search.jobs[0])
+        XCTAssertEqual(result.job.title, "Issued public title")
+        XCTAssertEqual(result.detailText, "Public detail body")
+        let countsAfterDetail = await client.counts()
+        XCTAssertEqual(countsAfterDetail.detail, 1)
+    }
+
+    func testDetailRejectsMismatchedReturnedIdentity() async throws {
+        let response = try makeSearchResponse(
+            jobs: [makeJob(id: Self.publicJobID)],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [response],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.secondPublicJobID,
+                    description: "Wrong detail"
+                ),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        await assertPublicError(.invalidResponse) {
+            try await adapter.detail(
+                for: AtlasPublicJobReference(publicJobID: Self.publicJobID)
+            )
+        }
+    }
+
+    func testDetailProvenanceIsBoundedWithDeterministicFIFOEviction()
+        async throws
+    {
+        let first = try makeSearchResponse(
+            jobs: [
+                makeJob(id: Self.publicJobID),
+                makeJob(id: Self.secondPublicJobID),
+            ],
+            total: 2,
+            limit: 2,
+            offset: 0
+        )
+        let second = try makeSearchResponse(
+            jobs: [makeJob(id: Self.thirdPublicJobID)],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [first, second],
+            details: [
+                Self.publicJobID: makeDetail(id: Self.publicJobID),
+                Self.secondPublicJobID: makeDetail(id: Self.secondPublicJobID),
+                Self.thirdPublicJobID: makeDetail(id: Self.thirdPublicJobID),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 2
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 2, offset: 0)
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(
+                for: AtlasPublicJobReference(publicJobID: Self.publicJobID)
+            )
+        }
+        _ = try await adapter.detail(
+            for: AtlasPublicJobReference(
+                publicJobID: Self.secondPublicJobID
+            )
+        )
+        _ = try await adapter.detail(
+            for: AtlasPublicJobReference(publicJobID: Self.thirdPublicJobID)
+        )
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        XCTAssertEqual(authorizedCount, 2)
+        XCTAssertFalse(String(reflecting: adapter).contains(Self.publicJobID))
+    }
+
+    func testAPIAdapterSourceExposesOnlyNarrowPublicClientOperations()
+        throws
+    {
+        let source = try source("AtlasPublicJobAPIAdapter.swift")
+
+        for forbidden in [
+            "savedSearch",
+            "saveSearch",
+            "deleteSavedSearch",
+            "saveJob",
+            "trackerRecords",
+            "deleteTracker",
+            "/api/saved-searches",
+            "/api/tracker",
+            "Keychain",
+            "SecItem",
+            "FileManager",
+            "UserDefaults",
+            "@main",
+            "SwiftUI",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+        XCTAssertTrue(source.contains("func health()"))
+        XCTAssertTrue(source.contains("func search("))
+        XCTAssertTrue(source.contains("func jobDetail("))
+        XCTAssertTrue(source.contains("func sources()"))
+        XCTAssertTrue(source.contains("func updates()"))
+    }
+
+    // MARK: - Public snapshot restorer
+
+    func testSnapshotRestorerConstructionInvokesNothingAndIsRedacted() async {
+        let root = RecordingRootProvider(
+            outcome: .url(URL(fileURLWithPath: "/tmp/atlas-root"))
+        )
+        let reader = RecordingSnapshotFileReader(status: .missing)
+        let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: reader
+        )
+
+        XCTAssertEqual(root.callCount, 0)
+        XCTAssertEqual(reader.counts, .zero)
+        XCTAssertEqual(
+            String(describing: restorer),
+            "AtlasApplicationSupportPublicSnapshotRestorer(<redacted>)"
+        )
+    }
+
+    func testMissingSnapshotReturnsNilAndUsesExactReviewedPath() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+        let root = RecordingRootProvider(outcome: .url(rootURL))
+        let reader = RecordingSnapshotFileReader(status: .missing)
+        let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: reader
+        )
+
+        let restored = try await restorer.restore()
+        XCTAssertNil(restored)
+
+        XCTAssertEqual(root.callCount, 1)
+        XCTAssertEqual(reader.counts.status, 1)
+        XCTAssertEqual(
+            reader.lastStatusURL?.standardizedFileURL,
+            rootURL
+                .appendingPathComponent("Atlas", isDirectory: true)
+                .appendingPathComponent(
+                    "atlas-local-snapshot.json",
+                    isDirectory: false
+                )
+                .standardizedFileURL
+        )
+        XCTAssertEqual(reader.counts.read, 0)
+    }
+
+    func testValidSnapshotProjectsOnlyReviewedPublicValues() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+        let root = RecordingRootProvider(outcome: .url(rootURL))
+        let reader = RecordingSnapshotFileReader(
+            status: .regularFile,
+            data: try validSnapshotData()
+        )
+        let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: reader
+        )
+
+        let restoredValue = try await restorer.restore()
+        let restored = try XCTUnwrap(restoredValue)
+
+        XCTAssertEqual(restored.savedAt, try date("2026-07-19T00:00:00Z"))
+        XCTAssertEqual(restored.health.availability, .available)
+        XCTAssertEqual(restored.health.openJobCount, 1)
+        XCTAssertEqual(restored.jobs.map(\.id), [Self.publicJobID])
+        XCTAssertEqual(restored.jobs[0].organization, "UNICEF")
+        XCTAssertEqual(
+            restored.jobs[0].closingDateText,
+            "2026-08-01T12:34:56Z"
+        )
+        XCTAssertEqual(restored.sources.map(\.sourceID), ["public_source"])
+        XCTAssertEqual(restored.updates[0].changedJobCount, 1)
+        let labels = Set(
+            Mirror(reflecting: restored).children.compactMap(\.label)
+        )
+        XCTAssertFalse(labels.contains("baseURL"))
+        XCTAssertFalse(labels.contains("searchResponse"))
+        XCTAssertFalse(String(reflecting: restored).contains("jobs.sqlite3"))
+        XCTAssertEqual(reader.counts.read, 1)
+    }
+
+    func testSnapshotProjectionMatchesAPIProjection() async throws {
+        let job = makeJob(
+            id: Self.publicJobID,
+            organization: "UNICEF PageUp",
+            closingDate: try date("2026-08-01T12:34:56Z")
+        )
+        let response = try makeSearchResponse(
+            jobs: [job],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let apiClient = RecordingPublicJobClient(searchResponses: [response])
+        let api = AtlasAPIClientPublicJobAdapter(client: apiClient)
+        let apiResult = try await api.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        let root = RecordingRootProvider(
+            outcome: .url(URL(fileURLWithPath: "/tmp/atlas-root"))
+        )
+        let reader = RecordingSnapshotFileReader(
+            status: .regularFile,
+            data: try validSnapshotData()
+        )
+        let snapshot = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: reader
+        )
+        let restoredValue = try await snapshot.restore()
+        let restored = try XCTUnwrap(restoredValue)
+
+        XCTAssertEqual(restored.jobs, apiResult.jobs)
+    }
+
+    func testSnapshotRejectsMalformedPrivateAndUnknownTopLevelKeys()
+        async throws
+    {
+        for key in [
+            "savedSearches",
+            "savedJobs",
+            "tracker",
+            "applicationNotes",
+            "profileSnippets",
+            "draftMetadata",
+            "generatedDocumentReferences",
+            "futureUnknownKey",
+        ] {
+            let data = try snapshotData(addingTopLevelKey: key)
+            let restorer = snapshotRestorer(data: data)
+            await assertSnapshotError(.invalidSnapshot) {
+                try await restorer.restore()
+            }
+        }
+
+        let malformed = snapshotRestorer(
+            data: Data("{not-json".utf8)
+        )
+        await assertSnapshotError(.invalidSnapshot) {
+            try await malformed.restore()
+        }
+    }
+
+    func testSnapshotRejectsUnsafeRootSymlinkEscapeAndNonRegularFile()
+        async
+    {
+        let rootFailure = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: RecordingRootProvider(outcome: .failure),
+            fileReader: RecordingSnapshotFileReader(status: .missing)
+        )
+        await assertSnapshotError(.unavailable) {
+            try await rootFailure.restore()
+        }
+
+        let rootURL = URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+        let root = RecordingRootProvider(outcome: .url(rootURL))
+        let escapedReader = RecordingSnapshotFileReader(
+            status: .regularFile,
+            data: Data(),
+            resolvedCandidate: URL(
+                fileURLWithPath: "/tmp/outside/\(Self.pathSentinel).json"
+            )
+        )
+        let escaped = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: escapedReader
+        )
+        await assertSnapshotError(.invalidSnapshot) {
+            try await escaped.restore()
+        }
+
+        let nonRegular = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: RecordingSnapshotFileReader(status: .nonRegular)
+        )
+        await assertSnapshotError(.invalidSnapshot) {
+            try await nonRegular.restore()
+        }
+
+        let rootSlash = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: RecordingRootProvider(
+                outcome: .url(URL(fileURLWithPath: "/"))
+            ),
+            fileReader: RecordingSnapshotFileReader(status: .missing)
+        )
+        await assertSnapshotError(.invalidSnapshot) {
+            try await rootSlash.restore()
+        }
+    }
+
+    func testSnapshotReadFailureMapsUnavailableWithoutPathLeak() async {
+        let reader = RecordingSnapshotFileReader(
+            status: .regularFile,
+            readFailure: true
+        )
+        let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: RecordingRootProvider(
+                outcome: .url(
+                    URL(
+                        fileURLWithPath: "/tmp/\(Self.pathSentinel)",
+                        isDirectory: true
+                    )
+                )
+            ),
+            fileReader: reader
+        )
+
+        await assertSnapshotError(.unavailable) {
+            try await restorer.restore()
+        }
+        XCTAssertFalse(
+            String(reflecting: AtlasPublicSnapshotRestoreError.unavailable)
+                .contains(Self.pathSentinel)
+        )
+    }
+
+    func testSnapshotSourceIsRestoreOnlyAndExcludesDetailCache() throws {
+        let source = try source("AtlasPublicSnapshotRestorer.swift")
+
+        for forbidden in [
+            "AtlasLocalCache",
+            "JobDetails",
+            "prepareDetail",
+            "loadDetail",
+            "saveDetail",
+            "copyExistingDetail",
+            "cachedDetail",
+            "missingDetail",
+            "write(",
+            "createDirectory",
+            "removeItem",
+            "UserDefaults",
+            "SwiftUI",
+            "@main",
+            "URLSession",
+            "Keychain",
+            "SecItem",
+            "func save",
+            "func delete",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+        XCTAssertTrue(source.contains("atlas-local-snapshot.json"))
+        XCTAssertTrue(source.contains("func restore()"))
+    }
+
+    // MARK: - Vault-selection registry
+
+    func testRegistryConstructionInvokesNothingAndUsesDistinctFixedMetadata()
+        async
+    {
+        let client = RecordingSelectionKeychainClient()
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+
+        XCTAssertEqual(client.counts, .zero)
+        XCTAssertNotEqual(
+            AtlasKeychainVaultSelectionRegistry<
+                RecordingSelectionKeychainClient
+            >.registryService,
+            AtlasKeychainVaultKeyStore<
+                RecordingSelectionKeychainClient
+            >.defaultService
+        )
+        XCTAssertEqual(
+            String(describing: registry),
+            "AtlasKeychainVaultSelectionRegistry(<redacted>)"
+        )
+    }
+
+    func testRegistryMissingItemReturnsNone() async throws {
+        let client = RecordingSelectionKeychainClient()
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+
+        let selection = try await registry.selectVaultID()
+        XCTAssertEqual(selection, .none)
+        XCTAssertEqual(client.counts, .init(copy: 1))
+        XCTAssertEqual(
+            client.copiedQueries,
+            [
+                AtlasKeychainQuery(
+                    service: type(of: registry).registryService,
+                    account: type(of: registry).registryAccount
+                ),
+            ]
+        )
+    }
+
+    func testRegistryLoadsValidatedVersionedSelection() async throws {
+        let client = RecordingSelectionKeychainClient()
+        client.copyResult = AtlasKeychainCopyResult(
+            status: errSecSuccess,
+            valueData: try registryData(vaultID: Self.vaultID)
+        )
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+
+        let selection = try await registry.selectVaultID()
+
+        guard case let .selected(selected) = selection else {
+            return XCTFail("Expected one selected vault")
+        }
+        XCTAssertEqual(selected.vaultID, Self.vaultID)
+        XCTAssertFalse(String(reflecting: selection).contains(Self.vaultID))
+    }
+
+    func testRegistryRejectsMalformedUnsupportedAndInvalidEmbeddedID()
+        async
+    {
+        let cases: [Data] = [
+            Data("{malformed".utf8),
+            (try? registryData(
+                format: "wrong-format",
+                version: 1,
+                vaultID: Self.vaultID
+            )) ?? Data(),
+            (try? registryData(
+                format: "atlas-vault-selection",
+                version: 2,
+                vaultID: Self.vaultID
+            )) ?? Data(),
+            (try? registryData(
+                format: "atlas-vault-selection",
+                version: 1,
+                vaultID: "../invalid"
+            )) ?? Data(),
+            Data(
+                """
+                {
+                  "format": "atlas-vault-selection",
+                  "version": 1,
+                  "vault_id": "\(Self.vaultID)",
+                  "unexpected": "FAKE_REGISTRY_FIELD"
+                }
+                """.utf8
+            ),
+        ]
+
+        for data in cases {
+            let client = RecordingSelectionKeychainClient()
+            client.copyResult = AtlasKeychainCopyResult(
+                status: errSecSuccess,
+                valueData: data
+            )
+            let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+            await assertSelectionError(.invalidRegistry) {
+                try await registry.selectVaultID()
+            }
+        }
+
+        let missingDataClient = RecordingSelectionKeychainClient()
+        missingDataClient.copyResult = AtlasKeychainCopyResult(
+            status: errSecSuccess,
+            valueData: nil
+        )
+        let missingDataRegistry = AtlasKeychainVaultSelectionRegistry(
+            client: missingDataClient
+        )
+        await assertSelectionError(.invalidRegistry) {
+            try await missingDataRegistry.selectVaultID()
+        }
+    }
+
+    func testRegistryReadFailureMapsUnavailableWithoutRawStatus() async {
+        let client = RecordingSelectionKeychainClient()
+        client.copyResult = AtlasKeychainCopyResult(
+            status: errSecNotAvailable,
+            valueData: nil
+        )
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+
+        await assertSelectionError(.unavailable) {
+            try await registry.selectVaultID()
+        }
+        XCTAssertEqual(String(describing: AtlasVaultIDSelectionError.unavailable), "unavailable")
+        XCTAssertFalse(
+            String(reflecting: AtlasVaultIDSelectionError.unavailable)
+                .contains(String(errSecNotAvailable))
+        )
+    }
+
+    func testRegistryStoreUsesValueDataOnlyAndDeviceLocalAccessibility()
+        async throws
+    {
+        let client = RecordingSelectionKeychainClient()
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+        let selected = try AtlasSelectedVaultID(validating: Self.vaultID)
+
+        try await registry.storeSelection(selected)
+
+        let item = try XCTUnwrap(client.addedItems.first)
+        XCTAssertEqual(item.service, type(of: registry).registryService)
+        XCTAssertEqual(item.account, type(of: registry).registryAccount)
+        XCTAssertEqual(item.accessibility, .afterFirstUnlockThisDeviceOnly)
+        XCTAssertFalse(item.service.contains(Self.vaultID))
+        XCTAssertFalse(item.account.contains(Self.vaultID))
+        XCTAssertFalse(
+            item.service.contains(
+                AtlasKeychainVaultKeyStore<
+                    RecordingSelectionKeychainClient
+                >.defaultService
+            )
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: item.valueData)
+                as? [String: Any]
+        )
+        XCTAssertEqual(object["format"] as? String, "atlas-vault-selection")
+        XCTAssertEqual(object["version"] as? Int, 1)
+        XCTAssertEqual(object["vault_id"] as? String, Self.vaultID)
+        XCTAssertEqual(Set(object.keys), ["format", "version", "vault_id"])
+        let serialized = String(data: item.valueData, encoding: .utf8) ?? ""
+        for forbidden in [
+            "vault_key",
+            "passphrase",
+            "recovery",
+            "path",
+            "label",
+            "timestamp",
+            "record",
+        ] {
+            XCTAssertFalse(serialized.contains(forbidden), forbidden)
+        }
+    }
+
+    func testRegistryDuplicateStoreUpdatesSameFixedQuery() async throws {
+        let client = RecordingSelectionKeychainClient()
+        client.forcedAddStatuses = [errSecDuplicateItem]
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+        let selected = try AtlasSelectedVaultID(validating: Self.vaultID)
+
+        try await registry.storeSelection(selected)
+
+        XCTAssertEqual(client.addedItems.count, 1)
+        XCTAssertEqual(client.updatedItems.count, 1)
+        XCTAssertEqual(
+            client.updatedItems[0].query,
+            AtlasKeychainQuery(
+                service: type(of: registry).registryService,
+                account: type(of: registry).registryAccount
+            )
+        )
+        XCTAssertEqual(
+            client.updatedItems[0].attributes.valueData,
+            client.addedItems[0].valueData
+        )
+    }
+
+    func testRegistryClearDeletesAndMissingIsSuccess() async throws {
+        let client = RecordingSelectionKeychainClient()
+        client.forcedDeleteStatuses = [errSecSuccess, errSecItemNotFound]
+        let registry = AtlasKeychainVaultSelectionRegistry(client: client)
+
+        try await registry.clearSelection()
+        try await registry.clearSelection()
+
+        XCTAssertEqual(client.deletedQueries.count, 2)
+        XCTAssertTrue(
+            client.deletedQueries.allSatisfy {
+                $0.service == type(of: registry).registryService
+                    && $0.account == type(of: registry).registryAccount
+            }
+        )
+    }
+
+    func testRegistryMutationFailuresMapUnavailableWithoutRawStatus()
+        async throws
+    {
+        let selected = try AtlasSelectedVaultID(validating: Self.vaultID)
+
+        let addClient = RecordingSelectionKeychainClient()
+        addClient.forcedAddStatuses = [errSecNotAvailable]
+        let addRegistry = AtlasKeychainVaultSelectionRegistry(client: addClient)
+        await assertSelectionError(.unavailable) {
+            try await addRegistry.storeSelection(selected)
+        }
+
+        let updateClient = RecordingSelectionKeychainClient()
+        updateClient.forcedAddStatuses = [errSecDuplicateItem]
+        updateClient.forcedUpdateStatuses = [errSecNotAvailable]
+        let updateRegistry = AtlasKeychainVaultSelectionRegistry(
+            client: updateClient
+        )
+        await assertSelectionError(.unavailable) {
+            try await updateRegistry.storeSelection(selected)
+        }
+
+        let deleteClient = RecordingSelectionKeychainClient()
+        deleteClient.forcedDeleteStatuses = [errSecNotAvailable]
+        let deleteRegistry = AtlasKeychainVaultSelectionRegistry(
+            client: deleteClient
+        )
+        await assertSelectionError(.unavailable) {
+            try await deleteRegistry.clearSelection()
+        }
+    }
+
+    func testRegistrySourceHasNoImplicitSelectionOrAlternateStorage() throws {
+        let source = try source("AtlasVaultSelectionRegistry.swift")
+
+        for forbidden in [
+            "UserDefaults",
+            "@AppStorage",
+            "@SceneStorage",
+            "FileManager",
+            "contentsOfDirectory",
+            "enumerator",
+            "URLSession",
+            "SwiftUI",
+            "@main",
+            "loadVaultKey",
+            "saveVaultKey",
+            "deleteVaultKey",
+            "CryptoKit",
+            "AtlasVaultRecordCrypto",
+            "selectAll",
+            "listVault",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+        XCTAssertFalse(source.contains("SecItemAdd"))
+        XCTAssertFalse(source.contains("SecItemCopyMatching"))
+        XCTAssertFalse(source.contains("SecItemUpdate"))
+        XCTAssertFalse(source.contains("SecItemDelete"))
+    }
+
+    func testExpandedSelectionErrorsAreFixedAndRedacted() {
+        XCTAssertEqual(
+            String(describing: AtlasVaultIDSelectionError.invalidVaultID),
+            "invalidVaultID"
+        )
+        XCTAssertEqual(
+            String(describing: AtlasVaultIDSelectionError.unavailable),
+            "unavailable"
+        )
+        XCTAssertEqual(
+            String(describing: AtlasVaultIDSelectionError.invalidRegistry),
+            "invalidRegistry"
+        )
+        for error in [
+            AtlasVaultIDSelectionError.invalidVaultID,
+            .unavailable,
+            .invalidRegistry,
+        ] {
+            XCTAssertFalse(String(reflecting: error).contains(Self.vaultID))
+            XCTAssertFalse(
+                String(reflecting: error).contains(String(errSecNotAvailable))
+            )
+        }
+    }
+
+    // MARK: - Scope and artifacts
+
+    func testNewProductionSourcesHaveNoHostUIOrLaterPhaseBehavior() throws {
+        let combined = try [
+            "AtlasPublicJobAPIAdapter.swift",
+            "AtlasPublicSnapshotRestorer.swift",
+            "AtlasVaultSelectionRegistry.swift",
+        ].map(source).joined(separator: "\n")
+
+        for forbidden in [
+            "AtlasRootView",
+            "refreshSidebarData",
+            "SearchViewModel",
+            "AtlasIOSHostApp",
+            "NavigationStack",
+            "NavigationLink",
+            "LocalAuthentication",
+            "LAContext",
+            "migration",
+            "cloud sync",
+            "AtlasVaultProductionHosting",
+            "AtlasVaultProductionHostFactory",
+            "passphrase",
+            "recovery-key provider",
+        ] {
+            XCTAssertFalse(combined.contains(forbidden), forbidden)
+        }
+    }
+
+    func testPhaseFileSetIsExactlyTheSixAllowedPaths() throws {
+        let root = try repositoryRoot()
+        let expected = Set([
+            "docs/architecture/phase2d55_concrete_public_adapters_and_vault_selection.md",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionHostContracts.swift",
+            "apps/apple/Sources/AtlasUI/AtlasPublicJobAPIAdapter.swift",
+            "apps/apple/Sources/AtlasUI/AtlasPublicSnapshotRestorer.swift",
+            "apps/apple/Sources/AtlasUI/AtlasVaultSelectionRegistry.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionAdaptersTests.swift",
+        ])
+        for path in expected {
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: root.appendingPathComponent(path).path
+                ),
+                path
+            )
+        }
+        let phaseNamedFiles = try allRepositoryFiles(root: root).filter {
+            $0.lastPathComponent.lowercased().contains("phase2d55")
+                || $0.lastPathComponent == "AtlasPublicJobAPIAdapter.swift"
+                || $0.lastPathComponent == "AtlasPublicSnapshotRestorer.swift"
+                || $0.lastPathComponent == "AtlasVaultSelectionRegistry.swift"
+                || $0.lastPathComponent
+                    == "AtlasVaultProductionAdaptersTests.swift"
+        }
+        let relative = Set(
+            phaseNamedFiles.map {
+                $0.path.replacingOccurrences(
+                    of: root.path + "/",
+                    with: ""
+                )
+            }
+        )
+        XCTAssertEqual(relative, expected.subtracting([
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionHostContracts.swift",
+        ]))
+    }
+
+    func testNoAtlasVaultOrReviewEnvironmentArtifactExists() throws {
+        let root = try repositoryRoot()
+        for url in try allRepositoryFiles(root: root) {
+            XCTAssertNotEqual(url.pathExtension, "atlasvault", url.path)
+            XCTAssertNotEqual(url.lastPathComponent, ".venv-review", url.path)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func assertPublicError<T>(
+        _ expected: AtlasPublicJobServiceError,
+        operation: () async throws -> T
+    ) async {
+        do {
+            _ = try await operation()
+            XCTFail("Expected \(expected)")
+        } catch {
+            XCTAssertEqual(error as? AtlasPublicJobServiceError, expected)
+            XCTAssertFalse(String(reflecting: error).contains(Self.bodySentinel))
+            XCTAssertFalse(
+                String(reflecting: error).contains(Self.transportSentinel)
+            )
+        }
+    }
+
+    private func assertSnapshotError<T>(
+        _ expected: AtlasPublicSnapshotRestoreError,
+        operation: () async throws -> T
+    ) async {
+        do {
+            _ = try await operation()
+            XCTFail("Expected \(expected)")
+        } catch {
+            XCTAssertEqual(error as? AtlasPublicSnapshotRestoreError, expected)
+            XCTAssertFalse(String(reflecting: error).contains(Self.pathSentinel))
+        }
+    }
+
+    private func assertSelectionError<T>(
+        _ expected: AtlasVaultIDSelectionError,
+        operation: () async throws -> T
+    ) async {
+        do {
+            _ = try await operation()
+            XCTFail("Expected \(expected)")
+        } catch {
+            XCTAssertEqual(error as? AtlasVaultIDSelectionError, expected)
+            XCTAssertFalse(String(reflecting: error).contains(Self.vaultID))
+            XCTAssertFalse(
+                String(reflecting: error).contains(String(errSecNotAvailable))
+            )
+        }
+    }
+
+    private func snapshotRestorer(
+        data: Data
+    ) -> AtlasApplicationSupportPublicSnapshotRestorer {
+        AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: RecordingRootProvider(
+                outcome: .url(
+                    URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+                )
+            ),
+            fileReader: RecordingSnapshotFileReader(
+                status: .regularFile,
+                data: data
+            )
+        )
+    }
+
+    private func validSnapshotData() throws -> Data {
+        Data(
+            """
+            {
+              "savedAt": "2026-07-19T00:00:00Z",
+              "baseURL": "http://127.0.0.1:8765",
+              "health": {
+                "status": "ok",
+                "db_path": "/FAKE_DB_PATH_DO_NOT_PROJECT/jobs.sqlite3",
+                "schema_version": "FAKE_SCHEMA_DO_NOT_PROJECT",
+                "open_jobs": 1,
+                "enabled_sources": 1,
+                "last_sync_at": "2026-07-19T00:00:00Z"
+              },
+              "searchResponse": {
+                "total": 1,
+                "limit": 1,
+                "offset": 0,
+                "facets": {
+                  "organizations": {
+                    "UNICEF": 1
+                  }
+                },
+                "facet_labels": {},
+                "unclassified_count": 0,
+                "results": [
+                  {
+                    "jobKey": "\(Self.publicJobID)",
+                    "title": "Public role",
+                    "organization": "UNICEF PageUp",
+                    "sourceID": "public_source",
+                    "dutyStation": "Tokyo, Japan",
+                    "gradeCode": "P-3",
+                    "contractLabel": "Fixed Term",
+                    "workModality": "Onsite",
+                    "closingDate": "2026-08-01T12:34:56Z",
+                    "needsReview": false,
+                    "score": 0.99,
+                    "scoreReasons": ["FAKE_SCORE_REASON_DO_NOT_PROJECT"],
+                    "matchSummary": "FAKE_MATCH_SUMMARY_DO_NOT_PROJECT",
+                    "description": "Public vacancy description",
+                    "status": "open"
+                  }
+                ]
+              },
+              "sources": [
+                {
+                  "source_id": "public_source",
+                  "organization": "UNICEF",
+                  "total_jobs": 1,
+                  "open_jobs": 1,
+                  "health_status": "ok"
+                }
+              ],
+              "recentRuns": [
+                {
+                  "source_id": "public_source",
+                  "fetched": 1,
+                  "inserted": 1,
+                  "updated": 0,
+                  "missing": 0,
+                  "closed": 0,
+                  "observed_at": "2026-07-19T00:00:00Z"
+                }
+              ]
+            }
+            """.utf8
+        )
+    }
+
+    private func snapshotData(addingTopLevelKey key: String) throws -> Data {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: validSnapshotData())
+                as? [String: Any]
+        )
+        object[key] = ["FAKE_PRIVATE_SENTINEL_DO_NOT_DECODE": true]
+        return try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+    }
+
+    private func registryData(
+        format: String = "atlas-vault-selection",
+        version: Int = 1,
+        vaultID: String
+    ) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "format": format,
+                "version": version,
+                "vault_id": vaultID,
+            ],
+            options: [.sortedKeys]
+        )
+    }
+
+    private func source(_ fileName: String) throws -> String {
+        let root = try repositoryRoot()
+        let url = root
+            .appendingPathComponent("apps/apple/Sources/AtlasUI")
+            .appendingPathComponent(fileName)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func repositoryRoot() throws -> URL {
+        var candidate = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+        while candidate.path != "/" {
+            if FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent(".git").path
+            ) {
+                return candidate
+            }
+            candidate.deleteLastPathComponent()
+        }
+        throw NSError(
+            domain: "AtlasVaultProductionAdaptersTests",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Could not locate repository root",
+            ]
+        )
+    }
+
+    private func allRepositoryFiles(root: URL) throws -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [URL] = []
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == ".git" {
+                if url.hasDirectoryPath {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            files.append(url)
+        }
+        return files
     }
 }
 
-private struct RedCheckpointKeychainClient: AtlasKeychainClient {
-    func add(_ item: AtlasKeychainItem) -> OSStatus {
-        errSecSuccess
+// MARK: - Public API fake
+
+private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
+    enum Failure: Sendable {
+        case none
+        case transport(String)
+        case http(String)
+        case invalidResponse
+        case decoding(String)
     }
 
-    func copyMatching(
-        _ query: AtlasKeychainQuery
-    ) -> AtlasKeychainCopyResult {
-        AtlasKeychainCopyResult(status: errSecItemNotFound, valueData: nil)
+    struct Counts: Equatable, Sendable {
+        var health = 0
+        var search = 0
+        var detail = 0
+        var sources = 0
+        var updates = 0
+
+        static let zero = Counts()
+    }
+
+    private var callCounts = Counts()
+    private var healthValue: AtlasHealthSummary
+    private var queuedSearchResponses: [AtlasSearchResponse]
+    private var detailValues: [String: AtlasJobDetail]
+    private var queuedSourceResponses: [AtlasSourcesResponse]
+    private var queuedUpdateResponses: [AtlasUpdatesResponse]
+    private var recordedSearchRequests: [AtlasSearchRequest] = []
+    private let healthFailure: Failure
+    private let searchFailure: Failure
+
+    init(
+        health: AtlasHealthSummary = makeHealth(status: "ok"),
+        searchResponses: [AtlasSearchResponse] = [],
+        details: [String: AtlasJobDetail] = [:],
+        sourceResponses: [AtlasSourcesResponse] = [],
+        updateResponses: [AtlasUpdatesResponse] = [],
+        healthFailure: Failure = .none,
+        searchFailure: Failure = .none
+    ) {
+        healthValue = health
+        queuedSearchResponses = searchResponses
+        detailValues = details
+        queuedSourceResponses = sourceResponses
+        queuedUpdateResponses = updateResponses
+        self.healthFailure = healthFailure
+        self.searchFailure = searchFailure
+    }
+
+    func health() async throws -> AtlasHealthSummary {
+        callCounts.health += 1
+        try Self.raise(healthFailure)
+        return healthValue
+    }
+
+    func search(_ request: AtlasSearchRequest) async throws
+        -> AtlasSearchResponse
+    {
+        callCounts.search += 1
+        recordedSearchRequests.append(request)
+        try Self.raise(searchFailure)
+        guard !queuedSearchResponses.isEmpty else {
+            throw AtlasAPIError.invalidResponse
+        }
+        return queuedSearchResponses.removeFirst()
+    }
+
+    func jobDetail(_ jobKey: String) async throws -> AtlasJobDetail {
+        callCounts.detail += 1
+        guard let detail = detailValues[jobKey] else {
+            throw AtlasAPIError.invalidResponse
+        }
+        return detail
+    }
+
+    func sources() async throws -> AtlasSourcesResponse {
+        callCounts.sources += 1
+        guard !queuedSourceResponses.isEmpty else {
+            return AtlasSourcesResponse(sources: [])
+        }
+        return queuedSourceResponses.removeFirst()
+    }
+
+    func updates() async throws -> AtlasUpdatesResponse {
+        callCounts.updates += 1
+        guard !queuedUpdateResponses.isEmpty else {
+            return AtlasUpdatesResponse(recentSourceRuns: [])
+        }
+        return queuedUpdateResponses.removeFirst()
+    }
+
+    func counts() -> Counts {
+        callCounts
+    }
+
+    func lastSearchRequest() -> AtlasSearchRequest? {
+        recordedSearchRequests.last
+    }
+
+    private static func raise(_ failure: Failure) throws {
+        switch failure {
+        case .none:
+            return
+        case let .transport(sentinel):
+            throw AtlasAPIError.transport(sentinel)
+        case let .http(sentinel):
+            throw AtlasAPIError.httpStatus(500, sentinel)
+        case .invalidResponse:
+            throw AtlasAPIError.invalidResponse
+        case let .decoding(sentinel):
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: [], debugDescription: sentinel)
+            )
+        }
+    }
+}
+
+private func makeHealth(
+    status: String,
+    dbPath: String? = nil,
+    schemaVersion: String? = nil,
+    openJobs: Int? = nil,
+    enabledSources: Int? = nil,
+    lastSyncAt: String? = nil
+) -> AtlasHealthSummary {
+    AtlasHealthSummary(
+        status: status,
+        dbPath: dbPath,
+        schemaVersion: schemaVersion,
+        openJobs: openJobs,
+        enabledSources: enabledSources,
+        lastSyncAt: lastSyncAt
+    )
+}
+
+private func makeJob(
+    id: String,
+    title: String = "Public role",
+    organization: String = "UNICEF",
+    location: String = "Tokyo, Japan",
+    closingDate: Date? = nil,
+    score: Double? = nil,
+    description: String = "Public description"
+) -> JobSearchResult {
+    JobSearchResult(
+        jobKey: id,
+        title: title,
+        organization: organization,
+        sourceID: "public_source",
+        dutyStation: location,
+        gradeCode: "P-3",
+        contractLabel: "Fixed Term",
+        workModality: "Onsite",
+        closingDate: closingDate,
+        needsReview: false,
+        locationConfidence: 0.95,
+        gradeConfidence: 0.9,
+        score: score,
+        scoreReasons: ["FAKE_SCORE_REASON_DO_NOT_PROJECT"],
+        matchSummary: "FAKE_MATCH_SUMMARY_DO_NOT_PROJECT",
+        description: description
+    )
+}
+
+private func makeSearchResponse(
+    jobs: [JobSearchResult],
+    total: Int,
+    limit: Int,
+    offset: Int
+) throws -> AtlasSearchResponse {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let jobsData = try encoder.encode(jobs)
+    let jobsObject = try JSONSerialization.jsonObject(with: jobsData)
+    let data = try JSONSerialization.data(
+        withJSONObject: [
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "results": jobsObject,
+            "facets": [:],
+            "facet_labels": [:],
+            "unclassified_count": 0,
+        ]
+    )
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try decoder.decode(AtlasSearchResponse.self, from: data)
+}
+
+private func makeDetail(
+    id: String,
+    title: String = "Public role",
+    description: String? = "Public detail"
+) -> AtlasJobDetail {
+    AtlasJobDetail(
+        jobKey: id,
+        title: title,
+        description: description,
+        status: "open",
+        closingDate: nil,
+        closesAtLocal: nil,
+        closesTimezone: nil,
+        applyURL: nil,
+        sourceURL: nil,
+        deadlineInfo: nil,
+        displaySections: []
+    )
+}
+
+private func date(_ value: String) throws -> Date {
+    let formatter = ISO8601DateFormatter()
+    guard let parsed = formatter.date(from: value) else {
+        throw NSError(
+            domain: "AtlasVaultProductionAdaptersTests",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "Invalid test date"]
+        )
+    }
+    return parsed
+}
+
+// MARK: - Snapshot fakes
+
+private final class RecordingRootProvider:
+    AtlasVaultRootDirectoryProviding,
+    @unchecked Sendable
+{
+    enum Outcome: Sendable {
+        case url(URL)
+        case failure
+    }
+
+    let outcome: Outcome
+    private(set) var callCount = 0
+
+    init(outcome: Outcome) {
+        self.outcome = outcome
+    }
+
+    func rootDirectory() throws -> URL {
+        callCount += 1
+        switch outcome {
+        case let .url(url):
+            return url
+        case .failure:
+            throw SnapshotTestError.unavailable
+        }
+    }
+}
+
+private final class RecordingSnapshotFileReader:
+    AtlasPublicSnapshotFileReading,
+    @unchecked Sendable
+{
+    struct Counts: Equatable {
+        var status = 0
+        var resolve = 0
+        var read = 0
+
+        static let zero = Counts()
+    }
+
+    private let fileStatus: AtlasPublicSnapshotFileStatus
+    private let data: Data
+    private let resolvedCandidate: URL?
+    private let readFailure: Bool
+    private(set) var counts = Counts()
+    private(set) var lastStatusURL: URL?
+
+    init(
+        status: AtlasPublicSnapshotFileStatus,
+        data: Data = Data(),
+        resolvedCandidate: URL? = nil,
+        readFailure: Bool = false
+    ) {
+        fileStatus = status
+        self.data = data
+        self.resolvedCandidate = resolvedCandidate
+        self.readFailure = readFailure
+    }
+
+    func status(
+        at url: URL
+    ) throws(AtlasPublicSnapshotFileReadError) -> AtlasPublicSnapshotFileStatus {
+        counts.status += 1
+        lastStatusURL = url
+        return fileStatus
+    }
+
+    func resolvedURL(
+        for url: URL
+    ) throws(AtlasPublicSnapshotFileReadError) -> URL {
+        counts.resolve += 1
+        if url.lastPathComponent == "atlas-local-snapshot.json",
+           let resolvedCandidate {
+            return resolvedCandidate
+        }
+        return url.standardizedFileURL
+    }
+
+    func read(
+        from url: URL
+    ) throws(AtlasPublicSnapshotFileReadError) -> Data {
+        counts.read += 1
+        if readFailure {
+            throw .unavailable
+        }
+        return data
+    }
+}
+
+private enum SnapshotTestError: Error, Sendable {
+    case unavailable
+}
+
+// MARK: - Keychain fake
+
+private final class RecordingSelectionKeychainClient:
+    AtlasKeychainClient,
+    @unchecked Sendable
+{
+    struct Counts: Equatable {
+        var add = 0
+        var copy = 0
+        var update = 0
+        var delete = 0
+
+        static let zero = Counts()
+    }
+
+    struct UpdateCall: Equatable {
+        let query: AtlasKeychainQuery
+        let attributes: AtlasKeychainUpdate
+    }
+
+    var copyResult = AtlasKeychainCopyResult(
+        status: errSecItemNotFound,
+        valueData: nil
+    )
+    var forcedAddStatuses: [OSStatus] = []
+    var forcedUpdateStatuses: [OSStatus] = []
+    var forcedDeleteStatuses: [OSStatus] = []
+    private(set) var counts = Counts()
+    private(set) var addedItems: [AtlasKeychainItem] = []
+    private(set) var copiedQueries: [AtlasKeychainQuery] = []
+    private(set) var updatedItems: [UpdateCall] = []
+    private(set) var deletedQueries: [AtlasKeychainQuery] = []
+
+    func add(_ item: AtlasKeychainItem) -> OSStatus {
+        counts.add += 1
+        addedItems.append(item)
+        if !forcedAddStatuses.isEmpty {
+            return forcedAddStatuses.removeFirst()
+        }
+        return errSecSuccess
+    }
+
+    func copyMatching(_ query: AtlasKeychainQuery) -> AtlasKeychainCopyResult {
+        counts.copy += 1
+        copiedQueries.append(query)
+        return copyResult
     }
 
     func update(
         _ query: AtlasKeychainQuery,
         with attributes: AtlasKeychainUpdate
     ) -> OSStatus {
-        errSecSuccess
+        counts.update += 1
+        updatedItems.append(.init(query: query, attributes: attributes))
+        if !forcedUpdateStatuses.isEmpty {
+            return forcedUpdateStatuses.removeFirst()
+        }
+        return errSecSuccess
     }
 
     func delete(_ query: AtlasKeychainQuery) -> OSStatus {
-        errSecSuccess
+        counts.delete += 1
+        deletedQueries.append(query)
+        if !forcedDeleteStatuses.isEmpty {
+            return forcedDeleteStatuses.removeFirst()
+        }
+        return errSecSuccess
     }
 }
