@@ -178,12 +178,15 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertEqual(health.lastSyncAt, syncTime)
         XCTAssertEqual(source.openJobCount, 8)
         XCTAssertEqual(update.changedJobCount, 2)
-        XCTAssertEqual(reference.rawValue, Self.fakeJobID)
+        XCTAssertEqual(reference.publicJobID, Self.fakeJobID)
         XCTAssertEqual(detail.job.id, Self.fakeJobID)
         XCTAssertFalse(rendered.contains(Self.fakeJobID))
         XCTAssertFalse(rendered.contains("FAKE_PUBLIC_SOURCE"))
         XCTAssertFalse(rendered.contains("FAKE_PUBLIC_DETAIL_TEXT_DO_NOT_LOG"))
         XCTAssertTrue(rendered.contains("<redacted>"))
+        XCTAssertTrue(
+            try contractsSource().contains("public let publicJobID: String")
+        )
 
         for value in [health as Any, source as Any, update as Any, detail as Any] {
             let labels = storedPropertyLabels(value)
@@ -374,7 +377,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
 
         XCTAssertEqual(none, .none)
         XCTAssertEqual(
-            selectedID.rawValue,
+            selectedID.vaultID,
             try AtlasInjectedRootVaultPathLocator.validatedVaultID(
                 Self.fakeVaultID
             )
@@ -382,7 +385,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         guard case let .selected(value) = selected else {
             return XCTFail("Expected selected fake vault")
         }
-        XCTAssertEqual(value.rawValue, Self.fakeVaultID)
+        XCTAssertEqual(value.vaultID, Self.fakeVaultID)
         requireSendable(none)
         requireSendable(selected)
     }
@@ -459,6 +462,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertTrue(
             section.contains("throws(AtlasVaultIDSelectionError)")
         )
+        XCTAssertTrue(section.contains("public let vaultID: String"))
     }
 
     func testFakeHostConformsAndSupportsOnlyFirstJourneyCommands() async throws {
@@ -541,6 +545,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         ] {
             XCTAssertFalse(section.contains(forbidden), forbidden)
         }
+        XCTAssertTrue(
+            section.contains("throws(AtlasPublicJobServiceError)")
+        )
     }
 
     func testDependencyAndFactoryConstructionInvokeNothing() async throws {
@@ -634,7 +641,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
 
         XCTAssertEqual(graph.unlockControllerBuilder.callCount, 1)
         XCTAssertEqual(
-            graph.unlockControllerBuilder.capturedSelectedVaultID?.rawValue,
+            graph.unlockControllerBuilder.capturedSelectedVaultID?.vaultID,
             Self.fakeVaultID
         )
         XCTAssertEqual(
@@ -1418,7 +1425,7 @@ private actor FactoryProductionHostSpy: AtlasVaultProductionHosting {
 
     func searchPublicJobs(
         _ request: AtlasPublicJobSearchRequest
-    ) async throws -> AtlasPublicJobSearchResult {
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobSearchResult {
         searchCalls += 1
         return searchResult
     }

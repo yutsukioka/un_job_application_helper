@@ -254,13 +254,13 @@ public struct AtlasPublicJobReference:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    let rawValue: String
+    public let publicJobID: String
 
     public init(publicJobID: String) throws {
         guard !publicJobID.isEmpty else {
             throw AtlasPublicJobServiceError.invalidRequest
         }
-        rawValue = publicJobID
+        self.publicJobID = publicJobID
     }
 
     public var description: String {
@@ -287,7 +287,7 @@ public struct AtlasPublicJobDetailResult:
         job: AtlasLockedPublicJob,
         detailText: String
     ) throws {
-        guard reference.rawValue == job.id else {
+        guard reference.publicJobID == job.id else {
             throw AtlasPublicJobServiceError.invalidResponse
         }
         self.reference = reference
@@ -406,11 +406,11 @@ public struct AtlasSelectedVaultID:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
-    let rawValue: String
+    public let vaultID: String
 
     public init(validating candidate: String) throws {
         do {
-            rawValue = try AtlasInjectedRootVaultPathLocator.validatedVaultID(
+            vaultID = try AtlasInjectedRootVaultPathLocator.validatedVaultID(
                 candidate
             )
         } catch {
@@ -461,7 +461,7 @@ public protocol AtlasVaultProductionHosting: Sendable {
     func currentFlowState() async -> AtlasLockedShellUnlockFlowState
     func searchPublicJobs(
         _ request: AtlasPublicJobSearchRequest
-    ) async throws -> AtlasPublicJobSearchResult
+    ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobSearchResult
     func requestUnlockPanel() async -> AtlasLockedShellUnlockFlowState
     func selectUnlockMethod(
         _ method: AtlasVaultUnlockMethod?

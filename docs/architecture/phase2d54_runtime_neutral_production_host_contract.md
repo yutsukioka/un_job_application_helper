@@ -115,10 +115,12 @@ transport authority.
 ## 9. Public-Detail Reference Boundary
 
 `AtlasPublicJobReference` is a distinct redacted value used by the public
-detail operation. Its raw value is module-internal, so it is not a general UI
-diagnostic field. `AtlasPublicJobDetailResult` contains only the reference, one
-safe public job value, and public detail text. Construction rejects a result
-whose public job ID does not match the requested reference.
+detail operation. Its public read-only `publicJobID` is available to a concrete
+public adapter so that an implementation outside `AtlasUI` can service the
+request. The wrapper is not a general UI diagnostic field, and its descriptions
+remain fixed and redacted. `AtlasPublicJobDetailResult` contains only the
+reference, one safe public job value, and public detail text. Construction
+rejects a result whose public job ID does not match the requested reference.
 
 This phase does not implement provenance or a concrete detail adapter. It also
 does not grant detail-cache restore, warmup, or write authority.
@@ -186,8 +188,10 @@ introduce a second validator.
 The existing policy rejects empty or whitespace-padded values, path
 separators, dot components, reserved semantic record IDs, unsupported
 characters, and excessive length. The selected raw ID remains
-module-internal. Public descriptions for both the ID and selection result are
-fixed and redacted.
+available through the wrapper's public read-only `vaultID` only for a future
+composition builder. Neither the host protocol nor any flow or presentation
+state returns the wrapper, and it must not be passed to views. Public
+descriptions for both the ID and selection result are fixed and redacted.
 
 ## 15. No Vault Registry Implementation
 
@@ -231,6 +235,8 @@ The host protocol contains:
 - explicit lock;
 - platform-neutral lifecycle-event delivery.
 
+The public-search operation constrains failures to
+`AtlasPublicJobServiceError`, matching the underlying public adapter contract.
 No operation is invoked by the contract itself.
 
 ## 18. Fixed Unlocked-Transition Boundary
@@ -255,8 +261,8 @@ panel, and non-sensitive transition.
 
 The first-journey host protocol has no mutation, save, durability, or private
 record command. The dependency bundle may hold the existing runtime facade for
-a future concrete host, but that facade is module-internal to the bundle and
-is never returned through the host protocol.
+a future concrete host, but that facade is a read-only injected dependency and
+is never returned through the host protocol or passed to views.
 
 Write-side product behavior remains outside this phase.
 
@@ -290,7 +296,9 @@ fixed and redacted.
 The contract exists because the controller cannot be created until explicit
 host-side vault selection has completed. The builder has no selection or
 submission command and receives no concrete provider, storage client, or
-runtime implementation detail.
+runtime implementation detail. It may read the validated `vaultID` solely to
+construct the controller or activate the runtime; the identifier never enters
+the host's public state or a presentation value.
 
 The production capability remains local-key-only. Passphrase and recovery
 remain unavailable without reviewed production providers.
@@ -388,7 +396,8 @@ identifiers, paths, responses, or server text.
 Every new value that can be rendered diagnostically has a fixed
 `description` and `debugDescription`. Query text, public job IDs, detail text,
 source identifiers, selected vault IDs, and dependency identities are
-redacted.
+redacted. The two identifier wrappers provide read-only adapter/composition
+access, but those values are never included in their descriptions.
 
 ## 32. TDD Evidence
 
