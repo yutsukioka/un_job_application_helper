@@ -837,7 +837,7 @@ Production host diagnostics may contain only fixed operation categories,
 coarse state classes, opaque process-local tokens, and reviewed timing data.
 They must not contain:
 
-- vault IDs unless an internal operation strictly requires one;
+- vault IDs;
 - paths or filenames;
 - keys, key lengths, nonces, ciphertext, or secret lengths;
 - Keychain account/service values or raw `OSStatus`;
@@ -849,7 +849,9 @@ They must not contain:
 
 Host error mapping must use fixed non-sensitive categories and must not forward
 underlying `localizedDescription`, API response bodies, or dependency
-descriptions.
+descriptions. Diagnostics that need to correlate an internal operation must use
+an opaque process-local operation token or a fixed category; a vault ID is
+never an acceptable correlation value.
 
 `AtlasVaultUnlockedSession.description` currently includes a vault ID and key
 byte count. Production host code must never log or reflect this lower-level
@@ -946,7 +948,9 @@ The minimum future test suite is:
 39. Reference-capture fixtures and cache side effects remain isolated from the
     production host.
 40. Diagnostics contain no fake vault ID, key length, path, query, job key,
-    private sentinel, or credential-availability signal.
+    private sentinel, or credential-availability signal, including for
+    internal-operation correlation; correlation tests accept only opaque
+    process-local operation tokens or fixed categories.
 41. App-entry replacement is rejected unless all matrix blockers have
     completed tests and review evidence.
 
