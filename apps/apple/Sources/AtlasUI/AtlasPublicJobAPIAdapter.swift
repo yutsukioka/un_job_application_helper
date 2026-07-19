@@ -175,6 +175,20 @@ public actor AtlasAPIClientPublicJobAdapter:
 }
 
 enum AtlasProductionPublicProjection {
+    private static let excludedPublicDetailSectionTitles: Set<String> = {
+        let canonicalTitles = [
+            "Job Record",
+            "Locations",
+            "Source Features",
+            "Raw Source Data",
+        ]
+        return Set(
+            canonicalTitles.map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
+        )
+    }()
+
     static func health(
         _ value: AtlasHealthSummary
     ) throws(AtlasPublicJobServiceError) -> AtlasPublicServiceHealth {
@@ -363,6 +377,12 @@ enum AtlasProductionPublicProjection {
             components.append(description)
         }
         for section in detail.displaySections {
+            let normalizedTitle = section.title
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if excludedPublicDetailSectionTitles.contains(normalizedTitle) {
+                continue
+            }
             if let body = trimmed(section.body) {
                 components.append(body)
             }

@@ -137,8 +137,23 @@ Before a successful issuance, or after eviction, detail fails as
 same public job ID. The result reuses the previously issued safe projection so
 an upstream detail response cannot replace list identity or presentation.
 
-Public detail text is built only from non-empty reviewed description, section
-body, and row-value fields. A response with no usable public text fails closed.
+Public detail text may include the non-empty reviewed top-level description and
+the bodies and row values of ordinary candidate-facing sections. Complete
+metadata and raw sections are excluded before either their body or rows are
+examined. The canonical excluded titles are:
+
+- `Job Record`;
+- `Locations`;
+- `Source Features`;
+- `Raw Source Data`.
+
+Matching trims surrounding whitespace, normalizes case deterministically, and
+compares the entire normalized title. It does not use substring, fuzzy,
+body-content, row-value, or sentinel scanning. A candidate-facing title such as
+`Raw Source Data Guidance` therefore remains eligible. If filtering leaves no
+candidate-facing component, detail fails as `invalidResponse`; excluded
+metadata is never used as a fallback. Provenance authorization and returned
+identity validation are unchanged.
 
 ## Bounded Provenance and Eviction
 
@@ -365,6 +380,9 @@ The focused suite covers:
 - deterministic dates;
 - bounded FIFO provenance;
 - detail identity and issuance;
+- normalized exact-title exclusion of complete metadata/raw sections, including
+  their bodies and rows, while retaining ordinary candidate-facing prose;
+- metadata-only detail fail-closed behavior;
 - error sentinel redaction;
 - missing, valid, malformed, private-key, unknown-key, path, symlink, and file
   status snapshot cases;
@@ -384,7 +402,7 @@ The full Swift suite remains the regression gate.
 | Concrete public-search adapter | Implemented |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
-| Public-detail provenance | Implemented with bounded in-memory constraints |
+| Public-detail provenance and candidate-facing projection | Implemented with bounded in-memory constraints and normalized metadata-section exclusion |
 | Detail cache while locked | Blocked |
 | Vault-selection contract | Implemented |
 | Single-vault Keychain registry | Implemented |

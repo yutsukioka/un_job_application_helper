@@ -559,6 +559,230 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(countsAfterDetail.detail, 1)
     }
 
+    func testDetailExcludesCompleteCanonicalMetadataSections() async throws {
+        let metadataSections = [
+            "Job Record",
+            "Locations",
+            "Source Features",
+            "Raw Source Data",
+        ].enumerated().map { index, title in
+            AtlasDetailSection(
+                title: title,
+                body: "FAKE_METADATA_BODY_\(index)_DO_NOT_PROJECT",
+                rows: [
+                    AtlasDetailRow(
+                        label: "FAKE_METADATA_LABEL_\(index)_DO_NOT_PROJECT",
+                        value: "FAKE_METADATA_VALUE_\(index)_DO_NOT_PROJECT"
+                    ),
+                ]
+            )
+        }
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: "FAKE_SAFE_TOP_LEVEL_DESCRIPTION",
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Candidate Requirements",
+                    body: "FAKE_SAFE_CANDIDATE_BODY",
+                    rows: [
+                        AtlasDetailRow(
+                            label: "Experience",
+                            value: "FAKE_SAFE_CANDIDATE_ROW_VALUE"
+                        ),
+                    ]
+                ),
+            ] + metadataSections
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [Self.publicJobID: detail]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        let search = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        let result = try await adapter.detail(for: reference)
+
+        XCTAssertEqual(result.reference, reference)
+        XCTAssertEqual(result.job, search.jobs[0])
+        XCTAssertEqual(
+            result.detailText,
+            [
+                "FAKE_SAFE_TOP_LEVEL_DESCRIPTION",
+                "FAKE_SAFE_CANDIDATE_BODY",
+                "FAKE_SAFE_CANDIDATE_ROW_VALUE",
+            ].joined(separator: "\n\n")
+        )
+        for index in metadataSections.indices {
+            XCTAssertFalse(
+                result.detailText.contains(
+                    "FAKE_METADATA_BODY_\(index)_DO_NOT_PROJECT"
+                )
+            )
+            XCTAssertFalse(
+                result.detailText.contains(
+                    "FAKE_METADATA_LABEL_\(index)_DO_NOT_PROJECT"
+                )
+            )
+            XCTAssertFalse(
+                result.detailText.contains(
+                    "FAKE_METADATA_VALUE_\(index)_DO_NOT_PROJECT"
+                )
+            )
+        }
+        for title in [
+            "Job Record",
+            "Locations",
+            "Source Features",
+            "Raw Source Data",
+        ] {
+            XCTAssertFalse(result.detailText.contains(title))
+        }
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
+    func testDetailMetadataTitleMatchingIsNormalizedAndExact() async throws {
+        let excludedVariants = [
+            " job record ",
+            "LOCATIONS",
+            "Source Features ",
+            " raw source data",
+        ].enumerated().map { index, title in
+            AtlasDetailSection(
+                title: title,
+                body: "FAKE_NORMALIZED_METADATA_BODY_\(index)",
+                rows: [
+                    AtlasDetailRow(
+                        label: "FAKE_NORMALIZED_METADATA_LABEL_\(index)",
+                        value: "FAKE_NORMALIZED_METADATA_VALUE_\(index)"
+                    ),
+                ]
+            )
+        }
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: nil,
+            displaySections: excludedVariants + [
+                AtlasDetailSection(
+                    title: "Raw Source Data Guidance",
+                    body: "FAKE_SAFE_SIMILAR_TITLE_BODY",
+                    rows: [
+                        AtlasDetailRow(
+                            label: "Guidance",
+                            value: "FAKE_SAFE_SIMILAR_TITLE_ROW"
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [Self.publicJobID: detail]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        let result = try await adapter.detail(for: reference)
+
+        XCTAssertEqual(
+            result.detailText,
+            [
+                "FAKE_SAFE_SIMILAR_TITLE_BODY",
+                "FAKE_SAFE_SIMILAR_TITLE_ROW",
+            ].joined(separator: "\n\n")
+        )
+        for index in excludedVariants.indices {
+            XCTAssertFalse(
+                result.detailText.contains(
+                    "FAKE_NORMALIZED_METADATA_BODY_\(index)"
+                )
+            )
+            XCTAssertFalse(
+                result.detailText.contains(
+                    "FAKE_NORMALIZED_METADATA_VALUE_\(index)"
+                )
+            )
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
+    func testDetailWithOnlyMetadataSectionsFailsClosed() async throws {
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: " \n ",
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Job Record",
+                    body: "FAKE_METADATA_ONLY_BODY",
+                    rows: [
+                        AtlasDetailRow(
+                            label: "FAKE_METADATA_ONLY_LABEL",
+                            value: "FAKE_METADATA_ONLY_VALUE"
+                        ),
+                    ]
+                ),
+                AtlasDetailSection(
+                    title: "Raw Source Data",
+                    body: "FAKE_METADATA_ONLY_RAW_BODY"
+                ),
+            ]
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [Self.publicJobID: detail]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        await assertPublicError(.invalidResponse) {
+            try await adapter.detail(for: reference)
+        }
+
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
     func testDetailRejectsMismatchedReturnedIdentity() async throws {
         let response = try makeSearchResponse(
             jobs: [makeJob(id: Self.publicJobID)],
@@ -1846,7 +2070,8 @@ private func makeSearchResponse(
 private func makeDetail(
     id: String,
     title: String = "Public role",
-    description: String? = "Public detail"
+    description: String? = "Public detail",
+    displaySections: [AtlasDetailSection] = []
 ) -> AtlasJobDetail {
     AtlasJobDetail(
         jobKey: id,
@@ -1859,7 +2084,7 @@ private func makeDetail(
         applyURL: nil,
         sourceURL: nil,
         deadlineInfo: nil,
-        displaySections: []
+        displaySections: displaySections
     )
 }
 
