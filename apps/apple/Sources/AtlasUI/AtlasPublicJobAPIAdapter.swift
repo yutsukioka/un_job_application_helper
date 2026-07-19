@@ -178,6 +178,7 @@ enum AtlasProductionPublicProjection {
     private static let excludedPublicDetailSectionTitles: Set<String> = {
         let canonicalTitles = [
             "Job Record",
+            "Classification",
             "Locations",
             "Source Features",
             "Raw Source Data",

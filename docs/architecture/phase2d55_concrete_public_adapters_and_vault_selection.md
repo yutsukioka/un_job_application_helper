@@ -143,10 +143,14 @@ metadata and raw sections are excluded before either their body or rows are
 examined. The canonical excluded titles are:
 
 - `Job Record`;
+- `Classification`;
 - `Locations`;
 - `Source Features`;
 - `Raw Source Data`.
 
+The backend `Classification` section is a complete classification database row
+and can contain internal taxonomy and evidence fields. It is not the narrow,
+reviewed classification summary rendered from safe public search fields.
 Matching trims surrounding whitespace, normalizes case deterministically, and
 compares the entire normalized title. It does not use substring, fuzzy,
 body-content, row-value, or sentinel scanning. A candidate-facing title such as

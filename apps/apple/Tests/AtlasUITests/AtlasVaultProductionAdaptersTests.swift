@@ -562,6 +562,7 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
     func testDetailExcludesCompleteCanonicalMetadataSections() async throws {
         let metadataSections = [
             "Job Record",
+            "Classification",
             "Locations",
             "Source Features",
             "Raw Source Data",
@@ -643,6 +644,7 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
         for title in [
             "Job Record",
+            "Classification",
             "Locations",
             "Source Features",
             "Raw Source Data",
@@ -658,6 +660,7 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
     func testDetailMetadataTitleMatchingIsNormalizedAndExact() async throws {
         let excludedVariants = [
             " job record ",
+            " CLASSIFICATION ",
             "LOCATIONS",
             "Source Features ",
             " raw source data",
