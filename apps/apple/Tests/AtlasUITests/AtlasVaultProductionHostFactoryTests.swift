@@ -158,7 +158,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         let reference = try AtlasPublicJobReference(
             publicJobID: Self.fakeJobID
         )
-        let detail = AtlasPublicJobDetailResult(
+        let detail = try AtlasPublicJobDetailResult(
             reference: reference,
             job: publicJob(),
             detailText: "FAKE_PUBLIC_DETAIL_TEXT_DO_NOT_LOG"
@@ -221,6 +221,25 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             )
         )
         XCTAssertThrowsError(try AtlasPublicJobReference(publicJobID: ""))
+        XCTAssertThrowsError(
+            try AtlasPublicJobDetailResult(
+                reference: AtlasPublicJobReference(
+                    publicJobID: Self.fakeJobID
+                ),
+                job: AtlasLockedPublicJob(
+                    id: "FAKE_DIFFERENT_PUBLIC_JOB",
+                    title: "Different public role",
+                    organization: "Fake Public Organization",
+                    location: "Remote"
+                ),
+                detailText: "Fake mismatched public detail"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasPublicJobServiceError,
+                .invalidResponse
+            )
+        }
     }
 
     func testPublicProtocolFakePerformsOnlyPublicOperations() async throws {
@@ -882,7 +901,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     }
 
     private func publicDetail() throws -> AtlasPublicJobDetailResult {
-        AtlasPublicJobDetailResult(
+        try AtlasPublicJobDetailResult(
             reference: try AtlasPublicJobReference(
                 publicJobID: Self.fakeJobID
             ),

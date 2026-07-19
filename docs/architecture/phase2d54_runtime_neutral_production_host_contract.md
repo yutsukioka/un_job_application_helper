@@ -116,7 +116,8 @@ transport authority.
 `AtlasPublicJobReference` is a distinct redacted value used by the public
 detail operation. Its raw value is module-internal, so it is not a general UI
 diagnostic field. `AtlasPublicJobDetailResult` contains only the reference, one
-safe public job value, and public detail text.
+safe public job value, and public detail text. Construction rejects a result
+whose public job ID does not match the requested reference.
 
 This phase does not implement provenance or a concrete detail adapter. It also
 does not grant detail-cache restore, warmup, or write authority.

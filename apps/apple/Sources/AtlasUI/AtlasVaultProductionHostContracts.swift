@@ -286,7 +286,10 @@ public struct AtlasPublicJobDetailResult:
         reference: AtlasPublicJobReference,
         job: AtlasLockedPublicJob,
         detailText: String
-    ) {
+    ) throws {
+        guard reference.rawValue == job.id else {
+            throw AtlasPublicJobServiceError.invalidResponse
+        }
         self.reference = reference
         self.job = job
         self.detailText = detailText
