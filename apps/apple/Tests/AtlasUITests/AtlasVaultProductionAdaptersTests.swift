@@ -82,6 +82,15 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         let missingHealth = try await missing.health()
         XCTAssertEqual(missingHealth.availability, .unavailable)
 
+        let missingDatabaseClient = RecordingPublicJobClient(
+            health: makeHealth(status: "missing_db")
+        )
+        let missingDatabase = AtlasAPIClientPublicJobAdapter(
+            client: missingDatabaseClient
+        )
+        let missingDatabaseHealth = try await missingDatabase.health()
+        XCTAssertEqual(missingDatabaseHealth.availability, .unavailable)
+
         let unknownClient = RecordingPublicJobClient(
             health: makeHealth(status: "FAKE_UNKNOWN_STATUS")
         )
@@ -298,6 +307,40 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
         let counts = await client.counts()
         XCTAssertEqual(counts, .init(sources: 2))
+    }
+
+    func testSourcesMapDocumentedBackendHealthStatuses() async throws {
+        let statuses: [(String, AtlasPublicServiceAvailability)] = [
+            ("ok_empty", .available),
+            ("warning", .unavailable),
+            ("degraded", .unavailable),
+            ("issue", .unavailable),
+        ]
+        let sourceValues = statuses.enumerated().map { index, item in
+            AtlasSourceSummary(
+                sourceID: "public_source_\(index)",
+                organization: "Public Organization \(index)",
+                totalJobs: 1,
+                openJobs: 1,
+                lastSeenAt: nil,
+                healthStatus: item.0,
+                observedAt: nil,
+                detailAttempted: nil,
+                detailFailed: nil,
+                missingTransitionAllowed: nil
+            )
+        }
+        let client = RecordingPublicJobClient(
+            sourceResponses: [AtlasSourcesResponse(sources: sourceValues)]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let projected = try await adapter.sources()
+
+        XCTAssertEqual(
+            projected.map(\.availability),
+            statuses.map(\.1)
+        )
     }
 
     func testUpdatesUseCheckedChangedCountAndRejectNegativeOrOverflow()
@@ -552,6 +595,19 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             String(describing: restorer),
             "AtlasApplicationSupportPublicSnapshotRestorer(<redacted>)"
         )
+    }
+
+    func testFoundationSnapshotReaderMapsActualMissingFileToMissing() throws {
+        let reader = AtlasFoundationPublicSnapshotFileReader()
+        let missingURL = URL(
+            fileURLWithPath: NSTemporaryDirectory(),
+            isDirectory: true
+        ).appendingPathComponent(
+            "atlas-phase2d55-missing-\(UUID().uuidString)",
+            isDirectory: false
+        )
+
+        XCTAssertEqual(try reader.status(at: missingURL), .missing)
     }
 
     func testMissingSnapshotReturnsNilAndUsesExactReviewedPath() async throws {

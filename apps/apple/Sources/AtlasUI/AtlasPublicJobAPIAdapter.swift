@@ -362,9 +362,17 @@ enum AtlasProductionPublicProjection {
             throw .invalidResponse
         }
         switch normalized {
-        case "ok", "healthy", "available":
+        case "ok", "ok_empty", "healthy", "available":
             return .available
-        case "unavailable", "down", "error", "disabled":
+        case
+            "missing_db",
+            "warning",
+            "degraded",
+            "issue",
+            "unavailable",
+            "down",
+            "error",
+            "disabled":
             return .unavailable
         default:
             throw .invalidResponse

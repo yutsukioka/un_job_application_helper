@@ -101,9 +101,10 @@ API and snapshot projections share the same implementation.
 
 ## Public Health Mapping
 
-Reviewed healthy values map to `available`. Reviewed unavailable values and
-missing optional service status map to `unavailable`. Unknown values fail as
-`invalidResponse`.
+Reviewed healthy values `ok`, `ok_empty`, `healthy`, and `available` map to
+`available`. Reviewed unavailable values `missing_db`, `warning`, `degraded`,
+`issue`, `unavailable`, `down`, `error`, and `disabled`, plus missing optional
+source status, map to `unavailable`. Unknown values fail as `invalidResponse`.
 
 Only public availability, open-job count, enabled-source count, and parsed
 last-sync time survive. Database path, schema version, endpoint details, and
@@ -175,8 +176,10 @@ root.
 
 ## Missing Snapshot
 
-A missing snapshot returns `nil`. Restore creates no directory or file and
-does not attempt a read.
+A missing snapshot returns `nil`. The Foundation reader recognizes both the
+general Cocoa no-such-file code and the file-read no-such-file code emitted by
+`attributesOfItem(atPath:)`. Restore creates no directory or file and does not
+attempt a read.
 
 ## Private and Legacy Key Rejection
 

@@ -43,8 +43,17 @@ struct AtlasFoundationPublicSnapshotFileReader:
             default:
                 return .nonRegular
             }
-        } catch let error as CocoaError
-        where error.code == .fileNoSuchFile {
+        } catch let error as NSError {
+            let missingFileCodes: Set<Int> = [
+                CocoaError.Code.fileNoSuchFile.rawValue,
+                CocoaError.Code.fileReadNoSuchFile.rawValue,
+            ]
+            guard
+                error.domain == NSCocoaErrorDomain,
+                missingFileCodes.contains(error.code)
+            else {
+                throw .unavailable
+            }
             return .missing
         } catch {
             throw .unavailable
