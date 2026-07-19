@@ -14,6 +14,27 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         "FAKE_HTTP_BODY_DO_NOT_LEAK"
     private static let pathSentinel =
         "FAKE_SNAPSHOT_PATH_DO_NOT_LEAK"
+    private static let repositoryScanIgnoredDirectoryNames: Set<String> = [
+        ".agents",
+        ".build",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".swiftpm",
+        ".venv",
+        "DerivedData",
+        "__pycache__",
+        "bak",
+        "build",
+        "dist",
+        "inputs",
+        "logs",
+        "node_modules",
+        "output",
+        "private",
+        "tmp",
+        "xcuserdata",
+    ]
 
     // MARK: - Public API adapter
 
@@ -599,13 +620,12 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
 
     func testFoundationSnapshotReaderMapsActualMissingFileToMissing() throws {
         let reader = AtlasFoundationPublicSnapshotFileReader()
-        let missingURL = URL(
-            fileURLWithPath: NSTemporaryDirectory(),
-            isDirectory: true
-        ).appendingPathComponent(
-            "atlas-phase2d55-missing-\(UUID().uuidString)",
-            isDirectory: false
-        )
+        let missingURL = try AtlasVaultTestFileSystemSupport
+            .canonicalTemporaryRoot()
+            .appendingPathComponent(
+                "atlas-phase2d55-missing-\(UUID().uuidString)",
+                isDirectory: false
+            )
 
         XCTAssertEqual(try reader.status(at: missingURL), .missing)
     }
@@ -1231,6 +1251,41 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         )
     }
 
+    func testRepositoryEnumerationSkipsIgnoredLocalDirectories() {
+        for directory in [
+            ".git",
+            "private",
+            "tmp",
+            "logs",
+            ".venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".mypy_cache",
+            ".build",
+            ".swiftpm",
+            "DerivedData",
+        ] {
+            XCTAssertTrue(
+                shouldSkipRepositoryDirectory(
+                    URL(
+                        fileURLWithPath: "/FAKE_REPOSITORY/\(directory)",
+                        isDirectory: true
+                    )
+                ),
+                directory
+            )
+        }
+        XCTAssertFalse(
+            shouldSkipRepositoryDirectory(
+                URL(
+                    fileURLWithPath: "/FAKE_REPOSITORY/apps",
+                    isDirectory: true
+                )
+            )
+        )
+    }
+
     // MARK: - Helpers
 
     private func assertPublicError<T>(
@@ -1435,7 +1490,7 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
         var files: [URL] = []
         for case let url as URL in enumerator {
-            if url.lastPathComponent == ".git" {
+            if shouldSkipRepositoryDirectory(url) {
                 if url.hasDirectoryPath {
                     enumerator.skipDescendants()
                 }
@@ -1444,6 +1499,16 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             files.append(url)
         }
         return files
+    }
+
+    private func shouldSkipRepositoryDirectory(_ url: URL) -> Bool {
+        if url.lastPathComponent == ".git" {
+            return true
+        }
+        return url.hasDirectoryPath
+            && Self.repositoryScanIgnoredDirectoryNames.contains(
+                url.lastPathComponent
+            )
     }
 }
 
