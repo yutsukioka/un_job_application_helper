@@ -1217,6 +1217,20 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
     }
 
+    func testRepositoryRootAcceptsTrackedMarkerWithoutGitMetadata() throws {
+        let expectedRoot = URL(fileURLWithPath: "/FAKE_SOURCE_ARCHIVE")
+        let nested = expectedRoot
+            .appendingPathComponent("apps/apple/Tests/AtlasUITests")
+        let root = try repositoryRoot(startingAt: nested) { path in
+            path == expectedRoot.appendingPathComponent("AGENTS.md").path
+        }
+
+        XCTAssertEqual(
+            root.standardizedFileURL.path,
+            expectedRoot.standardizedFileURL.path
+        )
+    }
+
     // MARK: - Helpers
 
     private func assertPublicError<T>(
@@ -1385,13 +1399,19 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    private func repositoryRoot() throws -> URL {
-        var candidate = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
+    private func repositoryRoot(
+        startingAt start: URL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent(),
+        fileExists: (String) -> Bool = {
+            FileManager.default.fileExists(atPath: $0)
+        }
+    ) throws -> URL {
+        var candidate = start
         while candidate.path != "/" {
-            if FileManager.default.fileExists(
-                atPath: candidate.appendingPathComponent(".git").path
-            ) {
+            let hasRootMarker = [".git", "AGENTS.md"].contains { marker in
+                fileExists(candidate.appendingPathComponent(marker).path)
+            }
+            if hasRootMarker {
                 return candidate
             }
             candidate.deleteLastPathComponent()
