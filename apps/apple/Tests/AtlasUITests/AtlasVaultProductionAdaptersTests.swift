@@ -221,6 +221,194 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 1))
     }
 
+    func testStablePublicDatesPreserveExactUTCOutputAcrossProjections()
+        throws
+    {
+        let cases: [(date: Date, expected: String)] = [
+            (
+                Date(timeIntervalSince1970: 0),
+                "1970-01-01T00:00:00Z"
+            ),
+            (
+                Date(timeIntervalSince1970: 1_710_032_398),
+                "2024-03-10T00:59:58Z"
+            ),
+            (
+                Date(timeIntervalSince1970: 1_710_028_799),
+                "2024-03-09T23:59:59Z"
+            ),
+            (
+                Date(timeIntervalSince1970: 1_710_032_398.987_654),
+                "2024-03-10T00:59:58Z"
+            ),
+        ]
+        let jobs = cases.enumerated().map { index, item in
+            makeJob(
+                id: "FAKE_STABLE_DATE_JOB_\(index)",
+                closingDate: item.date
+            )
+        }
+        let expected = cases.map(\.expected)
+
+        let direct = try jobs.map(AtlasProductionPublicProjection.job)
+        XCTAssertEqual(
+            direct.map(\.closingDateText),
+            expected.map(Optional.some)
+        )
+
+        let response = try makeSearchResponse(
+            jobs: jobs,
+            total: jobs.count,
+            limit: jobs.count,
+            offset: 0
+        )
+        let live = try AtlasProductionPublicProjection.searchResult(
+            response,
+            expectedLimit: jobs.count,
+            expectedOffset: 0
+        )
+        let snapshot = try AtlasProductionPublicProjection.snapshotJobs(
+            response
+        )
+
+        XCTAssertEqual(
+            live.jobs.map(\.closingDateText),
+            expected.map(Optional.some)
+        )
+        XCTAssertEqual(
+            snapshot.map(\.closingDateText),
+            expected.map(Optional.some)
+        )
+        XCTAssertEqual(
+            live.jobs.map(\.closingDateText),
+            snapshot.map(\.closingDateText)
+        )
+
+        let nilDate = try AtlasProductionPublicProjection.job(
+            makeJob(id: "FAKE_NIL_DATE_JOB", closingDate: nil)
+        )
+        XCTAssertNil(nilDate.closingDateText)
+    }
+
+    func testStablePublicDateProjectionHandlesTenThousandSnapshotRows()
+        throws
+    {
+        let closingDate = Date(timeIntervalSince1970: 1_710_032_398.987_654)
+        let jobs = (0..<10_000).map { index in
+            makeJob(
+                id: String(format: "FAKE_LARGE_JOB_%05d", index),
+                closingDate: closingDate
+            )
+        }
+        let response = try makeSearchResponse(
+            jobs: jobs,
+            total: jobs.count,
+            limit: jobs.count,
+            offset: 0
+        )
+
+        let projected = try AtlasProductionPublicProjection.snapshotJobs(
+            response
+        )
+
+        XCTAssertEqual(projected.count, jobs.count)
+        XCTAssertEqual(Set(projected.map(\.id)).count, jobs.count)
+        XCTAssertEqual(projected.first?.id, "FAKE_LARGE_JOB_00000")
+        XCTAssertEqual(projected.last?.id, "FAKE_LARGE_JOB_09999")
+        XCTAssertTrue(
+            projected.allSatisfy {
+                $0.closingDateText == "2024-03-10T00:59:58Z"
+            }
+        )
+    }
+
+    func testStablePublicDateProjectionIsDeterministicUnderConcurrency()
+        async throws
+    {
+        let taskCount = 16
+        let iterationsPerTask = 512
+        let expected = "2024-03-10T00:59:58Z"
+        let closingDate = Date(
+            timeIntervalSince1970: 1_710_032_398.987_654
+        )
+
+        let batches = try await withThrowingTaskGroup(
+            of: [String].self,
+            returning: [[String]].self
+        ) { group in
+            for taskIndex in 0..<taskCount {
+                group.addTask {
+                    var values: [String] = []
+                    values.reserveCapacity(iterationsPerTask)
+                    for index in 0..<iterationsPerTask {
+                        let projected = try AtlasProductionPublicProjection.job(
+                            makeJob(
+                                id: "FAKE_CONCURRENT_\(taskIndex)_\(index)",
+                                closingDate: closingDate
+                            )
+                        )
+                        guard let text = projected.closingDateText else {
+                            throw AtlasPublicJobServiceError.invalidResponse
+                        }
+                        values.append(text)
+                    }
+                    return values
+                }
+            }
+            var values: [[String]] = []
+            for try await result in group {
+                values.append(result)
+            }
+            return values
+        }
+
+        XCTAssertEqual(batches.count, taskCount)
+        XCTAssertEqual(
+            batches.reduce(0) { $0 + $1.count },
+            taskCount * iterationsPerTask
+        )
+        XCTAssertTrue(
+            batches.joined().allSatisfy { $0 == expected }
+        )
+    }
+
+    func testStableDateTextUsesOneReusableImmutableFormatStyle() throws {
+        let adapterSource = try source("AtlasPublicJobAPIAdapter.swift")
+        let functionStart = try XCTUnwrap(
+            adapterSource.range(
+                of: "private static func stableDateText(_ date: Date)"
+            )
+        )
+        let functionAndRemainder = adapterSource[functionStart.lowerBound...]
+        let functionEnd = try XCTUnwrap(
+            functionAndRemainder.range(
+                of: "\n    private static func trimmed"
+            )
+        )
+        let functionSource = String(
+            functionAndRemainder[..<functionEnd.lowerBound]
+        )
+
+        XCTAssertFalse(functionSource.contains("ISO8601DateFormatter()"))
+        XCTAssertTrue(
+            adapterSource.contains(
+                "private static let stablePublicDateFormat"
+                    + " = Date.ISO8601FormatStyle"
+            )
+        )
+        XCTAssertTrue(
+            adapterSource.contains("includingFractionalSeconds: false")
+        )
+        XCTAssertTrue(adapterSource.contains("timeZone: .gmt"))
+        XCTAssertTrue(
+            functionSource.contains(
+                "date.formatted(stablePublicDateFormat)"
+            )
+        )
+        XCTAssertFalse(adapterSource.contains("nonisolated(unsafe)"))
+        XCTAssertFalse(adapterSource.contains("@unchecked Sendable"))
+    }
+
     func testSearchRejectsDuplicatesAndInconsistentPagination() async throws {
         let duplicate = try makeSearchResponse(
             jobs: [

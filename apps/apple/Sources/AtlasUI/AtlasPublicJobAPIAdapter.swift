@@ -175,6 +175,11 @@ public actor AtlasAPIClientPublicJobAdapter:
 }
 
 enum AtlasProductionPublicProjection {
+    private static let stablePublicDateFormat = Date.ISO8601FormatStyle(
+        includingFractionalSeconds: false,
+        timeZone: .gmt
+    )
+
     private static let excludedPublicDetailSectionTitles: Set<String> = {
         let canonicalTitles = [
             "Job Record",
@@ -446,10 +451,7 @@ enum AtlasProductionPublicProjection {
     }
 
     private static func stableDateText(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        date.formatted(stablePublicDateFormat)
     }
 
     private static func trimmed(_ value: String?) -> String? {

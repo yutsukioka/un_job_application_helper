@@ -102,9 +102,17 @@ required values, and inconsistent pagination also fail closed.
 
 ## Stable Public Date Representation
 
-Closing dates use a fixed UTC ISO-8601 internet date representation. This is
-independent of device locale, user calendar, and time-zone display settings.
-API and snapshot projections share the same implementation.
+Closing dates use one static, immutable `Date.ISO8601FormatStyle` configured
+once for UTC internet date and time with fractional seconds disabled. Per-job
+projection only applies that reusable value; it does not construct or configure
+a formatter for each row. The value-style primitive has no shared mutable
+formatter state and is safe to use concurrently under Swift's strict
+concurrency model.
+
+Output remains `YYYY-MM-DDTHH:MM:SSZ`, independent of device locale, user
+calendar, and time-zone display settings. Subsecond input is represented
+without fractional seconds, preserving the reviewed contract. Live API search
+and public-snapshot restore share the same projection.
 
 ## Public Health Mapping
 
@@ -374,6 +382,13 @@ Tests were then expanded to cover public projection, provenance, fail-closed
 snapshot behavior, Keychain metadata isolation, fixed errors, side effects,
 source guards, artifacts, and exact scope.
 
+Review-fix cycle 8 first added a structural regression that failed while
+`stableDateText(_:)` constructed an `ISO8601DateFormatter` per call. Exact UTC
+output, concurrent use, and a 10,000-row fake snapshot batch were also covered
+before the immutable reusable format style was introduced. Optimized
+before/after benchmark evidence is recorded outside the repository; wall-clock
+timing is deliberately not a CI correctness threshold.
+
 ## Test Coverage
 
 The focused suite covers:
@@ -381,7 +396,11 @@ The focused suite covers:
 - construction call counts;
 - health/search/source/update/detail mapping;
 - non-open row, decoder-fallback, duplicate, and pagination validation;
-- deterministic dates;
+- exact deterministic UTC dates for epoch, nonzero-time, day-boundary, and
+  subsecond inputs;
+- identical live-search and snapshot date projection;
+- immutable reusable date-format structure and concurrent deterministic use;
+- 10,000-row fake snapshot date projection without a timing threshold;
 - bounded FIFO provenance;
 - detail identity and issuance;
 - normalized exact-title exclusion of complete metadata/raw sections, including
