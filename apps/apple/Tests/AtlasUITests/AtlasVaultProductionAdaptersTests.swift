@@ -3,6 +3,43 @@ import Security
 import XCTest
 @testable import AtlasUI
 
+private struct TrackedSourceRegistryRecord {
+    let id: String
+    let name: String
+    let enabled: Bool
+    let atsFamily: String
+    let adapter: String?
+    let outputSlug: String
+
+    var auditDescription: String {
+        let adapterValue = adapter ?? "-"
+        return "\(id) [name=\(name), enabled=\(enabled), "
+            + "ats_family=\(atsFamily), adapter=\(adapterValue), "
+            + "output_slug=\(outputSlug)]"
+    }
+}
+
+private struct TrackedSourceRegistryRecordBuilder {
+    let id: String
+    var name: String?
+    var enabled: Bool?
+    var atsFamily: String?
+    var adapter: String?
+    var outputSlug: String?
+}
+
+private struct TrackedRegistryAuditException {
+    let identityInput: String
+    let infrastructureTokens: Set<String>
+    let rationale: String
+}
+
+private struct RegistrySourceIDAudit {
+    let identityInput: String
+    let infrastructureTokens: Set<String>
+    let usesException: Bool
+}
+
 final class AtlasVaultProductionAdaptersTests: XCTestCase {
     private static let publicJobID = "PUBLIC_JOB_001"
     private static let secondPublicJobID = "PUBLIC_JOB_002"
@@ -14,6 +51,20 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         "FAKE_HTTP_BODY_DO_NOT_LEAK"
     private static let pathSentinel =
         "FAKE_SNAPSHOT_PATH_DO_NOT_LEAK"
+    private static let trackedSourceRegistryRelativePath =
+        "packages/jobagg/config/organizations.yaml"
+    private static let trackedRegistryAuditExceptions: [
+        String: TrackedRegistryAuditException
+    ] = [
+        "councilofeurope_talents": TrackedRegistryAuditException(
+            identityInput: "councilofeurope",
+            infrastructureTokens: ["talents"],
+            rationale:
+                "The registry name identifies Council of Europe while "
+                + "ats_family coe_talents and adapter static_html identify "
+                + "the trailing talents portal token."
+        ),
+    ]
     private static let repositoryScanIgnoredDirectoryNames: Set<String> = [
         ".agents",
         ".build",
@@ -234,9 +285,30 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
                 expected: "World Food Programme"
             ),
             (raw: "unicef-pageup", expected: "UNICEF"),
+            (
+                raw: "opcw_talentsoft_candidatespace",
+                expected: "OPCW"
+            ),
+            (raw: "interpol_jobs2web", expected: "Interpol"),
+            (raw: "ideglobal_workable", expected: "Ideglobal"),
+            (raw: "unaids_sharepoint", expected: "UNAIDS"),
+            (
+                raw: "councilofeurope_talents",
+                expected: "Councilofeurope"
+            ),
         ]
         let forbiddenTokens: Set<String> = [
-            "pageup", "oracle", "hcm", "uvp", "workday",
+            "pageup",
+            "oracle",
+            "hcm",
+            "uvp",
+            "workday",
+            "talentsoft",
+            "candidatespace",
+            "jobs2web",
+            "workable",
+            "sharepoint",
+            "talents",
         ]
 
         for (index, item) in cases.enumerated() {
@@ -351,6 +423,26 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             (
                 raw: "hcmuseum_collective",
                 expected: "Hcmuseum Collective"
+            ),
+            (
+                raw: "candidatespaceship_foundation",
+                expected: "Candidatespaceship Foundation"
+            ),
+            (
+                raw: "jobs2webinar_institute",
+                expected: "Jobs2webinar Institute"
+            ),
+            (
+                raw: "workableton_centre",
+                expected: "Workableton Centre"
+            ),
+            (
+                raw: "sharepointed_research_group",
+                expected: "Sharepointed Research Group"
+            ),
+            (
+                raw: "talentscape_collective",
+                expected: "Talentscape Collective"
             ),
         ]
 
@@ -869,6 +961,10 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             "oracle_hcm",
             "pageup_workday",
             "api_static",
+            "talentsoft_candidatespace",
+            "jobs2web",
+            "workable_sharepoint",
+            "talents",
             "---___",
             " \t ",
             "unknown_organization",
@@ -1069,6 +1165,166 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(sources: 1))
     }
 
+    func testSourcesRemoveRegistryAuditedPortalTokensAndPreserveIDs()
+        async throws
+    {
+        let cases = [
+            (
+                raw: "opcw_talentsoft_candidatespace",
+                expected: "OPCW",
+                forbidden: ["talentsoft", "candidatespace"]
+            ),
+            (
+                raw: "interpol_jobs2web",
+                expected: "Interpol",
+                forbidden: ["jobs2web"]
+            ),
+            (
+                raw: "ideglobal_workable",
+                expected: "Ideglobal",
+                forbidden: ["workable"]
+            ),
+            (
+                raw: "unaids_sharepoint",
+                expected: "UNAIDS",
+                forbidden: ["sharepoint"]
+            ),
+            (
+                raw: "councilofeurope_talents",
+                expected: "Councilofeurope",
+                forbidden: ["talents"]
+            ),
+        ]
+        let values = cases.enumerated().map { index, item in
+            makeSourceSummary(
+                sourceID: item.raw,
+                organization: item.raw,
+                totalJobs: index + 1,
+                openJobs: index + 1
+            )
+        }
+        let client = RecordingPublicJobClient(
+            sourceResponses: [AtlasSourcesResponse(sources: values)]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let sources = try await adapter.sources()
+
+        XCTAssertEqual(sources.map(\.sourceID), cases.map(\.raw))
+        XCTAssertEqual(sources.map(\.displayName), cases.map(\.expected))
+        for (source, item) in zip(sources, cases) {
+            let displayTokens = Set(
+                source.displayName
+                    .split(whereSeparator: \.isWhitespace)
+                    .map { $0.lowercased() }
+            )
+            XCTAssertTrue(
+                displayTokens.isDisjoint(with: Set(item.forbidden)),
+                item.raw
+            )
+            XCTAssertFalse(source.displayName.contains("_"), item.raw)
+            XCTAssertFalse(source.displayName.contains("-"), item.raw)
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(sources: 1))
+    }
+
+    func testTrackedSourceRegistryInfrastructureSuffixesAreCovered()
+        throws
+    {
+        let records = try trackedSourceRegistry()
+        XCTAssertFalse(records.isEmpty)
+        XCTAssertFalse(records.filter(\.enabled).isEmpty)
+        XCTAssertFalse(records.filter { !$0.enabled }.isEmpty)
+
+        var uncoveredTokens = Set<String>()
+        var nonDerivableSourceIDs = Set<String>()
+        var displayMismatches: [String] = []
+
+        for record in records {
+            let audit = try registrySourceIDAudit(for: record)
+            if audit.usesException {
+                nonDerivableSourceIDs.insert(record.id)
+            }
+            let projected = try AtlasProductionPublicProjection.source(
+                makeSourceSummary(
+                    sourceID: record.id,
+                    organization: record.id
+                )
+            )
+            let identityProjection =
+                try AtlasProductionPublicProjection.source(
+                    makeSourceSummary(
+                        sourceID: "FAKE_AUDIT_ID_\(record.id)",
+                        organization: "\(audit.identityInput)_api"
+                    )
+                )
+            let displayTokens = Set(
+                projected.displayName
+                    .split(whereSeparator: \.isWhitespace)
+                    .map { $0.lowercased() }
+            )
+            let survivingTokens = audit.infrastructureTokens.filter {
+                displayTokens.contains($0)
+            }
+            uncoveredTokens.formUnion(survivingTokens)
+            if projected.displayName != identityProjection.displayName {
+                displayMismatches.append(
+                    "\(record.auditDescription) projected "
+                        + "\(projected.displayName); expected identity "
+                        + "\(identityProjection.displayName)"
+                )
+            }
+
+            XCTAssertEqual(projected.sourceID, record.id)
+            XCTAssertFalse(projected.displayName.isEmpty, record.id)
+            XCTAssertFalse(projected.displayName.contains("_"), record.id)
+            XCTAssertFalse(projected.displayName.contains("-"), record.id)
+        }
+
+        XCTAssertEqual(
+            nonDerivableSourceIDs,
+            Set(Self.trackedRegistryAuditExceptions.keys)
+        )
+        XCTAssertTrue(
+            uncoveredTokens.isEmpty,
+            "Uncovered infrastructure tokens: "
+                + uncoveredTokens.sorted().joined(separator: ", ")
+        )
+        XCTAssertTrue(
+            displayMismatches.isEmpty,
+            "Configured source IDs retained infrastructure suffixes:\n"
+                + displayMismatches.joined(separator: "\n")
+        )
+    }
+
+    func testTrackedRegistryAuditIsTestOnlyAndProductionHasOneTokenPolicy()
+        throws
+    {
+        let adapterSource = try source("AtlasPublicJobAPIAdapter.swift")
+        let testSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(
+            adapterSource.contains(Self.trackedSourceRegistryRelativePath)
+        )
+        XCTAssertEqual(
+            testSource.components(
+                separatedBy: Self.trackedSourceRegistryRelativePath
+            ).count - 1,
+            1
+        )
+        XCTAssertEqual(
+            adapterSource.components(
+                separatedBy:
+                    "private static let candidateOrganizationInfrastructureTokens"
+            ).count - 1,
+            1
+        )
+    }
+
     func testSourceLabelsPreserveCandidateTextAndRemoveOnlyExactTokens()
         async throws
     {
@@ -1126,6 +1382,10 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             "",
             " \t\n ",
             "oracle_hcm",
+            "talentsoft_candidatespace",
+            "jobs2web",
+            "workable_sharepoint",
+            "talents",
             "---___",
             "Unknown organization",
         ]
@@ -1150,6 +1410,13 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             }
             let counts = await client.counts()
             XCTAssertEqual(counts, .init(sources: 1))
+            XCTAssertFalse(
+                String(reflecting: adapter).contains(organization)
+            )
+            XCTAssertFalse(
+                String(reflecting: AtlasPublicJobServiceError.invalidResponse)
+                    .contains(organization)
+            )
         }
     }
 
@@ -2540,6 +2807,104 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
     }
 
+    func testSnapshotPortalTokensMatchLiveSourceAndSearchProjection()
+        async throws
+    {
+        for item in [
+            (
+                raw: "opcw_talentsoft_candidatespace",
+                expected: "OPCW",
+                forbidden: ["talentsoft", "candidatespace"]
+            ),
+            (
+                raw: "interpol_jobs2web",
+                expected: "Interpol",
+                forbidden: ["jobs2web"]
+            ),
+        ] {
+            let liveClient = RecordingPublicJobClient(
+                searchResponses: [
+                    try makeSearchResponse(
+                        jobs: [
+                            makeJob(
+                                id: Self.publicJobID,
+                                organization: item.raw
+                            ),
+                        ],
+                        total: 1,
+                        limit: 1,
+                        offset: 0
+                    ),
+                ],
+                sourceResponses: [
+                    AtlasSourcesResponse(
+                        sources: [
+                            makeSourceSummary(
+                                sourceID: item.raw,
+                                organization: item.raw
+                            ),
+                        ]
+                    ),
+                ]
+            )
+            let liveAdapter = AtlasAPIClientPublicJobAdapter(client: liveClient)
+            let liveSearch = try await liveAdapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+            let liveSources = try await liveAdapter.sources()
+            let root = RecordingRootProvider(
+                outcome: .url(
+                    URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+                )
+            )
+            let reader = RecordingSnapshotFileReader(
+                status: .regularFile,
+                data: try snapshotData(
+                    replacingSourceID: item.raw,
+                    organization: item.raw,
+                    publicJobOrganization: item.raw
+                )
+            )
+            let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+                rootProvider: root,
+                fileReader: reader
+            )
+
+            let restoredValue = try await restorer.restore()
+            let restored = try XCTUnwrap(restoredValue)
+            let liveJob = try XCTUnwrap(liveSearch.jobs.first)
+            let liveSource = try XCTUnwrap(liveSources.first)
+            let restoredJob = try XCTUnwrap(restored.jobs.first)
+            let restoredSource = try XCTUnwrap(restored.sources.first)
+            let liveCounts = await liveClient.counts()
+
+            XCTAssertEqual(liveJob.organization, item.expected, item.raw)
+            XCTAssertEqual(liveSource.displayName, item.expected, item.raw)
+            XCTAssertEqual(restoredJob.organization, liveJob.organization)
+            XCTAssertEqual(restoredSource.displayName, liveSource.displayName)
+            XCTAssertEqual(restoredSource.sourceID, item.raw)
+            for token in item.forbidden {
+                XCTAssertFalse(
+                    restoredJob.organization.lowercased().contains(token),
+                    item.raw
+                )
+                XCTAssertFalse(
+                    restoredSource.displayName.lowercased().contains(token),
+                    item.raw
+                )
+            }
+            XCTAssertEqual(liveCounts, .init(search: 1, sources: 1))
+            XCTAssertEqual(root.callCount, 1)
+            XCTAssertEqual(
+                reader.counts,
+                .init(status: 2, resolve: 2, read: 1)
+            )
+            XCTAssertFalse(
+                try XCTUnwrap(reader.lastStatusURL).path.contains("JobDetails")
+            )
+        }
+    }
+
     func testSnapshotProjectionMatchesAPIProjection() async throws {
         let job = makeJob(
             id: Self.publicJobID,
@@ -3404,7 +3769,8 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
 
     private func snapshotData(
         replacingSourceID sourceID: String,
-        organization: String
+        organization: String,
+        publicJobOrganization: String? = nil
     ) throws -> Data {
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: validSnapshotData())
@@ -3419,6 +3785,19 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
                 "health_status": "ok",
             ],
         ]
+        if let publicJobOrganization {
+            var search = try XCTUnwrap(
+                object["searchResponse"] as? [String: Any]
+            )
+            var results = try XCTUnwrap(
+                search["results"] as? [[String: Any]]
+            )
+            var row = try XCTUnwrap(results.first)
+            row["organization"] = publicJobOrganization
+            results[0] = row
+            search["results"] = results
+            object["searchResponse"] = search
+        }
         return try JSONSerialization.data(
             withJSONObject: object,
             options: [.sortedKeys]
@@ -3516,6 +3895,203 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             .appendingPathComponent("apps/apple/Sources/AtlasUI")
             .appendingPathComponent(fileName)
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func trackedSourceRegistry() throws
+        -> [TrackedSourceRegistryRecord]
+    {
+        let registryURL = try repositoryRoot()
+            .appendingPathComponent(
+                Self.trackedSourceRegistryRelativePath,
+                isDirectory: false
+            )
+        let registryText = try String(
+            contentsOf: registryURL,
+            encoding: .utf8
+        )
+        var records: [TrackedSourceRegistryRecord] = []
+        var builder: TrackedSourceRegistryRecordBuilder?
+
+        for (offset, rawLine) in registryText.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).enumerated() {
+            let line = String(rawLine)
+            if line.hasPrefix("  - id: ") {
+                if let builder {
+                    records.append(
+                        try trackedSourceRegistryRecord(from: builder)
+                    )
+                }
+                builder = TrackedSourceRegistryRecordBuilder(
+                    id: try trackedRegistryScalar(
+                        line,
+                        prefix: "  - id: ",
+                        lineNumber: offset + 1
+                    )
+                )
+                continue
+            }
+            guard builder != nil else {
+                continue
+            }
+            if line.hasPrefix("    name: ") {
+                builder?.name = try trackedRegistryScalar(
+                    line,
+                    prefix: "    name: ",
+                    lineNumber: offset + 1
+                )
+            } else if line.hasPrefix("    enabled: ") {
+                let value = try trackedRegistryScalar(
+                    line,
+                    prefix: "    enabled: ",
+                    lineNumber: offset + 1
+                )
+                switch value {
+                case "true":
+                    builder?.enabled = true
+                case "false":
+                    builder?.enabled = false
+                default:
+                    throw trackedRegistryError(
+                        "Invalid enabled value at line \(offset + 1)"
+                    )
+                }
+            } else if line.hasPrefix("    ats_family: ") {
+                builder?.atsFamily = try trackedRegistryScalar(
+                    line,
+                    prefix: "    ats_family: ",
+                    lineNumber: offset + 1
+                )
+            } else if line.hasPrefix("    adapter: ") {
+                builder?.adapter = try trackedRegistryScalar(
+                    line,
+                    prefix: "    adapter: ",
+                    lineNumber: offset + 1
+                )
+            } else if line.hasPrefix("      output_slug: ") {
+                builder?.outputSlug = try trackedRegistryScalar(
+                    line,
+                    prefix: "      output_slug: ",
+                    lineNumber: offset + 1
+                )
+            }
+        }
+        if let builder {
+            records.append(try trackedSourceRegistryRecord(from: builder))
+        }
+
+        guard !records.isEmpty else {
+            throw trackedRegistryError("Tracked source registry is empty")
+        }
+        let sourceIDs = records.map(\.id)
+        guard Set(sourceIDs).count == sourceIDs.count else {
+            throw trackedRegistryError(
+                "Tracked source registry contains duplicate IDs"
+            )
+        }
+        return records
+    }
+
+    private func trackedSourceRegistryRecord(
+        from builder: TrackedSourceRegistryRecordBuilder
+    ) throws -> TrackedSourceRegistryRecord {
+        guard
+            let name = builder.name,
+            let enabled = builder.enabled,
+            let atsFamily = builder.atsFamily,
+            let outputSlug = builder.outputSlug
+        else {
+            throw trackedRegistryError(
+                "Incomplete tracked source record \(builder.id)"
+            )
+        }
+        return TrackedSourceRegistryRecord(
+            id: builder.id,
+            name: name,
+            enabled: enabled,
+            atsFamily: atsFamily,
+            adapter: builder.adapter,
+            outputSlug: outputSlug
+        )
+    }
+
+    private func trackedRegistryScalar(
+        _ line: String,
+        prefix: String,
+        lineNumber: Int
+    ) throws -> String {
+        var value = String(line.dropFirst(prefix.count))
+            .trimmingCharacters(in: .whitespaces)
+        if
+            value.count >= 2,
+            let first = value.first,
+            let last = value.last,
+            (first == "\"" || first == "'")
+        {
+            guard first == last else {
+                throw trackedRegistryError(
+                    "Unbalanced scalar quotes at line \(lineNumber)"
+                )
+            }
+            value.removeFirst()
+            value.removeLast()
+        }
+        guard !value.isEmpty else {
+            throw trackedRegistryError(
+                "Empty tracked registry scalar at line \(lineNumber)"
+            )
+        }
+        return value
+    }
+
+    private func registrySourceIDAudit(
+        for record: TrackedSourceRegistryRecord
+    ) throws -> RegistrySourceIDAudit {
+        let prefix = "\(record.outputSlug)_"
+        if record.id.hasPrefix(prefix) {
+            let suffix = String(record.id.dropFirst(prefix.count))
+            let tokens = Set(
+                suffix
+                    .split(separator: "_")
+                    .map { $0.lowercased() }
+            )
+            guard !tokens.isEmpty else {
+                throw trackedRegistryError(
+                    "Empty infrastructure suffix for \(record.id)"
+                )
+            }
+            return RegistrySourceIDAudit(
+                identityInput: record.outputSlug,
+                infrastructureTokens: tokens,
+                usesException: false
+            )
+        }
+
+        guard
+            let exception = Self.trackedRegistryAuditExceptions[record.id],
+            !exception.identityInput.isEmpty,
+            !exception.infrastructureTokens.isEmpty,
+            !exception.rationale.isEmpty
+        else {
+            throw trackedRegistryError(
+                "Non-derivable tracked source requires audit: "
+                    + record.auditDescription
+            )
+        }
+        return RegistrySourceIDAudit(
+            identityInput: exception.identityInput,
+            infrastructureTokens: exception.infrastructureTokens,
+            usesException: true
+        )
+    }
+
+    private func trackedRegistryError(_ description: String) -> NSError {
+        NSError(
+            domain: "AtlasVaultProductionAdaptersTests.RegistryAudit",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
     }
 
     private func repositoryRoot(

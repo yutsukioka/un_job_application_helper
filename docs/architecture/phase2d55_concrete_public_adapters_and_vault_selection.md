@@ -106,6 +106,13 @@ ATS-only results fail closed rather than exposing a raw slug. There is no
 per-source organization table and no runtime YAML or other configuration
 lookup.
 
+The one static infrastructure vocabulary is audited against every enabled and
+disabled entry in the tracked source registry. The complete Cycle 14 audit
+added the previously uncovered `candidatespace`, `jobs2web`, `sharepoint`,
+`talents`, and `workable` portal tokens while preserving organization identity
+tokens. Production does not read the registry; a test-only parser uses the
+tracked file to make future uncovered source-ID suffixes fail the suite.
+
 Score, score reasons, match evidence, membership, application status, notes,
 private classifications, URLs, and persistence details are discarded.
 Each response row must retain the exact reviewed `open` status requested by the
@@ -181,6 +188,16 @@ same projection. Source projection still requires an exact non-empty source ID
 and non-negative counts. Update projection remains unchanged: it requires a
 non-empty identifier, non-negative source-run counts, and deterministic optional
 date parsing.
+
+Tests audit all tracked enabled and disabled source records. For directly
+derivable IDs they compare the exact suffix after `output_slug + "_"`; the
+single non-derivable Council of Europe entry has an explicit test-only
+registry-evidence rationale and does not suppress its `talents` portal token.
+The test parser extracts only the public registry fields needed for this audit
+and has no production or general YAML role. Source IDs stay opaque and
+unchanged, organization identity tokens remain present, exact complete tokens
+such as `jobs2web` remain indivisible, and labels composed only of
+infrastructure terms fail closed.
 
 `changedJobCount` is the checked sum of inserted and updated rows. Arithmetic
 overflow fails as `invalidResponse`; it never wraps.
@@ -501,6 +518,16 @@ projection. The tests also prove unrelated non-evicting searches remain valid,
 stale retries make no extra detail call, and no pinning or global generation
 policy was introduced.
 
+Review-fix cycle 14 audited all 59 tracked source records, including 49 enabled
+and 10 disabled entries, before production changes. A test-only registry parser
+then failed while `candidatespace`, `jobs2web`, `sharepoint`, `talents`, and
+`workable` survived candidate-facing projection. Explicit live-source,
+search-row, and restored-snapshot regressions confirmed the leakage, while
+ATS-only combinations were accepted before provenance authorization. The
+correction extends the one shared exact-token set only with those five
+registry-proven infrastructure terms. No runtime registry dependency or
+per-source name map is introduced.
+
 ## Test Coverage
 
 The focused suite covers:
@@ -511,6 +538,12 @@ The focused suite covers:
   underscore- and hyphen-delimited source slugs;
 - shared public job and source-summary organization helper with one reviewed
   infrastructure-token set;
+- complete tracked-registry coverage across enabled and disabled sources,
+  including a future-source failure gate for uncovered infrastructure suffixes;
+- OPCW/CandidateSpace, INTERPOL/Jobs2web, Workable, SharePoint, and Council
+  talents-portal projection without source-ID mutation;
+- test-only tracked-registry parsing with no production YAML dependency or
+  per-source display-name map;
 - compatibility with existing `organizationDisplay` casing for already clean
   labels;
 - ATS-only public job rejection before provenance with zero detail calls;
@@ -569,7 +602,7 @@ The full Swift suite remains the regression gate.
 | --- | --- |
 | Public-search contract | Implemented |
 | Concrete public-search adapter | Implemented with shared candidate organization normalization and field-specific placeholder rejection before provenance |
-| Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
+| Candidate-facing public source summaries | Implemented with registry-audited generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
 | Public-detail provenance and candidate-facing projection | Implemented with bounded per-ID pre/post-await authorization, current-projection semantics, normalized metadata exclusion, and section-first description fallback |
