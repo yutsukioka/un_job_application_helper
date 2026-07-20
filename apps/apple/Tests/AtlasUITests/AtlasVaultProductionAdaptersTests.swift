@@ -221,6 +221,154 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 1))
     }
 
+    func testSearchRowsNormalizeMachineOrganizationsWithSharedCandidateProjection()
+        async throws
+    {
+        let cases = [
+            (raw: "unicef_pageup", expected: "UNICEF"),
+            (raw: "wmo_oracle_hcm", expected: "WMO"),
+            (raw: "unv_uvp", expected: "UNV"),
+            (raw: "wfp_workday", expected: "WFP"),
+            (
+                raw: "world_food_programme_workday",
+                expected: "World Food Programme"
+            ),
+            (raw: "unicef-pageup", expected: "UNICEF"),
+        ]
+        let forbiddenTokens: Set<String> = [
+            "pageup", "oracle", "hcm", "uvp", "workday",
+        ]
+
+        for (index, item) in cases.enumerated() {
+            let response = try makeSearchResponse(
+                jobs: [
+                    makeJob(
+                        id: "FAKE_ORGANIZATION_SLUG_JOB_\(index)",
+                        organization: item.raw
+                    ),
+                ],
+                total: 1,
+                limit: 1,
+                offset: 0
+            )
+            let client = RecordingPublicJobClient(searchResponses: [response])
+            let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+            let result = try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+            let job = try XCTUnwrap(result.jobs.first)
+
+            XCTAssertEqual(result.jobs.count, 1, item.raw)
+            XCTAssertEqual(
+                job.id,
+                "FAKE_ORGANIZATION_SLUG_JOB_\(index)",
+                item.raw
+            )
+            XCTAssertEqual(job.title, "Public role", item.raw)
+            XCTAssertEqual(job.organization, item.expected, item.raw)
+            XCTAssertEqual(job.location, "Tokyo, Japan", item.raw)
+            XCTAssertFalse(job.organization.contains("_"), item.raw)
+            XCTAssertFalse(job.organization.contains("-"), item.raw)
+            let words = Set(
+                job.organization
+                    .split(whereSeparator: \.isWhitespace)
+                    .map { $0.lowercased() }
+            )
+            XCTAssertTrue(words.isDisjoint(with: forbiddenTokens), item.raw)
+            let authorizedCount =
+                await adapter.authorizedReferenceCountForTesting()
+            let counts = await client.counts()
+            XCTAssertEqual(authorizedCount, 1, item.raw)
+            XCTAssertEqual(counts, .init(search: 1), item.raw)
+        }
+    }
+
+    func testRawDTOSearchOrganizationUsesSharedCandidateProjection()
+        async throws
+    {
+        for item in [
+            (raw: "unicef_pageup", expected: "UNICEF"),
+            (raw: "unicef-pageup", expected: "UNICEF"),
+        ] {
+            let response = try rawSearchResponse(
+                replacingPublicField: "organization",
+                with: item.raw
+            )
+            let client = RecordingPublicJobClient(searchResponses: [response])
+            let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+            let result = try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+
+            XCTAssertEqual(result.jobs.map(\.organization), [item.expected])
+            let authorizedCount =
+                await adapter.authorizedReferenceCountForTesting()
+            XCTAssertEqual(authorizedCount, 1)
+        }
+    }
+
+    func testJobOrganizationNormalizationPreservesCurrentCandidateDisplayContract()
+        throws
+    {
+        let rawValues = [
+            "UNICEF",
+            "Unicef",
+            "World Health Organization",
+            "UNICEF PageUp",
+        ]
+        let inputs = rawValues.enumerated().map { index, organization in
+            makeJob(
+                id: "FAKE_CANDIDATE_ORGANIZATION_\(index)",
+                organization: organization
+            )
+        }
+        let existingDisplays = inputs.map(\.organizationDisplay)
+
+        let projected = try inputs.map(AtlasProductionPublicProjection.job)
+
+        XCTAssertEqual(
+            existingDisplays,
+            ["UNICEF", "UNICEF", "World Health Organization", "UNICEF"]
+        )
+        XCTAssertEqual(projected.map(\.organization), existingDisplays)
+    }
+
+    func testJobOrganizationNormalizationRemovesOnlyExactInfrastructureTokens()
+        throws
+    {
+        let cases = [
+            (
+                raw: "fake_apiary-foundation",
+                expected: "Fake Apiary Foundation"
+            ),
+            (
+                raw: "workdaylight_institute",
+                expected: "Workdaylight Institute"
+            ),
+            (raw: "oracleton-centre", expected: "Oracleton Centre"),
+            (
+                raw: "hcmuseum_collective",
+                expected: "Hcmuseum Collective"
+            ),
+        ]
+
+        let projected = try cases.enumerated().map { index, item in
+            try AtlasProductionPublicProjection.job(
+                makeJob(
+                    id: "FAKE_EXACT_TOKEN_ORGANIZATION_\(index)",
+                    organization: item.raw
+                )
+            )
+        }
+
+        XCTAssertEqual(
+            projected.map(\.organization),
+            cases.map(\.expected)
+        )
+    }
+
     func testStablePublicDatesPreserveExactUTCOutputAcrossProjections()
         throws
     {
@@ -712,6 +860,71 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         ] {
             XCTAssertFalse(adapterSource.contains(forbidden), forbidden)
         }
+    }
+
+    func testATSOnlyAndPlaceholderOrganizationsFailBeforeAuthorization()
+        async throws
+    {
+        for organization in [
+            "oracle_hcm",
+            "pageup_workday",
+            "api_static",
+            "---___",
+            " \t ",
+            "unknown_organization",
+            "unknown-organization",
+            "Unknown Organization",
+        ] {
+            try await assertSearchRejectsBeforeAuthorization(
+                try rawSearchResponse(
+                    replacingPublicField: "organization",
+                    with: organization
+                ),
+                rejectedValue: organization
+            )
+        }
+    }
+
+    func testJobAndSourceProjectionShareCandidateOrganizationHelper() throws {
+        let adapterSource = try source("AtlasPublicJobAPIAdapter.swift")
+        let jobStart = try XCTUnwrap(
+            adapterSource.range(of: "    static func job(")
+        )
+        let sourceStart = try XCTUnwrap(
+            adapterSource.range(
+                of: "\n    static func source(",
+                range: jobStart.upperBound..<adapterSource.endIndex
+            )
+        )
+        let updateStart = try XCTUnwrap(
+            adapterSource.range(
+                of: "\n    static func update(",
+                range: sourceStart.upperBound..<adapterSource.endIndex
+            )
+        )
+        let jobSource = String(
+            adapterSource[jobStart.lowerBound..<sourceStart.lowerBound]
+        )
+        let sourceSource = String(
+            adapterSource[sourceStart.lowerBound..<updateStart.lowerBound]
+        )
+
+        XCTAssertTrue(jobSource.contains("candidateOrganizationDisplay"))
+        XCTAssertTrue(jobSource.contains("value.organizationDisplay"))
+        XCTAssertFalse(
+            jobSource.contains(
+                "value.organizationDisplay.trimmingCharacters"
+            )
+        )
+        XCTAssertTrue(sourceSource.contains("candidateOrganizationDisplay"))
+        XCTAssertTrue(sourceSource.contains("value.organization"))
+        XCTAssertEqual(
+            adapterSource.components(
+                separatedBy:
+                    "private static let candidateOrganizationInfrastructureTokens"
+            ).count - 1,
+            1
+        )
     }
 
     func testFailedSearchDoesNotAuthorizeDetail() async throws {
@@ -1814,6 +2027,75 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             )
         )
         XCTAssertEqual(searchJob.organization, "UNICEF")
+    }
+
+    func testSnapshotJobsShareCandidateOrganizationProjectionWithLiveSearch()
+        async throws
+    {
+        for item in [
+            (raw: "unicef_pageup", expected: "UNICEF"),
+            (raw: "wmo_oracle_hcm", expected: "WMO"),
+            (
+                raw: "world_food_programme_workday",
+                expected: "World Food Programme"
+            ),
+        ] {
+            let liveClient = RecordingPublicJobClient(
+                searchResponses: [
+                    try makeSearchResponse(
+                        jobs: [
+                            makeJob(
+                                id: Self.publicJobID,
+                                organization: item.raw
+                            ),
+                        ],
+                        total: 1,
+                        limit: 1,
+                        offset: 0
+                    ),
+                ]
+            )
+            let liveAdapter = AtlasAPIClientPublicJobAdapter(client: liveClient)
+            let live = try await liveAdapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+            let root = RecordingRootProvider(
+                outcome: .url(
+                    URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+                )
+            )
+            let reader = RecordingSnapshotFileReader(
+                status: .regularFile,
+                data: try snapshotData(
+                    replacingPublicJobField: "organization",
+                    with: item.raw
+                )
+            )
+            let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+                rootProvider: root,
+                fileReader: reader
+            )
+
+            let restoredValue = try await restorer.restore()
+            let restored = try XCTUnwrap(restoredValue)
+            let liveJob = try XCTUnwrap(live.jobs.first)
+            let restoredJob = try XCTUnwrap(restored.jobs.first)
+
+            XCTAssertEqual(liveJob.organization, item.expected, item.raw)
+            XCTAssertEqual(restoredJob.organization, liveJob.organization)
+            XCTAssertEqual(restoredJob.id, liveJob.id)
+            XCTAssertEqual(restoredJob.title, liveJob.title)
+            XCTAssertEqual(restoredJob.location, liveJob.location)
+            XCTAssertFalse(restoredJob.organization.contains(item.raw))
+            XCTAssertEqual(root.callCount, 1)
+            XCTAssertEqual(
+                reader.counts,
+                .init(status: 2, resolve: 2, read: 1)
+            )
+            XCTAssertFalse(
+                try XCTUnwrap(reader.lastStatusURL).path.contains("JobDetails")
+            )
+        }
     }
 
     func testSnapshotProjectionMatchesAPIProjection() async throws {

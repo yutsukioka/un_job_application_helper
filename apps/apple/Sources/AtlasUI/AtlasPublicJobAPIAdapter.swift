@@ -311,8 +311,8 @@ enum AtlasProductionPublicProjection {
     ) throws(AtlasPublicJobServiceError) -> AtlasLockedPublicJob {
         let id = value.jobKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = value.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let organization = value.organizationDisplay.trimmingCharacters(
-            in: .whitespacesAndNewlines
+        let organization = try candidateOrganizationDisplay(
+            value.organizationDisplay
         )
         let location = value.dutyStation.trimmingCharacters(
             in: .whitespacesAndNewlines

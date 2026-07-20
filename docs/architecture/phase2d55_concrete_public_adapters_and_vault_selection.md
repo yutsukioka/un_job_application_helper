@@ -89,6 +89,23 @@ Search rows project only:
 - public duty station;
 - stable closing-date text.
 
+The backend search result populates organization from `jobs.org_id`, and job
+normalization may store a source identifier in that field. The existing
+`JobSearchResult.organizationDisplay` preserves its reviewed candidate-facing
+casing behavior but splits ATS terms on spaces only. Public job projection
+therefore routes that existing display value through the same
+`candidateOrganizationDisplay(_:)` helper used by source summaries before
+constructing `AtlasLockedPublicJob`.
+
+The shared helper treats underscores and hyphens as word boundaries and removes
+the reviewed ATS and infrastructure vocabulary by case-insensitive exact
+whole-token comparison. It performs no substring, prefix, suffix, fuzzy, regex,
+or semantic deletion. Already candidate-facing output remains compatible with
+the existing `organizationDisplay` result. Empty, separator-only, fallback, or
+ATS-only results fail closed rather than exposing a raw slug. There is no
+per-source organization table and no runtime YAML or other configuration
+lookup.
+
 Score, score reasons, match evidence, membership, application status, notes,
 private classifications, URLs, and persistence details are discarded.
 Each response row must retain the exact reviewed `open` status requested by the
@@ -107,8 +124,10 @@ fuzzy, semantic, or arbitrary content scan. Accepted candidate-facing labels
 are returned unchanged, including labels that merely contain similar words.
 This prevents decoder fallbacks and normalized DTO display labels from
 bypassing rejection. Live search and restored snapshots share this projection,
-and rejection occurs before provenance authorization. Duplicate IDs, empty
-required values, and inconsistent pagination also fail closed.
+including the shared candidate organization cleanup. Normalized organization
+placeholder rejection runs after that cleanup. Any rejection occurs before
+provenance authorization. Duplicate IDs, empty required values, and inconsistent
+pagination also fail closed.
 
 ## Stable Public Date Representation
 
@@ -154,12 +173,14 @@ retain their existing word casing. Empty, separator-only, reviewed fallback,
 or ATS-only results fail closed as `invalidResponse` rather than exposing the
 raw slug.
 
-There is no source-ID-to-name table and no runtime dependency on organization
-YAML or another configuration file. Live `/api/sources` responses and restored
-snapshot source summaries call the same projection. Source projection still
-requires an exact non-empty source ID and non-negative counts. Update
-projection remains unchanged: it requires a non-empty identifier, non-negative
-source-run counts, and deterministic optional date parsing.
+The candidate display helper and its infrastructure-token set are shared by
+public job and source-summary projection. There is no source-ID-to-name table
+and no runtime dependency on organization YAML or another configuration file.
+Live `/api/sources` responses and restored snapshot source summaries call the
+same projection. Source projection still requires an exact non-empty source ID
+and non-negative counts. Update projection remains unchanged: it requires a
+non-empty identifier, non-negative source-run counts, and deterministic optional
+date parsing.
 
 `changedJobCount` is the checked sum of inserted and updated rows. Arithmetic
 overflow fails as `invalidResponse`; it never wraps.
@@ -446,12 +467,28 @@ whitespace-normalized title, organization, and location placeholders were
 accepted. The correction adds deterministic field-specific whole-label
 canonicalization without changing accepted output or provenance mechanics.
 
+Review-fix cycle 12 added live-client, raw DTO, direct-row, and restored
+snapshot regressions before production changes. They failed while public job
+projection bypassed the existing separator-aware candidate organization helper,
+leaving source/ATS slugs visible and authorizing ATS-only rows. The correction
+reuses the source-summary helper after the current `organizationDisplay`
+projection, preserving accepted casing while sharing one separator and exact
+token policy.
+
 ## Test Coverage
 
 The focused suite covers:
 
 - construction call counts;
 - health/search/source/update/detail mapping;
+- candidate-facing public job organization normalization for reviewed
+  underscore- and hyphen-delimited source slugs;
+- shared public job and source-summary organization helper with one reviewed
+  infrastructure-token set;
+- compatibility with existing `organizationDisplay` casing for already clean
+  labels;
+- ATS-only public job rejection before provenance with zero detail calls;
+- identical live and restored-snapshot public job organization projection;
 - candidate-facing source-label normalization with unchanged opaque source IDs;
 - exact ATS-token removal without substring deletion;
 - deterministic machine-separator casing and preservation of already clean
@@ -499,7 +536,7 @@ The full Swift suite remains the regression gate.
 | Capability | Status |
 | --- | --- |
 | Public-search contract | Implemented |
-| Concrete public-search adapter | Implemented with field-specific normalized placeholder rejection before provenance |
+| Concrete public-search adapter | Implemented with shared candidate organization normalization and field-specific placeholder rejection before provenance |
 | Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
