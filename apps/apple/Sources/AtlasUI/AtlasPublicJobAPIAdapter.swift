@@ -401,10 +401,7 @@ enum AtlasProductionPublicProjection {
     static func detailText(
         _ detail: AtlasJobDetail
     ) throws(AtlasPublicJobServiceError) -> String {
-        var components: [String] = []
-        if let description = trimmed(detail.description) {
-            components.append(description)
-        }
+        var sectionComponents: [String] = []
         for section in detail.displaySections {
             let normalizedTitle = section.title
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -413,18 +410,21 @@ enum AtlasProductionPublicProjection {
                 continue
             }
             if let body = trimmed(section.body) {
-                components.append(body)
+                sectionComponents.append(body)
             }
             for row in section.rows {
                 if let value = trimmed(row.value) {
-                    components.append(value)
+                    sectionComponents.append(value)
                 }
             }
         }
-        guard !components.isEmpty else {
-            throw .invalidResponse
+        if !sectionComponents.isEmpty {
+            return sectionComponents.joined(separator: "\n\n")
         }
-        return components.joined(separator: "\n\n")
+        if let description = trimmed(detail.description) {
+            return description
+        }
+        throw .invalidResponse
     }
 
     private static func candidateOrganizationDisplay(

@@ -899,6 +899,243 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(countsAfterDetail.detail, 1)
     }
 
+    func testDetailCandidateSectionTakesPrecedenceOverDuplicateDescription()
+        async throws
+    {
+        let duplicated = "FAKE_DUPLICATED_PUBLIC_DESCRIPTION"
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: duplicated,
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Full Description",
+                    body: duplicated
+                ),
+            ]
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [Self.publicJobID: detail]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        let search = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+
+        let result = try await adapter.detail(for: reference)
+
+        XCTAssertEqual(result.reference, reference)
+        XCTAssertEqual(result.job, search.jobs[0])
+        XCTAssertEqual(result.detailText, duplicated)
+        XCTAssertEqual(
+            result.detailText.components(separatedBy: duplicated).count - 1,
+            1
+        )
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
+    func testDetailStructuredSectionsSuppressTopLevelDescription() throws {
+        let topLevel = "FAKE_FULL_TOP_LEVEL_DESCRIPTION_DO_NOT_REPEAT"
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: topLevel,
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Summary",
+                    body: "FAKE_SECTION_SUMMARY"
+                ),
+                AtlasDetailSection(
+                    title: "Responsibilities",
+                    body: "FAKE_SECTION_RESPONSIBILITIES"
+                ),
+                AtlasDetailSection(
+                    title: "Qualifications",
+                    body: "FAKE_SECTION_QUALIFICATIONS"
+                ),
+            ]
+        )
+
+        let text = try AtlasProductionPublicProjection.detailText(detail)
+
+        XCTAssertEqual(
+            text,
+            [
+                "FAKE_SECTION_SUMMARY",
+                "FAKE_SECTION_RESPONSIBILITIES",
+                "FAKE_SECTION_QUALIFICATIONS",
+            ].joined(separator: "\n\n")
+        )
+        XCTAssertFalse(text.contains(topLevel))
+    }
+
+    func testDetailSectionBodyAndRowsPreserveOrderWithoutTopLevel() throws {
+        let topLevel = "FAKE_DISTINCT_TOP_LEVEL_DESCRIPTION"
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: topLevel,
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Candidate Requirements",
+                    body: "FAKE_SECTION_BODY",
+                    rows: [
+                        AtlasDetailRow(
+                            label: "FAKE_ROW_LABEL_ONE_NOT_PUBLIC",
+                            value: "FAKE_ROW_VALUE_ONE"
+                        ),
+                        AtlasDetailRow(
+                            label: "FAKE_ROW_LABEL_TWO_NOT_PUBLIC",
+                            value: "FAKE_ROW_VALUE_TWO"
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        let text = try AtlasProductionPublicProjection.detailText(detail)
+
+        XCTAssertEqual(
+            text,
+            [
+                "FAKE_SECTION_BODY",
+                "FAKE_ROW_VALUE_ONE",
+                "FAKE_ROW_VALUE_TWO",
+            ].joined(separator: "\n\n")
+        )
+        XCTAssertFalse(text.contains(topLevel))
+        XCTAssertFalse(text.contains("FAKE_ROW_LABEL_ONE_NOT_PUBLIC"))
+        XCTAssertFalse(text.contains("Candidate Requirements"))
+    }
+
+    func testDetailDescriptionIsFallbackWhenSectionsAreAbsent() throws {
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: "  FAKE_DESCRIPTION_ONLY_FALLBACK  ",
+            displaySections: []
+        )
+
+        XCTAssertEqual(
+            try AtlasProductionPublicProjection.detailText(detail),
+            "FAKE_DESCRIPTION_ONLY_FALLBACK"
+        )
+    }
+
+    func testDetailMetadataOnlySectionsPermitDescriptionFallback() throws {
+        let metadataSections = [
+            "Job Record",
+            "Classification",
+            "Locations",
+            "Source Features",
+            "Raw Source Data",
+        ].enumerated().map { index, title in
+            AtlasDetailSection(
+                title: title,
+                body: "FAKE_METADATA_FALLBACK_BODY_\(index)",
+                rows: [
+                    AtlasDetailRow(
+                        label: "FAKE_METADATA_FALLBACK_LABEL_\(index)",
+                        value: "FAKE_METADATA_FALLBACK_VALUE_\(index)"
+                    ),
+                ]
+            )
+        }
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: "FAKE_DESCRIPTION_AFTER_METADATA_FILTER",
+            displaySections: metadataSections
+        )
+
+        let text = try AtlasProductionPublicProjection.detailText(detail)
+
+        XCTAssertEqual(text, "FAKE_DESCRIPTION_AFTER_METADATA_FILTER")
+        for index in metadataSections.indices {
+            XCTAssertFalse(text.contains("FAKE_METADATA_FALLBACK_BODY_\(index)"))
+            XCTAssertFalse(text.contains("FAKE_METADATA_FALLBACK_VALUE_\(index)"))
+        }
+    }
+
+    func testDetailEmptyCandidateSectionsPermitDescriptionFallback() throws {
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: "FAKE_DESCRIPTION_AFTER_EMPTY_SECTIONS",
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Responsibilities",
+                    body: " \n ",
+                    rows: [
+                        AtlasDetailRow(
+                            label: "FAKE_EMPTY_ROW_LABEL_NOT_PUBLIC",
+                            value: " \t "
+                        ),
+                    ]
+                ),
+            ]
+        )
+
+        XCTAssertEqual(
+            try AtlasProductionPublicProjection.detailText(detail),
+            "FAKE_DESCRIPTION_AFTER_EMPTY_SECTIONS"
+        )
+    }
+
+    func testDetailWithoutUsablePublicContentFailsClosed() {
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: " \n ",
+            displaySections: [
+                AtlasDetailSection(
+                    title: "Responsibilities",
+                    body: " \t ",
+                    rows: [
+                        AtlasDetailRow(label: "Empty", value: " \n "),
+                    ]
+                ),
+                AtlasDetailSection(
+                    title: "Job Record",
+                    body: "FAKE_METADATA_NOT_A_FALLBACK"
+                ),
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try AtlasProductionPublicProjection.detailText(detail)
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasPublicJobServiceError,
+                .invalidResponse
+            )
+        }
+    }
+
+    func testDetailDoesNotDeduplicateRepeatedCandidateSectionContent() throws {
+        let repeated = "FAKE_INTENTIONALLY_REPEATED_SECTION_BODY"
+        let detail = makeDetail(
+            id: Self.publicJobID,
+            description: "FAKE_TOP_LEVEL_NOT_PROJECTED",
+            displaySections: [
+                AtlasDetailSection(title: "Summary", body: repeated),
+                AtlasDetailSection(title: "Responsibilities", body: repeated),
+            ]
+        )
+
+        XCTAssertEqual(
+            try AtlasProductionPublicProjection.detailText(detail),
+            [repeated, repeated].joined(separator: "\n\n")
+        )
+    }
+
     func testDetailExcludesCompleteCanonicalMetadataSections() async throws {
         let metadataSections = [
             "Job Record",
@@ -960,10 +1197,12 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(
             result.detailText,
             [
-                "FAKE_SAFE_TOP_LEVEL_DESCRIPTION",
                 "FAKE_SAFE_CANDIDATE_BODY",
                 "FAKE_SAFE_CANDIDATE_ROW_VALUE",
             ].joined(separator: "\n\n")
+        )
+        XCTAssertFalse(
+            result.detailText.contains("FAKE_SAFE_TOP_LEVEL_DESCRIPTION")
         )
         for index in metadataSections.indices {
             XCTAssertFalse(

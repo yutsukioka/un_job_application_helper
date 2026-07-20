@@ -165,10 +165,15 @@ Before a successful issuance, or after eviction, detail fails as
 same public job ID. The result reuses the previously issued safe projection so
 an upstream detail response cannot replace list identity or presentation.
 
-Public detail text may include the non-empty reviewed top-level description and
-the bodies and row values of ordinary candidate-facing sections. Complete
-metadata and raw sections are excluded before either their body or rows are
-examined. The canonical excluded titles are:
+Public detail follows the existing candidate-detail formatter's section-first
+policy. After metadata filtering, non-empty candidate-facing section bodies and
+row values are authoritative and retain their existing order. When at least one
+such component exists, the top-level description is not projected. The trimmed
+top-level description is fallback-only and is used only when no usable
+candidate-facing section component remains.
+
+Complete metadata and raw sections are excluded before either their body or
+rows are examined. The canonical excluded titles are:
 
 - `Job Record`;
 - `Classification`;
@@ -182,10 +187,18 @@ reviewed classification summary rendered from safe public search fields.
 Matching trims surrounding whitespace, normalizes case deterministically, and
 compares the entire normalized title. It does not use substring, fuzzy,
 body-content, row-value, or sentinel scanning. A candidate-facing title such as
-`Raw Source Data Guidance` therefore remains eligible. If filtering leaves no
-candidate-facing component, detail fails as `invalidResponse`; excluded
-metadata is never used as a fallback. Provenance authorization and returned
-identity validation are unchanged.
+`Raw Source Data Guidance` therefore remains eligible. Metadata-only sections
+and candidate-facing sections with only empty bodies and row values do not
+suppress a valid top-level description fallback. If neither section content nor
+a usable description remains, detail fails as `invalidResponse`; excluded
+metadata is never used as a fallback.
+
+This is source precedence, not textual deduplication. The projection performs no
+semantic, substring, fuzzy, hash, sentinel, or content-equality comparison.
+Repeated content in separate candidate-facing sections remains repeated.
+Section titles and row labels are not added. Components remain joined with
+`"\n\n"`. Provenance authorization and returned identity validation are
+unchanged.
 
 ## Bounded Provenance and Eviction
 
@@ -440,7 +453,13 @@ The focused suite covers:
 - detail identity and issuance;
 - normalized exact-title exclusion of complete metadata/raw sections, including
   their bodies and rows, while retaining ordinary candidate-facing prose;
-- metadata-only detail fail-closed behavior;
+- section-first precedence for exact duplicate and structured-description
+  payloads;
+- preservation of candidate section body and row-value order without section
+  titles or row labels;
+- description fallback after metadata-only or empty candidate sections;
+- no-content fail-closed behavior and preservation of intentionally repeated
+  candidate section content without broad deduplication;
 - error sentinel redaction;
 - missing, valid, malformed, private-key, unknown-key, path, symlink, and file
   status snapshot cases;
@@ -461,7 +480,7 @@ The full Swift suite remains the regression gate.
 | Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
-| Public-detail provenance and candidate-facing projection | Implemented with bounded in-memory constraints and normalized metadata-section exclusion |
+| Public-detail provenance and candidate-facing projection | Implemented with bounded in-memory constraints, normalized metadata exclusion, and section-first description fallback |
 | Detail cache while locked | Blocked |
 | Vault-selection contract | Implemented |
 | Single-vault Keychain registry | Implemented |
