@@ -113,7 +113,7 @@ public actor AtlasAPIClientPublicJobAdapter:
     public func detail(
         for reference: AtlasPublicJobReference
     ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobDetailResult {
-        guard let issuedJob = issuedJobs[reference.publicJobID] else {
+        guard issuedJobs[reference.publicJobID] != nil else {
             throw .invalidRequest
         }
 
@@ -123,6 +123,11 @@ public actor AtlasAPIClientPublicJobAdapter:
         } catch {
             throw Self.mapClientError(error)
         }
+        guard
+            let currentIssuedJob = issuedJobs[reference.publicJobID]
+        else {
+            throw .invalidRequest
+        }
         guard response.jobKey == reference.publicJobID else {
             throw .invalidResponse
         }
@@ -130,7 +135,7 @@ public actor AtlasAPIClientPublicJobAdapter:
         do {
             return try AtlasPublicJobDetailResult(
                 reference: reference,
-                job: issuedJob,
+                job: currentIssuedJob,
                 detailText: text
             )
         } catch {

@@ -1308,6 +1308,448 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(countsAfterDetail.detail, 1)
     }
 
+    func testDetailRejectsResponseWhenReferenceIsEvictedDuringAwait()
+        async throws
+    {
+        let discardedBody = "FAKE_EVICTED_DETAIL_BODY_DO_NOT_RETURN"
+        let gate = DetailRequestGate()
+        let first = try makeSearchResponse(
+            jobs: [makeJob(id: Self.publicJobID)],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let second = try makeSearchResponse(
+            jobs: [makeJob(id: Self.secondPublicJobID)],
+            total: 1,
+            limit: 1,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [first],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.publicJobID,
+                    description: discardedBody
+                ),
+            ],
+            detailGate: gate
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 1
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let detailTask = Task {
+            try await adapter.detail(for: reference)
+        }
+
+        await gate.waitUntilDetailEntered()
+        await client.enqueueSearchResponse(second)
+        let currentSearch = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        XCTAssertEqual(currentSearch.jobs.map(\.id), [Self.secondPublicJobID])
+        let currentProvenanceCount =
+            await adapter.authorizedReferenceCountForTesting()
+        XCTAssertEqual(currentProvenanceCount, 1)
+        await gate.releaseDetail()
+
+        do {
+            _ = try await detailTask.value
+            XCTFail("Expected evicted in-flight detail to fail")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasPublicJobServiceError,
+                .invalidRequest
+            )
+            XCTAssertFalse(String(reflecting: error).contains(discardedBody))
+        }
+        let afterEviction = await client.counts()
+        XCTAssertEqual(afterEviction, .init(search: 2, detail: 1))
+
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: reference)
+        }
+        let afterRetry = await client.counts()
+        XCTAssertEqual(afterRetry, .init(search: 2, detail: 1))
+    }
+
+    func testDetailAllowsConcurrentSearchThatDoesNotEvictReference()
+        async throws
+    {
+        let detailBody = "FAKE_NON_EVICTING_CONCURRENT_DETAIL"
+        let gate = DetailRequestGate()
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.publicJobID,
+                    description: detailBody
+                ),
+            ],
+            detailGate: gate
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 2
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        let issued = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let detailTask = Task {
+            try await adapter.detail(for: reference)
+        }
+
+        await gate.waitUntilDetailEntered()
+        await client.enqueueSearchResponse(
+            try makeSearchResponse(
+                jobs: [makeJob(id: Self.secondPublicJobID)],
+                total: 1,
+                limit: 1,
+                offset: 0
+            )
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        await gate.releaseDetail()
+        let result = try await detailTask.value
+
+        XCTAssertEqual(result.job, issued.jobs[0])
+        XCTAssertEqual(result.detailText, detailBody)
+        let authorizedCount =
+            await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 2)
+        XCTAssertEqual(counts, .init(search: 2, detail: 1))
+    }
+
+    func testDetailUsesCurrentProjectionAfterSameIDReauthorization()
+        async throws
+    {
+        let gate = DetailRequestGate()
+        let oldJob = makeJob(
+            id: Self.publicJobID,
+            title: "FAKE_OLD_PUBLIC_TITLE",
+            organization: "Old Public Organization",
+            location: "Old Public Location",
+            closingDate: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let currentJob = makeJob(
+            id: Self.publicJobID,
+            title: "FAKE_CURRENT_PUBLIC_TITLE",
+            organization: "Current Public Organization",
+            location: "Current Public Location",
+            closingDate: Date(timeIntervalSince1970: 1_710_000_000)
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [oldJob],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.publicJobID,
+                    description: "FAKE_CURRENT_PROJECTION_DETAIL"
+                ),
+            ],
+            detailGate: gate
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 1
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        let oldSearch = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let detailTask = Task {
+            try await adapter.detail(for: reference)
+        }
+
+        await gate.waitUntilDetailEntered()
+        await client.enqueueSearchResponse(
+            try makeSearchResponse(
+                jobs: [currentJob],
+                total: 1,
+                limit: 1,
+                offset: 0
+            )
+        )
+        let currentSearch = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        await gate.releaseDetail()
+        let result = try await detailTask.value
+
+        XCTAssertNotEqual(oldSearch.jobs[0], currentSearch.jobs[0])
+        XCTAssertEqual(result.job, currentSearch.jobs[0])
+        XCTAssertEqual(result.job.title, "FAKE_CURRENT_PUBLIC_TITLE")
+        XCTAssertEqual(
+            result.job.organization,
+            "Current Public Organization"
+        )
+        XCTAssertEqual(result.job.location, "Current Public Location")
+        XCTAssertFalse(result.job.title.contains("FAKE_OLD"))
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(search: 2, detail: 1))
+    }
+
+    func testDetailUsesCurrentProjectionAfterEvictionAndReauthorization()
+        async throws
+    {
+        let gate = DetailRequestGate()
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [
+                        makeJob(
+                            id: Self.publicJobID,
+                            title: "FAKE_PRE_EVICTION_TITLE"
+                        ),
+                    ],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.publicJobID,
+                    description: "FAKE_REAUTHORIZED_DETAIL"
+                ),
+            ],
+            detailGate: gate
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 1
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let detailTask = Task {
+            try await adapter.detail(for: reference)
+        }
+
+        await gate.waitUntilDetailEntered()
+        await client.enqueueSearchResponse(
+            try makeSearchResponse(
+                jobs: [makeJob(id: Self.secondPublicJobID)],
+                total: 1,
+                limit: 1,
+                offset: 0
+            )
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        await client.enqueueSearchResponse(
+            try makeSearchResponse(
+                jobs: [
+                    makeJob(
+                        id: Self.publicJobID,
+                        title: "FAKE_REAUTHORIZED_CURRENT_TITLE"
+                    ),
+                ],
+                total: 1,
+                limit: 1,
+                offset: 0
+            )
+        )
+        let currentSearch = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        await gate.releaseDetail()
+        let result = try await detailTask.value
+
+        XCTAssertEqual(result.job, currentSearch.jobs[0])
+        XCTAssertEqual(result.job.title, "FAKE_REAUTHORIZED_CURRENT_TITLE")
+        let authorizedCount =
+            await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 3, detail: 1))
+    }
+
+    func testDetailIdentityValidationRemainsAfterPostAwaitAuthorization()
+        async throws
+    {
+        let gate = DetailRequestGate()
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [makeJob(id: Self.publicJobID)],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [
+                Self.publicJobID: makeDetail(
+                    id: Self.secondPublicJobID,
+                    description: "FAKE_MISMATCHED_DETAIL_BODY"
+                ),
+            ],
+            detailGate: gate
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(
+            client: client,
+            provenanceCapacity: 2
+        )
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+        _ = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        let detailTask = Task {
+            try await adapter.detail(for: reference)
+        }
+
+        await gate.waitUntilDetailEntered()
+        await gate.releaseDetail()
+        await assertPublicError(.invalidResponse) {
+            try await detailTask.value
+        }
+
+        let authorizedCount =
+            await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
+    func testDetailClientErrorsRemainFixedAndRedacted() async throws {
+        let cases: [
+            (RecordingPublicJobClient.Failure, AtlasPublicJobServiceError)
+        ] = [
+            (.transport(Self.transportSentinel), .unavailable),
+            (.decoding(Self.bodySentinel), .invalidResponse),
+        ]
+
+        for (failure, expected) in cases {
+            let client = RecordingPublicJobClient(
+                searchResponses: [
+                    try makeSearchResponse(
+                        jobs: [makeJob(id: Self.publicJobID)],
+                        total: 1,
+                        limit: 1,
+                        offset: 0
+                    ),
+                ],
+                details: [
+                    Self.publicJobID: makeDetail(id: Self.publicJobID),
+                ],
+                detailFailure: failure
+            )
+            let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+            let reference = try AtlasPublicJobReference(
+                publicJobID: Self.publicJobID
+            )
+            _ = try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+
+            await assertPublicError(expected) {
+                try await adapter.detail(for: reference)
+            }
+
+            let authorizedCount =
+                await adapter.authorizedReferenceCountForTesting()
+            let counts = await client.counts()
+            XCTAssertEqual(authorizedCount, 1)
+            XCTAssertEqual(counts, .init(search: 1, detail: 1))
+        }
+    }
+
+    func testDetailSourceUsesTwoPhasePerIDAuthorizationWithoutPinning() throws {
+        let adapterSource = try source("AtlasPublicJobAPIAdapter.swift")
+        let detailStart = try XCTUnwrap(
+            adapterSource.range(of: "    public func detail(")
+        )
+        let detailEnd = try XCTUnwrap(
+            adapterSource.range(
+                of: "\n    func authorizedReferenceCountForTesting()",
+                range: detailStart.upperBound..<adapterSource.endIndex
+            )
+        )
+        let detailSource = String(
+            adapterSource[detailStart.lowerBound..<detailEnd.lowerBound]
+        )
+        let lookup = "issuedJobs[reference.publicJobID]"
+        let clientAwait = try XCTUnwrap(
+            detailSource.range(
+                of:
+                    "response = try await client.jobDetail(reference.publicJobID)"
+            )
+        )
+        let lookupCount =
+            detailSource.components(separatedBy: lookup).count - 1
+        let preAwaitLookup = detailSource.range(of: lookup)
+        let postAwaitLookup = detailSource.range(
+            of: lookup,
+            range: clientAwait.upperBound..<detailSource.endIndex
+        )
+
+        XCTAssertEqual(lookupCount, 2)
+        XCTAssertNotNil(preAwaitLookup)
+        XCTAssertNotNil(postAwaitLookup)
+        if let preAwaitLookup {
+            XCTAssertLessThan(
+                preAwaitLookup.lowerBound,
+                clientAwait.lowerBound
+            )
+        }
+        if let postAwaitLookup {
+            let afterFinalAuthorization = String(
+                detailSource[postAwaitLookup.lowerBound...]
+            )
+            XCTAssertTrue(
+                afterFinalAuthorization.contains("job: currentIssuedJob")
+            )
+            XCTAssertFalse(afterFinalAuthorization.contains("await "))
+        }
+        for forbidden in [
+            "pinned",
+            "reservation",
+            "reservedReference",
+            "provenanceGeneration",
+            "TaskLocal",
+            "NSLock",
+            "DispatchSemaphore",
+            "nonisolated(unsafe)",
+            "@unchecked Sendable",
+        ] {
+            XCTAssertFalse(detailSource.contains(forbidden), forbidden)
+        }
+    }
+
     func testDetailCandidateSectionTakesPrecedenceOverDuplicateDescription()
         async throws
     {
@@ -3136,6 +3578,48 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
 
 // MARK: - Public API fake
 
+private actor DetailRequestGate {
+    private var didEnter = false
+    private var didRelease = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilDetailEntered() async {
+        if didEnter {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func suspendDetail() async {
+        precondition(!didEnter)
+        didEnter = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        if didRelease {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func releaseDetail() {
+        precondition(!didRelease)
+        didRelease = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
 private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
     enum Failure: Sendable {
         case none
@@ -3164,6 +3648,8 @@ private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
     private var recordedSearchRequests: [AtlasSearchRequest] = []
     private let healthFailure: Failure
     private let searchFailure: Failure
+    private let detailFailure: Failure
+    private let detailGate: DetailRequestGate?
 
     init(
         health: AtlasHealthSummary = makeHealth(status: "ok"),
@@ -3172,7 +3658,9 @@ private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
         sourceResponses: [AtlasSourcesResponse] = [],
         updateResponses: [AtlasUpdatesResponse] = [],
         healthFailure: Failure = .none,
-        searchFailure: Failure = .none
+        searchFailure: Failure = .none,
+        detailFailure: Failure = .none,
+        detailGate: DetailRequestGate? = nil
     ) {
         healthValue = health
         queuedSearchResponses = searchResponses
@@ -3181,6 +3669,8 @@ private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
         queuedUpdateResponses = updateResponses
         self.healthFailure = healthFailure
         self.searchFailure = searchFailure
+        self.detailFailure = detailFailure
+        self.detailGate = detailGate
     }
 
     func health() async throws -> AtlasHealthSummary {
@@ -3203,8 +3693,12 @@ private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
 
     func jobDetail(_ jobKey: String) async throws -> AtlasJobDetail {
         callCounts.detail += 1
+        try Self.raise(detailFailure)
         guard let detail = detailValues[jobKey] else {
             throw AtlasAPIError.invalidResponse
+        }
+        if let detailGate {
+            await detailGate.suspendDetail()
         }
         return detail
     }
@@ -3231,6 +3725,10 @@ private actor RecordingPublicJobClient: AtlasPublicJobAPIClient {
 
     func lastSearchRequest() -> AtlasSearchRequest? {
         recordedSearchRequests.last
+    }
+
+    func enqueueSearchResponse(_ response: AtlasSearchResponse) {
+        queuedSearchResponses.append(response)
     }
 
     private static func raise(_ failure: Failure) throws {

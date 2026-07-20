@@ -191,10 +191,26 @@ An arbitrary `AtlasPublicJobReference` does not authorize detail access. A
 reference is usable only after the same adapter has successfully validated and
 issued that public job through search.
 
-Before a successful issuance, or after eviction, detail fails as
-`invalidRequest` without calling the client. A returned detail must have the
-same public job ID. The result reuses the previously issued safe projection so
-an upstream detail response cannot replace list identity or presentation.
+Before a detail network request, the actor checks that the reference is
+currently issued. A never-authorized or already-evicted reference fails as
+`invalidRequest` without calling the client.
+
+The awaited detail call permits actor reentrancy, so a concurrent search may
+mutate the bounded provenance cache while the request is suspended. Immediately
+after a successful client return, the actor checks the same public job ID again.
+If it was evicted, the returned payload is discarded and detail fails as
+`invalidRequest`. A concurrent search for another ID does not invalidate a
+reference that remains issued. If the same ID was reauthorized, result
+construction uses its current post-await safe public projection rather than the
+pre-await projection. No further await occurs between this final lookup,
+response identity validation, candidate-facing text projection, and result
+construction.
+
+This two-phase check does not pin in-flight references, expand provenance
+capacity, reserve entries, or use a global generation invalidation. Bounded FIFO
+eviction continues normally. A returned detail must have the same public job
+ID, so an upstream detail response cannot replace list identity or
+presentation.
 
 Public detail follows the existing candidate-detail formatter's section-first
 policy. After metadata filtering, non-empty candidate-facing section bodies and
@@ -228,8 +244,8 @@ This is source precedence, not textual deduplication. The projection performs no
 semantic, substring, fuzzy, hash, sentinel, or content-equality comparison.
 Repeated content in separate candidate-facing sections remains repeated.
 Section titles and row labels are not added. Components remain joined with
-`"\n\n"`. Provenance authorization and returned identity validation are
-unchanged.
+`"\n\n"`. Returned identity validation and candidate-facing text projection
+are unchanged.
 
 ## Bounded Provenance and Eviction
 
@@ -475,6 +491,16 @@ reuses the source-summary helper after the current `organizationDisplay`
 projection, preserving accepted casing while sharing one separator and exact
 token policy.
 
+Review-fix cycle 13 added deterministic checked-continuation regressions before
+production changes. They failed while an in-flight detail returned after
+per-ID eviction and while same-ID reauthorization returned the stale pre-await
+public projection. The correction retains the pre-request check, revalidates
+the same ID immediately after the awaited client call, discards an evicted
+response, and constructs successful results from the current post-await
+projection. The tests also prove unrelated non-evicting searches remain valid,
+stale retries make no extra detail call, and no pinning or global generation
+policy was introduced.
+
 ## Test Coverage
 
 The focused suite covers:
@@ -510,6 +536,12 @@ The focused suite covers:
 - immutable reusable date-format structure and concurrent deterministic use;
 - 10,000-row fake snapshot date projection without a timing threshold;
 - bounded FIFO provenance;
+- deterministic eviction during an awaited detail call, post-await
+  revalidation, response discard, and stale-retry rejection;
+- non-evicting concurrent-search validity and same-ID current-projection
+  semantics, including evict-then-reauthorize;
+- pre-await arbitrary-reference rejection, post-await identity validation, and
+  fixed client-error mapping without pinning or global generation invalidation;
 - detail identity and issuance;
 - normalized exact-title exclusion of complete metadata/raw sections, including
   their bodies and rows, while retaining ordinary candidate-facing prose;
@@ -540,7 +572,7 @@ The full Swift suite remains the regression gate.
 | Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
-| Public-detail provenance and candidate-facing projection | Implemented with bounded in-memory constraints, normalized metadata exclusion, and section-first description fallback |
+| Public-detail provenance and candidate-facing projection | Implemented with bounded per-ID pre/post-await authorization, current-projection semantics, normalized metadata exclusion, and section-first description fallback |
 | Detail cache while locked | Blocked |
 | Vault-selection contract | Implemented |
 | Single-vault Keychain registry | Implemented |
