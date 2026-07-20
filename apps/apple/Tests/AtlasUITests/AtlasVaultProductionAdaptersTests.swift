@@ -518,6 +518,202 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 3))
     }
 
+    func testSearchRejectsRawDTOPlaceholderLabelsBeforeAuthorization()
+        async throws
+    {
+        for (field, value) in [
+            ("organization", "unknown_organization"),
+            ("duty_station", "location_not_classified"),
+            ("title", "UNTITLED VACANCY"),
+        ] {
+            let response = try rawSearchResponse(
+                replacingPublicField: field,
+                with: value
+            )
+            try await assertSearchRejectsBeforeAuthorization(
+                response,
+                rejectedValue: value
+            )
+        }
+    }
+
+    func testSearchRejectsCaseSeparatorAndWhitespacePlaceholderVariants()
+        async throws
+    {
+        let titleVariants = [
+            "Untitled Vacancy",
+            "UNTITLED VACANCY",
+            "untitled_vacancy",
+            "untitled-vacancy",
+            " Untitled   Vacancy ",
+        ]
+        let organizationVariants = [
+            "Unknown Organization",
+            "UNKNOWN ORGANIZATION",
+            "unknown_organization",
+            "unknown-organization",
+            " Unknown   Organization ",
+        ]
+        let locationVariants = [
+            "Location Not Classified",
+            "LOCATION NOT CLASSIFIED",
+            "location_not_classified",
+            "location-not-classified",
+            " Location   Not Classified ",
+        ]
+
+        for value in titleVariants {
+            try await assertSearchRejectsBeforeAuthorization(
+                try makeSearchResponse(
+                    jobs: [
+                        makeJob(id: Self.publicJobID, title: value),
+                    ],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+                rejectedValue: value
+            )
+        }
+        for value in organizationVariants {
+            try await assertSearchRejectsBeforeAuthorization(
+                try makeSearchResponse(
+                    jobs: [
+                        makeJob(id: Self.publicJobID, organization: value),
+                    ],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+                rejectedValue: value
+            )
+        }
+        for value in locationVariants {
+            try await assertSearchRejectsBeforeAuthorization(
+                try makeSearchResponse(
+                    jobs: [
+                        makeJob(id: Self.publicJobID, location: value),
+                    ],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+                rejectedValue: value
+            )
+        }
+    }
+
+    func testPlaceholderMatchingIsExactAndPreservesAcceptedLabels()
+        async throws
+    {
+        let accepted = makeJob(
+            id: Self.publicJobID,
+            title: "Untitled Vacancy Programme",
+            organization: "Unknown Organization Initiative",
+            location: "Location Not Classified Research Centre"
+        )
+        let client = RecordingPublicJobClient(
+            searchResponses: [
+                try makeSearchResponse(
+                    jobs: [accepted],
+                    total: 1,
+                    limit: 1,
+                    offset: 0
+                ),
+            ],
+            details: [
+                Self.publicJobID: makeDetail(id: Self.publicJobID),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let result = try await adapter.search(
+            AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+        )
+        _ = try await adapter.detail(
+            for: AtlasPublicJobReference(publicJobID: Self.publicJobID)
+        )
+
+        XCTAssertEqual(result.jobs[0].title, "Untitled Vacancy Programme")
+        XCTAssertEqual(
+            result.jobs[0].organization,
+            "Unknown Organization Initiative"
+        )
+        XCTAssertEqual(
+            result.jobs[0].location,
+            "Location Not Classified Research Centre"
+        )
+        XCTAssertEqual(
+            try AtlasProductionPublicProjection.job(
+                makeJob(
+                    id: Self.secondPublicJobID,
+                    organization: "Unknown Organizations Unit"
+                )
+            ).organization,
+            "Unknown Organizations Unit"
+        )
+        XCTAssertEqual(
+            try AtlasProductionPublicProjection.job(
+                makeJob(
+                    id: Self.thirdPublicJobID,
+                    location: "Classified Location Office"
+                )
+            ).location,
+            "Classified Location Office"
+        )
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 1)
+        XCTAssertEqual(counts, .init(search: 1, detail: 1))
+    }
+
+    func testPlaceholderPoliciesAreFieldSpecific() throws {
+        let projected = try AtlasProductionPublicProjection.job(
+            makeJob(
+                id: Self.publicJobID,
+                title: "Unknown Organization",
+                organization: "Untitled Vacancy",
+                location: "Unknown Organization"
+            )
+        )
+
+        XCTAssertEqual(projected.title, "Unknown Organization")
+        XCTAssertEqual(projected.organization, "Untitled Vacancy")
+        XCTAssertEqual(projected.location, "Unknown Organization")
+    }
+
+    func testPlaceholderValidationUsesFieldSpecificExactCanonicalKeys()
+        throws
+    {
+        let adapterSource = try source("AtlasPublicJobAPIAdapter.swift")
+
+        XCTAssertTrue(
+            adapterSource.contains("rejectedTitlePlaceholderKeys")
+        )
+        XCTAssertTrue(
+            adapterSource.contains("rejectedOrganizationPlaceholderKeys")
+        )
+        XCTAssertTrue(
+            adapterSource.contains("rejectedLocationPlaceholderKeys")
+        )
+        XCTAssertTrue(
+            adapterSource.contains("canonicalPublicPlaceholderKey")
+        )
+        for forbidden in [
+            "contains(\"unknown\")",
+            "hasPrefix(\"unknown\")",
+            "hasSuffix(\"unknown\")",
+            "NSRegularExpression",
+            "Levenshtein",
+            "similarity",
+            "fuzzy",
+            "Locale.current",
+            "localized",
+        ] {
+            XCTAssertFalse(adapterSource.contains(forbidden), forbidden)
+        }
+    }
+
     func testFailedSearchDoesNotAuthorizeDetail() async throws {
         let client = RecordingPublicJobClient(
             searchFailure: .transport(Self.transportSentinel)
@@ -1655,6 +1851,52 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(restored.jobs, apiResult.jobs)
     }
 
+    func testSnapshotRejectsNormalizedPublicPlaceholderVariants()
+        async throws
+    {
+        for (field, value) in [
+            ("organization", "Unknown Organization"),
+            ("organization", "unknown_organization"),
+            ("dutyStation", "Location Not Classified"),
+            ("dutyStation", "location_not_classified"),
+            ("title", "UNTITLED VACANCY"),
+        ] {
+            let root = RecordingRootProvider(
+                outcome: .url(
+                    URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+                )
+            )
+            let reader = RecordingSnapshotFileReader(
+                status: .regularFile,
+                data: try snapshotData(
+                    replacingPublicJobField: field,
+                    with: value
+                )
+            )
+            let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+                rootProvider: root,
+                fileReader: reader
+            )
+
+            await assertSnapshotError(.invalidSnapshot) {
+                try await restorer.restore()
+            }
+
+            XCTAssertEqual(root.callCount, 1, field)
+            XCTAssertEqual(reader.counts.status, 2, field)
+            XCTAssertEqual(reader.counts.resolve, 2, field)
+            XCTAssertEqual(reader.counts.read, 1, field)
+            XCTAssertFalse(
+                try XCTUnwrap(reader.lastStatusURL).path.contains("JobDetails"),
+                field
+            )
+            XCTAssertFalse(
+                String(describing: restorer).contains(value),
+                field
+            )
+        }
+    }
+
     func testSnapshotAcceptsCacheLimitAboveLiveSearchPageMaximum() async throws {
         let data = try snapshotData(
             replacingSearchLimit: 10_000
@@ -2271,6 +2513,41 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         }
     }
 
+    private func assertSearchRejectsBeforeAuthorization(
+        _ response: AtlasSearchResponse,
+        rejectedValue: String
+    ) async throws {
+        let client = RecordingPublicJobClient(
+            searchResponses: [response],
+            details: [
+                Self.publicJobID: makeDetail(id: Self.publicJobID),
+            ]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let reference = try AtlasPublicJobReference(
+            publicJobID: Self.publicJobID
+        )
+
+        await assertPublicError(.invalidResponse) {
+            try await adapter.search(
+                AtlasPublicJobSearchRequest(query: "", limit: 1, offset: 0)
+            )
+        }
+        await assertPublicError(.invalidRequest) {
+            try await adapter.detail(for: reference)
+        }
+
+        let authorizedCount = await adapter.authorizedReferenceCountForTesting()
+        let counts = await client.counts()
+        XCTAssertEqual(authorizedCount, 0, rejectedValue)
+        XCTAssertEqual(counts, .init(search: 1), rejectedValue)
+        XCTAssertFalse(String(describing: adapter).contains(rejectedValue))
+        XCTAssertFalse(
+            String(reflecting: AtlasPublicJobServiceError.invalidResponse)
+                .contains(rejectedValue)
+        )
+    }
+
     private func assertSelectionError<T>(
         _ expected: AtlasVaultIDSelectionError,
         operation: () async throws -> T
@@ -2424,6 +2701,29 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         )
     }
 
+    private func snapshotData(
+        replacingPublicJobField field: String,
+        with value: String
+    ) throws -> Data {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: validSnapshotData())
+                as? [String: Any]
+        )
+        var search = try XCTUnwrap(
+            object["searchResponse"] as? [String: Any]
+        )
+        var results = try XCTUnwrap(search["results"] as? [[String: Any]])
+        var row = try XCTUnwrap(results.first)
+        row[field] = value
+        results[0] = row
+        search["results"] = results
+        object["searchResponse"] = search
+        return try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+    }
+
     private func rawSearchResponse(
         omittingPublicField field: String
     ) throws -> AtlasSearchResponse {
@@ -2435,6 +2735,30 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             "status": "open",
         ]
         row.removeValue(forKey: field)
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "total": 1,
+                "limit": 1,
+                "offset": 0,
+                "results": [row],
+            ],
+            options: [.sortedKeys]
+        )
+        return try JSONDecoder().decode(AtlasSearchResponse.self, from: data)
+    }
+
+    private func rawSearchResponse(
+        replacingPublicField field: String,
+        with value: String
+    ) throws -> AtlasSearchResponse {
+        var row: [String: Any] = [
+            "job_key": Self.publicJobID,
+            "title": "Public role",
+            "organization": "UNICEF",
+            "duty_station": "Tokyo, Japan",
+            "status": "open",
+        ]
+        row[field] = value
         let data = try JSONSerialization.data(
             withJSONObject: [
                 "total": 1,

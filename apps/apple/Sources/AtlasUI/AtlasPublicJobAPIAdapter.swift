@@ -179,6 +179,15 @@ enum AtlasProductionPublicProjection {
         includingFractionalSeconds: false,
         timeZone: .gmt
     )
+    private static let rejectedTitlePlaceholderKeys: Set<String> = [
+        "untitled vacancy",
+    ]
+    private static let rejectedOrganizationPlaceholderKeys: Set<String> = [
+        "unknown organization",
+    ]
+    private static let rejectedLocationPlaceholderKeys: Set<String> = [
+        "location not classified",
+    ]
 
     private static let excludedPublicDetailSectionTitles: Set<String> = {
         let canonicalTitles = [
@@ -312,12 +321,23 @@ enum AtlasProductionPublicProjection {
             !id.isEmpty,
             id == value.jobKey,
             !title.isEmpty,
-            title != "Untitled vacancy",
             !organization.isEmpty,
-            organization != "Unknown organization",
             !location.isEmpty,
-            location != "Location not classified",
             value.status == "open"
+        else {
+            throw .invalidResponse
+        }
+        let titlePlaceholderKey = canonicalPublicPlaceholderKey(title)
+        let organizationPlaceholderKey = canonicalPublicPlaceholderKey(
+            organization
+        )
+        let locationPlaceholderKey = canonicalPublicPlaceholderKey(location)
+        guard
+            !rejectedTitlePlaceholderKeys.contains(titlePlaceholderKey),
+            !rejectedOrganizationPlaceholderKeys.contains(
+                organizationPlaceholderKey
+            ),
+            !rejectedLocationPlaceholderKeys.contains(locationPlaceholderKey)
         else {
             throw .invalidResponse
         }
@@ -532,6 +552,25 @@ enum AtlasProductionPublicProjection {
 
     private static func stableDateText(_ date: Date) -> String {
         date.formatted(stablePublicDateFormat)
+    }
+
+    private static func canonicalPublicPlaceholderKey(
+        _ value: String
+    ) -> String {
+        let separated = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        let collapsed = separated
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        let scalars = collapsed.unicodeScalars.map { scalar in
+            if scalar.value >= 65, scalar.value <= 90 {
+                return scalar.value + 32
+            }
+            return scalar.value
+        }
+        return String(decoding: scalars, as: Unicode.UTF32.self)
     }
 
     private static func trimmed(_ value: String?) -> String? {

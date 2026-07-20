@@ -93,11 +93,21 @@ Score, score reasons, match evidence, membership, application status, notes,
 private classifications, URLs, and persistence details are discarded.
 Each response row must retain the exact reviewed `open` status requested by the
 adapter. Non-open rows fail before projection or provenance authorization.
-Decoder-synthesized placeholders for a missing title, organization, or duty
-station are not reviewed public values and also fail before provenance
-authorization. This deliberately rejects even a literal value equal to one of
-those fallback labels rather than accepting a row whose raw field presence can
-no longer be proven across the existing client seam. Duplicate IDs, empty
+Required title, organization, and duty-station values fail closed when their
+candidate-facing labels are field-specific placeholder equivalents. Validation
+uses separate exact canonical sets for `untitled vacancy`,
+`unknown organization`, and `location not classified`; a placeholder for one
+field is not applied to another field.
+
+Canonicalization is comparison-only. It trims surrounding whitespace, treats
+ASCII underscores and hyphens as spaces, collapses repeated whitespace, and
+lowercases ASCII letters deterministically. The complete canonical label must
+equal the field-specific key. There is no substring, prefix, suffix, regex,
+fuzzy, semantic, or arbitrary content scan. Accepted candidate-facing labels
+are returned unchanged, including labels that merely contain similar words.
+This prevents decoder fallbacks and normalized DTO display labels from
+bypassing rejection. Live search and restored snapshots share this projection,
+and rejection occurs before provenance authorization. Duplicate IDs, empty
 required values, and inconsistent pagination also fail closed.
 
 ## Stable Public Date Representation
@@ -430,6 +440,12 @@ exact-token projection shared by both live and snapshot source summaries. An
 exact-head review regression then narrowed acronym uppercasing so clean
 title-case single-token labels remain unchanged.
 
+Review-fix cycle 11 added raw DTO, direct-row, and snapshot regressions before
+production changes. They failed while case, underscore, hyphen, and
+whitespace-normalized title, organization, and location placeholders were
+accepted. The correction adds deterministic field-specific whole-label
+canonicalization without changing accepted output or provenance mechanics.
+
 ## Test Coverage
 
 The focused suite covers:
@@ -444,6 +460,13 @@ The focused suite covers:
 - empty, separator-only, fallback, and ATS-only source-label rejection;
 - identical live and restored-snapshot source projection;
 - non-open row, decoder-fallback, duplicate, and pagination validation;
+- field-specific title, organization, and location placeholder rejection
+  across case, underscore, hyphen, and repeated-whitespace variants;
+- raw DTO normalization and restored-snapshot placeholder rejection before
+  provenance authorization;
+- exact-only matching that preserves legitimate containing labels and accepted
+  candidate-facing values;
+- zero authorized references and zero detail calls after invalid live rows;
 - exact deterministic UTC dates for epoch, nonzero-time, day-boundary, and
   subsecond inputs;
 - identical live-search and snapshot date projection;
@@ -476,7 +499,7 @@ The full Swift suite remains the regression gate.
 | Capability | Status |
 | --- | --- |
 | Public-search contract | Implemented |
-| Concrete public-search adapter | Implemented |
+| Concrete public-search adapter | Implemented with field-specific normalized placeholder rejection before provenance |
 | Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
