@@ -137,7 +137,9 @@ hyphens as word boundaries, collapses repeated whitespace, and removes the
 same reviewed ATS and infrastructure vocabulary used by candidate-facing job
 organization cleanup. Tokens are compared case-insensitively as exact whole
 words; no substring deletion is performed. Machine-separated labels use
-deterministic, locale-independent casing, while already candidate-facing names
+deterministic, locale-independent casing. A short single token is rendered as
+an acronym only when it came from machine-separated text or was entirely
+lowercase; already candidate-facing names, including title-case single tokens,
 retain their existing word casing. Empty, separator-only, reviewed fallback,
 or ATS-only results fail closed as `invalidResponse` rather than exposing the
 raw slug.
@@ -411,7 +413,9 @@ Review-fix cycle 9 added live and restored-source regressions before production
 changes. They failed while source/org slugs remained the candidate display,
 ATS tokens remained visible, and ATS-only or separator-only labels were
 accepted. The implementation then introduced one generic separator-aware,
-exact-token projection shared by both live and snapshot source summaries.
+exact-token projection shared by both live and snapshot source summaries. An
+exact-head review regression then narrowed acronym uppercasing so clean
+title-case single-token labels remain unchanged.
 
 ## Test Coverage
 
@@ -423,6 +427,7 @@ The focused suite covers:
 - exact ATS-token removal without substring deletion;
 - deterministic machine-separator casing and preservation of already clean
   organization names;
+- preservation of clean title-case short single-token labels;
 - empty, separator-only, fallback, and ATS-only source-label rejection;
 - identical live and restored-snapshot source projection;
 - non-open row, decoder-fallback, duplicate, and pagination validation;

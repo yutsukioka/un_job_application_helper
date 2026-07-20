@@ -684,6 +684,10 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
                 sourceID: "fake_whitespace_text",
                 organization: "  World   Health\tOrganization  "
             ),
+            makeSourceSummary(
+                sourceID: "fake_short_candidate_text",
+                organization: "Fakeco"
+            ),
         ]
         let client = RecordingPublicJobClient(
             sourceResponses: [AtlasSourcesResponse(sources: values)]
@@ -700,6 +704,7 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
                 "Fake Capitol Hcmuseum Oracleson",
                 "Fake Apiary Oracular Guidance",
                 "World Health Organization",
+                "Fakeco",
             ]
         )
         XCTAssertEqual(sources.map(\.sourceID), values.map(\.sourceID))

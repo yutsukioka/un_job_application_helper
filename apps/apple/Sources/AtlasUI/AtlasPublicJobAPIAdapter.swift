@@ -458,7 +458,11 @@ enum AtlasProductionPublicProjection {
         }
 
         let displayName: String
-        if words.count == 1, words[0].count <= 6 {
+        if
+            words.count == 1,
+            words[0].count <= 6,
+            hasMachineSeparator || words[0] == words[0].lowercased()
+        {
             displayName = words[0].uppercased()
         } else if hasMachineSeparator {
             displayName = words
