@@ -127,9 +127,27 @@ raw server diagnostics are dropped.
 
 ## Public Source and Update Mapping
 
-Source projection requires non-empty identifiers and display names plus
-non-negative counts. Update projection requires a non-empty identifier,
-non-negative source-run counts, and deterministic optional date parsing.
+Backend source summaries may populate `organization` from `jobs.org_id`, where
+normalization currently stores the source ID. The projection therefore keeps
+`sourceID` unchanged as the opaque public identity and derives `displayName`
+separately as candidate-facing text.
+
+The display projection trims surrounding whitespace, treats underscores and
+hyphens as word boundaries, collapses repeated whitespace, and removes the
+same reviewed ATS and infrastructure vocabulary used by candidate-facing job
+organization cleanup. Tokens are compared case-insensitively as exact whole
+words; no substring deletion is performed. Machine-separated labels use
+deterministic, locale-independent casing, while already candidate-facing names
+retain their existing word casing. Empty, separator-only, reviewed fallback,
+or ATS-only results fail closed as `invalidResponse` rather than exposing the
+raw slug.
+
+There is no source-ID-to-name table and no runtime dependency on organization
+YAML or another configuration file. Live `/api/sources` responses and restored
+snapshot source summaries call the same projection. Source projection still
+requires an exact non-empty source ID and non-negative counts. Update
+projection remains unchanged: it requires a non-empty identifier, non-negative
+source-run counts, and deterministic optional date parsing.
 
 `changedJobCount` is the checked sum of inserted and updated rows. Arithmetic
 overflow fails as `invalidResponse`; it never wraps.
@@ -389,12 +407,24 @@ before the immutable reusable format style was introduced. Optimized
 before/after benchmark evidence is recorded outside the repository; wall-clock
 timing is deliberately not a CI correctness threshold.
 
+Review-fix cycle 9 added live and restored-source regressions before production
+changes. They failed while source/org slugs remained the candidate display,
+ATS tokens remained visible, and ATS-only or separator-only labels were
+accepted. The implementation then introduced one generic separator-aware,
+exact-token projection shared by both live and snapshot source summaries.
+
 ## Test Coverage
 
 The focused suite covers:
 
 - construction call counts;
 - health/search/source/update/detail mapping;
+- candidate-facing source-label normalization with unchanged opaque source IDs;
+- exact ATS-token removal without substring deletion;
+- deterministic machine-separator casing and preservation of already clean
+  organization names;
+- empty, separator-only, fallback, and ATS-only source-label rejection;
+- identical live and restored-snapshot source projection;
 - non-open row, decoder-fallback, duplicate, and pagination validation;
 - exact deterministic UTC dates for epoch, nonzero-time, day-boundary, and
   subsecond inputs;
@@ -423,6 +453,7 @@ The full Swift suite remains the regression gate.
 | --- | --- |
 | Public-search contract | Implemented |
 | Concrete public-search adapter | Implemented |
+| Candidate-facing public source summaries | Implemented with generic exact-token normalization shared by live and snapshot projection |
 | Public-snapshot restore contract | Implemented |
 | Concrete public-snapshot restorer | Implemented |
 | Public-detail provenance and candidate-facing projection | Implemented with bounded in-memory constraints and normalized metadata-section exclusion |

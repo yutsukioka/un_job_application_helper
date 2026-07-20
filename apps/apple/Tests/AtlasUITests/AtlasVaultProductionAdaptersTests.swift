@@ -592,6 +592,153 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(sources: 2))
     }
 
+    func testSourcesNormalizeCandidateLabelsAndPreserveOpaqueIDs()
+        async throws
+    {
+        let values = [
+            makeSourceSummary(
+                sourceID: "unicef_pageup",
+                organization: "unicef_pageup",
+                totalJobs: 9,
+                openJobs: 7
+            ),
+            makeSourceSummary(
+                sourceID: "wmo_oracle_hcm",
+                organization: "wmo_oracle_hcm",
+                totalJobs: 8,
+                openJobs: 6
+            ),
+            makeSourceSummary(
+                sourceID: "unv_uvp",
+                organization: "unv_uvp",
+                totalJobs: 7,
+                openJobs: 5
+            ),
+            makeSourceSummary(
+                sourceID: "wfp_workday",
+                organization: "wfp_workday",
+                totalJobs: 6,
+                openJobs: 4
+            ),
+            makeSourceSummary(
+                sourceID: "world_food_programme_workday",
+                organization: "world_food_programme_workday",
+                totalJobs: 5,
+                openJobs: 3
+            ),
+        ]
+        let client = RecordingPublicJobClient(
+            sourceResponses: [AtlasSourcesResponse(sources: values)]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let sources = try await adapter.sources()
+
+        XCTAssertEqual(sources.map(\.sourceID), values.map(\.sourceID))
+        XCTAssertEqual(
+            sources.map(\.displayName),
+            ["UNICEF", "WMO", "UNV", "WFP", "World Food Programme"]
+        )
+        XCTAssertEqual(sources.map(\.openJobCount), [7, 6, 5, 4, 3])
+        XCTAssertTrue(sources.allSatisfy { $0.availability == .available })
+        let forbiddenTokens: Set<String> = [
+            "pageup", "oracle", "hcm", "uvp", "workday",
+        ]
+        for (source, rawValue) in zip(sources, values.map(\.organization)) {
+            XCTAssertFalse(source.displayName.contains("_"))
+            XCTAssertFalse(source.displayName.contains("-"))
+            let words = Set(
+                source.displayName
+                    .split(whereSeparator: \.isWhitespace)
+                    .map { $0.lowercased() }
+            )
+            XCTAssertTrue(words.isDisjoint(with: forbiddenTokens))
+            XCTAssertFalse(String(describing: source).contains(rawValue))
+            XCTAssertFalse(String(reflecting: source).contains(rawValue))
+        }
+        let counts = await client.counts()
+        XCTAssertEqual(counts, .init(sources: 1))
+    }
+
+    func testSourceLabelsPreserveCandidateTextAndRemoveOnlyExactTokens()
+        async throws
+    {
+        let values = [
+            makeSourceSummary(
+                sourceID: "who_public",
+                organization: "World Health Organization"
+            ),
+            makeSourceSummary(
+                sourceID: "unicef_pageup",
+                organization: "UNICEF PageUp"
+            ),
+            makeSourceSummary(
+                sourceID: "fake_candidate_text",
+                organization: "Fake Capitol Hcmuseum Oracleson"
+            ),
+            makeSourceSummary(
+                sourceID: "fake_machine_text",
+                organization: "fake_apiary-oracular_guidance"
+            ),
+            makeSourceSummary(
+                sourceID: "fake_whitespace_text",
+                organization: "  World   Health\tOrganization  "
+            ),
+        ]
+        let client = RecordingPublicJobClient(
+            sourceResponses: [AtlasSourcesResponse(sources: values)]
+        )
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+        let sources = try await adapter.sources()
+
+        XCTAssertEqual(
+            sources.map(\.displayName),
+            [
+                "World Health Organization",
+                "UNICEF",
+                "Fake Capitol Hcmuseum Oracleson",
+                "Fake Apiary Oracular Guidance",
+                "World Health Organization",
+            ]
+        )
+        XCTAssertEqual(sources.map(\.sourceID), values.map(\.sourceID))
+    }
+
+    func testSourcesFailClosedForEmptySeparatorATSAndFallbackLabels()
+        async
+    {
+        let invalidOrganizations = [
+            "",
+            " \t\n ",
+            "oracle_hcm",
+            "---___",
+            "Unknown organization",
+        ]
+
+        for (index, organization) in invalidOrganizations.enumerated() {
+            let client = RecordingPublicJobClient(
+                sourceResponses: [
+                    AtlasSourcesResponse(
+                        sources: [
+                            makeSourceSummary(
+                                sourceID: "fake_invalid_source_\(index)",
+                                organization: organization
+                            ),
+                        ]
+                    ),
+                ]
+            )
+            let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+
+            await assertPublicError(.invalidResponse) {
+                try await adapter.sources()
+            }
+            let counts = await client.counts()
+            XCTAssertEqual(counts, .init(sources: 1))
+        }
+    }
+
     func testSourcesMapDocumentedBackendHealthStatuses() async throws {
         let statuses: [(String, AtlasPublicServiceAvailability)] = [
             ("ok_empty", .available),
@@ -1077,6 +1224,11 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
             "UserDefaults",
             "@main",
             "SwiftUI",
+            "organizations.yaml",
+            "Locale.current",
+            "localizedCapitalized",
+            "unicef_pageup",
+            "wmo_oracle_hcm",
         ] {
             XCTAssertFalse(source.contains(forbidden), forbidden)
         }
@@ -1179,6 +1331,49 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertFalse(labels.contains("searchResponse"))
         XCTAssertFalse(String(reflecting: restored).contains("jobs.sqlite3"))
         XCTAssertEqual(reader.counts.read, 1)
+    }
+
+    func testSnapshotSourcesShareCandidateLabelProjectionWithLiveSources()
+        async throws
+    {
+        let data = try snapshotData(
+            replacingSourceID: "unicef_pageup",
+            organization: "unicef_pageup"
+        )
+        let root = RecordingRootProvider(
+            outcome: .url(
+                URL(fileURLWithPath: "/tmp/atlas-root", isDirectory: true)
+            )
+        )
+        let reader = RecordingSnapshotFileReader(
+            status: .regularFile,
+            data: data
+        )
+        let restorer = AtlasApplicationSupportPublicSnapshotRestorer(
+            rootProvider: root,
+            fileReader: reader
+        )
+
+        let restoredValue = try await restorer.restore()
+        let restored = try XCTUnwrap(restoredValue)
+
+        XCTAssertEqual(restored.sources.map(\.sourceID), ["unicef_pageup"])
+        XCTAssertEqual(restored.sources.map(\.displayName), ["UNICEF"])
+        XCTAssertFalse(
+            restored.sources[0].displayName.contains("unicef_pageup")
+        )
+        XCTAssertEqual(reader.counts.read, 1)
+        XCTAssertFalse(
+            try XCTUnwrap(reader.lastStatusURL).path.contains("JobDetails")
+        )
+
+        let searchJob = try AtlasProductionPublicProjection.job(
+            makeJob(
+                id: Self.publicJobID,
+                organization: "UNICEF PageUp"
+            )
+        )
+        XCTAssertEqual(searchJob.organization, "UNICEF")
     }
 
     func testSnapshotProjectionMatchesAPIProjection() async throws {
@@ -1962,6 +2157,29 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         )
     }
 
+    private func snapshotData(
+        replacingSourceID sourceID: String,
+        organization: String
+    ) throws -> Data {
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: validSnapshotData())
+                as? [String: Any]
+        )
+        object["sources"] = [
+            [
+                "source_id": sourceID,
+                "organization": organization,
+                "total_jobs": 1,
+                "open_jobs": 1,
+                "health_status": "ok",
+            ],
+        ]
+        return try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+    }
+
     private func rawSearchResponse(
         omittingPublicField field: String
     ) throws -> AtlasSearchResponse {
@@ -2198,6 +2416,27 @@ private func makeHealth(
         openJobs: openJobs,
         enabledSources: enabledSources,
         lastSyncAt: lastSyncAt
+    )
+}
+
+private func makeSourceSummary(
+    sourceID: String,
+    organization: String,
+    totalJobs: Int = 1,
+    openJobs: Int = 1,
+    healthStatus: String? = "ok"
+) -> AtlasSourceSummary {
+    AtlasSourceSummary(
+        sourceID: sourceID,
+        organization: organization,
+        totalJobs: totalJobs,
+        openJobs: openJobs,
+        lastSeenAt: nil,
+        healthStatus: healthStatus,
+        observedAt: nil,
+        detailAttempted: nil,
+        detailFailed: nil,
+        missingTransitionAllowed: nil
     )
 }
 

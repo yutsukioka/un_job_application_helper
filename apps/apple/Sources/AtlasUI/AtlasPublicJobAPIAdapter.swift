@@ -195,6 +195,31 @@ enum AtlasProductionPublicProjection {
         )
     }()
 
+    private static let candidateOrganizationInfrastructureTokens: Set<String> = [
+        "pageup",
+        "successfactors",
+        "taleo",
+        "workday",
+        "inspira",
+        "avature",
+        "csod",
+        "recruitee",
+        "smartrecruiters",
+        "oracle",
+        "hcm",
+        "peoplesoft",
+        "talentsoft",
+        "uvp",
+        "api",
+        "static",
+        "html",
+        "custom",
+        "legacy",
+        "rmk",
+        "drupal",
+        "split",
+    ]
+
     static func health(
         _ value: AtlasHealthSummary
     ) throws(AtlasPublicJobServiceError) -> AtlasPublicServiceHealth {
@@ -311,17 +336,15 @@ enum AtlasProductionPublicProjection {
         let sourceID = value.sourceID.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        let displayName = value.organization.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
         guard
             sourceID == value.sourceID,
-            displayName == value.organization,
+            !sourceID.isEmpty,
             value.totalJobs >= 0,
             value.openJobs >= 0
         else {
             throw .invalidResponse
         }
+        let displayName = try candidateOrganizationDisplay(value.organization)
         let sourceAvailability = try availability(
             value.healthStatus,
             missingIsUnavailable: true
@@ -402,6 +425,59 @@ enum AtlasProductionPublicProjection {
             throw .invalidResponse
         }
         return components.joined(separator: "\n\n")
+    }
+
+    private static func candidateOrganizationDisplay(
+        _ rawValue: String
+    ) throws(AtlasPublicJobServiceError) -> String {
+        let trimmedValue = rawValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !trimmedValue.isEmpty else {
+            throw .invalidResponse
+        }
+
+        let hasMachineSeparator =
+            trimmedValue.contains("_") || trimmedValue.contains("-")
+        let separators = CharacterSet.whitespacesAndNewlines.union(
+            CharacterSet(charactersIn: "_-")
+        )
+        let words = trimmedValue
+            .components(separatedBy: separators)
+            .filter { !$0.isEmpty }
+            .filter {
+                !candidateOrganizationInfrastructureTokens.contains(
+                    $0.lowercased()
+                )
+            }
+        guard
+            !words.isEmpty,
+            words.contains(where: { $0.contains(where: \.isLetter) })
+        else {
+            throw .invalidResponse
+        }
+
+        let displayName: String
+        if words.count == 1, words[0].count <= 6 {
+            displayName = words[0].uppercased()
+        } else if hasMachineSeparator {
+            displayName = words
+                .map(candidateOrganizationSlugWord)
+                .joined(separator: " ")
+        } else {
+            displayName = words.joined(separator: " ")
+        }
+        guard displayName.lowercased() != "unknown organization" else {
+            throw .invalidResponse
+        }
+        return displayName
+    }
+
+    private static func candidateOrganizationSlugWord(_ word: String) -> String {
+        if word == word.uppercased() {
+            return word
+        }
+        return word.prefix(1).uppercased() + word.dropFirst().lowercased()
     }
 
     private static func availability(
