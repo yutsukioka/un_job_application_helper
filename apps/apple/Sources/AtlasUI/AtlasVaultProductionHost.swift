@@ -802,9 +802,16 @@ public actor AtlasVaultProductionHost:
                 expectedGeneration: startedGeneration,
                 ownerState: startedState
             )
-            guard case .acknowledged = finalPublication,
-                  lifetime == .starting,
+            guard lifetime == .starting,
                   generation == startedGeneration else {
+                return failStartForPresentation()
+            }
+            switch finalPublication {
+            case .acknowledged:
+                break
+            case .stale:
+                continue
+            case .failed:
                 return failStartForPresentation()
             }
             guard safeLifecycleCheckRevision == nil,
@@ -1372,33 +1379,128 @@ public actor AtlasVaultProductionHost:
             unlockState = lockedUnlockState()
             isUnlockPanelPresented = false
             let ordinaryGeneration = advanceGeneration()
+            var requiresFreshRuntimeAdmissionProof = false
             while barrierSucceeded {
                 let admissionLifecycleRevision = lifecycleEventRevision
                 let admissionSafeCheckRevision = safeLifecycleCheckRevision
-                let mayOpen = barrierCompletionAdmissionPermitted
+                let mayOpen = !requiresFreshRuntimeAdmissionProof
+                    && barrierCompletionAdmissionPermitted
                 let ordinaryShell = shellReplacingCanRequestUnlock(mayOpen)
-                let ordinaryState = flowState(publicShell: ordinaryShell)
+                let ordinaryState: AtlasLockedShellUnlockFlowState
+                if requiresFreshRuntimeAdmissionProof {
+                    ordinaryState = AtlasLockedShellUnlockFlowState(
+                        publicShell: ordinaryShell,
+                        unlockPresentationState: reconciliationUnlockState(),
+                        isUnlockPanelPresented: true
+                    )
+                } else {
+                    ordinaryState = flowState(publicShell: ordinaryShell)
+                }
+                let ordinaryPresentationStatus: AtlasVaultPresentationStatus =
+                    requiresFreshRuntimeAdmissionProof
+                    ? .locking
+                    : lockedPresentationStatus
                 let ordinaryPublication = await publishAndReset(
-                    status: lockedPresentationStatus,
+                    status: ordinaryPresentationStatus,
                     expectedGeneration: ordinaryGeneration,
                     ownerState: ordinaryState
                 )
                 guard barrierOperation?.id == operationID else {
                     return flowState()
                 }
-                guard case .acknowledged = ordinaryPublication,
-                      generation == ordinaryGeneration else {
+                guard generation == ordinaryGeneration else {
                     barrierSucceeded = false
                     break
                 }
-                guard lifecycleEventRevision == admissionLifecycleRevision,
-                      safeLifecycleCheckRevision
-                        == admissionSafeCheckRevision else {
+                if case .stale = ordinaryPublication,
+                   !publicationLifecycleFenceIsCurrent(
+                       revision: admissionLifecycleRevision,
+                       safeCheckRevision: admissionSafeCheckRevision
+                   ) {
                     closeUnlockAdmission()
+                    unlockState = reconciliationUnlockState()
+                    isUnlockPanelPresented = true
+                    requiresFreshRuntimeAdmissionProof = true
+                    continue
+                }
+                guard case .acknowledged = ordinaryPublication else {
+                    barrierSucceeded = false
+                    break
+                }
+                guard publicationLifecycleFenceIsCurrent(
+                    revision: admissionLifecycleRevision,
+                    safeCheckRevision: admissionSafeCheckRevision
+                ) else {
+                    closeUnlockAdmission()
+                    unlockState = reconciliationUnlockState()
+                    isUnlockPanelPresented = true
+                    requiresFreshRuntimeAdmissionProof = true
+                    continue
+                }
+                if requiresFreshRuntimeAdmissionProof {
+                    var currentRuntimeStatus = await dependencies.runtime
+                        .status()
+                    guard barrierOperation?.id == operationID else {
+                        return flowState()
+                    }
+                    guard generation == ordinaryGeneration else {
+                        barrierSucceeded = false
+                        break
+                    }
+                    guard publicationLifecycleFenceIsCurrent(
+                        revision: admissionLifecycleRevision,
+                        safeCheckRevision: admissionSafeCheckRevision
+                    ) else {
+                        closeUnlockAdmission()
+                        continue
+                    }
+                    if currentRuntimeStatus != .locked {
+                        await dependencies.runtime.lock()
+                        guard barrierOperation?.id == operationID else {
+                            return flowState()
+                        }
+                        guard generation == ordinaryGeneration else {
+                            barrierSucceeded = false
+                            break
+                        }
+                        guard publicationLifecycleFenceIsCurrent(
+                            revision: admissionLifecycleRevision,
+                            safeCheckRevision: admissionSafeCheckRevision
+                        ) else {
+                            closeUnlockAdmission()
+                            continue
+                        }
+                        currentRuntimeStatus = await dependencies.runtime
+                            .status()
+                        guard barrierOperation?.id == operationID else {
+                            return flowState()
+                        }
+                        guard generation == ordinaryGeneration else {
+                            barrierSucceeded = false
+                            break
+                        }
+                        guard publicationLifecycleFenceIsCurrent(
+                            revision: admissionLifecycleRevision,
+                            safeCheckRevision: admissionSafeCheckRevision
+                        ) else {
+                            closeUnlockAdmission()
+                            continue
+                        }
+                    }
+                    guard currentRuntimeStatus == .locked else {
+                        barrierSucceeded = false
+                        break
+                    }
+                    unlockState = lockedUnlockState()
+                    isUnlockPanelPresented = false
+                    requiresFreshRuntimeAdmissionProof = false
                     continue
                 }
                 guard !mayOpen || barrierCompletionAdmissionPermitted else {
                     closeUnlockAdmission()
+                    unlockState = reconciliationUnlockState()
+                    isUnlockPanelPresented = true
+                    requiresFreshRuntimeAdmissionProof = true
                     continue
                 }
                 selectedVaultID = nil
@@ -1569,6 +1671,9 @@ public actor AtlasVaultProductionHost:
         ownerState: AtlasLockedShellUnlockFlowState? = nil
     ) async -> PublicationResult {
         let state = ownerState ?? flowState()
+        let requiresLifecycleFence = state.publicShell.canRequestUnlock
+        let publicationLifecycleRevision = lifecycleEventRevision
+        let publicationSafeCheckRevision = safeLifecycleCheckRevision
         guard let publicationPermit = await acquirePublicationPermit() else {
             return .stale
         }
@@ -1576,6 +1681,13 @@ public actor AtlasVaultProductionHost:
             releasePublicationPermit(publicationPermit)
         }
         guard generation == expectedGeneration else {
+            return .stale
+        }
+        guard !requiresLifecycleFence
+            || publicationLifecycleFenceIsCurrent(
+                revision: publicationLifecycleRevision,
+                safeCheckRevision: publicationSafeCheckRevision
+            ) else {
             return .stale
         }
         let raw = AtlasVaultPresentationSnapshot(
@@ -1593,6 +1705,13 @@ public actor AtlasVaultProductionHost:
         guard generation == expectedGeneration else {
             return .stale
         }
+        guard !requiresLifecycleFence
+            || publicationLifecycleFenceIsCurrent(
+                revision: publicationLifecycleRevision,
+                safeCheckRevision: publicationSafeCheckRevision
+            ) else {
+            return .stale
+        }
         guard await dependencies.presentationOwner.resetPresentation(
             to: state,
             generation: expectedGeneration
@@ -1602,6 +1721,14 @@ public actor AtlasVaultProductionHost:
         return generation == expectedGeneration
             ? .acknowledged
             : .stale
+    }
+
+    private func publicationLifecycleFenceIsCurrent(
+        revision: UInt64,
+        safeCheckRevision: UInt64?
+    ) -> Bool {
+        lifecycleEventRevision == revision
+            && self.safeLifecycleCheckRevision == safeCheckRevision
     }
 
     private func mapRestoredSnapshot(

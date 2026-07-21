@@ -690,6 +690,66 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(try await second.value.get(), secondResult)
     }
 
+    func testQueuedInteractivePublicationIsRejectedWhenSafeCheckStarts()
+        async throws
+    {
+        let publishGate = HostSuspensionGate()
+        let lifecycleHandleGate = HostSuspensionGate()
+        let firstResult = try makeSearchResult(
+            jobID: "FAKE_QUEUED_PUBLICATION_JOB",
+            title: "Fake Queued Publication Role"
+        )
+        let secondResult = try makeSearchResult(
+            jobID: "FAKE_LIFECYCLE_FENCED_JOB",
+            title: "Fake Lifecycle Fenced Role"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                HostPublicJobsFake.Plan(result: .success(firstResult)),
+                HostPublicJobsFake.Plan(result: .success(secondResult)),
+            ],
+            lifecycleHandleGate: lifecycleHandleGate
+        )
+        _ = try await graph.host.start()
+        let ownerCallsBeforeSearch = await graph.owner.totalCalls()
+        await graph.presentation.setPublishGate(publishGate)
+        let firstRequest = try searchRequest(
+            query: "FAKE_QUEUED_PUBLICATION"
+        )
+        let secondRequest = try searchRequest(
+            query: "FAKE_LIFECYCLE_FENCED"
+        )
+
+        let first = Task {
+            await captureSearch(graph.host, firstRequest)
+        }
+        await publishGate.waitUntilEntered()
+        let second = Task {
+            await captureSearch(graph.host, secondRequest)
+        }
+        await graph.publicJobs.waitForTotalCalls(2)
+        let safe = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await lifecycleHandleGate.waitUntilEntered()
+
+        await publishGate.release()
+        await expectThrowsError(try await first.value.get())
+        await expectEqual(try await second.value.get(), secondResult)
+        await expectFalse(
+            (await graph.owner.canRequestUnlockValues(
+                from: ownerCallsBeforeSearch
+            )).contains(true)
+        )
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+
+        await lifecycleHandleGate.release()
+        await expectTrue((await safe.value).publicShell.canRequestUnlock)
+    }
+
     func testStopCancelsSearchAndIgnoresLateCompletion() async throws {
         let gate = HostSuspensionGate()
         let result = try makeSearchResult(
@@ -1483,6 +1543,80 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectTrue(reopened.publicShell.canRequestUnlock)
     }
 
+    func testBarrierRevalidatesRuntimeAfterCompletedSafeLifecycleEvent()
+        async throws
+    {
+        let ordinaryOwnerGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID()))
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        await graph.owner.setGate(
+            ordinaryOwnerGate,
+            whenCanRequestUnlock: true
+        )
+
+        let locking = Task { await graph.host.lock() }
+        await ordinaryOwnerGate.waitUntilEntered()
+        let safe = await graph.host.handleLifecycleEvent(.didBecomeActive)
+        await expectFalse(safe.publicShell.canRequestUnlock)
+        await graph.runtime.setStatus(.unlocked)
+        await graph.runtime.setLockResult(.unlocked)
+
+        await ordinaryOwnerGate.release()
+        let locked = await locking.value
+        await expectFalse(locked.publicShell.canRequestUnlock)
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+        await expectEqual(
+            await graph.owner.latestCanRequestUnlock(),
+            false
+        )
+        await expectEqual(
+            await graph.owner.latestUnlockStatus(),
+            .hostReconciliationRequired
+        )
+        await expectEqual(
+            await graph.presentation.currentSnapshot().status,
+            .locking
+        )
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
+    }
+
+    func testBarrierReopensOnlyAfterFreshRuntimeLockProof() async throws {
+        let ordinaryOwnerGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID()))
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        await graph.owner.setGate(
+            ordinaryOwnerGate,
+            whenCanRequestUnlock: true
+        )
+
+        let locking = Task { await graph.host.lock() }
+        await ordinaryOwnerGate.waitUntilEntered()
+        let safe = await graph.host.handleLifecycleEvent(.didBecomeActive)
+        await expectFalse(safe.publicShell.canRequestUnlock)
+        await graph.runtime.setStatus(.unlocked)
+
+        await ordinaryOwnerGate.release()
+        let locked = await locking.value
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(
+            await graph.owner.latestCanRequestUnlock(),
+            true
+        )
+    }
+
     func testSafeReopenClosesAdmissionAcrossEverySafetyAwait() async throws {
         for event in [
             AtlasVaultLifecycleEvent.didBecomeActive,
@@ -1899,19 +2033,36 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             let permitAwait = hostSource.range(
                 of: "await acquirePublicationPermit()",
                 range: publicationStart.lowerBound..<hostSource.endIndex
+            ),
+            let ownerReset = hostSource.range(
+                of: "dependencies.presentationOwner.resetPresentation(",
+                range: publicationStart.lowerBound..<hostSource.endIndex
             ) else {
             XCTFail("Publication capture structure is missing")
             return
         }
 
         await expectTrue(stateCapture.lowerBound < permitAwait.lowerBound)
+        let publicationBeforeOwner = String(
+            hostSource[
+                publicationStart.lowerBound..<ownerReset.lowerBound
+            ]
+        )
+        await expectEqual(
+            publicationBeforeOwner.components(
+                separatedBy: "guard !requiresLifecycleFence"
+            ).count - 1,
+            2
+        )
         for required in [
             "let admissionLifecycleRevision = lifecycleEventRevision",
             "let admissionSafeCheckRevision = safeLifecycleCheckRevision",
-            "lifecycleEventRevision == admissionLifecycleRevision",
-            "safeLifecycleCheckRevision",
-            "== admissionSafeCheckRevision",
             "barrierCompletionAdmissionPermitted",
+            "requiresFreshRuntimeAdmissionProof",
+            "publicationLifecycleFenceIsCurrent",
+            "currentRuntimeStatus = await dependencies.runtime",
+            "await dependencies.runtime.lock()",
+            "currentRuntimeStatus == .locked",
         ] {
             await expectTrue(hostSource.contains(required), required)
         }
@@ -2680,6 +2831,11 @@ private actor HostBoolRecorder {
 }
 
 private actor HostPublicJobsFake: AtlasPublicJobSearching {
+    private struct CallWaiter {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     struct Plan: Sendable {
         let result: Result<
             AtlasPublicJobSearchResult,
@@ -2705,6 +2861,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
     private var plans: [Plan]
     private var searchCalls = 0
     private var cancellationCalls = 0
+    private var callWaiters: [CallWaiter] = []
     private var cancellationWaiters:
         [CheckedContinuation<Void, Never>] = []
 
@@ -2733,6 +2890,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         -> AtlasPublicJobSearchResult
     {
         searchCalls += 1
+        resumeCallWaiters()
         guard !plans.isEmpty else {
             throw .unavailable
         }
@@ -2779,6 +2937,24 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         searchCalls
     }
 
+    func waitForTotalCalls(_ expectedCount: Int) async {
+        guard searchCalls < expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            guard searchCalls < expectedCount else {
+                continuation.resume()
+                return
+            }
+            callWaiters.append(
+                CallWaiter(
+                    expectedCount: expectedCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
     func cancelledCalls() -> Int {
         cancellationCalls
     }
@@ -2805,6 +2981,18 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         if releasesGate {
             await gate.release()
         }
+    }
+
+    private func resumeCallWaiters() {
+        var pending: [CallWaiter] = []
+        for waiter in callWaiters {
+            if searchCalls >= waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        callWaiters = pending
     }
 }
 
@@ -3267,6 +3455,10 @@ private actor HostPresentationOwnerRecorder {
         return states[index].publicShell.searchQuery
     }
 
+    func canRequestUnlockValues(from index: Int) -> [Bool] {
+        states.dropFirst(index).map(\.publicShell.canRequestUnlock)
+    }
+
     private static let privateMarker =
         "FAKE_PRIVATE_STATE_MUST_NOT_APPEAR"
 }
@@ -3355,6 +3547,10 @@ private final class HostPresentationOwnerFake:
 
     func searchQuery(at index: Int) async -> String? {
         await recorder.searchQuery(at: index)
+    }
+
+    func canRequestUnlockValues(from index: Int) async -> [Bool] {
+        await recorder.canRequestUnlockValues(from: index)
     }
 }
 

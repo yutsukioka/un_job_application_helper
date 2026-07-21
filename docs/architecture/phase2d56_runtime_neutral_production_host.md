@@ -459,6 +459,13 @@ Each logical publication captures its intended locked-shell owner flow before
 awaiting the permit or pipeline. Actor reentrancy may mutate later host state,
 but that mutation cannot be substituted into the already-started publication's
 owner acknowledgement.
+An interactive captured flow also carries the current lifecycle revision and
+safe-check marker as an admission fence. The host revalidates that fence after
+acquiring the FIFO permit and again after pipeline acknowledgement, before
+calling the owner. A safe lifecycle check that starts while an interactive
+publication is queued or suspended therefore makes that publication stale; the
+captured interactive flow is never delivered to the owner. Closed flows remain
+eligible to carry current public-shell data while lifecycle validation proceeds.
 Each permit has a host-private identity. Terminal stop can revoke a stale permit
 and fail its queued waiters closed after installing the owner-generation fence,
 allowing terminal publication to proceed without waiting for an abandoned
@@ -524,7 +531,11 @@ The barrier order is:
 9. verify runtime is exactly locked;
 10. capture lifecycle revision and safe-check ownership, then acknowledge the
     intended ready shell while admission remains closed;
-11. atomically clear private-operation ownership and reopen admission.
+11. when the lifecycle fence changed during acknowledgement, acknowledge a
+    reconciliation owner state and repeat authoritative runtime status, lock,
+    and final locked-status verification;
+12. acknowledge the current ordinary target, then atomically clear
+    private-operation ownership and reopen admission.
 
 Every barrier operation has a private identity that is revalidated after each
 await. Terminal stop replaces an in-flight nonterminal identity immediately,
@@ -533,13 +544,20 @@ and begins terminal publication. Late stale runtime, controller, pipeline, or
 owner completion therefore returns the current private-free flow without
 changing terminal state.
 
-For a nonterminal barrier, step 11 requires the lifecycle revision and safe-check
-marker captured in step 10 to remain unchanged after owner acknowledgement. If
-a safe lifecycle check begins or completes during that await, the barrier keeps
-admission closed and republishes the current target under the same host
-generation. It commits only a target whose lifecycle fence and transient reopen
-predicate remain current. A stale pre-check decision therefore cannot reopen
-selection while lifecycle safety is still being established.
+For a nonterminal barrier, advancing from step 10 to the ordinary commit in
+step 12 requires the captured lifecycle revision and safe-check marker to remain
+unchanged after owner acknowledgement. If a safe lifecycle check begins or
+completes during that await, the barrier keeps
+admission closed and republishes a reconciliation owner target under the same
+host generation with a matching private-free locking pipeline status. Before it
+can publish an ordinary target again, it obtains a
+fresh authoritative runtime status, commands lock when that status is not
+locked, and verifies a final locked status. Every one of those awaits is fenced
+by the barrier identity, host generation, lifecycle revision, and safe-check
+marker. Failed relock or verification leaves host and owner in reconciliation;
+successful proof permits only a newly acknowledged current target. A stale
+pre-check decision therefore cannot reopen selection while lifecycle safety is
+being established or after runtime becomes unsafe during owner acknowledgement.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
 stop. A no-vault shell remains no-vault with admission closed across both
@@ -605,6 +623,14 @@ during the ordinary barrier owner acknowledgement allowed the stale barrier
 decision to reopen admission and invoke vault selection. Both tests failed on
 the prior exact head without timing delays.
 
+Cycle 14 captured deterministic red evidence for the remaining lifecycle-fence
+windows. A safe event started while an interactive publication was queued behind
+the FIFO permit, and the stale captured flow was delivered to the owner. A
+separate barrier test completed the safe event during ordinary owner
+acknowledgement, changed runtime to unlocked, and proved the barrier reopened
+from its earlier status result. The tests use checked-continuation publication,
+lifecycle, and owner gates rather than timing delays.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -655,6 +681,13 @@ before publication awaits, plus a targeted interactive-owner gate proving a
 nonterminal barrier cannot reopen admission across a newer lifecycle revision or
 active safe-check marker. A structural guard enforces both capture and
 post-acknowledgement fence shapes without comparing whole functions.
+Cycle 14 adds a queued-publication regression that rejects every stale
+interactive owner flow after a safe-check start. Barrier regressions cover both
+fresh runtime outcomes after a completed safe event: failed relock remains
+non-interactive reconciliation, while successful relock may reopen only after
+the new status, lock, and final-status proof. The structural guard requires two
+interactive lifecycle-fence checks before owner reset and the late runtime-proof
+path.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
