@@ -1657,6 +1657,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let completed = await submit.value
         await expectTrue(completed.publicShell.canRequestUnlock)
         await expectEqual(await graph.controller.submitCount(), 1)
+        try await assertSafeAcknowledgementDoesNotReuseStatusAfterSubmitUnlocks()
     }
 
     func testSafeLifecycleEligibilitySurvivesTemporaryRuntimeState() async throws {
@@ -1672,6 +1673,45 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let locked = await graph.host.lock()
         await expectTrue(locked.publicShell.canRequestUnlock)
         await expectEqual(await graph.lifecycle.events(), [.didBecomeActive])
+    }
+
+    private func assertSafeAcknowledgementDoesNotReuseStatusAfterSubmitUnlocks()
+        async throws
+    {
+        let submitGate = HostSuspensionGate()
+        let safeOwnerGate = HostSuspensionGate()
+        let submitStatusGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.failed),
+            submitGate: submitGate
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let ownerCallsBeforeSubmit = await graph.owner.totalCalls()
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await submitGate.waitUntilEntered()
+        await graph.owner.waitForTotalCalls(ownerCallsBeforeSubmit + 1)
+        await graph.owner.setGate(safeOwnerGate)
+        let safe = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await safeOwnerGate.waitUntilEntered()
+
+        await graph.runtime.setStatus(.unlocked)
+        await graph.runtime.setStatusGate(submitStatusGate)
+        await submitGate.release()
+        await submitStatusGate.waitUntilEntered()
+        await safeOwnerGate.release()
+
+        let safeState = await safe.value
+        await expectFalse(safeState.publicShell.canRequestUnlock)
+        await submitStatusGate.release()
+        let reconciled = await submit.value
+        await expectEqual(reconciled.mode, .lockedPublic)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
     }
 
     func testLatestSafeLifecycleEventOwnsEligibilityCommit() async throws {
@@ -2774,6 +2814,10 @@ private actor HostRuntimeFake: AtlasVaultRuntimeFacading {
         runtimeStatus = status
     }
 
+    func setStatusGate(_ gate: HostSuspensionGate?) {
+        nextStatusGate = gate
+    }
+
     func setLockResult(_ status: AtlasVaultRuntimeStatus) {
         lockResult = status
     }
@@ -2950,12 +2994,18 @@ private actor HostPresentationFake:
 }
 
 private actor HostPresentationOwnerRecorder {
+    private struct CallWaiter {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private var states: [AtlasLockedShellUnlockFlowState] = []
     private var generations: [AtlasVaultProductionHostGeneration] = []
     private var results: [Bool] = []
     private var nextGate: HostSuspensionGate?
     private var currentGeneration: AtlasVaultProductionHostGeneration?
     private var staleResets = 0
+    private var callWaiters: [CallWaiter] = []
 
     init(gate: HostSuspensionGate?) {
         nextGate = gate
@@ -2984,6 +3034,7 @@ private actor HostPresentationOwnerRecorder {
         }
         states.append(state)
         generations.append(generation)
+        resumeCallWaiters()
         return result
     }
 
@@ -3003,6 +3054,36 @@ private actor HostPresentationOwnerRecorder {
 
     func totalCalls() -> Int {
         states.count
+    }
+
+    func waitForTotalCalls(_ expectedCount: Int) async {
+        guard states.count < expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            guard states.count < expectedCount else {
+                continuation.resume()
+                return
+            }
+            callWaiters.append(
+                CallWaiter(
+                    expectedCount: expectedCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    private func resumeCallWaiters() {
+        var pending: [CallWaiter] = []
+        for waiter in callWaiters {
+            if states.count >= waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        callWaiters = pending
     }
 
     func allStatesArePrivateFree() -> Bool {
@@ -3077,6 +3158,10 @@ private final class HostPresentationOwnerFake:
 
     func totalCalls() async -> Int {
         await recorder.totalCalls()
+    }
+
+    func waitForTotalCalls(_ expectedCount: Int) async {
+        await recorder.waitForTotalCalls(expectedCount)
     }
 
     func allStatesArePrivateFree() async -> Bool {

@@ -348,7 +348,9 @@ final lifecycle-revision check. If a selection or submit reaches its terminal
 state during acknowledgement, the host republishes the now-current target
 before clearing the safe-check marker. Ordinary publications also capture that
 marker and cannot commit a target calculated on the other side of the marker's
-transition. Acknowledgement failure enters the existing private-free barrier.
+transition. Upgrading a previously closed target requires a fresh authoritative
+runtime-status read, and activating or unlocked controller state never permits
+admission. Acknowledgement failure enters the existing private-free barrier.
 
 A later generation-winning lock, lock-producing lifecycle event, or stop makes
 the safe-reopen completion stale, so it cannot publish or reopen over the newer
@@ -622,7 +624,9 @@ temporary-runtime recovery, newest-safe-event ownership, and closed transient
 admission while a safe check is in progress. Source coverage rejects assigning
 temporary `mayReopen` results back into persistent lifecycle eligibility. The
 publication fence ensures a target computed while a safe marker was active
-cannot commit after that marker changes.
+cannot commit after that marker changes. A deterministic submit gate also proves
+a locked runtime status read is not reused after the submit clears its transient
+blocker while runtime becomes unlocked during owner acknowledgement.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an

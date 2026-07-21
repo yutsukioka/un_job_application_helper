@@ -1025,7 +1025,7 @@ public actor AtlasVaultProductionHost:
             clearSafeLifecycleCheck(lifecycleRevision)
             return flowState()
         }
-        let runtimeStatus = await dependencies.runtime.status()
+        var runtimeStatus = await dependencies.runtime.status()
         guard isCurrentSafeReopen(
             expectedGeneration,
             lifecycleRevision: lifecycleRevision
@@ -1057,11 +1057,26 @@ public actor AtlasVaultProductionHost:
 
             switch publication {
             case .acknowledged:
-                let currentMayReopen = maySafelyReopen(
+                var currentMayReopen = maySafelyReopen(
                     expectedGeneration: expectedGeneration,
                     lifecycleRevision: lifecycleRevision,
                     runtimeStatus: runtimeStatus
                 )
+                if !mayReopen, currentMayReopen {
+                    runtimeStatus = await dependencies.runtime.status()
+                    guard isCurrentSafeReopen(
+                        expectedGeneration,
+                        lifecycleRevision: lifecycleRevision
+                    ) else {
+                        clearSafeLifecycleCheck(lifecycleRevision)
+                        return flowState()
+                    }
+                    currentMayReopen = maySafelyReopen(
+                        expectedGeneration: expectedGeneration,
+                        lifecycleRevision: lifecycleRevision,
+                        runtimeStatus: runtimeStatus
+                    )
+                }
                 guard currentMayReopen == mayReopen else {
                     mayReopen = currentMayReopen
                     continue
@@ -1106,7 +1121,7 @@ public actor AtlasVaultProductionHost:
             && selectionOperation == nil
             && submitOperation == nil
             && shell.vaultStatus != .noVault
-            && unlockState.status != .hostReconciliationRequired
+            && unlockStatePermitsAdmission
     }
 
     private func isCurrentLifecycleCheck(_ revision: UInt64) -> Bool {
@@ -1507,7 +1522,21 @@ public actor AtlasVaultProductionHost:
             && barrierOperation == nil
             && stopOperation == nil
             && shell.vaultStatus != .noVault
-            && unlockState.status != .hostReconciliationRequired
+            && unlockStatePermitsAdmission
+    }
+
+    private var unlockStatePermitsAdmission: Bool {
+        switch unlockState.status {
+        case .activating, .unlocked, .hostReconciliationRequired:
+            false
+        case .locked,
+             .ready,
+             .methodUnavailable,
+             .failed,
+             .cancelled,
+             .timedOut:
+            true
+        }
     }
 
     private func publishAndReset(
