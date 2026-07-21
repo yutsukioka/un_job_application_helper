@@ -250,6 +250,14 @@ public actor AtlasVaultProductionHost:
         let operationGeneration = searchGeneration
         searchOperation?.task.cancel()
 
+        replaceShell(
+            serviceStatus: .checking,
+            cacheFreshness: .unavailable,
+            searchQuery: request.query,
+            publicJobs: [],
+            isSearching: true
+        )
+
         let id = UUID()
         let service = dependencies.publicJobs
         let task = Task<
@@ -272,11 +280,6 @@ public actor AtlasVaultProductionHost:
             generation: operationGeneration,
             task: task
         )
-        replaceShell(
-            serviceStatus: .checking,
-            searchQuery: request.query,
-            isSearching: true
-        )
         _ = await publishCurrentFlow(status: presentationStatus)
 
         let result = await task.value
@@ -293,6 +296,7 @@ public actor AtlasVaultProductionHost:
             replaceShell(
                 serviceStatus: .available,
                 cacheFreshness: .current,
+                searchQuery: request.query,
                 publicJobs: value.jobs,
                 isSearching: false
             )
@@ -306,6 +310,9 @@ public actor AtlasVaultProductionHost:
         case let .failure(error):
             replaceShell(
                 serviceStatus: .unavailable,
+                cacheFreshness: .unavailable,
+                searchQuery: request.query,
+                publicJobs: [],
                 isSearching: false
             )
             _ = await publishCurrentFlow(status: presentationStatus)

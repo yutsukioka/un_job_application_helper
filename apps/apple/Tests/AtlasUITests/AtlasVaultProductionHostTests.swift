@@ -456,6 +456,65 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectFalse(graph.host.description.contains(Self.fakeQuery))
     }
 
+    func testFailedSearchClearsPriorQueryResultsAndFreshness() async throws {
+        let failureGate = HostSuspensionGate()
+        let firstResult = try makeSearchResult(
+            jobID: "FAKE_FIRST_SUCCESS_JOB",
+            title: "Fake First Success Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(result: .success(firstResult)),
+            HostPublicJobsFake.Plan(
+                result: .failure(.unavailable),
+                gate: failureGate
+            ),
+        ])
+        _ = try await graph.host.start()
+        let firstRequest = try searchRequest(query: "FAKE_QUERY_A")
+        let secondRequest = try searchRequest(query: "FAKE_QUERY_B")
+        await expectEqual(
+            try await graph.host.searchPublicJobs(firstRequest),
+            firstResult
+        )
+
+        let second = Task {
+            await captureSearch(graph.host, secondRequest)
+        }
+        await failureGate.waitUntilEntered()
+
+        let searching = await graph.host.currentFlowState().publicShell
+        await expectEqual(searching.searchQuery, "FAKE_QUERY_B")
+        await expectEqual(searching.publicJobs, [])
+        await expectEqual(searching.cacheFreshness, .unavailable)
+        await expectEqual(searching.serviceStatus, .checking)
+        await expectTrue(searching.isSearching)
+
+        await failureGate.release()
+        await expectEqual(await second.value, .failure(.unavailable))
+
+        let failed = await graph.host.currentFlowState().publicShell
+        await expectEqual(failed.searchQuery, "FAKE_QUERY_B")
+        await expectEqual(failed.publicJobs, [])
+        await expectEqual(failed.cacheFreshness, .unavailable)
+        await expectEqual(failed.serviceStatus, .unavailable)
+        await expectFalse(failed.isSearching)
+        await expectEqual(await graph.publicJobs.totalCalls(), 2)
+    }
+
+    func testSearchCoherenceUsesNoHiddenPreviousResultCache() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+
+        for forbidden in [
+            "lastSuccessfulJobs",
+            "lastSuccessfulQuery",
+            "previousResults",
+            "searchResultHistory",
+            "searchResultsByQuery",
+        ] {
+            await expectFalse(hostSource.contains(forbidden), forbidden)
+        }
+    }
+
     func testSearchBeforeStartAndAfterStopFailsWithoutCallingService() async throws {
         let graph = try makeGraph()
         let request = try searchRequest(query: "FAKE_BOUNDARY_QUERY")
@@ -474,6 +533,10 @@ final class AtlasVaultProductionHostTests: XCTestCase {
     func testSupersedingSearchCancelsAndRejectsLateResult() async throws {
         let firstGate = HostSuspensionGate()
         let secondGate = HostSuspensionGate()
+        let initialResult = try makeSearchResult(
+            jobID: "FAKE_INITIAL_JOB",
+            title: "Fake Initial Role"
+        )
         let firstResult = try makeSearchResult(
             jobID: "FAKE_STALE_JOB",
             title: "Fake Stale Role"
@@ -483,6 +546,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             title: "Fake Current Role"
         )
         let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(result: .success(initialResult)),
             HostPublicJobsFake.Plan(
                 result: .success(firstResult),
                 gate: firstGate
@@ -493,17 +557,30 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             ),
         ])
         _ = try await graph.host.start()
+        let initialRequest = try searchRequest(query: "FAKE_INITIAL")
         let firstRequest = try searchRequest(query: "FAKE_FIRST")
         let secondRequest = try searchRequest(query: "FAKE_SECOND")
+        await expectEqual(
+            try await graph.host.searchPublicJobs(initialRequest),
+            initialResult
+        )
 
         let first = Task {
             await captureSearch(graph.host, firstRequest)
         }
         await firstGate.waitUntilEntered()
+        let firstSearching = await graph.host.currentFlowState().publicShell
+        await expectEqual(firstSearching.searchQuery, "FAKE_FIRST")
+        await expectEqual(firstSearching.publicJobs, [])
+        await expectEqual(firstSearching.cacheFreshness, .unavailable)
         let second = Task {
             await captureSearch(graph.host, secondRequest)
         }
         await secondGate.waitUntilEntered()
+        let secondSearching = await graph.host.currentFlowState().publicShell
+        await expectEqual(secondSearching.searchQuery, "FAKE_SECOND")
+        await expectEqual(secondSearching.publicJobs, [])
+        await expectEqual(secondSearching.cacheFreshness, .unavailable)
         await secondGate.release()
         await expectEqual(try await second.value.get(), secondResult)
         await firstGate.release()

@@ -139,6 +139,13 @@ A valid restored snapshot is marked `stale`, not `current`. Only a successful
 live public search advances cache freshness to `current`. This avoids claiming
 freshness merely because a public cache was readable.
 
+Starting a new explicit search commits its query immediately, clears the prior
+query's jobs, and sets freshness to `unavailable` before service work begins.
+The searching shell therefore never presents one query with another query's
+result set. A failed search retains the new query but finishes with no jobs,
+unavailable freshness, unavailable service status, and no searching indicator.
+The host does not retain a hidden previous-result cache or roll results back.
+
 ## 11. Public-Search Task Ownership
 
 The host creates one unstructured host-owned public-search task through
@@ -154,6 +161,11 @@ lifetime before it can update the shell. A late cancelled or superseded result
 cannot overwrite a newer result or a terminal host. This public-search token is
 separate from the unlock-admission generation: a valid public-only completion
 does not invalidate an unrelated vault selection or unlock submission.
+
+Once those checks pass, success installs only the current query's jobs with
+available service status and current freshness. Failure keeps the current query
+with an empty result set and unavailable service/cache status. Superseded
+completion cannot restore either an earlier result set or its freshness.
 
 Queries remain public shell inputs but are absent from host and error
 descriptions.
@@ -695,6 +707,12 @@ reported as acknowledged when its lifecycle revision or safe-check ownership
 changes while the owner reset is suspended. The source guard requires the two
 pre-owner checks and the final post-owner check, with no further await before
 the publication result is returned.
+Cycle 16 adds deterministic query/result coherence coverage. A successful
+search A is followed by a gated search B to prove that B clears A before its
+service suspension and remains empty with unavailable freshness after failure.
+The supersession regression also begins from a successful result and proves
+that neither a cancelled search nor its former freshness can overwrite the
+newer query. A source guard rejects hidden previous-result caches.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
