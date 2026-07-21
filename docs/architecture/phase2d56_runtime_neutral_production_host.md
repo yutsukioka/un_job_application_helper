@@ -103,6 +103,10 @@ presentation pipeline, restores the optional public snapshot once, publishes a
 locked private-free snapshot, and awaits the owner reset. Unlock admission
 remains closed throughout every await.
 
+The pipeline source has its own activation gate. A subscription requested
+before `start()` may observe only the adapter's initial private-free value; it
+cannot begin source observation until explicit start activates the source.
+
 The intended ready shell is sent to the owner while actor admission is still
 closed. Only after the owner acknowledgement and generation check succeed does
 the actor atomically enter `started` and open admission. Start after terminal
@@ -166,7 +170,9 @@ Selection is generation checked after every suspension.
 A selector result of `none` creates no controller, performs no runtime call,
 keeps the panel hidden, and publishes the fixed public `noVault` shell state.
 Admission remains closed until a later reviewed vault-creation or selection
-journey exists.
+journey exists. If publication or owner acknowledgement fails, reconciliation
+preserves `noVault`; a successful barrier cannot convert it to ordinary locked
+state or reopen selection admission.
 
 ## 16. Selection Failure
 
@@ -269,6 +275,12 @@ host adds no platform notification framework. `didBecomeActive` and
 `protectedDataBecameAvailable` never unlock; they may reopen admission only when
 runtime is locked, no grace lock is pending, and host lifecycle state is safe.
 
+Close events are recorded and forwarded while the host is inactive or starting.
+They invalidate admission before suspension, so an event received during
+snapshot restore or owner acknowledgement cannot be lost. Start performs no
+runtime or lifecycle query and remains conservatively closed until a later
+post-start safe lifecycle event proves admission may reopen.
+
 `willResignActive` closes admission and contains active submit work.
 Lock-producing events complete host-owned private-free barriers before return.
 
@@ -291,7 +303,8 @@ protected-data API is imported by the host.
 and selection work, contains active unlock work, runs a terminal runtime and
 presentation barrier, finishes the presentation pipeline, and leaves the host
 terminal. A pipeline that started before a failed start is still finished by a
-later stop.
+later stop. Cancellation completion also clears `isSearching` before the
+terminal private-free state is published.
 
 ## 32. Terminal Stop Policy
 
@@ -367,7 +380,8 @@ The barrier order is:
 11. atomically clear private-operation ownership and reopen admission.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
-stop.
+stop. A no-vault shell remains no-vault with admission closed across both
+successful and failed barriers.
 
 ## 39. No Private-State Access
 
@@ -414,7 +428,10 @@ owner suspension, failed-start teardown, presentation sequencing,
 subscriptions, private-state rejection, terminal finish, redaction, source
 guards, the six-file allowlist, forbidden paths, and artifact absence. Search
 completion during suspended selection and submit proves that public-only
-publication does not invalidate unlock admission.
+publication does not invalidate unlock admission. Additional regressions cover
+pre-start source activation, lifecycle close events before and during start,
+terminal search-indicator cleanup, and no-vault preservation across a failed
+publication barrier.
 
 ## 45. Go/No-Go Update
 

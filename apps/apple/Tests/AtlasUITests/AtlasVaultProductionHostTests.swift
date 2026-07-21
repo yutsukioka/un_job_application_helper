@@ -43,13 +43,25 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             0
         )
         await expectFalse(await pipeline.publish(locked))
+        let prestartSubscription = await pipeline.subscribe()
+        await expectEqual(
+            await pipeline.observationStartCountForTesting(),
+            0
+        )
         await expectTrue(await pipeline.start())
         await expectTrue(await pipeline.start())
         await expectEqual(
             await pipeline.observationStartCountForTesting(),
             1
         )
+        await prestartSubscription.cancel()
         await expectTrue(pipeline.description.contains("<redacted>"))
+        let pipelineSource = try source(
+            named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        await expectTrue(
+            pipelineSource.contains("await source.activate()")
+        )
     }
 
     func testPipelinePublishesOrderedPrivateFreeSnapshotsAndCurrentValue() async throws {
@@ -557,9 +569,10 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let stop = Task { await graph.host.stop() }
         await graph.publicJobs.waitUntilCancellation()
         await gate.release()
-        _ = await stop.value
+        let stopped = await stop.value
 
         await expectThrowsError(try await search.value.get())
+        await expectFalse(stopped.publicShell.isSearching)
         await expectEqual(
             (await graph.host.currentFlowState()).publicShell.publicJobs,
             []
@@ -592,6 +605,21 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectFalse(
             unavailableState.description.contains(Self.fakeVaultID)
         )
+    }
+
+    func testNoVaultPublicationFailurePreservesNoVaultAndClosedAdmission() async throws {
+        let graph = try makeGraph(selection: .success(.none))
+        _ = try await graph.host.start()
+        await graph.presentation.setPublishResults([false])
+
+        let state = await graph.host.requestUnlockPanel()
+
+        await expectEqual(state.publicShell.vaultStatus, .noVault)
+        await expectFalse(state.publicShell.canRequestUnlock)
+        await expectEqual(state.mode, .lockedPublic)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 1)
     }
 
     func testConcurrentPanelRequestsSelectOnceAndReuseOneController() async throws {
@@ -959,6 +987,56 @@ final class AtlasVaultProductionHostTests: XCTestCase {
                 .didEnterBackground,
             ]
         )
+    }
+
+    func testLifecycleCloseEventsBeforeAndDuringStartKeepAdmissionClosed() async throws {
+        let inactive = try makeGraph()
+        _ = await inactive.host.handleLifecycleEvent(
+            .protectedDataBecameUnavailable
+        )
+        let inactiveStart = try await inactive.host.start()
+        await expectFalse(inactiveStart.publicShell.canRequestUnlock)
+        await expectEqual(
+            await inactive.lifecycle.events(),
+            [.protectedDataBecameUnavailable]
+        )
+        await expectEqual(await inactive.runtime.totalCalls(), 0)
+
+        let restoreGate = HostSuspensionGate()
+        let starting = try makeGraph(snapshotGate: restoreGate)
+        let start = Task { await captureStart(starting.host) }
+        await restoreGate.waitUntilEntered()
+        _ = await starting.host.handleLifecycleEvent(.didEnterBackground)
+        await restoreGate.release()
+
+        let started = try await start.value.get()
+        await expectFalse(started.publicShell.canRequestUnlock)
+        await expectEqual(
+            await starting.lifecycle.events(),
+            [.didEnterBackground]
+        )
+        await expectEqual(await starting.runtime.totalCalls(), 0)
+
+        let ownerGate = HostSuspensionGate()
+        let acknowledging = try makeGraph(ownerGate: ownerGate)
+        let firstStart = Task { await captureStart(acknowledging.host) }
+        await ownerGate.waitUntilEntered()
+        _ = await acknowledging.host.handleLifecycleEvent(
+            .didEnterBackground
+        )
+        await ownerGate.release()
+        await expectEqual(
+            await firstStart.value,
+            .failure(.presentationUnavailable)
+        )
+
+        let retried = try await acknowledging.host.start()
+        await expectFalse(retried.publicShell.canRequestUnlock)
+        await expectEqual(
+            await acknowledging.lifecycle.events(),
+            [.didEnterBackground]
+        )
+        await expectEqual(await acknowledging.runtime.totalCalls(), 0)
     }
 
     func testProtectedDataLossLocksAndTerminationStopsTerminally() async throws {

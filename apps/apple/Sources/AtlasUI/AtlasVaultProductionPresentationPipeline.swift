@@ -23,12 +23,18 @@ private actor AtlasVaultProductionPresentationUpdateSource:
         [UInt64: [CheckedContinuation<Void, Never>]] = [:]
     private var observationStartWaiters:
         [CheckedContinuation<Void, Never>] = []
+    private var activationWaiters:
+        [CheckedContinuation<Bool, Never>] = []
     private var nextSequence: UInt64 = 1
     private var observationStartCount = 0
     private var acceptingUpdates = true
+    private var activated = false
     private var deliverySuspended = false
 
-    func updates() -> AsyncStream<AtlasVaultPresentationUpdate> {
+    func updates() async -> AsyncStream<AtlasVaultPresentationUpdate> {
+        guard await waitUntilActivated() else {
+            return AsyncStream(unfolding: { nil })
+        }
         observationStartCount += 1
         let startWaiters = observationStartWaiters
         observationStartWaiters.removeAll()
@@ -59,6 +65,18 @@ private actor AtlasVaultProductionPresentationUpdateSource:
         )
     }
 
+    func activate() {
+        guard acceptingUpdates, !activated else {
+            return
+        }
+        activated = true
+        let waiters = activationWaiters
+        activationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: true)
+        }
+    }
+
     func sendAndWait(
         _ snapshot: AtlasVaultPresentationSnapshot
     ) async -> Bool {
@@ -85,6 +103,11 @@ private actor AtlasVaultProductionPresentationUpdateSource:
         acceptingUpdates = false
         deliverySuspended = false
         bufferedUpdate = nil
+        let activationWaiters = activationWaiters
+        self.activationWaiters.removeAll()
+        for waiter in activationWaiters {
+            waiter.resume(returning: false)
+        }
         invalidateObservation()
     }
 
@@ -110,7 +133,7 @@ private actor AtlasVaultProductionPresentationUpdateSource:
     }
 
     func waitUntilObservationStarted() async {
-        guard observationStartCount == 0 else {
+        guard observationStartCount == 0, acceptingUpdates else {
             return
         }
         await withCheckedContinuation { continuation in
@@ -135,6 +158,18 @@ private actor AtlasVaultProductionPresentationUpdateSource:
         self.pendingNext = nil
         deliveredSequenceAwaitingAcknowledgement = update.sequence
         pendingNext.resume(returning: update)
+    }
+
+    private func waitUntilActivated() async -> Bool {
+        if activated {
+            return acceptingUpdates
+        }
+        guard acceptingUpdates else {
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            activationWaiters.append(continuation)
+        }
     }
 
     private func nextUpdate(
@@ -261,6 +296,7 @@ public actor AtlasVaultProductionPresentationPipeline:
         }
 
         state = .active
+        await source.activate()
         let subscription = await observable.subscribe()
         anchorSubscription = subscription
         anchorTask = Task {
@@ -304,6 +340,7 @@ public actor AtlasVaultProductionPresentationPipeline:
             }
         case .inactive:
             state = .finished
+            await source.finish()
             return false
         case .active:
             state = .finishing

@@ -143,6 +143,7 @@ public actor AtlasVaultProductionHost:
     private var unlockAdmissionOpen = false
     private var lifecycleIsActive = true
     private var protectedDataIsAvailable = true
+    private var lifecycleAdmissionPermitted = true
     private var isTerminated = false
     private var restoreAttempted = false
     private var presentationWasStarted = false
@@ -551,31 +552,58 @@ public actor AtlasVaultProductionHost:
     public func handleLifecycleEvent(
         _ event: AtlasVaultLifecycleEvent
     ) async -> AtlasLockedShellUnlockFlowState {
-        guard isPublicOperationAvailable else {
+        guard lifetime != .stopped, lifetime != .stopping else {
             return flowState()
         }
         updateLifecycleState(for: event)
         if event.closesUnlockAdmission {
+            lifecycleAdmissionPermitted = false
             closeUnlockAdmission()
+            _ = advanceGeneration()
         }
 
         await dependencies.lifecycle.handle(event)
+
+        if case .willTerminate = event {
+            return await stop()
+        }
+        guard lifetime != .inactive, lifetime != .starting else {
+            return flowState()
+        }
+        guard isPublicOperationAvailable else {
+            return flowState()
+        }
 
         switch event {
         case .didBecomeActive, .protectedDataBecameAvailable:
             let lifecycleStatus = await dependencies.lifecycle.status()
             let runtimeStatus = await dependencies.runtime.status()
-            if lifetime == .started,
-               runtimeStatus == .locked,
-               !lifecycleStatus.hasPendingGraceLock {
-                _ = await publishCurrentFlowAndReopenAdmission(
-                    status: presentationStatus
-                )
+            let mayReopen = lifetime == .started
+                && lifecycleIsActive
+                && protectedDataIsAvailable
+                && runtimeStatus == .locked
+                && !lifecycleStatus.hasPendingGraceLock
+            lifecycleAdmissionPermitted = mayReopen
+            guard mayReopen else {
+                closeUnlockAdmission()
+                return flowState()
+            }
+            let publication = await publishCurrentFlowAndReopenAdmission(
+                status: presentationStatus
+            )
+            if case .failed = publication {
+                return await runPrivateFreeBarrier(terminal: false)
             }
             return flowState()
         case .willResignActive:
             if submitOperation != nil {
                 return await cancelUnlock()
+            }
+            let publication = await publishCurrentFlow(
+                status: presentationStatus
+            )
+            if case .failed = publication {
+                return await runPrivateFreeBarrier(terminal: false)
             }
             return flowState()
         case .didEnterBackground, .protectedDataBecameUnavailable:
@@ -695,6 +723,7 @@ public actor AtlasVaultProductionHost:
 
         let mayOpen = lifecycleIsActive
             && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
             && !isTerminated
         let startedShell = shellReplacingCanRequestUnlock(mayOpen)
         let startedState = flowState(publicShell: startedShell)
@@ -726,6 +755,7 @@ public actor AtlasVaultProductionHost:
         if let search {
             _ = await search.task.value
         }
+        replaceShell(isSearching: false)
         let state = await runPrivateFreeBarrier(terminal: true)
         lifetime = .stopped
         closeUnlockAdmission()
@@ -939,6 +969,10 @@ public actor AtlasVaultProductionHost:
         defer {
             resumeSelectionWaiters(with: flowState())
         }
+        let preservesNoVault = shell.vaultStatus == .noVault
+            && selectedVaultID == nil
+        let lockedPresentationStatus: AtlasVaultPresentationStatus =
+            preservesNoVault ? .noVault : .locked
         closeUnlockAdmission()
         _ = advanceGeneration()
         unlockState = AtlasVaultUnlockPresentationState(
@@ -982,11 +1016,11 @@ public actor AtlasVaultProductionHost:
         unlockState = lockedUnlockState()
         isUnlockPanelPresented = false
         replaceShell(
-            vaultStatus: .locked,
+            vaultStatus: preservesNoVault ? .noVault : .locked,
             canRequestUnlock: false
         )
         let lockedPublication = await publishAndReset(
-            status: .locked,
+            status: lockedPresentationStatus,
             expectedGeneration: lockedGeneration
         )
         if case .acknowledged = lockedPublication {
@@ -1010,12 +1044,14 @@ public actor AtlasVaultProductionHost:
         if barrierSucceeded && !terminal {
             let mayOpen = lifecycleIsActive
                 && protectedDataIsAvailable
+                && lifecycleAdmissionPermitted
                 && !isTerminated
+                && shell.vaultStatus != .noVault
             let ordinaryShell = shellReplacingCanRequestUnlock(mayOpen)
             let ordinaryState = flowState(publicShell: ordinaryShell)
             let ordinaryGeneration = advanceGeneration()
             let ordinaryPublication = await publishAndReset(
-                status: .locked,
+                status: lockedPresentationStatus,
                 expectedGeneration: ordinaryGeneration,
                 ownerState: ordinaryState
             )
@@ -1085,7 +1121,9 @@ public actor AtlasVaultProductionHost:
         }
         let mayOpen = lifecycleIsActive
             && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
             && !isTerminated
+            && shell.vaultStatus != .noVault
         let readyShell = shellReplacingCanRequestUnlock(mayOpen)
         let readyState = flowState(publicShell: readyShell)
         let readyGeneration = generation
