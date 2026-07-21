@@ -4,6 +4,17 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultProductionHostTests: XCTestCase {
+    private enum SafeReopenSuspensionPoint: CaseIterable {
+        case lifecycleHandle
+        case lifecycleStatus
+        case runtimeStatus
+    }
+
+    private enum PostSuccessCallback: CaseIterable {
+        case cancel
+        case disappearance
+    }
+
     private static let fakeVaultID =
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
@@ -760,6 +771,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(graph.controllerBuilder.callCount, 1)
         await expectEqual(await graph.controller.cancelCount(), 1)
         await expectEqual(await graph.controller.disappearanceCount(), 1)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
         await expectTrue(await graph.owner.allStatesArePrivateFree())
     }
 
@@ -909,6 +921,135 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             await graph.presentation.publishedStatuses()
                 .contains(.unlocked)
         )
+    }
+
+    func testPostSuccessDisappearanceEntersPrivateFreeBarrier() async throws {
+        let ownerGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            disappearanceResult:
+                unlockState(.hostReconciliationRequired)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        await expectEqual(
+            (await graph.host.submitUnlock(.localKey, timeout: nil)).mode,
+            .unlockedTransition
+        )
+        await graph.owner.setGate(ownerGate)
+
+        let disappearance = Task {
+            await graph.host.unlockPanelDidDisappear()
+        }
+        await ownerGate.waitUntilEntered()
+
+        let reconciling = await graph.host.currentFlowState()
+        await expectEqual(
+            reconciling.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectFalse(reconciling.publicShell.canRequestUnlock)
+        await expectEqual(
+            await graph.presentation.publishedStatuses().last,
+            .locking
+        )
+        _ = await graph.host.submitUnlock(.localKey, timeout: nil)
+        await expectEqual(await graph.controller.submitCount(), 1)
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
+
+        await ownerGate.release()
+        let locked = await disappearance.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(await graph.controller.hostLockCount(), 1)
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testPostSuccessCancellationEntersPrivateFreeBarrier() async throws {
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            cancelResult: unlockState(.hostReconciliationRequired)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        await expectEqual(
+            (await graph.host.submitUnlock(.localKey, timeout: nil)).mode,
+            .unlockedTransition
+        )
+
+        let locked = await graph.host.cancelUnlock()
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(await graph.controller.hostLockCount(), 1)
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+        await expectTrue(
+            await graph.presentation.publishedStatuses().contains(.locking)
+        )
+    }
+
+    func testDirectUnlockedCallbackResultAlsoRequiresBarrier() async throws {
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            disappearanceResult: unlockState(.unlocked)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        _ = await graph.host.submitUnlock(.localKey, timeout: nil)
+
+        let locked = await graph.host.unlockPanelDidDisappear()
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(await graph.controller.hostLockCount(), 1)
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+    }
+
+    func testPostSuccessCallbackBarrierFailureRetriesThroughExplicitLock() async throws {
+        for callback in PostSuccessCallback.allCases {
+            let graph = try makeGraph(
+                selection: .success(.selected(try selectedVaultID())),
+                runtimeStatus: .unlocked,
+                submitResult: unlockState(.unlocked),
+                cancelResult: unlockState(.hostReconciliationRequired),
+                disappearanceResult:
+                    unlockState(.hostReconciliationRequired)
+            )
+            try await prepareLocalKeyUnlock(graph)
+            _ = await graph.host.submitUnlock(.localKey, timeout: nil)
+            await graph.runtime.setLockResult(.unlocked)
+
+            let failed: AtlasLockedShellUnlockFlowState
+            switch callback {
+            case .cancel:
+                failed = await graph.host.cancelUnlock()
+            case .disappearance:
+                failed = await graph.host.unlockPanelDidDisappear()
+            }
+
+            await expectEqual(
+                failed.unlockPanelState?.status,
+                .hostReconciliationRequired
+            )
+            await expectFalse(failed.publicShell.canRequestUnlock)
+            await expectTrue(await graph.host.hasSelectedVaultForTesting())
+
+            await graph.runtime.setStatus(.unlocked)
+            await graph.runtime.setLockResult(.locked)
+            let retried = await graph.host.lock()
+
+            await expectEqual(retried.mode, .lockedPublic)
+            await expectTrue(retried.publicShell.canRequestUnlock)
+            await expectFalse(await graph.host.hasSelectedVaultForTesting())
+            await expectEqual(await graph.runtime.lockCalls(), 2)
+        }
     }
 
     func testDuplicateSubmissionDispatchesOnceAndClearsRejectedSecret() async throws {
@@ -1249,6 +1390,196 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(locked.mode, .lockedPublic)
         await expectTrue(locked.publicShell.canRequestUnlock)
         await expectEqual(await graph.runtime.lockCalls(), 0)
+    }
+
+    func testSafeReopenClosesAdmissionAcrossEverySafetyAwait() async throws {
+        for event in [
+            AtlasVaultLifecycleEvent.didBecomeActive,
+            .protectedDataBecameAvailable,
+        ] {
+            for suspensionPoint in SafeReopenSuspensionPoint.allCases {
+                try await assertSafeReopenAdmissionClosed(
+                    event: event,
+                    suspensionPoint: suspensionPoint
+                )
+            }
+        }
+    }
+
+    func testSafeReopenAcknowledgesClosedAndInteractiveTargets() async throws {
+        let ownerGate = HostSuspensionGate()
+        let safe = try makeGraph(
+            selection: .success(.selected(try selectedVaultID()))
+        )
+        _ = try await safe.host.start()
+        await safe.owner.setGate(ownerGate)
+
+        let reopening = Task {
+            await safe.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await ownerGate.waitUntilEntered()
+
+        await expectFalse(
+            (await safe.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+        _ = await safe.host.requestUnlockPanel()
+        await expectEqual(await safe.selector.selectCount(), 0)
+        await expectEqual(safe.controllerBuilder.callCount, 0)
+
+        await ownerGate.release()
+        let reopened = await reopening.value
+        await expectTrue(reopened.publicShell.canRequestUnlock)
+        await expectEqual(
+            await safe.owner.latestCanRequestUnlock(),
+            true
+        )
+
+        for runtimeStatus in [
+            AtlasVaultRuntimeStatus.activating,
+            .locking,
+            .unlocked,
+            .saving,
+            .failed(.activation(.authenticationFailed)),
+        ] {
+            let unsafe = try makeGraph(runtimeStatus: runtimeStatus)
+            _ = try await unsafe.host.start()
+
+            let closed = await unsafe.host.handleLifecycleEvent(
+                .protectedDataBecameAvailable
+            )
+
+            await expectFalse(closed.publicShell.canRequestUnlock)
+            await expectEqual(
+                await unsafe.owner.latestCanRequestUnlock(),
+                false
+            )
+            await expectNil(
+                await unsafe.presentation.currentSnapshot().privateState
+            )
+            await expectEqual(await unsafe.selector.selectCount(), 0)
+            await expectEqual(unsafe.controllerBuilder.callCount, 0)
+        }
+
+        let pendingGrace = try makeGraph(lifecyclePendingGrace: true)
+        _ = try await pendingGrace.host.start()
+        let graceOwnerCalls = await pendingGrace.owner.totalCalls()
+        let graceClosed = await pendingGrace.host.handleLifecycleEvent(
+            .didBecomeActive
+        )
+        await expectFalse(graceClosed.publicShell.canRequestUnlock)
+        await expectEqual(
+            await pendingGrace.owner.totalCalls(),
+            graceOwnerCalls + 1
+        )
+        await expectEqual(
+            await pendingGrace.owner.latestCanRequestUnlock(),
+            false
+        )
+
+        let protectedDataUnavailable = try makeGraph()
+        _ = try await protectedDataUnavailable.host.start()
+        _ = await protectedDataUnavailable.host.handleLifecycleEvent(
+            .protectedDataBecameUnavailable
+        )
+        let protectedOwnerCalls = await protectedDataUnavailable.owner
+            .totalCalls()
+        let protectedClosed = await protectedDataUnavailable.host
+            .handleLifecycleEvent(.didBecomeActive)
+        await expectFalse(protectedClosed.publicShell.canRequestUnlock)
+        await expectEqual(
+            await protectedDataUnavailable.owner.totalCalls(),
+            protectedOwnerCalls + 1
+        )
+        await expectEqual(
+            await protectedDataUnavailable.owner.latestCanRequestUnlock(),
+            false
+        )
+
+        let inactiveLifecycle = try makeGraph()
+        _ = try await inactiveLifecycle.host.start()
+        _ = await inactiveLifecycle.host.handleLifecycleEvent(
+            .willResignActive
+        )
+        let inactiveOwnerCalls = await inactiveLifecycle.owner.totalCalls()
+        let inactiveClosed = await inactiveLifecycle.host
+            .handleLifecycleEvent(.protectedDataBecameAvailable)
+        await expectFalse(inactiveClosed.publicShell.canRequestUnlock)
+        await expectEqual(
+            await inactiveLifecycle.owner.totalCalls(),
+            inactiveOwnerCalls + 1
+        )
+        await expectEqual(
+            await inactiveLifecycle.owner.latestCanRequestUnlock(),
+            false
+        )
+    }
+
+    func testUnsafeSafeReopenAcknowledgementFailureReconcilesAndRetries() async throws {
+        let graph = try makeGraph(lifecyclePendingGrace: true)
+        _ = try await graph.host.start()
+        await graph.owner.setResults([false, false])
+
+        let failed = await graph.host.handleLifecycleEvent(.didBecomeActive)
+
+        await expectEqual(
+            failed.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectFalse(failed.publicShell.canRequestUnlock)
+        await expectTrue(
+            await graph.presentation.publishedStatuses().contains(.locking)
+        )
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 0)
+
+        let retried = await graph.host.lock()
+        await expectEqual(retried.mode, .lockedPublic)
+        await expectFalse(retried.publicShell.canRequestUnlock)
+    }
+
+    func testStaleSafeReopenCannotPublishAfterExplicitLockWins() async throws {
+        let statusGate = HostSuspensionGate()
+        let graph = try makeGraph(lifecycleStatusGate: statusGate)
+        _ = try await graph.host.start()
+
+        let reopening = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await statusGate.waitUntilEntered()
+        _ = await graph.host.lock()
+        let ownerCallsAfterLock = await graph.owner.totalCalls()
+
+        await statusGate.release()
+        _ = await reopening.value
+
+        await expectEqual(
+            await graph.owner.totalCalls(),
+            ownerCallsAfterLock
+        )
+    }
+
+    func testSafeReopenDoesNotInvalidateSuspendedSelection() async throws {
+        let selectionGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            selectionGate: selectionGate
+        )
+        _ = try await graph.host.start()
+        let panel = Task { await graph.host.requestUnlockPanel() }
+        await selectionGate.waitUntilEntered()
+
+        let lifecycle = await graph.host.handleLifecycleEvent(
+            .protectedDataBecameAvailable
+        )
+
+        await expectFalse(lifecycle.publicShell.canRequestUnlock)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        await selectionGate.release()
+
+        await expectEqual((await panel.value).mode, .unlockPanel)
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
     }
 
     func testLifecycleNeverUnlocksAndLockingEventsCompleteBarrier() async throws {
@@ -1670,12 +2001,66 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    private func assertSafeReopenAdmissionClosed(
+        event: AtlasVaultLifecycleEvent,
+        suspensionPoint: SafeReopenSuspensionPoint
+    ) async throws {
+        let gate = HostSuspensionGate()
+        let selection = HostVaultSelectorFake.Outcome.success(
+            .selected(try selectedVaultID())
+        )
+        let graph: HostGraph
+        switch suspensionPoint {
+        case .lifecycleHandle:
+            graph = try makeGraph(
+                selection: selection,
+                lifecycleHandleGate: gate
+            )
+        case .lifecycleStatus:
+            graph = try makeGraph(
+                selection: selection,
+                lifecycleStatusGate: gate
+            )
+        case .runtimeStatus:
+            graph = try makeGraph(
+                selection: selection,
+                runtimeStatusGate: gate
+            )
+        }
+        _ = try await graph.host.start()
+
+        let reopening = Task {
+            await graph.host.handleLifecycleEvent(event)
+        }
+        await gate.waitUntilEntered()
+
+        let suspended = await graph.host.currentFlowState()
+        await expectFalse(
+            suspended.publicShell.canRequestUnlock,
+            "\(event) at \(suspensionPoint)"
+        )
+        let panel = await graph.host.requestUnlockPanel()
+        await expectFalse(
+            panel.publicShell.canRequestUnlock,
+            "\(event) at \(suspensionPoint)"
+        )
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+
+        await gate.release()
+        _ = await reopening.value
+    }
+
     private func makeGraph(
         snapshot: HostSnapshotRestorerFake.Outcome = .success(nil),
         snapshotGate: HostSuspensionGate? = nil,
         searchPlans: [HostPublicJobsFake.Plan] = [],
         selection: HostVaultSelectorFake.Outcome = .success(.none),
         selectionGate: HostSuspensionGate? = nil,
+        lifecycleHandleGate: HostSuspensionGate? = nil,
+        lifecycleStatusGate: HostSuspensionGate? = nil,
+        lifecyclePendingGrace: Bool = false,
         runtimeStatus: AtlasVaultRuntimeStatus = .locked,
         runtimeStatusGate: HostSuspensionGate? = nil,
         runtimeLockGate: HostSuspensionGate? = nil,
@@ -1704,7 +2089,11 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             statusGate: runtimeStatusGate,
             lockGate: runtimeLockGate
         )
-        let lifecycle = HostLifecycleFake()
+        let lifecycle = HostLifecycleFake(
+            handleGate: lifecycleHandleGate,
+            statusGate: lifecycleStatusGate,
+            pendingGrace: lifecyclePendingGrace
+        )
         let presentation = HostPresentationFake(
             startGate: presentationStartGate
         )
@@ -2234,14 +2623,36 @@ private actor HostRuntimeFake: AtlasVaultRuntimeFacading {
 private actor HostLifecycleFake: AtlasVaultLifecycleCoordinating {
     private var handledEvents: [AtlasVaultLifecycleEvent] = []
     private var statusCallCount = 0
-    private var pendingGrace = false
+    private var nextHandleGate: HostSuspensionGate?
+    private var nextStatusGate: HostSuspensionGate?
+    private var pendingGrace: Bool
+
+    init(
+        handleGate: HostSuspensionGate?,
+        statusGate: HostSuspensionGate?,
+        pendingGrace: Bool
+    ) {
+        nextHandleGate = handleGate
+        nextStatusGate = statusGate
+        self.pendingGrace = pendingGrace
+    }
 
     func handle(_ event: AtlasVaultLifecycleEvent) async {
         handledEvents.append(event)
+        let gate = nextHandleGate
+        nextHandleGate = nil
+        if let gate {
+            await gate.wait()
+        }
     }
 
     func status() async -> AtlasVaultLifecycleStatus {
         statusCallCount += 1
+        let gate = nextStatusGate
+        nextStatusGate = nil
+        if let gate {
+            await gate.wait()
+        }
         return AtlasVaultLifecycleStatus(
             lastEvent: handledEvents.last,
             hasPendingGraceLock: pendingGrace,
@@ -2439,6 +2850,10 @@ private actor HostPresentationOwnerRecorder {
         states.last?.unlockPanelState?.status
     }
 
+    func latestCanRequestUnlock() -> Bool? {
+        states.last?.publicShell.canRequestUnlock
+    }
+
     private static let privateMarker =
         "FAKE_PRIVATE_STATE_MUST_NOT_APPEAR"
 }
@@ -2504,6 +2919,10 @@ private final class HostPresentationOwnerFake:
 
     func latestUnlockStatus() async -> AtlasVaultUnlockPresentationStatus? {
         await recorder.latestUnlockStatus()
+    }
+
+    func latestCanRequestUnlock() async -> Bool? {
+        await recorder.latestCanRequestUnlock()
     }
 }
 

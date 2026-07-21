@@ -477,6 +477,11 @@ public actor AtlasVaultProductionHost:
             guard generation == operationGeneration else {
                 return flowState()
             }
+            if requiresPrivateFreeReconciliation(cancelled.status) {
+                unlockState = reconciliationUnlockState()
+                isUnlockPanelPresented = true
+                return await runPrivateFreeBarrier(terminal: false)
+            }
             unlockState = cancelled
             isUnlockPanelPresented = false
             let publication = await publishCurrentFlowAndReopenAdmission(
@@ -506,9 +511,10 @@ public actor AtlasVaultProductionHost:
         case .started:
             break
         }
-        if cancelledState.status == .hostReconciliationRequired
-            || terminalState?.status == .hostReconciliationRequired
-            || terminalState?.status == .unlocked
+        if requiresPrivateFreeReconciliation(cancelledState.status)
+            || terminalState.map({
+                requiresPrivateFreeReconciliation($0.status)
+            }) == true
         {
             return await runPrivateFreeBarrier(terminal: false)
         }
@@ -541,6 +547,11 @@ public actor AtlasVaultProductionHost:
             guard generation == operationGeneration else {
                 return flowState()
             }
+            if requiresPrivateFreeReconciliation(disappeared.status) {
+                unlockState = reconciliationUnlockState()
+                isUnlockPanelPresented = true
+                return await runPrivateFreeBarrier(terminal: false)
+            }
             unlockState = disappeared
             isUnlockPanelPresented = false
             let publication = await publishCurrentFlowAndReopenAdmission(
@@ -570,9 +581,10 @@ public actor AtlasVaultProductionHost:
         case .started:
             break
         }
-        if disappearedState.status == .hostReconciliationRequired
-            || terminalState?.status == .hostReconciliationRequired
-            || terminalState?.status == .unlocked
+        if requiresPrivateFreeReconciliation(disappearedState.status)
+            || terminalState.map({
+                requiresPrivateFreeReconciliation($0.status)
+            }) == true
         {
             return await runPrivateFreeBarrier(terminal: false)
         }
@@ -603,6 +615,14 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
         updateLifecycleState(for: event)
+        let safeReopenGeneration: AtlasVaultProductionHostGeneration?
+        if event.isSafeReopenEvent {
+            lifecycleAdmissionPermitted = false
+            closeUnlockAdmission()
+            safeReopenGeneration = generation
+        } else {
+            safeReopenGeneration = nil
+        }
         if event.closesUnlockAdmission {
             lifecycleAdmissionPermitted = false
             closeUnlockAdmission()
@@ -613,30 +633,12 @@ public actor AtlasVaultProductionHost:
 
         switch event {
         case .didBecomeActive, .protectedDataBecameAvailable:
-            guard lifetime != .inactive,
-                  lifetime != .starting,
-                  isPublicOperationAvailable else {
+            guard let safeReopenGeneration else {
                 return flowState()
             }
-            let lifecycleStatus = await dependencies.lifecycle.status()
-            let runtimeStatus = await dependencies.runtime.status()
-            let mayReopen = lifetime == .started
-                && lifecycleIsActive
-                && protectedDataIsAvailable
-                && runtimeStatus == .locked
-                && !lifecycleStatus.hasPendingGraceLock
-            lifecycleAdmissionPermitted = mayReopen
-            guard mayReopen else {
-                closeUnlockAdmission()
-                return flowState()
-            }
-            let publication = await publishCurrentFlowAndReopenAdmission(
-                status: presentationStatus
+            return await finishSafeReopen(
+                expectedGeneration: safeReopenGeneration
             )
-            if case .failed = publication {
-                return await runPrivateFreeBarrier(terminal: false)
-            }
-            return flowState()
         case .willResignActive:
             guard lifetime != .inactive,
                   lifetime != .starting,
@@ -976,6 +978,90 @@ public actor AtlasVaultProductionHost:
         for waiter in waiters {
             waiter.resume(returning: state)
         }
+    }
+
+    private func finishSafeReopen(
+        expectedGeneration: AtlasVaultProductionHostGeneration
+    ) async -> AtlasLockedShellUnlockFlowState {
+        guard isCurrentSafeReopen(expectedGeneration) else {
+            return flowState()
+        }
+        let lifecycleStatus = await dependencies.lifecycle.status()
+        guard isCurrentSafeReopen(expectedGeneration) else {
+            return flowState()
+        }
+        let runtimeStatus = await dependencies.runtime.status()
+        guard isCurrentSafeReopen(expectedGeneration) else {
+            return flowState()
+        }
+
+        let mayReopen = maySafelyReopen(
+            expectedGeneration: expectedGeneration,
+            lifecycleStatus: lifecycleStatus,
+            runtimeStatus: runtimeStatus
+        )
+        let targetShell = shellReplacingCanRequestUnlock(mayReopen)
+        let targetState = flowState(publicShell: targetShell)
+        let publication = await publishAndReset(
+            status: presentationStatus,
+            expectedGeneration: expectedGeneration,
+            ownerState: targetState
+        )
+        guard isCurrentSafeReopen(expectedGeneration) else {
+            return flowState()
+        }
+
+        switch publication {
+        case .acknowledged:
+            guard !mayReopen || maySafelyReopen(
+                expectedGeneration: expectedGeneration,
+                lifecycleStatus: lifecycleStatus,
+                runtimeStatus: runtimeStatus
+            ) else {
+                return await runPrivateFreeBarrier(terminal: false)
+            }
+            lifecycleAdmissionPermitted = mayReopen
+            replaceShell(canRequestUnlock: mayReopen)
+            unlockAdmissionOpen = mayReopen
+            return flowState()
+        case .stale:
+            return flowState()
+        case .failed:
+            return await runPrivateFreeBarrier(terminal: false)
+        }
+    }
+
+    private func isCurrentSafeReopen(
+        _ expectedGeneration: AtlasVaultProductionHostGeneration
+    ) -> Bool {
+        generation == expectedGeneration
+            && lifetime == .started
+            && barrierOperation == nil
+            && stopOperation == nil
+            && !isTerminated
+    }
+
+    private func maySafelyReopen(
+        expectedGeneration: AtlasVaultProductionHostGeneration,
+        lifecycleStatus: AtlasVaultLifecycleStatus,
+        runtimeStatus: AtlasVaultRuntimeStatus
+    ) -> Bool {
+        isCurrentSafeReopen(expectedGeneration)
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && !lifecycleStatus.hasPendingGraceLock
+            && lifecycleStatus.failure == nil
+            && runtimeStatus == .locked
+            && selectionOperation == nil
+            && submitOperation == nil
+            && shell.vaultStatus != .noVault
+            && unlockState.status != .hostReconciliationRequired
+    }
+
+    private func requiresPrivateFreeReconciliation(
+        _ status: AtlasVaultUnlockPresentationStatus
+    ) -> Bool {
+        status == .unlocked || status == .hostReconciliationRequired
     }
 
     private func finishOrdinaryUnlockFailure() async
@@ -1560,6 +1646,18 @@ private extension AtlasVaultUnlockSubmission {
 }
 
 private extension AtlasVaultLifecycleEvent {
+    var isSafeReopenEvent: Bool {
+        switch self {
+        case .didBecomeActive, .protectedDataBecameAvailable:
+            true
+        case .willResignActive,
+             .didEnterBackground,
+             .willTerminate,
+             .protectedDataBecameUnavailable:
+            false
+        }
+    }
+
     var closesUnlockAdmission: Bool {
         switch self {
         case .willResignActive,

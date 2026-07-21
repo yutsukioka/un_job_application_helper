@@ -216,10 +216,12 @@ recovery methods remain unavailable, and the host adds no credential provider.
 ## 19. Process-Global Unlock Admission
 
 Admission is actor-owned and closed before selection, method changes, submit,
-cancel, disappearance, reconciliation, lock, lifecycle lock events, and stop.
-Ready presentation state may be proposed to the owner while admission remains
-closed. The host opens actual admission only after pipeline acknowledgement,
-owner acknowledgement, generation revalidation, and safe lifecycle checks.
+cancel, disappearance, reconciliation, lock, every lifecycle safety check, and
+stop. Foreground and protected-data-availability events synchronously close
+both actor admission and the public shell before their first suspension. Ready
+presentation state may be proposed to the owner while admission remains closed.
+The host opens actual admission only after pipeline acknowledgement, owner
+acknowledgement, generation revalidation, and safe lifecycle checks.
 
 ## 20. Host-Owned Submit Task
 
@@ -254,11 +256,20 @@ private-free reconciliation barrier.
 ## 24. Cancel And Disappearance
 
 Without an active submit, cancel and disappearance forward to the shared
-controller, hide the panel, and acknowledge a private-free ready state before
-reopening admission. With an active submit, the host closes admission, advances
-generation, requests controller cancellation or disappearance, and awaits the
-retained task. A late success or uncertain terminal state enters reconciliation
-and cannot publish stale unlocked state.
+controller. Ordinary pre-success terminal states hide the panel and acknowledge
+a private-free ready state before reopening admission. A callback may also
+arrive after submit completion and successful activation. The controller maps
+that post-success callback to `hostReconciliationRequired`; the host treats
+either `unlocked` or `hostReconciliationRequired` as uncertain and bypasses the
+ordinary reopen path for both cancel and disappearance. It retains a
+non-interactive reconciliation flow and runs the complete private-free barrier.
+
+With an active submit, the host closes admission, advances generation, requests
+controller cancellation or disappearance, and awaits the retained task. A late
+success or uncertain terminal state enters reconciliation and cannot publish
+stale unlocked state. Post-success callback reconciliation has no automatic
+retry. A barrier failure remains non-interactive with admission closed, and a
+later explicit `lock()` may retry it.
 
 Panel callbacks are accepted only while host lifetime is started. A callback
 arriving during reconciliation cannot advance generation or invalidate the
@@ -276,7 +287,11 @@ owner reset, verifies observable private freedom, and verifies final runtime
 status is exactly locked.
 
 Only a complete barrier discards the controller and selected identifier and
-returns ordinary locked state.
+returns ordinary locked state. This includes barriers entered from a
+no-active-submit post-success cancel or disappearance: runtime is
+authoritatively locked, `hostDidLock()` is delivered, pipeline and owner
+acknowledgements complete, observable private freedom is verified, and final
+runtime status is exactly locked before admission may reopen.
 
 ## 26. Reconciliation Retry
 
@@ -299,8 +314,27 @@ selected identifier are cleared only after barrier success.
 
 Every lifecycle event is forwarded to the neutral lifecycle coordinator. The
 host adds no platform notification framework. `didBecomeActive` and
-`protectedDataBecameAvailable` never unlock; they may reopen admission only when
-runtime is locked, no grace lock is pending, and host lifecycle state is safe.
+`protectedDataBecameAvailable` never unlock. Before forwarding either event, the
+host synchronously closes lifecycle admission and public unlock admission and
+captures, but does not advance, the current host generation. This prevents the
+safe event itself from invalidating valid selection or submit work.
+
+Lifecycle handling, lifecycle status, and runtime status are awaited in that
+order and generation/lifetime are revalidated after each suspension. Admission
+may reopen only while the same generation is started and unterminated, lifecycle
+is active, protected data is available, no grace lock or lifecycle failure is
+present, runtime is exactly locked, no selection, submit, barrier, or stop is
+active, vault status is not `noVault`, and reconciliation is absent. The host
+publishes exactly one private-free target while actor admission remains closed:
+an interactive target when every condition passes, or an acknowledged closed
+target when any condition fails. Actor shell and admission state commit only
+after pipeline and owner acknowledgement and final generation revalidation.
+Acknowledgement failure enters the existing private-free barrier.
+
+A later generation-winning lock, lock-producing lifecycle event, or stop makes
+the safe-reopen completion stale, so it cannot publish or reopen over the newer
+state. A safe event arriving while selection or submit is active keeps admission
+closed without invalidating that operation merely by changing generation.
 
 Close events are recorded and forwarded while the host is inactive or starting.
 They invalidate admission before suspension, so an event received during
@@ -323,8 +357,10 @@ on an unobserved future grace callback to remove unlocked presentation state.
 
 `protectedDataBecameUnavailable` immediately completes the lock barrier.
 `protectedDataBecameAvailable` never unlocks and cannot reopen admission unless
-runtime and lifecycle checks are safe. No LocalAuthentication or platform
-protected-data API is imported by the host.
+the complete lifecycle/runtime predicate is current and both private-free
+presentation acknowledgements succeed. An unsafe result is itself published and
+owner-acknowledged as closed. No LocalAuthentication or platform protected-data
+API is imported by the host.
 
 ## 31. Explicit Stop
 
@@ -502,6 +538,14 @@ was added after that checkpoint. Deterministic actors and checked continuations,
 not sleeps, drive pipeline delivery, snapshot restore, public search, selection,
 submit, owner acknowledgement, runtime lock, and barrier races.
 
+Cycle 11 first captured deterministic red evidence for both remaining
+invariants. Safe lifecycle tests suspended independently in lifecycle handling,
+lifecycle status, and runtime status and proved admission remained exposed;
+owner-gated cases proved unsafe targets were not acknowledged as closed.
+Separate post-success cancel and disappearance tests proved uncertain callback
+states bypassed reconciliation. Production behavior changed only after both red
+states were recorded.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -531,6 +575,13 @@ generation after suspension, explicit lock closes admission before runtime
 status, and a failed runtime verification keeps the owner in reconciliation.
 Retained-controller coverage cancels and reopens the panel without reselection,
 and terminal finish/runtime failures keep the owner in reconciliation.
+Cycle 11 adds table-driven suspension checks for both safe-reopen events at all
+three safety awaits, owner-gated closed and interactive targets, unsafe
+acknowledgement failure and explicit-lock retry, stale reopen after a winning
+lock, and non-invalidation of suspended selection. Callback regressions cover
+post-success disappearance and cancellation, a defensive direct `unlocked`
+result, full barrier effects, ordinary pre-success behavior, and failed-barrier
+retry.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
@@ -548,6 +599,9 @@ provides the same six-file enumeration when Git reports a shallow checkout.
 - Runtime-neutral production host actor: implemented.
 - Process-global unlock admission: implemented in one host actor.
 - Authoritative reconciliation: implemented.
+- Acknowledged lifecycle safe reopen: implemented with per-await generation
+  revalidation.
+- Post-success cancel/disappearance reconciliation: implemented symmetrically.
 - Owner-reset acknowledgement seam: implemented and testable.
 - Concrete MainActor presentation owner: not implemented.
 - Production composition root: not implemented.
