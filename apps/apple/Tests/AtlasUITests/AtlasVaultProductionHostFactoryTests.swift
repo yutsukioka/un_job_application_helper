@@ -29,6 +29,18 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         requireSendable(factory)
     }
 
+    func testOwnerGenerationContractDescribesARevocableStaleFence() throws {
+        let ownerContract = try sourceSection(
+            contractsSource(),
+            from: "public protocol AtlasVaultProductionPresentationOwnerResetting",
+            to: "public protocol AtlasVaultProductionHosting"
+        )
+
+        XCTAssertTrue(ownerContract.contains("Invalidates owner work"))
+        XCTAssertTrue(ownerContract.contains("remains current"))
+        XCTAssertFalse(ownerContract.contains("only generation allowed"))
+    }
+
     func testPublicSearchRequestAndResultAreSafeAndRedacted() throws {
         let request = try AtlasPublicJobSearchRequest(
             query: Self.fakeQuery,

@@ -545,8 +545,9 @@ public protocol AtlasVaultProductionPresentationCoordinating:
 }
 
 public protocol AtlasVaultProductionPresentationOwnerResetting: Sendable {
-    /// Establishes the only generation allowed to mutate owner presentation.
-    /// A reset must recheck this generation after each suspension.
+    /// Invalidates owner work associated with superseded host generations.
+    /// A reset may establish its supplied generation and may commit only while
+    /// that generation remains current after each suspension.
     @MainActor
     func supersedePresentationGeneration(
         _ generation: AtlasVaultProductionHostGeneration

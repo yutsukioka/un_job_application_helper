@@ -428,11 +428,14 @@ receives no runtime, vault identifier, key, path, or service object.
 The owner contract exposes `supersedePresentationGeneration(_:)`. Before
 revoking a stale permit, terminal teardown awaits this MainActor generation
 fence. An owner must reject a reset whose generation is no longer current and
-must recheck after every suspension before mutating presentation. The host also
-revalidates generation after every owner await. Tests suspend the MainActor fake
-deterministically and prove that admission remains closed until acknowledgement
-and that a stale reset cannot reinstall pre-stop flow after terminal finish.
-Phase 2D-56 does not implement the concrete owner.
+must recheck after every suspension before mutating presentation. Supersede is a
+stale-work fence, not permanent exclusivity for one token: a later valid reset
+may establish its supplied opaque generation, then commit only while that exact
+generation remains current. The host also revalidates generation after every
+owner await. Tests suspend the MainActor fake deterministically and prove that
+admission remains closed until acknowledgement and that a stale reset cannot
+reinstall pre-stop flow after terminal finish. Phase 2D-56 does not implement
+the concrete owner.
 
 ## 38. Private-Free Barrier
 
