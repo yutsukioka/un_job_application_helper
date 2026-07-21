@@ -156,6 +156,8 @@ public actor AtlasVaultProductionHost:
         AtlasLockedShellUnlockFlowState,
         Never
     >] = []
+    private var publicationInProgress = false
+    private var publicationWaiters: [CheckedContinuation<Void, Never>] = []
     private var submitOperation: SubmitOperation?
     private var barrierOperation: BarrierOperation?
     private var stopOperation: StopOperation?
@@ -1057,7 +1059,7 @@ public actor AtlasVaultProductionHost:
     private func publishCurrentFlow(
         status: AtlasVaultPresentationStatus
     ) async -> PublicationResult {
-        let publicationGeneration = advanceGeneration()
+        let publicationGeneration = generation
         return await publishAndReset(
             status: status,
             expectedGeneration: publicationGeneration
@@ -1086,7 +1088,7 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
         let readyShell = shellReplacingCanRequestUnlock(mayOpen)
         let readyState = flowState(publicShell: readyShell)
-        let readyGeneration = advanceGeneration()
+        let readyGeneration = generation
         let publication = await publishAndReset(
             status: status,
             expectedGeneration: readyGeneration,
@@ -1107,6 +1109,10 @@ public actor AtlasVaultProductionHost:
         expectedGeneration: AtlasVaultProductionHostGeneration,
         ownerState: AtlasLockedShellUnlockFlowState? = nil
     ) async -> PublicationResult {
+        await acquirePublicationPermit()
+        defer {
+            releasePublicationPermit()
+        }
         guard generation == expectedGeneration else {
             return .stale
         }
@@ -1226,6 +1232,25 @@ public actor AtlasVaultProductionHost:
         let next = AtlasVaultProductionHostGeneration()
         generation = next
         return next
+    }
+
+    private func acquirePublicationPermit() async {
+        guard publicationInProgress else {
+            publicationInProgress = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            publicationWaiters.append(continuation)
+        }
+    }
+
+    private func releasePublicationPermit() {
+        guard !publicationWaiters.isEmpty else {
+            publicationInProgress = false
+            return
+        }
+        let next = publicationWaiters.removeFirst()
+        next.resume()
     }
 
     private func closeUnlockAdmission() {

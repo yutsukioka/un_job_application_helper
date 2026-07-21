@@ -456,6 +456,84 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testSearchCompletionDoesNotInvalidateSuspendedVaultSelection() async throws {
+        let searchGate = HostSuspensionGate()
+        let selectionGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_SELECTION_SEARCH_JOB",
+            title: "Fake Selection Search Role"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                HostPublicJobsFake.Plan(
+                    result: .success(result),
+                    gate: searchGate
+                )
+            ],
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            selectionGate: selectionGate
+        )
+        _ = try await graph.host.start()
+        let request = try searchRequest(
+            query: "FAKE_DURING_SELECTION"
+        )
+
+        let search = Task {
+            await captureSearch(graph.host, request)
+        }
+        await searchGate.waitUntilEntered()
+        let panel = Task { await graph.host.requestUnlockPanel() }
+        await selectionGate.waitUntilEntered()
+
+        await searchGate.release()
+        await expectEqual(try await search.value.get(), result)
+        await selectionGate.release()
+
+        let panelState = await panel.value
+        await expectEqual(panelState.mode, .unlockPanel)
+        await expectEqual(panelState.publicShell.publicJobs, result.jobs)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
+        await expectTrue(await graph.host.hasUnlockControllerForTesting())
+    }
+
+    func testSearchCompletionDoesNotInvalidateSuspendedUnlockSubmit() async throws {
+        let submitGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_SUBMIT_SEARCH_JOB",
+            title: "Fake Submit Search Role"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                HostPublicJobsFake.Plan(result: .success(result))
+            ],
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            submitGate: submitGate
+        )
+        try await prepareLocalKeyUnlock(graph)
+
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await submitGate.waitUntilEntered()
+        let searchResult = try await graph.host.searchPublicJobs(
+            try searchRequest(query: "FAKE_DURING_SUBMIT")
+        )
+        await expectEqual(searchResult, result)
+        await submitGate.release()
+
+        let submitState = await submit.value
+        await expectEqual(submitState.mode, .unlockedTransition)
+        await expectEqual(submitState.publicShell.publicJobs, result.jobs)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+        await expectEqual(await graph.controller.submitCount(), 1)
+    }
+
     func testStopCancelsSearchAndIgnoresLateCompletion() async throws {
         let gate = HostSuspensionGate()
         let result = try makeSearchResult(

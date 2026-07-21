@@ -137,7 +137,9 @@ runtime, lifecycle, unlock, or private compatibility services.
 Each search receives a host-local monotonically advancing token and operation
 identifier. Completion must match the current operation, generation, and host
 lifetime before it can update the shell. A late cancelled or superseded result
-cannot overwrite a newer result or a terminal host.
+cannot overwrite a newer result or a terminal host. This public-search token is
+separate from the unlock-admission generation: a valid public-only completion
+does not invalidate an unrelated vault selection or unlock submission.
 
 Queries remain public shell inputs but are absent from host and error
 descriptions.
@@ -147,7 +149,10 @@ descriptions.
 Public search is independent of panel presentation and vault locking. Opening
 the panel does not cancel a search. Explicit lock preserves public query and
 results and does not cancel an unrelated public-search task. Terminal stop is
-the operation that cancels all remaining public work.
+the operation that cancels all remaining public work. Host publications are
+serialized, so a search update carries the current non-sensitive unlock state
+without racing the presentation-owner acknowledgement for selection, submit,
+lock, or reconciliation.
 
 ## 14. Lazy Vault Selection
 
@@ -301,7 +306,8 @@ non-interactive reconciliation flow; restart is not supported.
 `AtlasVaultProductionHostGeneration` is Hashable, Sendable, process-local, and
 opaque. Its token is private and its descriptions are redacted. The host
 advances generation to reject late start, selection, submit, presentation,
-owner, lock, lifecycle, and stop completions.
+owner, lock, lifecycle, and stop completions. Public search has an independent
+token and does not advance this unlock-admission generation.
 
 ## 34. Host-Owned Presentation Source
 
@@ -319,7 +325,10 @@ non-nil private state.
 Accepted publications receive monotonically increasing private sequence values.
 The source retains at most the newest undelivered update. Multiple subscribers
 use the existing observable adapter's newest-value buffering. Subscriber
-cancellation removes only that subscriber.
+cancellation removes only that subscriber. The host grants one FIFO publication
+permit at a time across the pipeline and MainActor owner reset. This prevents
+reentrant public-shell updates from overtaking owner acknowledgements while
+allowing public search and unlock admission to keep independent generations.
 
 Sequence values, subscriber counts, and current status are absent from public
 descriptions.
@@ -403,7 +412,9 @@ caller cancellation, runtime success validation, late completion containment,
 barrier failure and retry, lock coalescing, lifecycle policy, terminal stop,
 owner suspension, failed-start teardown, presentation sequencing,
 subscriptions, private-state rejection, terminal finish, redaction, source
-guards, the six-file allowlist, forbidden paths, and artifact absence.
+guards, the six-file allowlist, forbidden paths, and artifact absence. Search
+completion during suspended selection and submit proves that public-only
+publication does not invalidate unlock admission.
 
 ## 45. Go/No-Go Update
 
