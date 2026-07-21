@@ -1,3 +1,5 @@
+<!-- Phase 2D-56 repository boundary. -->
+
 # Phase 2D-56 Runtime-Neutral Production Host
 
 ## 1. Purpose
@@ -434,8 +436,9 @@ The barrier order is:
 3. retain and await active submit work;
 4. inspect and, when required, lock runtime;
 5. notify the shared controller;
-6. publish and acknowledge locked private-free presentation;
-7. await owner reset for a new generation;
+6. publish and acknowledge locked private-free pipeline presentation;
+7. keep a nonterminal presentation owner in reconciliation for the new
+   generation;
 8. verify observable private freedom;
 9. verify runtime is exactly locked;
 10. acknowledge the intended ready shell while admission remains closed;
@@ -450,7 +453,10 @@ changing terminal state.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
 stop. A no-vault shell remains no-vault with admission closed across both
-successful and failed barriers.
+successful and failed barriers. A nonterminal owner receives ordinary locked
+flow only in step 10, after observable and authoritative runtime verification;
+a late runtime-lock failure therefore leaves both host and owner visibly in
+reconciliation.
 
 ## 39. No Private-State Access
 
@@ -512,8 +518,11 @@ regressions hold a cancellation-ignoring public search while selection is
 abandoned and hold a stale nonterminal owner acknowledgement while terminal stop
 completes through a replacement barrier. The owner fake commits only the newest
 generation after suspension, explicit lock closes admission before runtime
-status, and the exact allowlist is derived from Git phase history plus current
-tracked and untracked changes rather than reconstructed from expected paths.
+status, and a failed runtime verification keeps the owner in reconciliation.
+The exact allowlist is derived from the tracked test file's path-introduction
+history plus current tracked and untracked changes, without a bounded log scan
+or commit-subject dependency. A repository ownership marker provides the same
+six-file enumeration when Git reports a shallow checkout.
 
 ## 45. Go/No-Go Update
 

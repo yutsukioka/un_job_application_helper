@@ -1,3 +1,4 @@
+// Phase 2D-56 repository boundary.
 import Foundation
 
 public struct AtlasVaultProductionHostBuilder:
@@ -1120,15 +1121,22 @@ public actor AtlasVaultProductionHost:
         }
 
         let lockedGeneration = advanceGeneration()
-        unlockState = lockedUnlockState()
-        isUnlockPanelPresented = false
         replaceShell(
             vaultStatus: preservesNoVault ? .noVault : .locked,
             canRequestUnlock: false
         )
+        let lockedOwnerState: AtlasLockedShellUnlockFlowState?
+        if terminal {
+            unlockState = lockedUnlockState()
+            isUnlockPanelPresented = false
+            lockedOwnerState = nil
+        } else {
+            lockedOwnerState = flowState()
+        }
         let lockedPublication = await publishAndReset(
             status: lockedPresentationStatus,
-            expectedGeneration: lockedGeneration
+            expectedGeneration: lockedGeneration,
+            ownerState: lockedOwnerState
         )
         guard barrierOperation?.id == operationID else {
             return flowState()
@@ -1159,6 +1167,8 @@ public actor AtlasVaultProductionHost:
         }
 
         if barrierSucceeded && !terminal {
+            unlockState = lockedUnlockState()
+            isUnlockPanelPresented = false
             let mayOpen = lifecycleIsActive
                 && protectedDataIsAvailable
                 && lifecycleAdmissionPermitted

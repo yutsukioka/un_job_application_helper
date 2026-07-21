@@ -1,3 +1,4 @@
+// Phase 2D-56 repository boundary.
 import Foundation
 import XCTest
 @testable import AtlasUI
@@ -878,6 +879,35 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertEqual(try phaseChangedFiles(), expected)
     }
 
+    func testPhaseFileDiscoveryIsIndependentOfRecentCommitSubjects() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let discovery = try sourceSection(
+            source,
+            from: "    private func phase"
+                + "ChangedFiles() throws -> Set<String> {",
+            to: "    private func gitOutput"
+                + "(_ arguments: [String]) throws -> String {"
+        )
+
+        XCTAssertTrue(discovery.contains("--diff-filter=A"))
+        XCTAssertTrue(discovery.contains("--is-shallow-repository"))
+        XCTAssertTrue(discovery.contains("phase2D56BoundaryMarker"))
+        XCTAssertFalse(discovery.contains("\"-n\""))
+        XCTAssertFalse(
+            discovery.contains(
+                "Test AtlasVault runtime-neutral production host"
+            )
+        )
+        XCTAssertFalse(
+            discovery.contains(
+                "Add AtlasVault runtime-neutral production host tests"
+            )
+        )
+    }
+
     private func makeDependencyGraph() throws -> FactoryDependencyGraph {
         let publicJobs = try FactoryPublicJobsSpy(
             health: publicHealth(),
@@ -1090,51 +1120,44 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     }
 
     private func phaseChangedFiles() throws -> Set<String> {
-        let history = try gitOutput([
-            "log",
-            "--format=%H%x09%s",
-            "-n",
-            "200",
-        ])
-        let entries: [(sha: String, subject: String)] = history
-            .split(separator: "\n")
-            .compactMap { line -> (sha: String, subject: String)? in
-                let parts = line.split(
-                    separator: "\t",
-                    maxSplits: 1,
-                    omittingEmptySubsequences: false
-                )
-                guard parts.count == 2 else {
-                    return nil
-                }
-                return (sha: String(parts[0]), subject: String(parts[1]))
-            }
-
+        let isShallow = try gitOutput([
+            "rev-parse",
+            "--is-shallow-repository",
+        ]) == "true"
         let committed: String
-        if let red = entries.first(where: {
-            $0.subject == "Test AtlasVault runtime-neutral production host"
-        }) {
+        if isShallow {
+            committed = try gitOutput([
+                "grep",
+                "-l",
+                "-F",
+                phase2D56BoundaryMarker,
+                "--",
+                "docs",
+                "apps/apple/Sources/AtlasUI",
+                "apps/apple/Tests/AtlasUITests",
+            ])
+        } else {
+            let introduction = try XCTUnwrap(
+                try gitOutput([
+                    "log",
+                    "--diff-filter=A",
+                    "--format=%H",
+                    "--",
+                    phase2D56AnchorPath,
+                ])
+                .split(separator: "\n")
+                .first
+                .map(String.init),
+                "Phase 2D-56 path introduction is unavailable"
+            )
             let baseline = try gitOutput([
                 "rev-parse",
-                "\(red.sha)^",
+                "\(introduction)^",
             ])
             committed = try gitOutput([
                 "diff",
                 "--name-only",
                 "\(baseline)..HEAD",
-            ])
-        } else {
-            let merged = try XCTUnwrap(
-                entries.first(where: {
-                    $0.subject
-                        == "Add AtlasVault runtime-neutral production host tests"
-                }),
-                "Phase 2D-56 history is unavailable"
-            )
-            committed = try gitOutput([
-                "diff",
-                "--name-only",
-                "\(merged.sha)^..\(merged.sha)",
             ])
         }
 
@@ -1154,6 +1177,14 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
                 .split(separator: "\n")
                 .map(String.init)
         )
+    }
+
+    private var phase2D56BoundaryMarker: String {
+        "Phase 2D-56 repository boundary"
+    }
+
+    private var phase2D56AnchorPath: String {
+        "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostTests.swift"
     }
 
     private func gitOutput(_ arguments: [String]) throws -> String {

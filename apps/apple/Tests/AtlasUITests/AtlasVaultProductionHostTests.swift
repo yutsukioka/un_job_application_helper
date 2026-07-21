@@ -1,3 +1,4 @@
+// Phase 2D-56 repository boundary.
 import Foundation
 import XCTest
 @testable import AtlasUI
@@ -1131,6 +1132,30 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectTrue(retried.publicShell.canRequestUnlock)
         await expectFalse(await graph.host.hasSelectedVaultForTesting())
         await expectEqual(await graph.runtime.lockCalls(), 2)
+    }
+
+    func testFailedBarrierKeepsPresentationOwnerInReconciliation() async throws {
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        await graph.runtime.setStatus(.unlocked)
+        await graph.runtime.setLockResult(.unlocked)
+
+        let failed = await graph.host.lock()
+
+        await expectEqual(
+            failed.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectEqual(await graph.owner.latestMode(), .unlockPanel)
+        await expectEqual(
+            await graph.owner.latestUnlockStatus(),
+            .hostReconciliationRequired
+        )
     }
 
     func testPipelineAndOwnerBarrierFailuresRemainClosedUntilRetry() async throws {
@@ -2380,6 +2405,10 @@ private actor HostPresentationOwnerRecorder {
         states.last?.mode
     }
 
+    func latestUnlockStatus() -> AtlasVaultUnlockPresentationStatus? {
+        states.last?.unlockPanelState?.status
+    }
+
     private static let privateMarker =
         "FAKE_PRIVATE_STATE_MUST_NOT_APPEAR"
 }
@@ -2441,6 +2470,10 @@ private final class HostPresentationOwnerFake:
 
     func latestMode() async -> AtlasLockedShellUnlockFlowMode? {
         await recorder.latestMode()
+    }
+
+    func latestUnlockStatus() async -> AtlasVaultUnlockPresentationStatus? {
+        await recorder.latestUnlockStatus()
     }
 }
 
