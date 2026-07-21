@@ -1,15 +1,2190 @@
+import Foundation
 import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultProductionHostTests: XCTestCase {
-    func testPhase2D56ProductionHostTypesAreAvailable() {
+    private static let fakeVaultID =
+        "00000000-0000-4000-8000-000000000256"
+    private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
+
+    func testPhaseTypesErrorsGenerationsAndDescriptionsAreRedacted() async {
         _ = AtlasVaultProductionHost.self
         _ = AtlasVaultProductionHostBuilder.self
         _ = AtlasVaultProductionUnlockPresentationControllerBuilder.self
         _ = AtlasVaultProductionPresentationPipeline.self
         _ = AtlasVaultProductionPresentationCoordinating.self
         _ = AtlasVaultProductionPresentationOwnerResetting.self
-        _ = AtlasVaultProductionHostError.self
-        _ = AtlasVaultProductionHostGeneration.self
+
+        let first = AtlasVaultProductionHostGeneration()
+        let second = AtlasVaultProductionHostGeneration()
+        await expectNotEqual(first, second)
+
+        let rendered = [
+            first.description,
+            first.debugDescription,
+            AtlasVaultProductionHostError.stopped.description,
+            AtlasVaultProductionHostError.presentationUnavailable.description,
+            AtlasVaultProductionHostBuilder().description,
+            AtlasVaultProductionUnlockPresentationControllerBuilder()
+                .description,
+        ].joined(separator: "\n")
+        await expectTrue(rendered.contains("<redacted>"))
+        await expectFalse(rendered.contains(Self.fakeVaultID))
+        await expectFalse(rendered.contains(Self.fakeQuery))
+        requireSendable(first)
+    }
+
+    func testPipelineConstructionExplicitStartAndIdempotence() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        let locked = try privateFreeSnapshot(.locked)
+
+        await expectEqual(
+            await pipeline.observationStartCountForTesting(),
+            0
+        )
+        await expectFalse(await pipeline.publish(locked))
+        await expectTrue(await pipeline.start())
+        await expectTrue(await pipeline.start())
+        await expectEqual(
+            await pipeline.observationStartCountForTesting(),
+            1
+        )
+        await expectTrue(pipeline.description.contains("<redacted>"))
+    }
+
+    func testPipelinePublishesOrderedPrivateFreeSnapshotsAndCurrentValue() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let subscription = await pipeline.subscribe()
+        var iterator = subscription.snapshots.makeAsyncIterator()
+        await expectEqual((await iterator.next())?.status, .locked)
+
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.activating)
+            )
+        )
+        await expectEqual((await iterator.next())?.status, .activating)
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.unlocked)
+            )
+        )
+        await expectEqual((await iterator.next())?.status, .unlocked)
+
+        let current = await pipeline.currentSnapshot()
+        await expectEqual(current.status, .unlocked)
+        await expectNil(current.privateState)
+        await expectEqual(await pipeline.latestSequenceForTesting(), 2)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            2
+        )
+        await subscription.cancel()
+    }
+
+    func testPipelineRejectsPrivatePayloadWithoutEmission() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let unsafe = AtlasVaultPresentationSnapshot(
+            status: .unlocked,
+            privateState: AtlasVaultPrivatePresentationState(
+                savedSearches: [],
+                savedJobs: [],
+                applicationNotes: [],
+                profileSnippets: [],
+                draftMetadata: []
+            )
+        )
+
+        await expectThrowsError(
+            try AtlasVaultPrivateFreePresentationSnapshot(
+                validating: unsafe
+            )
+        ) { error in
+            await expectEqual(
+                error as? AtlasVaultProductionHostError,
+                .presentationUnavailable
+            )
+        }
+        await expectEqual(
+            await pipeline.currentSnapshot(),
+            AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            )
+        )
+        await expectEqual(await pipeline.latestSequenceForTesting(), 0)
+    }
+
+    func testPipelinePublishWaitsForAdapterAcknowledgement() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        let completion = HostBoolRecorder()
+        await expectTrue(await pipeline.start())
+        await pipeline.suspendDeliveryForTesting()
+        let activating = try privateFreeSnapshot(.activating)
+
+        let task = Task {
+            let result = await pipeline.publish(activating)
+            await completion.record(result)
+        }
+        await pipeline.waitUntilSequenceForTesting(1)
+        await expectNil(await completion.value())
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            0
+        )
+
+        await pipeline.resumeDeliveryForTesting()
+        await task.value
+        await expectEqual(await completion.value(), true)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            1
+        )
+    }
+
+    func testPipelineSubscribersCancellationAndNewestValueBuffering() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let first = await pipeline.subscribe()
+        let second = await pipeline.subscribe()
+        var firstIterator = first.snapshots.makeAsyncIterator()
+        var secondIterator = second.snapshots.makeAsyncIterator()
+        _ = await firstIterator.next()
+        _ = await secondIterator.next()
+
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.activating)
+            )
+        )
+        await expectEqual((await firstIterator.next())?.status, .activating)
+        await expectEqual((await secondIterator.next())?.status, .activating)
+
+        await first.cancel()
+        await expectNil(await firstIterator.next())
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.unlocked)
+            )
+        )
+        await expectEqual((await secondIterator.next())?.status, .unlocked)
+
+        let slow = await pipeline.subscribe()
+        var slowIterator = slow.snapshots.makeAsyncIterator()
+        await expectEqual((await slowIterator.next())?.status, .unlocked)
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.locking)
+            )
+        )
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.locked)
+            )
+        )
+        await expectEqual((await slowIterator.next())?.status, .locked)
+        await second.cancel()
+        await slow.cancel()
+    }
+
+    func testPipelineFinishIsPrivateFreeTerminalAndCompletesSubscribers() async throws {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let subscription = await pipeline.subscribe()
+        var iterator = subscription.snapshots.makeAsyncIterator()
+        _ = await iterator.next()
+        await expectTrue(
+            await pipeline.publish(
+                try privateFreeSnapshot(.unlocked)
+            )
+        )
+
+        await expectTrue(await pipeline.finish())
+        await expectEqual((await iterator.next())?.status, .locked)
+        await expectNil(await iterator.next())
+        await expectEqual(
+            await pipeline.currentSnapshot(),
+            AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            )
+        )
+        await expectFalse(
+            await pipeline.publish(
+                try privateFreeSnapshot(.activating)
+            )
+        )
+        await expectFalse(await pipeline.start())
+        await expectTrue(await pipeline.finish())
+    }
+
+    func testHostConstructionInvokesNoDependencyAndStartsInactive() async throws {
+        let graph = try makeGraph()
+        await expectTrue(await graph.host.isInactiveForTesting())
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+        await expectEqual(await graph.snapshot.restoreCount(), 0)
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await expectEqual(await graph.lifecycle.totalCalls(), 0)
+        await expectEqual(await graph.presentation.totalCalls(), 0)
+        await expectEqual(await graph.owner.totalCalls(), 0)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+    }
+
+    func testStartWithNilSnapshotIsExplicitPrivateFreeAndSideEffectBounded() async throws {
+        let graph = try makeGraph()
+        let state = try await graph.host.start()
+
+        await expectEqual(state.mode, .lockedPublic)
+        await expectEqual(state.publicShell.vaultStatus, .locked)
+        await expectEqual(state.publicShell.serviceStatus, .checking)
+        await expectEqual(state.publicShell.cacheFreshness, .unavailable)
+        await expectEqual(state.publicShell.searchQuery, "")
+        await expectEqual(state.publicShell.publicJobs, [])
+        await expectFalse(state.publicShell.isSearching)
+        await expectTrue(state.publicShell.canRequestUnlock)
+        await expectEqual(await graph.snapshot.restoreCount(), 1)
+        await expectEqual(await graph.presentation.startCount(), 1)
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await expectEqual(await graph.lifecycle.totalCalls(), 0)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testStartRestoresOnlyPublicSnapshotWithConservativeFreshness() async throws {
+        let snapshot = try makeSnapshot(jobID: "FAKE_SNAPSHOT_JOB")
+        let graph = try makeGraph(snapshot: .success(snapshot))
+        let state = try await graph.host.start()
+
+        await expectEqual(state.publicShell.publicJobs, snapshot.jobs)
+        await expectEqual(state.publicShell.serviceStatus, .available)
+        await expectEqual(state.publicShell.cacheFreshness, .stale)
+        await expectEqual(state.publicShell.searchQuery, "")
+        await expectEqual(await graph.snapshot.restoreCount(), 1)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+    }
+
+    func testUnavailableSnapshotFailsOpenToEmptyPublicShell() async throws {
+        let graph = try makeGraph(snapshot: .failure(.invalidSnapshot))
+        let state = try await graph.host.start()
+
+        await expectEqual(state.mode, .lockedPublic)
+        await expectEqual(state.publicShell.publicJobs, [])
+        await expectEqual(state.publicShell.serviceStatus, .unavailable)
+        await expectEqual(state.publicShell.cacheFreshness, .unavailable)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testConcurrentAndRepeatedStartRestoreOnlyOnce() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(snapshotGate: gate)
+        let first = Task { await captureStart(graph.host) }
+        await gate.waitUntilEntered()
+        let second = Task { await captureStart(graph.host) }
+        await gate.release()
+
+        await expectNoThrow(try await first.value.get())
+        await expectNoThrow(try await second.value.get())
+        _ = try await graph.host.start()
+        await expectEqual(await graph.snapshot.restoreCount(), 1)
+        await expectEqual(await graph.presentation.startCount(), 1)
+    }
+
+    func testStartKeepsAdmissionClosedUntilOwnerAcknowledges() async throws {
+        let ownerGate = HostSuspensionGate()
+        let graph = try makeGraph(ownerGate: ownerGate)
+
+        let start = Task { await captureStart(graph.host) }
+        await ownerGate.waitUntilEntered()
+        let whileSuspended = await graph.host.requestUnlockPanel()
+
+        await expectFalse(whileSuspended.publicShell.canRequestUnlock)
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await ownerGate.release()
+        await expectNoThrow(try await start.value.get())
+        await expectTrue(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+    }
+
+    func testStartAcknowledgementFailuresFailClosedBeforeSelection() async throws {
+        let pipelineFailure = try makeGraph()
+        await pipelineFailure.presentation.setPublishResults([false])
+        await assertStartPresentationFailure(pipelineFailure.host)
+        _ = await pipelineFailure.host.requestUnlockPanel()
+        await expectEqual(await pipelineFailure.selector.selectCount(), 0)
+        await expectFalse(
+            (await pipelineFailure.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+
+        let ownerFailure = try makeGraph()
+        await ownerFailure.owner.setResults([false])
+        await assertStartPresentationFailure(ownerFailure.host)
+        _ = await ownerFailure.host.requestUnlockPanel()
+        await expectEqual(await ownerFailure.selector.selectCount(), 0)
+    }
+
+    func testPublicSearchUpdatesShellWithoutPrivateDependencies() async throws {
+        let result = try makeSearchResult(
+            jobID: "FAKE_SEARCH_JOB",
+            title: "Fake Search Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(result: .success(result))
+        ])
+        _ = try await graph.host.start()
+        let request = try searchRequest(query: Self.fakeQuery)
+        let returned = try await graph.host.searchPublicJobs(request)
+        let state = await graph.host.currentFlowState()
+
+        await expectEqual(returned, result)
+        await expectEqual(state.publicShell.searchQuery, Self.fakeQuery)
+        await expectEqual(state.publicShell.publicJobs, result.jobs)
+        await expectEqual(state.publicShell.serviceStatus, .available)
+        await expectEqual(state.publicShell.cacheFreshness, .current)
+        await expectFalse(state.publicShell.isSearching)
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await expectFalse(graph.host.description.contains(Self.fakeQuery))
+    }
+
+    func testSearchBeforeStartAndAfterStopFailsWithoutCallingService() async throws {
+        let graph = try makeGraph()
+        let request = try searchRequest(query: "FAKE_BOUNDARY_QUERY")
+
+        let beforeStart = await captureSearch(graph.host, request)
+        await expectEqual(beforeStart, .failure(.unavailable))
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+
+        _ = try await graph.host.start()
+        _ = await graph.host.stop()
+        let afterStop = await captureSearch(graph.host, request)
+        await expectEqual(afterStop, .failure(.unavailable))
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+    }
+
+    func testSupersedingSearchCancelsAndRejectsLateResult() async throws {
+        let firstGate = HostSuspensionGate()
+        let secondGate = HostSuspensionGate()
+        let firstResult = try makeSearchResult(
+            jobID: "FAKE_STALE_JOB",
+            title: "Fake Stale Role"
+        )
+        let secondResult = try makeSearchResult(
+            jobID: "FAKE_CURRENT_JOB",
+            title: "Fake Current Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(firstResult),
+                gate: firstGate
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(secondResult),
+                gate: secondGate
+            ),
+        ])
+        _ = try await graph.host.start()
+        let firstRequest = try searchRequest(query: "FAKE_FIRST")
+        let secondRequest = try searchRequest(query: "FAKE_SECOND")
+
+        let first = Task {
+            await captureSearch(graph.host, firstRequest)
+        }
+        await firstGate.waitUntilEntered()
+        let second = Task {
+            await captureSearch(graph.host, secondRequest)
+        }
+        await secondGate.waitUntilEntered()
+        await secondGate.release()
+        await expectEqual(try await second.value.get(), secondResult)
+        await firstGate.release()
+        await expectThrowsError(try await first.value.get()) { error in
+            await expectEqual(
+                error as? AtlasPublicJobServiceError,
+                .unavailable
+            )
+        }
+
+        let state = await graph.host.currentFlowState()
+        await expectEqual(state.publicShell.publicJobs, secondResult.jobs)
+        await expectEqual(state.publicShell.searchQuery, "FAKE_SECOND")
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+    }
+
+    func testPanelAndExplicitLockDoNotCancelIndependentPublicSearch() async throws {
+        let gate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_INDEPENDENT_JOB",
+            title: "Fake Independent Role"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                HostPublicJobsFake.Plan(
+                    result: .success(result),
+                    gate: gate
+                )
+            ],
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await graph.host.start()
+        let independentRequest = try searchRequest(
+            query: "FAKE_INDEPENDENT"
+        )
+        let search = Task {
+            await captureSearch(graph.host, independentRequest)
+        }
+        await gate.waitUntilEntered()
+        await expectEqual(
+            (await graph.host.requestUnlockPanel()).mode,
+            .unlockPanel
+        )
+        _ = await graph.host.lock()
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 0)
+        await gate.release()
+        await expectEqual(try await search.value.get(), result)
+        await expectEqual(
+            (await graph.host.currentFlowState()).publicShell.publicJobs,
+            result.jobs
+        )
+    }
+
+    func testStopCancelsSearchAndIgnoresLateCompletion() async throws {
+        let gate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_STOPPED_JOB",
+            title: "Fake Stopped Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: gate
+            )
+        ])
+        _ = try await graph.host.start()
+        let stoppedRequest = try searchRequest(
+            query: "FAKE_STOPPED_QUERY"
+        )
+        let search = Task {
+            await captureSearch(graph.host, stoppedRequest)
+        }
+        await gate.waitUntilEntered()
+        let stop = Task { await graph.host.stop() }
+        await graph.publicJobs.waitUntilCancellation()
+        await gate.release()
+        _ = await stop.value
+
+        await expectThrowsError(try await search.value.get())
+        await expectEqual(
+            (await graph.host.currentFlowState()).publicShell.publicJobs,
+            []
+        )
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+    }
+
+    func testPanelSelectionNoneAndFailureRemainNonSensitive() async throws {
+        let noVault = try makeGraph(selection: .success(.none))
+        _ = try await noVault.host.start()
+        let noVaultState = await noVault.host.requestUnlockPanel()
+        await expectEqual(noVaultState.publicShell.vaultStatus, .noVault)
+        await expectEqual(noVaultState.mode, .lockedPublic)
+        await expectFalse(noVaultState.publicShell.canRequestUnlock)
+        await expectEqual(noVault.controllerBuilder.callCount, 0)
+        await expectEqual(await noVault.runtime.totalCalls(), 0)
+
+        let unavailable = try makeGraph(
+            selection: .failure(.invalidRegistry)
+        )
+        _ = try await unavailable.host.start()
+        let unavailableState =
+            await unavailable.host.requestUnlockPanel()
+        await expectEqual(
+            unavailableState.publicShell.vaultStatus,
+            .keyUnavailable
+        )
+        await expectEqual(unavailableState.mode, .lockedPublic)
+        await expectEqual(unavailable.controllerBuilder.callCount, 0)
+        await expectFalse(
+            unavailableState.description.contains(Self.fakeVaultID)
+        )
+    }
+
+    func testConcurrentPanelRequestsSelectOnceAndReuseOneController() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            selectionGate: gate
+        )
+        _ = try await graph.host.start()
+        let first = Task { await graph.host.requestUnlockPanel() }
+        await gate.waitUntilEntered()
+        let second = Task { await graph.host.requestUnlockPanel() }
+        await gate.release()
+
+        await expectEqual((await first.value).mode, .unlockPanel)
+        await expectEqual((await second.value).mode, .unlockPanel)
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
+        await expectEqual(
+            graph.controllerBuilder.capturedCapabilities?.availableMethods,
+            [.localKey]
+        )
+        await expectEqual(
+            graph.controllerBuilder.capturedVaultID?.vaultID,
+            Self.fakeVaultID
+        )
+        await expectTrue(await graph.host.hasUnlockControllerForTesting())
+        await expectFalse(
+            (await graph.host.currentFlowState()).description
+                .contains(Self.fakeVaultID)
+        )
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+    }
+
+    func testCancelAndDisappearanceWithoutSubmitRemainPrivateFree() async throws {
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+
+        let cancelled = await graph.host.cancelUnlock()
+        await expectEqual(cancelled.mode, .lockedPublic)
+        await expectTrue(cancelled.publicShell.canRequestUnlock)
+
+        _ = await graph.host.requestUnlockPanel()
+        let disappeared = await graph.host.unlockPanelDidDisappear()
+        await expectEqual(disappeared.mode, .lockedPublic)
+        await expectTrue(disappeared.publicShell.canRequestUnlock)
+        await expectEqual(await graph.controller.cancelCount(), 1)
+        await expectEqual(await graph.controller.disappearanceCount(), 1)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testStopDuringSuspendedSelectionReleasesConcurrentPanelWaiter() async throws {
+        let gate = HostSuspensionGate()
+        let selectedID = try selectedVaultID()
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedID)),
+            selectionGate: gate
+        )
+        _ = try await graph.host.start()
+
+        let first = Task { await graph.host.requestUnlockPanel() }
+        await gate.waitUntilEntered()
+        let second = Task { await graph.host.requestUnlockPanel() }
+        let stopped = await graph.host.stop()
+
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual((await second.value).mode, .lockedPublic)
+        await gate.release()
+        await expectEqual((await first.value).mode, .lockedPublic)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+    }
+
+    func testSuccessfulSubmitUsesHostOwnedTaskAndAuthoritativeRuntimeStatus() async throws {
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let result = await graph.host.submitUnlock(
+            .localKey,
+            timeout: nil
+        )
+
+        await expectEqual(result.mode, .unlockedTransition)
+        await expectNil(result.unlockPanelState)
+        await expectEqual(await graph.controller.submitCount(), 1)
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+        await expectTrue(
+            await graph.presentation.publishedStatuses()
+                .contains(.unlocked)
+        )
+    }
+
+    func testDuplicateSubmissionDispatchesOnceAndClearsRejectedSecret() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            submitResult: unlockState(.failed),
+            submitGate: gate
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let first = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await gate.waitUntilEntered()
+        let secret = HostSecretBuffer()
+        _ = await graph.host.submitUnlock(
+            .passphrase(secret),
+            timeout: nil
+        )
+
+        await expectEqual(await secret.clearCount(), 1)
+        await expectEqual(await graph.controller.submitCount(), 1)
+        await gate.release()
+        _ = await first.value
+        await expectEqual(await graph.controller.submitCount(), 1)
+    }
+
+    func testCallerCancellationCannotOrphanHostOwnedSubmit() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            submitGate: gate
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let caller = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await gate.waitUntilEntered()
+        caller.cancel()
+        await expectTrue(await graph.host.hasActiveSubmitForTesting())
+        await gate.release()
+        await expectEqual((await caller.value).mode, .unlockedTransition)
+        await expectFalse(await graph.host.hasActiveSubmitForTesting())
+    }
+
+    func testRuntimeMismatchAfterControllerSuccessReconcilesWithoutUnlockedTransition() async throws {
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let result = await graph.host.submitUnlock(
+            .localKey,
+            timeout: nil
+        )
+
+        await expectEqual(result.mode, .lockedPublic)
+        await expectNotEqual(result.mode, .unlockedTransition)
+        await expectEqual(await graph.controller.hostLockCount(), 1)
+        await expectTrue(
+            await graph.presentation.publishedStatuses()
+                .contains(.locking)
+        )
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+    }
+
+    func testCancelDuringSubmitRetainsTaskAndContainsLateSuccess() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            submitGate: gate,
+            cancelResult: unlockState(.hostReconciliationRequired)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await gate.waitUntilEntered()
+        let cancel = Task { await graph.host.cancelUnlock() }
+        await expectTrue(await graph.host.hasActiveSubmitForTesting())
+        await gate.release()
+
+        let cancelled = await cancel.value
+        let submitted = await submit.value
+        await expectNotEqual(cancelled.mode, .unlockedTransition)
+        await expectNotEqual(submitted.mode, .unlockedTransition)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectFalse(await graph.host.hasActiveSubmitForTesting())
+    }
+
+    func testDisappearanceDuringSubmitContainsLateSuccess() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            submitGate: gate,
+            disappearanceResult:
+                unlockState(.hostReconciliationRequired)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await gate.waitUntilEntered()
+        let disappearance = Task {
+            await graph.host.unlockPanelDidDisappear()
+        }
+        await gate.release()
+
+        await expectNotEqual(
+            (await disappearance.value).mode,
+            .unlockedTransition
+        )
+        await expectNotEqual((await submit.value).mode, .unlockedTransition)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+    }
+
+    func testFailedBarrierRemainsReconciliationAndExplicitLockRetries() async throws {
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        await graph.runtime.setStatus(.unlocked)
+        await graph.runtime.setLockResult(.unlocked)
+
+        let failed = await graph.host.lock()
+        await expectEqual(failed.mode, .unlockPanel)
+        await expectEqual(
+            failed.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectFalse(failed.publicShell.canRequestUnlock)
+        await expectTrue(await graph.host.hasSelectedVaultForTesting())
+
+        await graph.runtime.setStatus(.unlocked)
+        await graph.runtime.setLockResult(.locked)
+        let retried = await graph.host.lock()
+        await expectEqual(retried.mode, .lockedPublic)
+        await expectTrue(retried.publicShell.canRequestUnlock)
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+        await expectEqual(await graph.runtime.lockCalls(), 2)
+    }
+
+    func testPipelineAndOwnerBarrierFailuresRemainClosedUntilRetry() async throws {
+        let pipelineGraph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await pipelineGraph.host.start()
+        _ = await pipelineGraph.host.requestUnlockPanel()
+        await pipelineGraph.runtime.setStatus(.unlocked)
+        await pipelineGraph.presentation.setPublishResults([false])
+        await expectEqual(
+            (await pipelineGraph.host.lock()).mode,
+            .unlockPanel
+        )
+        await expectFalse(
+            (await pipelineGraph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+        await pipelineGraph.runtime.setStatus(.unlocked)
+        await expectEqual(
+            (await pipelineGraph.host.lock()).mode,
+            .lockedPublic
+        )
+
+        let ownerGraph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            )
+        )
+        _ = try await ownerGraph.host.start()
+        _ = await ownerGraph.host.requestUnlockPanel()
+        await ownerGraph.runtime.setStatus(.unlocked)
+        await ownerGraph.owner.setResults([false])
+        await expectEqual((await ownerGraph.host.lock()).mode, .unlockPanel)
+        await ownerGraph.runtime.setStatus(.unlocked)
+        await expectEqual((await ownerGraph.host.lock()).mode, .lockedPublic)
+    }
+
+    func testConcurrentLockCoalescesAndPreservesPublicResults() async throws {
+        let job = try makeSnapshot(jobID: "FAKE_LOCKED_PUBLIC_JOB")
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            snapshot: .success(job),
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            runtimeLockGate: gate
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        let first = Task { await graph.host.lock() }
+        await gate.waitUntilEntered()
+        let second = Task { await graph.host.lock() }
+        await gate.release()
+
+        await expectEqual((await first.value).mode, .lockedPublic)
+        await expectEqual((await second.value).mode, .lockedPublic)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(
+            (await graph.host.currentFlowState()).publicShell.publicJobs,
+            job.jobs
+        )
+    }
+
+    func testLifecycleNeverUnlocksAndLockingEventsCompleteBarrier() async throws {
+        let graph = try makeGraph()
+        _ = try await graph.host.start()
+
+        _ = await graph.host.handleLifecycleEvent(.didBecomeActive)
+        _ = await graph.host.handleLifecycleEvent(
+            .protectedDataBecameAvailable
+        )
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+
+        let resigned = await graph.host.handleLifecycleEvent(
+            .willResignActive
+        )
+        await expectFalse(resigned.publicShell.canRequestUnlock)
+        let active = await graph.host.handleLifecycleEvent(.didBecomeActive)
+        await expectTrue(active.publicShell.canRequestUnlock)
+
+        await graph.runtime.setStatus(.unlocked)
+        _ = await graph.host.handleLifecycleEvent(.didEnterBackground)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+
+        let events = await graph.lifecycle.events()
+        await expectEqual(
+            events,
+            [
+                .didBecomeActive,
+                .protectedDataBecameAvailable,
+                .willResignActive,
+                .didBecomeActive,
+                .didEnterBackground,
+            ]
+        )
+    }
+
+    func testProtectedDataLossLocksAndTerminationStopsTerminally() async throws {
+        let graph = try makeGraph(runtimeStatus: .unlocked)
+        _ = try await graph.host.start()
+        _ = await graph.host.handleLifecycleEvent(
+            .protectedDataBecameUnavailable
+        )
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+
+        await graph.runtime.setStatus(.unlocked)
+        let terminated = await graph.host.handleLifecycleEvent(
+            .willTerminate
+        )
+        await expectEqual(terminated.mode, .lockedPublic)
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectEqual(
+            await graph.lifecycle.events(),
+            [.protectedDataBecameUnavailable, .willTerminate]
+        )
+        await assertStartStopped(graph.host)
+    }
+
+    func testStopBeforeStartIsSafeAndTerminal() async throws {
+        let graph = try makeGraph()
+        let state = await graph.host.stop()
+        await expectEqual(state.mode, .lockedPublic)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await expectEqual(await graph.presentation.totalCalls(), 0)
+        await assertStartStopped(graph.host)
+    }
+
+    func testConcurrentStopCoalescesLocksAndFinishesPrivateFree() async throws {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            runtimeStatus: .unlocked,
+            runtimeLockGate: gate
+        )
+        _ = try await graph.host.start()
+        let first = Task { await graph.host.stop() }
+        await gate.waitUntilEntered()
+        let second = Task { await graph.host.stop() }
+        await gate.release()
+
+        await expectEqual((await first.value).mode, .lockedPublic)
+        await expectEqual((await second.value).mode, .lockedPublic)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+        _ = await graph.host.stop()
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await assertStartStopped(graph.host)
+    }
+
+    func testStopAfterFailedStartFinishesAlreadyStartedPipeline() async throws {
+        let graph = try makeGraph()
+        await graph.owner.setResults([false])
+        await assertStartPresentationFailure(graph.host)
+
+        let stopped = await graph.host.stop()
+
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await assertStartStopped(graph.host)
+    }
+
+    func testTerminalStopCannotReopenAdmissionFromInFlightLockBarrier() async throws {
+        let lockGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            runtimeLockGate: lockGate
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+
+        let lock = Task { await graph.host.lock() }
+        await lockGate.waitUntilEntered()
+        let stop = Task { await graph.host.stop() }
+        await lockGate.release()
+
+        _ = await lock.value
+        let stopped = await stop.value
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await assertStartStopped(graph.host)
+    }
+
+    func testStopAcknowledgementFailureRemainsTerminalReconciliation() async throws {
+        let graph = try makeGraph()
+        _ = try await graph.host.start()
+        await graph.presentation.setFinishResult(false)
+        let stopped = await graph.host.stop()
+
+        await expectEqual(stopped.mode, .unlockPanel)
+        await expectEqual(
+            stopped.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await assertStartStopped(graph.host)
+    }
+
+    func testProductionSourceGuardsAndExactAllowlist() async throws {
+        let host = try source(named: "AtlasVaultProductionHost.swift")
+        for forbidden in [
+            "privateState(",
+            "AtlasVaultPrivateStateSnapshot",
+            "AtlasVaultHydratedState",
+            "AtlasVaultPrivatePresentationState",
+            "apply(",
+            "AtlasVaultRuntimeMutationRequest",
+            "AtlasVaultSaveOutcome",
+            "savedSearch",
+            "savedJob",
+            "applicationNote",
+            "profileSnippet",
+            "draftMetadata",
+            "generatedDocument",
+            "SwiftUI",
+            "@main",
+            "AtlasIOSHostApp",
+            "AtlasRootView",
+            "SearchViewModel",
+            "AtlasAPIClient",
+            "AtlasLocalCache",
+            "Keychain",
+            "SecItem",
+            "FileManager",
+            "Data.write",
+            "URLSession",
+            "UserDefaults",
+            "NavigationStack",
+            "NavigationLink",
+            "LocalAuthentication",
+            "LAContext",
+            "suppliedTestVaultKey",
+            "Task.detached",
+            "nonisolated(unsafe)",
+            "@unchecked Sendable",
+            "NSLock",
+            "DispatchSemaphore",
+            "sleep(",
+        ] {
+            await expectFalse(host.contains(forbidden), forbidden)
+        }
+
+        let pipeline = try source(
+            named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        for forbidden in [
+            "SwiftUI",
+            "@main",
+            "AtlasRootView",
+            "AtlasAPIClient",
+            "Keychain",
+            "SecItem",
+            "FileManager",
+            "Data.write",
+            "URLSession",
+            "UserDefaults",
+            "LocalAuthentication",
+            "LAContext",
+            "Task.detached",
+            "nonisolated(unsafe)",
+            "@unchecked Sendable",
+            "NSLock",
+            "DispatchSemaphore",
+            "sleep(",
+        ] {
+            await expectFalse(pipeline.contains(forbidden), forbidden)
+        }
+        for line in pipeline.split(separator: "\n")
+            where line.contains("privateState:") {
+            await expectTrue(line.contains("nil"), String(line))
+        }
+
+        let expected = Set([
+            "phase2d56_runtime_neutral_production_host.md",
+            "AtlasVaultProductionHostContracts.swift",
+            "AtlasVaultProductionPresentationPipeline.swift",
+            "AtlasVaultProductionHost.swift",
+            "AtlasVaultProductionHostTests.swift",
+            "AtlasVaultProductionHostFactoryTests.swift",
+        ])
+        let actual = Set([
+            architectureURL().lastPathComponent,
+            sourceURL(named: "AtlasVaultProductionHostContracts.swift")
+                .lastPathComponent,
+            sourceURL(
+                named: "AtlasVaultProductionPresentationPipeline.swift"
+            ).lastPathComponent,
+            sourceURL(named: "AtlasVaultProductionHost.swift")
+                .lastPathComponent,
+            URL(fileURLWithPath: #filePath).lastPathComponent,
+            testURL(named: "AtlasVaultProductionHostFactoryTests.swift")
+                .lastPathComponent,
+        ])
+        await expectEqual(actual, expected)
+    }
+
+    func testNoAppEntryWiringOrReviewArtifactsExist() async throws {
+        let appEntry = repositoryRootURL()
+            .appendingPathComponent("apps/apple/AtlasIOSHost")
+            .appendingPathComponent("AtlasIOSHostApp.swift")
+        if FileManager.default.fileExists(atPath: appEntry.path) {
+            let source = try String(contentsOf: appEntry, encoding: .utf8)
+            await expectFalse(source.contains("AtlasVaultProductionHost("))
+            await expectFalse(
+                source.contains("AtlasVaultProductionHostBuilder(")
+            )
+            await expectFalse(
+                source.contains("AtlasVaultProductionPresentationPipeline(")
+            )
+        }
+
+        for url in try reviewArtifactURLs(at: repositoryRootURL()) {
+            await expectNotEqual(url.pathExtension, "atlasvault")
+            await expectNotEqual(url.lastPathComponent, ".venv-review")
+        }
+    }
+
+    private func privateFreeSnapshot(
+        _ status: AtlasVaultPresentationStatus
+    ) throws -> AtlasVaultPrivateFreePresentationSnapshot {
+        try AtlasVaultPrivateFreePresentationSnapshot(
+            validating: AtlasVaultPresentationSnapshot(
+                status: status,
+                privateState: nil
+            )
+        )
+    }
+
+    private func makeGraph(
+        snapshot: HostSnapshotRestorerFake.Outcome = .success(nil),
+        snapshotGate: HostSuspensionGate? = nil,
+        searchPlans: [HostPublicJobsFake.Plan] = [],
+        selection: HostVaultSelectorFake.Outcome = .success(.none),
+        selectionGate: HostSuspensionGate? = nil,
+        runtimeStatus: AtlasVaultRuntimeStatus = .locked,
+        runtimeLockGate: HostSuspensionGate? = nil,
+        submitResult: AtlasVaultUnlockPresentationState =
+            unlockState(.failed),
+        submitGate: HostSuspensionGate? = nil,
+        ownerGate: HostSuspensionGate? = nil,
+        cancelResult: AtlasVaultUnlockPresentationState =
+            unlockState(.cancelled),
+        disappearanceResult: AtlasVaultUnlockPresentationState =
+            unlockState(.locked)
+    ) throws -> HostGraph {
+        let publicJobs = HostPublicJobsFake(plans: searchPlans)
+        let restorer = HostSnapshotRestorerFake(
+            outcome: snapshot,
+            gate: snapshotGate
+        )
+        let selector = HostVaultSelectorFake(
+            outcome: selection,
+            gate: selectionGate
+        )
+        let runtime = HostRuntimeFake(
+            status: runtimeStatus,
+            lockGate: runtimeLockGate
+        )
+        let lifecycle = HostLifecycleFake()
+        let presentation = HostPresentationFake()
+        let owner = HostPresentationOwnerFake(gate: ownerGate)
+        let coordinator = HostUnlockCoordinatorFake()
+        let controller = HostUnlockControllerFake(
+            submitResult: submitResult,
+            submitGate: submitGate,
+            cancelResult: cancelResult,
+            disappearanceResult: disappearanceResult
+        )
+        let controllerBuilder = HostUnlockControllerBuilderFake(
+            controller: controller
+        )
+        let dependencies = AtlasVaultProductionHostDependencies(
+            publicJobs: publicJobs,
+            publicSnapshotRestorer: restorer,
+            vaultIDSelector: selector,
+            runtime: runtime,
+            lifecycle: lifecycle,
+            presentation: presentation,
+            presentationOwner: owner,
+            unlockCoordinator: coordinator,
+            unlockControllerBuilder: controllerBuilder
+        )
+        let host = AtlasVaultProductionHost(dependencies: dependencies)
+        return HostGraph(
+            host: host,
+            publicJobs: publicJobs,
+            snapshot: restorer,
+            selector: selector,
+            runtime: runtime,
+            lifecycle: lifecycle,
+            presentation: presentation,
+            owner: owner,
+            coordinator: coordinator,
+            controller: controller,
+            controllerBuilder: controllerBuilder
+        )
+    }
+
+    private func makeSnapshot(
+        jobID: String
+    ) throws -> AtlasProductionPublicSnapshot {
+        AtlasProductionPublicSnapshot(
+            savedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            health: try AtlasPublicServiceHealth(
+                availability: .available,
+                openJobCount: 1,
+                enabledSourceCount: 1,
+                lastSyncAt: Date(timeIntervalSince1970: 1_799_999_000)
+            ),
+            jobs: [
+                AtlasLockedPublicJob(
+                    id: jobID,
+                    title: "Fake Public Role",
+                    organization: "Fake Public Organization",
+                    location: "Fake Public Location",
+                    closingDateText: "2099-12-31"
+                )
+            ],
+            sources: [],
+            updates: []
+        )
+    }
+
+    private func makeSearchResult(
+        jobID: String,
+        title: String
+    ) throws -> AtlasPublicJobSearchResult {
+        try AtlasPublicJobSearchResult(
+            jobs: [
+                AtlasLockedPublicJob(
+                    id: jobID,
+                    title: title,
+                    organization: "Fake Search Organization",
+                    location: "Fake Search Location",
+                    closingDateText: "2099-12-31"
+                )
+            ],
+            total: 1,
+            limit: 25,
+            offset: 0
+        )
+    }
+
+    private func searchRequest(
+        query: String
+    ) throws -> AtlasPublicJobSearchRequest {
+        try AtlasPublicJobSearchRequest(
+            query: query,
+            limit: 25,
+            offset: 0
+        )
+    }
+
+    private func selectedVaultID() throws -> AtlasSelectedVaultID {
+        try AtlasSelectedVaultID(validating: Self.fakeVaultID)
+    }
+
+    private func prepareLocalKeyUnlock(
+        _ graph: HostGraph
+    ) async throws {
+        _ = try await graph.host.start()
+        await expectEqual(
+            (await graph.host.requestUnlockPanel()).mode,
+            .unlockPanel
+        )
+        let selected = await graph.host.selectUnlockMethod(.localKey)
+        await expectEqual(selected.unlockPanelState?.selectedMethod, .localKey)
+    }
+
+    private func assertStartPresentationFailure(
+        _ host: AtlasVaultProductionHost
+    ) async {
+        do {
+            _ = try await host.start()
+            XCTFail("Expected presentationUnavailable")
+        } catch {
+            await expectEqual(
+                error as? AtlasVaultProductionHostError,
+                .presentationUnavailable
+            )
+        }
+    }
+
+    private func assertStartStopped(
+        _ host: AtlasVaultProductionHost
+    ) async {
+        do {
+            _ = try await host.start()
+            XCTFail("Expected stopped")
+        } catch {
+            await expectEqual(
+                error as? AtlasVaultProductionHostError,
+                .stopped
+            )
+        }
+    }
+
+    private func source(named filename: String) throws -> String {
+        try String(
+            contentsOf: sourceURL(named: filename),
+            encoding: .utf8
+        )
+    }
+
+    private func sourceURL(named filename: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AtlasUI")
+            .appendingPathComponent(filename)
+    }
+
+    private func testURL(named filename: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(filename)
+    }
+
+    private func architectureURL() -> URL {
+        repositoryRootURL()
+            .appendingPathComponent("docs/architecture")
+            .appendingPathComponent(
+                "phase2d56_runtime_neutral_production_host.md"
+            )
+    }
+
+    private func repositoryRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 }
+
+private struct HostGraph {
+    let host: AtlasVaultProductionHost
+    let publicJobs: HostPublicJobsFake
+    let snapshot: HostSnapshotRestorerFake
+    let selector: HostVaultSelectorFake
+    let runtime: HostRuntimeFake
+    let lifecycle: HostLifecycleFake
+    let presentation: HostPresentationFake
+    let owner: HostPresentationOwnerFake
+    let coordinator: HostUnlockCoordinatorFake
+    let controller: HostUnlockControllerFake
+    let controllerBuilder: HostUnlockControllerBuilderFake
+}
+
+private actor HostSuspensionGate {
+    private var entered = false
+    private var released = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        entered = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        guard !released else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !released else {
+            return
+        }
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+private actor HostBoolRecorder {
+    private var recordedValue: Bool?
+
+    func record(_ value: Bool) {
+        recordedValue = value
+    }
+
+    func value() -> Bool? {
+        recordedValue
+    }
+}
+
+private actor HostPublicJobsFake: AtlasPublicJobSearching {
+    struct Plan: Sendable {
+        let result: Result<
+            AtlasPublicJobSearchResult,
+            AtlasPublicJobServiceError
+        >
+        let gate: HostSuspensionGate?
+
+        init(
+            result: Result<
+                AtlasPublicJobSearchResult,
+                AtlasPublicJobServiceError
+            >,
+            gate: HostSuspensionGate? = nil
+        ) {
+            self.result = result
+            self.gate = gate
+        }
+    }
+
+    private var plans: [Plan]
+    private var searchCalls = 0
+    private var cancellationCalls = 0
+    private var cancellationWaiters:
+        [CheckedContinuation<Void, Never>] = []
+
+    init(plans: [Plan]) {
+        self.plans = plans
+    }
+
+    func health() async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicServiceHealth
+    {
+        do {
+            return try AtlasPublicServiceHealth(
+                availability: .available,
+                openJobCount: 0,
+                enabledSourceCount: 0,
+                lastSyncAt: nil
+            )
+        } catch {
+            throw .invalidResponse
+        }
+    }
+
+    func search(
+        _ request: AtlasPublicJobSearchRequest
+    ) async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicJobSearchResult
+    {
+        searchCalls += 1
+        guard !plans.isEmpty else {
+            throw .unavailable
+        }
+        let plan = plans.removeFirst()
+        if let gate = plan.gate {
+            await withTaskCancellationHandler {
+                await gate.wait()
+            } onCancel: {
+                Task {
+                    await self.recordCancellationAndRelease(gate)
+                }
+            }
+        }
+        if Task.isCancelled {
+            throw .unavailable
+        }
+        return try plan.result.get()
+    }
+
+    func sources() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicSourceStatus]
+    {
+        []
+    }
+
+    func updates() async throws(AtlasPublicJobServiceError)
+        -> [AtlasPublicUpdateStatus]
+    {
+        []
+    }
+
+    func detail(
+        for reference: AtlasPublicJobReference
+    ) async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicJobDetailResult
+    {
+        throw .invalidRequest
+    }
+
+    func totalCalls() -> Int {
+        searchCalls
+    }
+
+    func cancelledCalls() -> Int {
+        cancellationCalls
+    }
+
+    func waitUntilCancellation() async {
+        guard cancellationCalls == 0 else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    private func recordCancellationAndRelease(
+        _ gate: HostSuspensionGate
+    ) async {
+        cancellationCalls += 1
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await gate.release()
+    }
+}
+
+private actor HostSnapshotRestorerFake: AtlasPublicSnapshotRestoring {
+    enum Outcome: Sendable {
+        case success(AtlasProductionPublicSnapshot?)
+        case failure(AtlasPublicSnapshotRestoreError)
+    }
+
+    private let outcome: Outcome
+    private let gate: HostSuspensionGate?
+    private var calls = 0
+
+    init(outcome: Outcome, gate: HostSuspensionGate?) {
+        self.outcome = outcome
+        self.gate = gate
+    }
+
+    func restore() async throws(AtlasPublicSnapshotRestoreError)
+        -> AtlasProductionPublicSnapshot?
+    {
+        calls += 1
+        if let gate {
+            await gate.wait()
+        }
+        switch outcome {
+        case let .success(snapshot):
+            return snapshot
+        case let .failure(error):
+            throw error
+        }
+    }
+
+    func restoreCount() -> Int {
+        calls
+    }
+}
+
+private actor HostVaultSelectorFake: AtlasVaultIDSelecting {
+    enum Outcome: Sendable {
+        case success(AtlasVaultIDSelection)
+        case failure(AtlasVaultIDSelectionError)
+    }
+
+    private let outcome: Outcome
+    private let gate: HostSuspensionGate?
+    private var calls = 0
+
+    init(outcome: Outcome, gate: HostSuspensionGate?) {
+        self.outcome = outcome
+        self.gate = gate
+    }
+
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
+    {
+        calls += 1
+        if let gate {
+            await gate.wait()
+        }
+        switch outcome {
+        case let .success(selection):
+            return selection
+        case let .failure(error):
+            throw error
+        }
+    }
+
+    func selectCount() -> Int {
+        calls
+    }
+}
+
+private actor HostRuntimeFake: AtlasVaultRuntimeFacading {
+    private var runtimeStatus: AtlasVaultRuntimeStatus
+    private var lockResult: AtlasVaultRuntimeStatus = .locked
+    private var nextLockGate: HostSuspensionGate?
+    private var statusCallCount = 0
+    private var activationCallCount = 0
+    private var lockCallCount = 0
+    private var mutationCallCount = 0
+
+    init(
+        status: AtlasVaultRuntimeStatus,
+        lockGate: HostSuspensionGate?
+    ) {
+        runtimeStatus = status
+        nextLockGate = lockGate
+    }
+
+    func status() async -> AtlasVaultRuntimeStatus {
+        statusCallCount += 1
+        return runtimeStatus
+    }
+
+    func activate(
+        _ request: AtlasVaultRuntimeActivationRequest
+    ) async throws {
+        activationCallCount += 1
+    }
+
+    func lock() async {
+        lockCallCount += 1
+        let gate = nextLockGate
+        nextLockGate = nil
+        if let gate {
+            await gate.wait()
+        }
+        runtimeStatus = lockResult
+    }
+
+    func apply(
+        _ request: AtlasVaultRuntimeMutationRequest
+    ) async throws -> AtlasVaultSaveOutcome {
+        mutationCallCount += 1
+        return .committed
+    }
+
+    func setStatus(_ status: AtlasVaultRuntimeStatus) {
+        runtimeStatus = status
+    }
+
+    func setLockResult(_ status: AtlasVaultRuntimeStatus) {
+        lockResult = status
+    }
+
+    func totalCalls() -> Int {
+        statusCallCount
+            + activationCallCount
+            + lockCallCount
+            + mutationCallCount
+    }
+
+    func activationCalls() -> Int {
+        activationCallCount
+    }
+
+    func lockCalls() -> Int {
+        lockCallCount
+    }
+}
+
+private actor HostLifecycleFake: AtlasVaultLifecycleCoordinating {
+    private var handledEvents: [AtlasVaultLifecycleEvent] = []
+    private var statusCallCount = 0
+    private var pendingGrace = false
+
+    func handle(_ event: AtlasVaultLifecycleEvent) async {
+        handledEvents.append(event)
+    }
+
+    func status() async -> AtlasVaultLifecycleStatus {
+        statusCallCount += 1
+        return AtlasVaultLifecycleStatus(
+            lastEvent: handledEvents.last,
+            hasPendingGraceLock: pendingGrace,
+            failure: nil
+        )
+    }
+
+    func totalCalls() -> Int {
+        handledEvents.count + statusCallCount
+    }
+
+    func events() -> [AtlasVaultLifecycleEvent] {
+        handledEvents
+    }
+}
+
+private struct HostNeverPresentationSource:
+    AtlasVaultPresentationUpdateSourcing
+{
+    func updates() async -> AsyncStream<AtlasVaultPresentationUpdate> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+}
+
+private actor HostPresentationFake:
+    AtlasVaultProductionPresentationCoordinating
+{
+    private let backing = AtlasVaultObservablePresentationAdapter(
+        source: HostNeverPresentationSource()
+    )
+    private var startCalls = 0
+    private var publishCalls = 0
+    private var finishCalls = 0
+    private var subscribeCalls = 0
+    private var snapshotCalls = 0
+    private var publishResults: [Bool] = []
+    private var finishResult = true
+    private var current = AtlasVaultPresentationSnapshot(
+        status: .locked,
+        privateState: nil
+    )
+    private var statuses: [AtlasVaultPresentationStatus] = []
+
+    func start() async -> Bool {
+        startCalls += 1
+        return true
+    }
+
+    func publish(
+        _ value: AtlasVaultPrivateFreePresentationSnapshot
+    ) async -> Bool {
+        publishCalls += 1
+        statuses.append(value.snapshot.status)
+        let result = publishResults.isEmpty
+            ? true
+            : publishResults.removeFirst()
+        if result {
+            current = value.snapshot
+        }
+        return result
+    }
+
+    func finish() async -> Bool {
+        finishCalls += 1
+        if finishResult {
+            current = AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            )
+        }
+        return finishResult
+    }
+
+    func subscribe() async -> AtlasVaultPresentationSubscription {
+        subscribeCalls += 1
+        return await backing.subscribe()
+    }
+
+    func currentSnapshot() async -> AtlasVaultPresentationSnapshot {
+        snapshotCalls += 1
+        return current
+    }
+
+    func setPublishResults(_ results: [Bool]) {
+        publishResults = results
+    }
+
+    func setFinishResult(_ result: Bool) {
+        finishResult = result
+    }
+
+    func startCount() -> Int {
+        startCalls
+    }
+
+    func finishCount() -> Int {
+        finishCalls
+    }
+
+    func publishedStatuses() -> [AtlasVaultPresentationStatus] {
+        statuses
+    }
+
+    func totalCalls() -> Int {
+        startCalls
+            + publishCalls
+            + finishCalls
+            + subscribeCalls
+            + snapshotCalls
+    }
+}
+
+private actor HostPresentationOwnerRecorder {
+    private var states: [AtlasLockedShellUnlockFlowState] = []
+    private var generations: [AtlasVaultProductionHostGeneration] = []
+    private var results: [Bool] = []
+
+    func reset(
+        state: AtlasLockedShellUnlockFlowState,
+        generation: AtlasVaultProductionHostGeneration
+    ) -> Bool {
+        states.append(state)
+        generations.append(generation)
+        return results.isEmpty ? true : results.removeFirst()
+    }
+
+    func setResults(_ values: [Bool]) {
+        results = values
+    }
+
+    func totalCalls() -> Int {
+        states.count
+    }
+
+    func allStatesArePrivateFree() -> Bool {
+        states.allSatisfy { state in
+            state.unlockPanelState?.description
+                .contains(Self.privateMarker) != true
+        }
+    }
+
+    private static let privateMarker =
+        "FAKE_PRIVATE_STATE_MUST_NOT_APPEAR"
+}
+
+private final class HostPresentationOwnerFake:
+    AtlasVaultProductionPresentationOwnerResetting,
+    @unchecked Sendable
+{
+    private let recorder = HostPresentationOwnerRecorder()
+    private let gate: HostSuspensionGate?
+
+    init(gate: HostSuspensionGate? = nil) {
+        self.gate = gate
+    }
+
+    @MainActor
+    func resetPresentation(
+        to state: AtlasLockedShellUnlockFlowState,
+        generation: AtlasVaultProductionHostGeneration
+    ) async -> Bool {
+        let result = await recorder.reset(
+            state: state,
+            generation: generation
+        )
+        if let gate {
+            await gate.wait()
+        }
+        return result
+    }
+
+    func setResults(_ results: [Bool]) async {
+        await recorder.setResults(results)
+    }
+
+    func totalCalls() async -> Int {
+        await recorder.totalCalls()
+    }
+
+    func allStatesArePrivateFree() async -> Bool {
+        await recorder.allStatesArePrivateFree()
+    }
+}
+
+private actor HostUnlockCoordinatorFake:
+    AtlasVaultUnlockRequestCoordinating
+{
+    private var dispatchCalls = 0
+    private var cancelCalls = 0
+
+    func dispatch(_ request: AtlasVaultUnlockRequest) async throws {
+        dispatchCalls += 1
+    }
+
+    func cancel(_ request: AtlasVaultUnlockRequest) async -> Bool {
+        cancelCalls += 1
+        return true
+    }
+}
+
+private actor HostUnlockControllerFake:
+    AtlasVaultUnlockPresentationControlling
+{
+    private var state = unlockState(.locked)
+    private let submitResult: AtlasVaultUnlockPresentationState
+    private let submitGate: HostSuspensionGate?
+    private let cancelResult: AtlasVaultUnlockPresentationState
+    private let disappearanceResult: AtlasVaultUnlockPresentationState
+    private var submitCalls = 0
+    private var cancelCalls = 0
+    private var disappearanceCalls = 0
+    private var hostLockCalls = 0
+
+    init(
+        submitResult: AtlasVaultUnlockPresentationState,
+        submitGate: HostSuspensionGate?,
+        cancelResult: AtlasVaultUnlockPresentationState,
+        disappearanceResult: AtlasVaultUnlockPresentationState
+    ) {
+        self.submitResult = submitResult
+        self.submitGate = submitGate
+        self.cancelResult = cancelResult
+        self.disappearanceResult = disappearanceResult
+    }
+
+    func currentState() async -> AtlasVaultUnlockPresentationState {
+        state
+    }
+
+    func select(
+        _ method: AtlasVaultUnlockMethod?
+    ) async -> AtlasVaultUnlockPresentationState {
+        state = AtlasVaultUnlockPresentationState(
+            capabilities: .currentProduction,
+            selectedMethod: method,
+            status: method == nil ? .locked : .ready
+        )
+        return state
+    }
+
+    func submit(
+        _ submission: AtlasVaultUnlockSubmission,
+        timeout: Duration?
+    ) async -> AtlasVaultUnlockPresentationState {
+        submitCalls += 1
+        state = AtlasVaultUnlockPresentationState(
+            capabilities: .currentProduction,
+            selectedMethod: .localKey,
+            status: .activating
+        )
+        if let submitGate {
+            await submitGate.wait()
+        }
+        state = submitResult
+        return state
+    }
+
+    func cancel() async -> AtlasVaultUnlockPresentationState {
+        cancelCalls += 1
+        state = cancelResult
+        return state
+    }
+
+    func didDisappear() async -> AtlasVaultUnlockPresentationState {
+        disappearanceCalls += 1
+        state = disappearanceResult
+        return state
+    }
+
+    func hostDidLock() async -> AtlasVaultUnlockPresentationState {
+        hostLockCalls += 1
+        state = unlockState(.locked)
+        return state
+    }
+
+    func submitCount() -> Int {
+        submitCalls
+    }
+
+    func cancelCount() -> Int {
+        cancelCalls
+    }
+
+    func disappearanceCount() -> Int {
+        disappearanceCalls
+    }
+
+    func hostLockCount() -> Int {
+        hostLockCalls
+    }
+}
+
+private final class HostUnlockControllerBuilderFake:
+    AtlasVaultUnlockPresentationControllerBuilding,
+    @unchecked Sendable
+{
+    private(set) var callCount = 0
+    private(set) var capturedVaultID: AtlasSelectedVaultID?
+    private(set) var capturedCapabilities: AtlasVaultUnlockCapabilities?
+    private let controller: HostUnlockControllerFake
+
+    init(controller: HostUnlockControllerFake) {
+        self.controller = controller
+    }
+
+    func makeController(
+        selectedVaultID: AtlasSelectedVaultID,
+        capabilities: AtlasVaultUnlockCapabilities,
+        coordinator: any AtlasVaultUnlockRequestCoordinating
+    ) -> any AtlasVaultUnlockPresentationControlling {
+        callCount += 1
+        capturedVaultID = selectedVaultID
+        capturedCapabilities = capabilities
+        return controller
+    }
+}
+
+private actor HostSecretBuffer: AtlasVaultSecretBuffer {
+    private var clears = 0
+
+    func takeSecretBytes() async throws -> Data {
+        Data()
+    }
+
+    func clear() async {
+        clears += 1
+    }
+
+    func clearCount() -> Int {
+        clears
+    }
+}
+
+private func unlockState(
+    _ status: AtlasVaultUnlockPresentationStatus
+) -> AtlasVaultUnlockPresentationState {
+    AtlasVaultUnlockPresentationState(
+        capabilities: .currentProduction,
+        selectedMethod: status == .locked ? nil : .localKey,
+        status: status
+    )
+}
+
+private func captureStart(
+    _ host: AtlasVaultProductionHost
+) async -> Result<
+    AtlasLockedShellUnlockFlowState,
+    AtlasVaultProductionHostError
+> {
+    do {
+        return .success(try await host.start())
+    } catch let error as AtlasVaultProductionHostError {
+        return .failure(error)
+    } catch {
+        return .failure(.presentationUnavailable)
+    }
+}
+
+private func captureSearch(
+    _ host: AtlasVaultProductionHost,
+    _ request: AtlasPublicJobSearchRequest
+) async -> Result<
+    AtlasPublicJobSearchResult,
+    AtlasPublicJobServiceError
+> {
+    do {
+        return .success(try await host.searchPublicJobs(request))
+    } catch {
+        return .failure(error)
+    }
+}
+
+private func reviewArtifactURLs(at root: URL) throws -> [URL] {
+    let ignored = Set([
+        ".git",
+        "private",
+        "node_modules",
+        ".build",
+        "DerivedData",
+        ".codex",
+    ])
+    guard let enumerator = FileManager.default.enumerator(
+        at: root,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: []
+    ) else {
+        throw CocoaError(.fileReadUnknown)
+    }
+
+    var urls: [URL] = []
+    for case let url as URL in enumerator {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+        if values.isDirectory == true,
+           ignored.contains(url.lastPathComponent) {
+            enumerator.skipDescendants()
+            continue
+        }
+        urls.append(url)
+    }
+    return urls
+}
+
+private func expectEqual<Value: Equatable>(
+    _ actual: @autoclosure () async throws -> Value,
+    _ expected: @autoclosure () async throws -> Value,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let actualValue = try await actual()
+        let expectedValue = try await expected()
+        XCTAssertEqual(actualValue, expectedValue, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectNotEqual<Value: Equatable>(
+    _ actual: @autoclosure () async throws -> Value,
+    _ expected: @autoclosure () async throws -> Value,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let actualValue = try await actual()
+        let expectedValue = try await expected()
+        XCTAssertNotEqual(actualValue, expectedValue, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectTrue(
+    _ expression: @autoclosure () async throws -> Bool,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let value = try await expression()
+        XCTAssertTrue(value, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectFalse(
+    _ expression: @autoclosure () async throws -> Bool,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let value = try await expression()
+        XCTAssertFalse(value, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectNil<Value>(
+    _ expression: @autoclosure () async throws -> Value?,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let value = try await expression()
+        XCTAssertNil(value, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectNotNil<Value>(
+    _ expression: @autoclosure () async throws -> Value?,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        let value = try await expression()
+        XCTAssertNotNil(value, message(), file: file, line: line)
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectNoThrow<Value>(
+    _ expression: @autoclosure () async throws -> Value,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+    } catch {
+        XCTFail("Unexpected error: \(error)", file: file, line: line)
+    }
+}
+
+private func expectThrowsError<Value>(
+    _ expression: @autoclosure () async throws -> Value,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ handler: ((any Error) async -> Void)? = nil
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected an error", file: file, line: line)
+    } catch {
+        await handler?(error)
+    }
+}
+
+private func requireSendable<Value: Sendable>(_ value: Value) {}

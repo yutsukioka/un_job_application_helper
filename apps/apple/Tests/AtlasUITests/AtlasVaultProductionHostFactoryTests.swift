@@ -14,6 +14,8 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         _ = AtlasVaultProductionHosting.self
         _ = AtlasVaultProductionHostBuilding.self
         _ = AtlasVaultUnlockPresentationControllerBuilding.self
+        _ = AtlasVaultProductionPresentationCoordinating.self
+        _ = AtlasVaultProductionPresentationOwnerResetting.self
 
         let graph = try makeDependencyGraph()
         let dependencies = graph.dependencies
@@ -605,6 +607,12 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         )
         XCTAssertTrue(
             sameObject(
+                captured.presentationOwner,
+                graph.presentationOwner
+            )
+        )
+        XCTAssertTrue(
+            sameObject(
                 captured.unlockCoordinator,
                 graph.unlockCoordinator
             )
@@ -622,10 +630,49 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertEqual(callCounts.runtime, 0)
         XCTAssertEqual(callCounts.lifecycle, 0)
         XCTAssertEqual(callCounts.presentation, 0)
+        XCTAssertEqual(callCounts.presentationOwner, 0)
         XCTAssertEqual(callCounts.unlockCoordinator, 0)
         XCTAssertEqual(callCounts.unlockControllerBuilder, 0)
         XCTAssertEqual(callCounts.hostBuilder, 1)
         XCTAssertEqual(callCounts.hostStart, 0)
+    }
+
+    func testConcreteHostBuilderReturnsInactiveHostWithoutInvokingDependencies() async throws {
+        let graph = try makeDependencyGraph()
+        let builder = AtlasVaultProductionHostBuilder()
+        let before = await graph.callCounts()
+
+        let built = builder.makeHost(dependencies: graph.dependencies)
+        let host = try XCTUnwrap(built as? AtlasVaultProductionHost)
+        let after = await graph.callCounts()
+        let inactive = await host.isInactiveForTesting()
+
+        XCTAssertEqual(before, .zero)
+        XCTAssertEqual(after, .zero)
+        XCTAssertTrue(inactive)
+        XCTAssertTrue(builder.description.contains("<redacted>"))
+    }
+
+    func testConcreteControllerBuilderConstructsWithoutDispatching() async throws {
+        let graph = try makeDependencyGraph()
+        let selectedID = try AtlasSelectedVaultID(
+            validating: Self.fakeVaultID
+        )
+        let builder =
+            AtlasVaultProductionUnlockPresentationControllerBuilder()
+
+        let controller = builder.makeController(
+            selectedVaultID: selectedID,
+            capabilities: .currentProduction,
+            coordinator: graph.unlockCoordinator
+        )
+        let state = await controller.currentState()
+        let coordinatorCalls = await graph.unlockCoordinator.totalCalls()
+
+        XCTAssertEqual(state.status, .locked)
+        XCTAssertEqual(state.capabilities, .currentProduction)
+        XCTAssertEqual(coordinatorCalls, 0)
+        XCTAssertTrue(builder.description.contains("<redacted>"))
     }
 
     func testLazyUnlockControllerBuilderReceivesValidatedIDCapabilitiesAndCoordinator() async throws {
@@ -777,6 +824,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             "public let runtime:",
             "public let lifecycle:",
             "public let presentation:",
+            "public let presentationOwner:",
             "public let unlockCoordinator:",
             "public let unlockControllerBuilder:",
         ] {
@@ -817,18 +865,25 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         }
     }
 
-    func testPhaseFileSetIsExactlyTheAllowlistedFourFiles() {
+    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() {
         let expected = Set([
-            "phase2d54_runtime_neutral_production_host_contract.md",
+            "phase2d56_runtime_neutral_production_host.md",
             "AtlasVaultProductionHostContracts.swift",
-            "AtlasVaultProductionHostFactory.swift",
+            "AtlasVaultProductionPresentationPipeline.swift",
+            "AtlasVaultProductionHost.swift",
+            "AtlasVaultProductionHostTests.swift",
             "AtlasVaultProductionHostFactoryTests.swift",
         ])
         let actual = Set([
             architectureDocumentURL().lastPathComponent,
             sourceURL(named: "AtlasVaultProductionHostContracts.swift")
                 .lastPathComponent,
-            sourceURL(named: "AtlasVaultProductionHostFactory.swift")
+            sourceURL(
+                named: "AtlasVaultProductionPresentationPipeline.swift"
+            ).lastPathComponent,
+            sourceURL(named: "AtlasVaultProductionHost.swift")
+                .lastPathComponent,
+            testURL(named: "AtlasVaultProductionHostTests.swift")
                 .lastPathComponent,
             URL(fileURLWithPath: #filePath).lastPathComponent,
         ])
@@ -851,6 +906,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         let runtime = FactoryRuntimeSpy()
         let lifecycle = FactoryLifecycleSpy()
         let presentation = FactoryPresentationSpy()
+        let presentationOwner = FactoryPresentationOwnerSpy()
         let unlockCoordinator = FactoryUnlockCoordinatorSpy()
         let unlockControllerBuilder =
             FactoryUnlockControllerBuilderSpy()
@@ -866,6 +922,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             runtime: runtime,
             lifecycle: lifecycle,
             presentation: presentation,
+            presentationOwner: presentationOwner,
             unlockCoordinator: unlockCoordinator,
             unlockControllerBuilder: unlockControllerBuilder
         )
@@ -876,6 +933,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             runtime: runtime,
             lifecycle: lifecycle,
             presentation: presentation,
+            presentationOwner: presentationOwner,
             unlockCoordinator: unlockCoordinator,
             unlockControllerBuilder: unlockControllerBuilder,
             host: host,
@@ -1021,11 +1079,17 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             .appendingPathComponent(filename)
     }
 
+    private func testURL(named filename: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(filename)
+    }
+
     private func architectureDocumentURL() -> URL {
         repositoryRootURL()
             .appendingPathComponent("docs/architecture")
             .appendingPathComponent(
-                "phase2d54_runtime_neutral_production_host_contract.md"
+                "phase2d56_runtime_neutral_production_host.md"
             )
     }
 
@@ -1046,6 +1110,7 @@ private struct FactoryDependencyGraph {
     let runtime: FactoryRuntimeSpy
     let lifecycle: FactoryLifecycleSpy
     let presentation: FactoryPresentationSpy
+    let presentationOwner: FactoryPresentationOwnerSpy
     let unlockCoordinator: FactoryUnlockCoordinatorSpy
     let unlockControllerBuilder: FactoryUnlockControllerBuilderSpy
     let host: FactoryProductionHostSpy
@@ -1060,6 +1125,7 @@ private struct FactoryDependencyGraph {
             runtime: await runtime.totalCalls(),
             lifecycle: await lifecycle.totalCalls(),
             presentation: await presentation.totalCalls(),
+            presentationOwner: await presentationOwner.totalCalls(),
             unlockCoordinator: await unlockCoordinator.totalCalls(),
             unlockControllerBuilder: unlockControllerBuilder.callCount,
             hostBuilder: hostBuilder.callCount,
@@ -1076,6 +1142,7 @@ private struct FactoryDependencyCallCounts: Equatable {
         runtime: 0,
         lifecycle: 0,
         presentation: 0,
+        presentationOwner: 0,
         unlockCoordinator: 0,
         unlockControllerBuilder: 0,
         hostBuilder: 0,
@@ -1088,6 +1155,7 @@ private struct FactoryDependencyCallCounts: Equatable {
     let runtime: Int
     let lifecycle: Int
     let presentation: Int
+    let presentationOwner: Int
     let unlockCoordinator: Int
     let unlockControllerBuilder: Int
     let hostBuilder: Int
@@ -1279,12 +1347,34 @@ private struct FactoryNeverPresentationSource:
     }
 }
 
-private actor FactoryPresentationSpy: AtlasVaultPresentationObserving {
+private actor FactoryPresentationSpy:
+    AtlasVaultProductionPresentationCoordinating
+{
     private let backing = AtlasVaultObservablePresentationAdapter(
         source: FactoryNeverPresentationSource()
     )
     private var subscribeCalls = 0
     private var snapshotCalls = 0
+    private var startCalls = 0
+    private var publishCalls = 0
+    private var finishCalls = 0
+
+    func start() async -> Bool {
+        startCalls += 1
+        return true
+    }
+
+    func publish(
+        _ value: AtlasVaultPrivateFreePresentationSnapshot
+    ) async -> Bool {
+        publishCalls += 1
+        return true
+    }
+
+    func finish() async -> Bool {
+        finishCalls += 1
+        return true
+    }
 
     func subscribe() async -> AtlasVaultPresentationSubscription {
         subscribeCalls += 1
@@ -1297,7 +1387,43 @@ private actor FactoryPresentationSpy: AtlasVaultPresentationObserving {
     }
 
     func totalCalls() -> Int {
-        subscribeCalls + snapshotCalls
+        subscribeCalls
+            + snapshotCalls
+            + startCalls
+            + publishCalls
+            + finishCalls
+    }
+}
+
+private actor FactoryPresentationOwnerRecorder {
+    private var calls = 0
+
+    func record() {
+        calls += 1
+    }
+
+    func totalCalls() -> Int {
+        calls
+    }
+}
+
+private final class FactoryPresentationOwnerSpy:
+    AtlasVaultProductionPresentationOwnerResetting,
+    @unchecked Sendable
+{
+    private let recorder = FactoryPresentationOwnerRecorder()
+
+    @MainActor
+    func resetPresentation(
+        to state: AtlasLockedShellUnlockFlowState,
+        generation: AtlasVaultProductionHostGeneration
+    ) async -> Bool {
+        await recorder.record()
+        return true
+    }
+
+    func totalCalls() async -> Int {
+        await recorder.totalCalls()
     }
 }
 
