@@ -208,8 +208,7 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
 
-        lifetime = .stopping
-        closeUnlockAdmission()
+        beginTerminalStop()
         let id = UUID()
         let task = Task { [self] in
             await performStop()
@@ -714,16 +713,8 @@ public actor AtlasVaultProductionHost:
         guard lifetime == .starting else {
             return .failure(.stopped)
         }
-        let presentationStarted = await dependencies.presentation.start()
-        guard presentationStarted else {
-            let wasStopped = lifetime == .stopping || lifetime == .stopped
-            if !wasStopped {
-                lifetime = .inactive
-            }
-            closeUnlockAdmission()
-            return .failure(
-                wasStopped ? .stopped : .presentationUnavailable
-            )
+        guard await dependencies.presentation.start() else {
+            return failStartForPresentation()
         }
         presentationWasStarted = true
         guard lifetime == .starting else {
@@ -765,9 +756,7 @@ public actor AtlasVaultProductionHost:
         guard case .acknowledged = publication,
               lifetime == .starting,
               generation == startGeneration else {
-            lifetime = .inactive
-            closeUnlockAdmission()
-            return .failure(.presentationUnavailable)
+            return failStartForPresentation()
         }
 
         let mayOpen = lifecycleIsActive
@@ -785,9 +774,7 @@ public actor AtlasVaultProductionHost:
         guard case .acknowledged = finalPublication,
               lifetime == .starting,
               generation == startedGeneration else {
-            lifetime = .inactive
-            closeUnlockAdmission()
-            return .failure(.presentationUnavailable)
+            return failStartForPresentation()
         }
         lifetime = .started
         shell = startedShell
@@ -1012,9 +999,13 @@ public actor AtlasVaultProductionHost:
     private func runPrivateFreeBarrier(
         terminal: Bool
     ) async -> AtlasLockedShellUnlockFlowState {
+        let terminalBarrierRequested = terminal
+            || lifetime == .stopping
+            || lifetime == .stopped
+            || stopOperation != nil
         if let barrierOperation {
             let result = await barrierOperation.task.value
-            if terminal && !barrierOperation.terminal {
+            if terminalBarrierRequested && !barrierOperation.terminal {
                 if self.barrierOperation?.id == barrierOperation.id {
                     self.barrierOperation = nil
                 }
@@ -1023,15 +1014,17 @@ public actor AtlasVaultProductionHost:
             return result
         }
 
-        lifetime = terminal ? .stopping : .reconciling
+        lifetime = terminalBarrierRequested ? .stopping : .reconciling
         closeUnlockAdmission()
         let id = UUID()
         let task = Task { [self] in
-            await performPrivateFreeBarrier(terminal: terminal)
+            await performPrivateFreeBarrier(
+                terminal: terminalBarrierRequested
+            )
         }
         barrierOperation = BarrierOperation(
             id: id,
-            terminal: terminal,
+            terminal: terminalBarrierRequested,
             task: task
         )
         let result = await task.value
@@ -1044,11 +1037,7 @@ public actor AtlasVaultProductionHost:
     private func performPrivateFreeBarrier(
         terminal: Bool
     ) async -> AtlasLockedShellUnlockFlowState {
-        selectionOperation?.task.cancel()
-        selectionOperation = nil
-        defer {
-            resumeSelectionWaiters(with: flowState())
-        }
+        abandonSelectionAndResumeCallers()
         let preservesNoVault = shell.vaultStatus == .noVault
             && selectedVaultID == nil
         let lockedPresentationStatus: AtlasVaultPresentationStatus =
@@ -1350,6 +1339,31 @@ public actor AtlasVaultProductionHost:
         let next = AtlasVaultProductionHostGeneration()
         generation = next
         return next
+    }
+
+    private func beginTerminalStop() {
+        lifetime = .stopping
+        closeUnlockAdmission()
+        _ = advanceGeneration()
+    }
+
+    private func failStartForPresentation() -> Result<
+        AtlasLockedShellUnlockFlowState,
+        AtlasVaultProductionHostError
+    > {
+        closeUnlockAdmission()
+        if lifetime == .stopping || lifetime == .stopped {
+            return .failure(.stopped)
+        }
+        lifetime = .inactive
+        return .failure(.presentationUnavailable)
+    }
+
+    private func abandonSelectionAndResumeCallers() {
+        selectionOperation?.task.cancel()
+        selectionOperation = nil
+        let abandonedState = flowState()
+        resumeSelectionWaiters(with: abandonedState)
     }
 
     private func acquirePublicationPermit() async {

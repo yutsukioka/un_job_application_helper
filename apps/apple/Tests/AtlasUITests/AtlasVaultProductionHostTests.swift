@@ -276,6 +276,41 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testPipelineFinishInterruptsSuspendedPublishWithoutAcknowledgement() async throws {
+        let pipelineSource = try source(
+            named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        await pipeline.suspendDeliveryForTesting()
+        let activating = try privateFreeSnapshot(.activating)
+        let publish = Task {
+            await pipeline.publish(activating)
+        }
+        await pipeline.waitUntilSequenceForTesting(1)
+        let finish = Task { await pipeline.finish() }
+
+        guard !pipelineSource.contains(
+            "let acknowledged = await source.sendAndWait(locked)"
+        ) else {
+            XCTFail("Terminal finish must not wait for another acknowledgement")
+            await pipeline.resumeDeliveryForTesting()
+            _ = await finish.value
+            _ = await publish.value
+            return
+        }
+
+        await expectTrue(await finish.value)
+        await expectFalse(await publish.value)
+        await expectEqual(
+            await pipeline.currentSnapshot(),
+            AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            )
+        )
+    }
+
     func testHostConstructionInvokesNoDependencyAndStartsInactive() async throws {
         let graph = try makeGraph()
         await expectTrue(await graph.host.isInactiveForTesting())
@@ -750,6 +785,45 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual((await first.value).mode, .lockedPublic)
         await expectEqual((await second.value).mode, .lockedPublic)
         await gate.release()
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+    }
+
+    func testAbandonedSelectionCallersReturnBeforeSlowBarrierCompletes() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        let selectionGate = HostSuspensionGate()
+        let ownerGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            selectionGate: selectionGate,
+            runtimeStatus: .unlocked
+        )
+        _ = try await graph.host.start()
+        let first = Task { await graph.host.requestUnlockPanel() }
+        await selectionGate.waitUntilEntered()
+        let second = Task { await graph.host.requestUnlockPanel() }
+        await graph.owner.setGate(ownerGate)
+        let lock = Task { await graph.host.lock() }
+        await ownerGate.waitUntilEntered()
+
+        guard hostSource.contains("abandonSelectionAndResumeCallers") else {
+            XCTFail("Selection callers must be released before barrier awaits")
+            await ownerGate.release()
+            _ = await lock.value
+            await selectionGate.release()
+            _ = await first.value
+            _ = await second.value
+            return
+        }
+
+        await expectEqual((await first.value).mode, .lockedPublic)
+        await expectEqual((await second.value).mode, .lockedPublic)
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+        await ownerGate.release()
+        _ = await lock.value
+        await selectionGate.release()
         await expectEqual(graph.controllerBuilder.callCount, 0)
     }
 
@@ -1298,6 +1372,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
 
     func testProductionSourceGuardsAndExactAllowlist() async throws {
         let host = try source(named: "AtlasVaultProductionHost.swift")
+        await expectTrue(host.contains("beginTerminalStop()"))
+        await expectTrue(host.contains("terminalBarrierRequested"))
         for forbidden in [
             "privateState(",
             "AtlasVaultPrivateStateSnapshot",

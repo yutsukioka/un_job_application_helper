@@ -380,13 +380,10 @@ public actor AtlasVaultProductionPresentationPipeline:
             status: .locked,
             privateState: nil
         )
-        let acknowledged = await source.sendAndWait(locked)
-        let current = await observable.currentSnapshot()
-        let verified = acknowledged
-            && current == locked
-            && current.privateState == nil
         await source.finish()
         await anchorTask?.value
+        let current = await observable.currentSnapshot()
+        let verified = current == locked && current.privateState == nil
         await anchorSubscription?.cancel()
         anchorTask = nil
         anchorSubscription = nil

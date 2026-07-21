@@ -173,9 +173,11 @@ selection operation and closes admission before awaiting the selector.
 Concurrent requests join one host-owned completion and invoke the selector once.
 The initiating request and every concurrent request wait on the same actor-owned
 continuation set. Lock or stop cancels and abandons the selector task, then
-releases every caller without waiting for a platform selector that ignores task
-cancellation. A late selector result is discarded. Selection is generation
-checked after every suspension.
+captures the current private-free flow and releases every caller before the
+barrier performs its first await. Callers therefore do not wait for either a
+platform selector that ignores task cancellation or a slow presentation/runtime
+barrier. A late selector result is discarded. Selection is generation checked
+after every suspension.
 
 ## 15. No-Vault Behavior
 
@@ -326,6 +328,11 @@ terminal. A pipeline that started before a failed start is still finished by a
 later stop. Cancellation completion also clears `isSearching` before the
 terminal private-free state is published.
 
+Stop advances host generation synchronously with entering stopping lifetime and
+closing admission, before it creates or awaits teardown work. Any later request
+for a nonterminal barrier inherits this terminal intent rather than replacing
+stopping or stopped lifetime with reconciliation.
+
 ## 32. Terminal Stop Policy
 
 Stop before start performs no dependency call and becomes terminal. Stop after
@@ -380,6 +387,13 @@ Terminal source finish drains activation, observation-start, sequence, delivery,
 and acknowledgement waiters exactly once. Wait helpers called after finish
 return immediately, so teardown cannot strand a start or test-maintenance
 continuation.
+
+Finish does not enqueue and await one more sequenced publication. It terminally
+finishes the source first, which causes the existing observable adapter to emit
+its fixed locked private-free terminal snapshot and close subscribers. The
+pipeline then joins its retained observation task and verifies that observable
+current state is exactly that locked snapshot. A previously suspended publish
+is resumed as unacknowledged instead of blocking teardown.
 
 ## 37. Presentation-Owner Reset Acknowledgement
 
@@ -464,7 +478,9 @@ observation handshake. Panel callbacks during reconciliation and late callback
 completion after terminal stop use deterministic suspension-gate regressions.
 Additional teardown regressions cover unfulfilled pipeline waiter release,
 terminal stop during the presentation-start handshake, and immediate release of
-all callers when a suspended selector is abandoned.
+all callers when a suspended selector is abandoned. Terminal finish while a
+publish is unacknowledged, selector release before a suspended owner barrier,
+and immediate terminal generation invalidation are also covered.
 
 ## 45. Go/No-Go Update
 
