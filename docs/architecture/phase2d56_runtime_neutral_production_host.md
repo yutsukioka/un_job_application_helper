@@ -243,6 +243,12 @@ generation, requests controller cancellation or disappearance, and awaits the
 retained task. A late success or uncertain terminal state enters reconciliation
 and cannot publish stale unlocked state.
 
+Panel callbacks are accepted only while host lifetime is started. A callback
+arriving during reconciliation cannot advance generation or invalidate the
+in-flight barrier. After any controller or submit suspension, the callback
+rechecks lifetime: terminal stop is joined as terminal, existing reconciliation
+is joined as nonterminal, and an already stopped host remains stopped.
+
 ## 25. Host Reconciliation
 
 Reconciliation closes admission and advances generation before suspension. It
@@ -316,7 +322,9 @@ Stop before start performs no dependency call and becomes terminal. Stop after
 start commands runtime lock even if runtime initially reports locked. A terminal
 stop request upgrades an in-flight nonterminal barrier without allowing that
 barrier to reopen admission. Failed acknowledgement remains a terminal,
-non-interactive reconciliation flow; restart is not supported.
+non-interactive reconciliation flow; restart is not supported. A late cancel or
+disappearance completion cannot replace stopped lifetime with nonterminal
+reconciliation.
 
 ## 33. Host Generation
 
@@ -436,7 +444,8 @@ publication does not invalidate unlock admission. Additional regressions cover
 pre-start source activation, lifecycle close events before and during start,
 terminal search-indicator cleanup, and no-vault preservation across a failed
 publication barrier. Concurrent pipeline starts coalesce behind one completed
-observation handshake.
+observation handshake. Panel callbacks during reconciliation and late callback
+completion after terminal stop use deterministic suspension-gate regressions.
 
 ## 45. Go/No-Go Update
 

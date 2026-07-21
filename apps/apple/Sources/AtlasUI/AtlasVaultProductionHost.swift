@@ -443,7 +443,7 @@ public actor AtlasVaultProductionHost:
     public func cancelUnlock() async
         -> AtlasLockedShellUnlockFlowState
     {
-        guard isPublicOperationAvailable,
+        guard lifetime == .started,
               let unlockController else {
             return flowState()
         }
@@ -451,8 +451,17 @@ public actor AtlasVaultProductionHost:
             closeUnlockAdmission()
             let operationGeneration = advanceGeneration()
             let cancelled = await unlockController.cancel()
-            guard generation == operationGeneration,
-                  lifetime == .started else {
+            switch lifetime {
+            case .stopping:
+                return await runPrivateFreeBarrier(terminal: true)
+            case .reconciling:
+                return await runPrivateFreeBarrier(terminal: false)
+            case .inactive, .starting, .stopped:
+                return flowState()
+            case .started:
+                break
+            }
+            guard generation == operationGeneration else {
                 return flowState()
             }
             unlockState = cancelled
@@ -474,6 +483,16 @@ public actor AtlasVaultProductionHost:
         if submitOperation?.id == active?.id {
             submitOperation = nil
         }
+        switch lifetime {
+        case .stopping:
+            return await runPrivateFreeBarrier(terminal: true)
+        case .reconciling:
+            return await runPrivateFreeBarrier(terminal: false)
+        case .inactive, .starting, .stopped:
+            return flowState()
+        case .started:
+            break
+        }
         if cancelledState.status == .hostReconciliationRequired
             || terminalState?.status == .hostReconciliationRequired
             || terminalState?.status == .unlocked
@@ -488,7 +507,7 @@ public actor AtlasVaultProductionHost:
     public func unlockPanelDidDisappear() async
         -> AtlasLockedShellUnlockFlowState
     {
-        guard isPublicOperationAvailable,
+        guard lifetime == .started,
               let unlockController else {
             return flowState()
         }
@@ -496,8 +515,17 @@ public actor AtlasVaultProductionHost:
             closeUnlockAdmission()
             let operationGeneration = advanceGeneration()
             let disappeared = await unlockController.didDisappear()
-            guard generation == operationGeneration,
-                  lifetime == .started else {
+            switch lifetime {
+            case .stopping:
+                return await runPrivateFreeBarrier(terminal: true)
+            case .reconciling:
+                return await runPrivateFreeBarrier(terminal: false)
+            case .inactive, .starting, .stopped:
+                return flowState()
+            case .started:
+                break
+            }
+            guard generation == operationGeneration else {
                 return flowState()
             }
             unlockState = disappeared
@@ -518,6 +546,16 @@ public actor AtlasVaultProductionHost:
         let terminalState = await active?.task.value
         if submitOperation?.id == active?.id {
             submitOperation = nil
+        }
+        switch lifetime {
+        case .stopping:
+            return await runPrivateFreeBarrier(terminal: true)
+        case .reconciling:
+            return await runPrivateFreeBarrier(terminal: false)
+        case .inactive, .starting, .stopped:
+            return flowState()
+        case .started:
+            break
         }
         if disappearedState.status == .hostReconciliationRequired
             || terminalState?.status == .hostReconciliationRequired

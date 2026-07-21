@@ -876,6 +876,73 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.runtime.lockCalls(), 1)
     }
 
+    func testStopRemainsTerminalWhenCancelledSubmitCompletesLate() async throws {
+        let submitGate = HostSuspensionGate()
+        let firstCancelGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            submitGate: submitGate,
+            cancelGate: firstCancelGate,
+            cancelResult: unlockState(.hostReconciliationRequired)
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await submitGate.waitUntilEntered()
+        let cancel = Task { await graph.host.cancelUnlock() }
+        await firstCancelGate.waitUntilEntered()
+
+        let stop = Task { await graph.host.stop() }
+        await graph.controller.waitUntilCancelCount(2)
+        await submitGate.release()
+        let stopped = await stop.value
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await assertStartStopped(graph.host)
+
+        await firstCancelGate.release()
+        _ = await cancel.value
+        _ = await submit.value
+        await assertStartStopped(graph.host)
+        await expectFalse(
+            (await graph.host.currentFlowState()).publicShell.canRequestUnlock
+        )
+        await expectEqual(await graph.presentation.finishCount(), 1)
+    }
+
+    func testPanelCallbackCannotInvalidateReconciliationBarrier() async throws {
+        let ownerGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(
+                .selected(try selectedVaultID())
+            ),
+            runtimeStatus: .unlocked
+        )
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+        await graph.owner.setGate(ownerGate)
+
+        let lock = Task { await graph.host.lock() }
+        await ownerGate.waitUntilEntered()
+        let callback = await graph.host.unlockPanelDidDisappear()
+
+        await expectEqual(
+            callback.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectEqual(await graph.controller.disappearanceCount(), 0)
+        await ownerGate.release()
+
+        let locked = await lock.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectFalse(await graph.host.hasSelectedVaultForTesting())
+    }
+
     func testFailedBarrierRemainsReconciliationAndExplicitLockRetries() async throws {
         let graph = try makeGraph(
             selection: .success(
@@ -1313,6 +1380,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         submitResult: AtlasVaultUnlockPresentationState =
             unlockState(.failed),
         submitGate: HostSuspensionGate? = nil,
+        cancelGate: HostSuspensionGate? = nil,
         ownerGate: HostSuspensionGate? = nil,
         cancelResult: AtlasVaultUnlockPresentationState =
             unlockState(.cancelled),
@@ -1339,6 +1407,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let controller = HostUnlockControllerFake(
             submitResult: submitResult,
             submitGate: submitGate,
+            cancelGate: cancelGate,
             cancelResult: cancelResult,
             disappearanceResult: disappearanceResult
         )
@@ -1968,18 +2037,32 @@ private actor HostPresentationOwnerRecorder {
     private var states: [AtlasLockedShellUnlockFlowState] = []
     private var generations: [AtlasVaultProductionHostGeneration] = []
     private var results: [Bool] = []
+    private var nextGate: HostSuspensionGate?
+
+    init(gate: HostSuspensionGate?) {
+        nextGate = gate
+    }
 
     func reset(
         state: AtlasLockedShellUnlockFlowState,
         generation: AtlasVaultProductionHostGeneration
-    ) -> Bool {
+    ) -> (result: Bool, gate: HostSuspensionGate?) {
         states.append(state)
         generations.append(generation)
-        return results.isEmpty ? true : results.removeFirst()
+        let gate = nextGate
+        nextGate = nil
+        return (
+            results.isEmpty ? true : results.removeFirst(),
+            gate
+        )
     }
 
     func setResults(_ values: [Bool]) {
         results = values
+    }
+
+    func setGate(_ gate: HostSuspensionGate?) {
+        nextGate = gate
     }
 
     func totalCalls() -> Int {
@@ -2001,11 +2084,10 @@ private final class HostPresentationOwnerFake:
     AtlasVaultProductionPresentationOwnerResetting,
     @unchecked Sendable
 {
-    private let recorder = HostPresentationOwnerRecorder()
-    private let gate: HostSuspensionGate?
+    private let recorder: HostPresentationOwnerRecorder
 
     init(gate: HostSuspensionGate? = nil) {
-        self.gate = gate
+        recorder = HostPresentationOwnerRecorder(gate: gate)
     }
 
     @MainActor
@@ -2013,18 +2095,22 @@ private final class HostPresentationOwnerFake:
         to state: AtlasLockedShellUnlockFlowState,
         generation: AtlasVaultProductionHostGeneration
     ) async -> Bool {
-        let result = await recorder.reset(
+        let plan = await recorder.reset(
             state: state,
             generation: generation
         )
-        if let gate {
+        if let gate = plan.gate {
             await gate.wait()
         }
-        return result
+        return plan.result
     }
 
     func setResults(_ results: [Bool]) async {
         await recorder.setResults(results)
+    }
+
+    func setGate(_ gate: HostSuspensionGate?) async {
+        await recorder.setGate(gate)
     }
 
     func totalCalls() async -> Int {
@@ -2058,21 +2144,28 @@ private actor HostUnlockControllerFake:
     private var state = unlockState(.locked)
     private let submitResult: AtlasVaultUnlockPresentationState
     private let submitGate: HostSuspensionGate?
+    private let cancelGate: HostSuspensionGate?
     private let cancelResult: AtlasVaultUnlockPresentationState
     private let disappearanceResult: AtlasVaultUnlockPresentationState
     private var submitCalls = 0
     private var cancelCalls = 0
     private var disappearanceCalls = 0
     private var hostLockCalls = 0
+    private var cancelCountWaiters: [(
+        target: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )] = []
 
     init(
         submitResult: AtlasVaultUnlockPresentationState,
         submitGate: HostSuspensionGate?,
+        cancelGate: HostSuspensionGate?,
         cancelResult: AtlasVaultUnlockPresentationState,
         disappearanceResult: AtlasVaultUnlockPresentationState
     ) {
         self.submitResult = submitResult
         self.submitGate = submitGate
+        self.cancelGate = cancelGate
         self.cancelResult = cancelResult
         self.disappearanceResult = disappearanceResult
     }
@@ -2111,6 +2204,10 @@ private actor HostUnlockControllerFake:
 
     func cancel() async -> AtlasVaultUnlockPresentationState {
         cancelCalls += 1
+        resumeCancelCountWaiters()
+        if cancelCalls == 1, let cancelGate {
+            await cancelGate.wait()
+        }
         state = cancelResult
         return state
     }
@@ -2135,12 +2232,36 @@ private actor HostUnlockControllerFake:
         cancelCalls
     }
 
+    func waitUntilCancelCount(_ target: Int) async {
+        guard cancelCalls < target else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancelCountWaiters.append((target, continuation))
+        }
+    }
+
     func disappearanceCount() -> Int {
         disappearanceCalls
     }
 
     func hostLockCount() -> Int {
         hostLockCalls
+    }
+
+    private func resumeCancelCountWaiters() {
+        var remaining: [(
+            target: Int,
+            continuation: CheckedContinuation<Void, Never>
+        )] = []
+        for waiter in cancelCountWaiters {
+            if waiter.target <= cancelCalls {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        cancelCountWaiters = remaining
     }
 }
 
