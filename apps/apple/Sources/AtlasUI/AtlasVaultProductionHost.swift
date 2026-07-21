@@ -161,6 +161,7 @@ public actor AtlasVaultProductionHost:
         (any AtlasVaultUnlockPresentationControlling)?
     private var startOperation: StartOperation?
     private var searchOperation: SearchOperation?
+    private var retainedSearchOperations: [UUID: SearchOperation] = [:]
     private var selectionOperation: SelectionOperation?
     private var selectionWaiters: [CheckedContinuation<
         AtlasLockedShellUnlockFlowState,
@@ -275,14 +276,17 @@ public actor AtlasVaultProductionHost:
                 return .failure(.unavailable)
             }
         }
-        searchOperation = SearchOperation(
+        let operation = SearchOperation(
             id: id,
             generation: operationGeneration,
             task: task
         )
+        retainedSearchOperations[id] = operation
+        searchOperation = operation
         _ = await publishCurrentFlow(status: presentationStatus)
 
         let result = await task.value
+        retainedSearchOperations[id] = nil
         guard searchOperation?.id == id,
               searchOperation?.generation == operationGeneration,
               searchGeneration == operationGeneration,
@@ -705,6 +709,10 @@ public actor AtlasVaultProductionHost:
         submitOperation != nil
     }
 
+    func retainedSearchOperationCountForTesting() -> Int {
+        retainedSearchOperations.count
+    }
+
     private var isPublicOperationAvailable: Bool {
         lifetime == .started || lifetime == .reconciling
     }
@@ -841,19 +849,28 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
 
-        searchGeneration &+= 1
-        let search = searchOperation
-        searchOperation = nil
-        search?.task.cancel()
         selectionOperation?.task.cancel()
-        if let search {
-            _ = await search.task.value
-        }
+        await cancelAndDrainSearchOperations()
         replaceShell(isSearching: false)
         let state = await runPrivateFreeBarrier(terminal: true)
         lifetime = .stopped
         closeUnlockAdmission()
         return state
+    }
+
+    private func cancelAndDrainSearchOperations() async {
+        searchGeneration &+= 1
+        let operations = Array(retainedSearchOperations.values)
+        searchOperation = nil
+        for operation in operations {
+            operation.task.cancel()
+        }
+        for operation in operations {
+            _ = await operation.task.value
+        }
+        for operation in operations {
+            retainedSearchOperations[operation.id] = nil
+        }
     }
 
     private func awaitStartingOperationBeforeStop() async {

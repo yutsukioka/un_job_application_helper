@@ -861,6 +861,453 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
     }
 
+    func testTerminalStopDrainsCurrentAndSupersededCancellationIgnoringSearches()
+        async throws
+    {
+        let supersededGate = HostSuspensionGate()
+        let currentGate = HostSuspensionGate()
+        let supersededResult = try makeSearchResult(
+            jobID: "FAKE_SUPERSEDED_STOP_JOB",
+            title: "Fake Superseded Stop Role"
+        )
+        let currentResult = try makeSearchResult(
+            jobID: "FAKE_CURRENT_STOP_JOB",
+            title: "Fake Current Stop Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(supersededResult),
+                gate: supersededGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(currentResult),
+                gate: currentGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+        ])
+        _ = try await graph.host.start()
+        let supersededRequest = try searchRequest(
+            query: "FAKE_SUPERSEDED_STOP"
+        )
+        let currentRequest = try searchRequest(
+            query: "FAKE_CURRENT_STOP"
+        )
+        let superseded = Task {
+            await captureSearch(graph.host, supersededRequest)
+        }
+        await supersededGate.waitUntilEntered()
+        let current = Task {
+            await captureSearch(graph.host, currentRequest)
+        }
+        await currentGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(1)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            2
+        )
+
+        let stopCompleted = HostBoolRecorder()
+        let stop = Task {
+            let state = await graph.host.stop()
+            await stopCompleted.record(true)
+            return state
+        }
+        await graph.publicJobs.waitForCancellationCount(2)
+        await expectEqual(
+            await graph.publicJobs.cancelledCallNumbers(),
+            Set([1, 2])
+        )
+        await expectEqual(await stopCompleted.value(), nil)
+
+        await currentGate.release()
+        await expectEqual(await current.value, .failure(.unavailable))
+        await graph.publicJobs.waitForCompletedCalls(1)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+        await expectEqual(await stopCompleted.value(), nil)
+
+        await supersededGate.release()
+        await expectEqual(await superseded.value, .failure(.unavailable))
+        let stopped = await stop.value
+        await graph.publicJobs.waitForCompletedCalls(2)
+
+        await expectEqual(await graph.publicJobs.activeCalls(), 0)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            0
+        )
+        await expectFalse(stopped.publicShell.isSearching)
+        await expectEqual(stopped.publicShell.searchQuery, "FAKE_CURRENT_STOP")
+        await expectEqual(stopped.publicShell.publicJobs, [])
+        await expectEqual(stopped.publicShell.cacheFreshness, .unavailable)
+        await expectEqual(stopped.publicShell.serviceStatus, .checking)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testTerminalStopCancelsAllRetainedSearchesBeforeDrainingAndCoalesces()
+        async throws
+    {
+        let firstGate = HostSuspensionGate()
+        let secondGate = HostSuspensionGate()
+        let thirdGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_MULTI_DRAIN_JOB",
+            title: "Fake Multi Drain Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: firstGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: secondGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: thirdGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+        ])
+        _ = try await graph.host.start()
+        let firstRequest = try searchRequest(query: "FAKE_DRAIN_A")
+        let secondRequest = try searchRequest(query: "FAKE_DRAIN_B")
+        let thirdRequest = try searchRequest(query: "FAKE_DRAIN_C")
+        let first = Task { await captureSearch(graph.host, firstRequest) }
+        await firstGate.waitUntilEntered()
+        let second = Task { await captureSearch(graph.host, secondRequest) }
+        await secondGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(1)
+        let third = Task { await captureSearch(graph.host, thirdRequest) }
+        await thirdGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(2)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            3
+        )
+
+        let firstStopCompleted = HostBoolRecorder()
+        let secondStopCompleted = HostBoolRecorder()
+        let firstStop = Task {
+            let state = await graph.host.stop()
+            await firstStopCompleted.record(true)
+            return state
+        }
+        await graph.publicJobs.waitForCancellationCount(3)
+        let secondStop = Task {
+            let state = await graph.host.stop()
+            await secondStopCompleted.record(true)
+            return state
+        }
+        await expectEqual(
+            await graph.publicJobs.cancelledCallNumbers(),
+            Set([1, 2, 3])
+        )
+
+        await thirdGate.release()
+        await expectEqual(await third.value, .failure(.unavailable))
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            2
+        )
+        await expectEqual(await firstStopCompleted.value(), nil)
+        await expectEqual(await secondStopCompleted.value(), nil)
+
+        await firstGate.release()
+        await expectEqual(await first.value, .failure(.unavailable))
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+        await expectEqual(await firstStopCompleted.value(), nil)
+        await expectEqual(await secondStopCompleted.value(), nil)
+
+        await secondGate.release()
+        await expectEqual(await second.value, .failure(.unavailable))
+        await expectEqual((await firstStop.value).mode, .lockedPublic)
+        await expectEqual((await secondStop.value).mode, .lockedPublic)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            0
+        )
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectEqual(await graph.runtime.lockCalls(), 1)
+        await expectEqual(await graph.publicJobs.activeCalls(), 0)
+    }
+
+    func testCompletedSupersededSearchIsRemovedWhileNewSearchRemainsResponsive()
+        async throws
+    {
+        let supersededGate = HostSuspensionGate()
+        let supersededResult = try makeSearchResult(
+            jobID: "FAKE_COMPLETED_SUPERSEDED_JOB",
+            title: "Fake Completed Superseded Role"
+        )
+        let currentResult = try makeSearchResult(
+            jobID: "FAKE_RESPONSIVE_SEARCH_JOB",
+            title: "Fake Responsive Search Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(supersededResult),
+                gate: supersededGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(result: .success(currentResult)),
+        ])
+        _ = try await graph.host.start()
+        let supersededRequest = try searchRequest(
+            query: "FAKE_COMPLETED_SUPERSEDED"
+        )
+        let currentRequest = try searchRequest(query: "FAKE_RESPONSIVE")
+        let superseded = Task {
+            await captureSearch(graph.host, supersededRequest)
+        }
+        await supersededGate.waitUntilEntered()
+
+        await expectEqual(
+            try await graph.host.searchPublicJobs(currentRequest),
+            currentResult
+        )
+        await expectEqual(await graph.publicJobs.totalCalls(), 2)
+        await expectEqual(await graph.publicJobs.activeCalls(), 1)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+
+        await supersededGate.release()
+        await expectEqual(await superseded.value, .failure(.unavailable))
+        await graph.publicJobs.waitForCompletedCalls(2)
+        await expectEqual(await graph.publicJobs.activeCalls(), 0)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            0
+        )
+        let stopped = await graph.host.stop()
+        await expectEqual(stopped.publicShell.publicJobs, currentResult.jobs)
+    }
+
+    func testCallerCancellationDoesNotReleaseSupersededSearchOwnership()
+        async throws
+    {
+        let supersededGate = HostSuspensionGate()
+        let currentGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_CALLER_CANCEL_SEARCH_JOB",
+            title: "Fake Caller Cancel Search Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: supersededGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: currentGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+        ])
+        _ = try await graph.host.start()
+        let supersededRequest = try searchRequest(query: "FAKE_CALLER_A")
+        let currentRequest = try searchRequest(query: "FAKE_CALLER_B")
+        let superseded = Task {
+            await captureSearch(graph.host, supersededRequest)
+        }
+        await supersededGate.waitUntilEntered()
+        superseded.cancel()
+        let current = Task {
+            await captureSearch(graph.host, currentRequest)
+        }
+        await currentGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(1)
+
+        let stopCompleted = HostBoolRecorder()
+        let stop = Task {
+            let state = await graph.host.stop()
+            await stopCompleted.record(true)
+            return state
+        }
+        await graph.publicJobs.waitForCancellationCount(2)
+        await currentGate.release()
+        await expectEqual(await current.value, .failure(.unavailable))
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+        await expectEqual(await stopCompleted.value(), nil)
+
+        await supersededGate.release()
+        await expectEqual(await superseded.value, .failure(.unavailable))
+        _ = await stop.value
+        await expectEqual(await graph.publicJobs.activeCalls(), 0)
+    }
+
+    func testLateSupersededFailureCannotMutateShellDuringTerminalDrain()
+        async throws
+    {
+        let staleGate = HostSuspensionGate()
+        let terminalGate = HostSuspensionGate()
+        let successfulResult = try makeSearchResult(
+            jobID: "FAKE_DRAIN_CURRENT_JOB",
+            title: "Fake Drain Current Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .failure(.invalidResponse),
+                gate: staleGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(result: .success(successfulResult)),
+            HostPublicJobsFake.Plan(
+                result: .failure(.unavailable),
+                gate: terminalGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+        ])
+        _ = try await graph.host.start()
+        let staleRequest = try searchRequest(query: "FAKE_STALE_FAILURE")
+        let successfulRequest = try searchRequest(
+            query: "FAKE_DRAIN_SUCCESS"
+        )
+        let terminalRequest = try searchRequest(query: "FAKE_DRAIN_TERMINAL")
+        let stale = Task { await captureSearch(graph.host, staleRequest) }
+        await staleGate.waitUntilEntered()
+        await expectEqual(
+            try await graph.host.searchPublicJobs(successfulRequest),
+            successfulResult
+        )
+        let terminal = Task {
+            await captureSearch(graph.host, terminalRequest)
+        }
+        await terminalGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(1)
+        let stop = Task { await graph.host.stop() }
+        await graph.publicJobs.waitForCancellationCount(2)
+
+        await staleGate.release()
+        await expectEqual(await stale.value, .failure(.unavailable))
+        let draining = await graph.host.currentFlowState().publicShell
+        await expectEqual(draining.searchQuery, "FAKE_DRAIN_TERMINAL")
+        await expectEqual(draining.publicJobs, [])
+        await expectEqual(draining.cacheFreshness, .unavailable)
+        await expectEqual(draining.serviceStatus, .checking)
+
+        await terminalGate.release()
+        await expectEqual(await terminal.value, .failure(.unavailable))
+        let stopped = await stop.value
+        await expectEqual(stopped.publicShell.searchQuery, "FAKE_DRAIN_TERMINAL")
+        await expectEqual(stopped.publicShell.publicJobs, [])
+        await expectEqual(stopped.publicShell.cacheFreshness, .unavailable)
+        await expectEqual(stopped.publicShell.serviceStatus, .checking)
+        await expectFalse(stopped.publicShell.isSearching)
+    }
+
+    func testWillTerminateDrainsSupersededSearchAndExplicitLockDoesNot()
+        async throws
+    {
+        let supersededGate = HostSuspensionGate()
+        let currentGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "FAKE_TERMINATION_DRAIN_JOB",
+            title: "Fake Termination Drain Role"
+        )
+        let graph = try makeGraph(searchPlans: [
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: supersededGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+            HostPublicJobsFake.Plan(
+                result: .success(result),
+                gate: currentGate,
+                releasesGateOnCancellation: false,
+                ignoresCancellation: true
+            ),
+        ])
+        _ = try await graph.host.start()
+        let firstRequest = try searchRequest(query: "FAKE_TERMINATION_A")
+        let secondRequest = try searchRequest(query: "FAKE_TERMINATION_B")
+        let first = Task { await captureSearch(graph.host, firstRequest) }
+        await supersededGate.waitUntilEntered()
+
+        _ = await graph.host.lock()
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 0)
+        await expectEqual(await graph.publicJobs.activeCalls(), 1)
+
+        let second = Task { await captureSearch(graph.host, secondRequest) }
+        await currentGate.waitUntilEntered()
+        await graph.publicJobs.waitForCancellationCount(1)
+        let terminationCompleted = HostBoolRecorder()
+        let termination = Task {
+            let state = await graph.host.handleLifecycleEvent(.willTerminate)
+            await terminationCompleted.record(true)
+            return state
+        }
+        await graph.publicJobs.waitForCancellationCount(2)
+
+        await currentGate.release()
+        await expectEqual(await second.value, .failure(.unavailable))
+        await expectEqual(await terminationCompleted.value(), nil)
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+
+        await supersededGate.release()
+        await expectEqual(await first.value, .failure(.unavailable))
+        let stopped = await termination.value
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectEqual(await graph.publicJobs.activeCalls(), 0)
+        await expectEqual(await graph.lifecycle.events(), [.willTerminate])
+        await assertStartStopped(graph.host)
+    }
+
+    func testSearchTaskRegistryAndTerminalDrainRemainPrivateAndTracked()
+        async throws
+    {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        let registry = "private var retainedSearchOperations"
+        let cancellationLoop = "for operation in operations {\n            operation.task.cancel()\n        }"
+        let awaitLoop = "for operation in operations {\n            _ = await operation.task.value\n        }"
+
+        await expectTrue(hostSource.contains(registry))
+        await expectFalse(hostSource.contains("public var retainedSearch"))
+        await expectFalse(hostSource.contains("Task.detached"))
+        await expectFalse(hostSource.contains("detachedSearch"))
+        await expectFalse(hostSource.contains("searchDrainTimeout"))
+        await expectFalse(hostSource.contains("abandonSearch"))
+        await expectTrue(hostSource.contains(cancellationLoop))
+        await expectTrue(hostSource.contains(awaitLoop))
+        if let cancellationRange = hostSource.range(of: cancellationLoop),
+           let awaitRange = hostSource.range(of: awaitLoop) {
+            await expectTrue(
+                cancellationRange.lowerBound < awaitRange.lowerBound
+            )
+        }
+        let graph = try makeGraph()
+        await expectFalse(
+            graph.host.description.contains("retainedSearch")
+        )
+    }
+
     func testPanelSelectionNoneAndFailureRemainNonSensitive() async throws {
         let noVault = try makeGraph(selection: .success(.none))
         _ = try await noVault.host.start()
@@ -2922,7 +3369,7 @@ private actor HostBoolRecorder {
 }
 
 private actor HostPublicJobsFake: AtlasPublicJobSearching {
-    private struct CallWaiter {
+    private struct CountWaiter {
         let expectedCount: Int
         let continuation: CheckedContinuation<Void, Never>
     }
@@ -2934,6 +3381,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         >
         let gate: HostSuspensionGate?
         let releasesGateOnCancellation: Bool
+        let ignoresCancellation: Bool
 
         init(
             result: Result<
@@ -2941,20 +3389,25 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
                 AtlasPublicJobServiceError
             >,
             gate: HostSuspensionGate? = nil,
-            releasesGateOnCancellation: Bool = true
+            releasesGateOnCancellation: Bool = true,
+            ignoresCancellation: Bool = false
         ) {
             self.result = result
             self.gate = gate
             self.releasesGateOnCancellation = releasesGateOnCancellation
+            self.ignoresCancellation = ignoresCancellation
         }
     }
 
     private var plans: [Plan]
     private var searchCalls = 0
     private var cancellationCalls = 0
-    private var callWaiters: [CallWaiter] = []
-    private var cancellationWaiters:
-        [CheckedContinuation<Void, Never>] = []
+    private var activeCallIDs: Set<Int> = []
+    private var completedCallIDs: Set<Int> = []
+    private var cancelledCallIDs: Set<Int> = []
+    private var callWaiters: [CountWaiter] = []
+    private var cancellationWaiters: [CountWaiter] = []
+    private var completionWaiters: [CountWaiter] = []
 
     init(plans: [Plan]) {
         self.plans = plans
@@ -2981,7 +3434,14 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         -> AtlasPublicJobSearchResult
     {
         searchCalls += 1
+        let callID = searchCalls
+        activeCallIDs.insert(callID)
         resumeCallWaiters()
+        defer {
+            activeCallIDs.remove(callID)
+            completedCallIDs.insert(callID)
+            resumeCompletionWaiters()
+        }
         guard !plans.isEmpty else {
             throw .unavailable
         }
@@ -2992,13 +3452,14 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
             } onCancel: {
                 Task {
                     await self.recordCancellation(
+                        callID: callID,
                         gate,
                         releasesGate: plan.releasesGateOnCancellation
                     )
                 }
             }
         }
-        if Task.isCancelled {
+        if Task.isCancelled, !plan.ignoresCancellation {
             throw .unavailable
         }
         return try plan.result.get()
@@ -3038,7 +3499,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
                 return
             }
             callWaiters.append(
-                CallWaiter(
+                CountWaiter(
                     expectedCount: expectedCount,
                     continuation: continuation
                 )
@@ -3051,31 +3512,70 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
     }
 
     func waitUntilCancellation() async {
-        guard cancellationCalls == 0 else {
+        await waitForCancellationCount(1)
+    }
+
+    func waitForCancellationCount(_ expectedCount: Int) async {
+        guard cancellationCalls < expectedCount else {
             return
         }
         await withCheckedContinuation { continuation in
-            cancellationWaiters.append(continuation)
+            guard cancellationCalls < expectedCount else {
+                continuation.resume()
+                return
+            }
+            cancellationWaiters.append(
+                CountWaiter(
+                    expectedCount: expectedCount,
+                    continuation: continuation
+                )
+            )
         }
     }
 
+    func waitForCompletedCalls(_ expectedCount: Int) async {
+        guard completedCallIDs.count < expectedCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            guard completedCallIDs.count < expectedCount else {
+                continuation.resume()
+                return
+            }
+            completionWaiters.append(
+                CountWaiter(
+                    expectedCount: expectedCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func activeCalls() -> Int {
+        activeCallIDs.count
+    }
+
+    func cancelledCallNumbers() -> Set<Int> {
+        cancelledCallIDs
+    }
+
     private func recordCancellation(
+        callID: Int,
         _ gate: HostSuspensionGate,
         releasesGate: Bool
     ) async {
-        cancellationCalls += 1
-        let waiters = cancellationWaiters
-        cancellationWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
+        guard cancelledCallIDs.insert(callID).inserted else {
+            return
         }
+        cancellationCalls += 1
+        resumeCancellationWaiters()
         if releasesGate {
             await gate.release()
         }
     }
 
     private func resumeCallWaiters() {
-        var pending: [CallWaiter] = []
+        var pending: [CountWaiter] = []
         for waiter in callWaiters {
             if searchCalls >= waiter.expectedCount {
                 waiter.continuation.resume()
@@ -3084,6 +3584,30 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
             }
         }
         callWaiters = pending
+    }
+
+    private func resumeCancellationWaiters() {
+        var pending: [CountWaiter] = []
+        for waiter in cancellationWaiters {
+            if cancellationCalls >= waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        cancellationWaiters = pending
+    }
+
+    private func resumeCompletionWaiters() {
+        var pending: [CountWaiter] = []
+        for waiter in completionWaiters {
+            if completedCallIDs.count >= waiter.expectedCount {
+                waiter.continuation.resume()
+            } else {
+                pending.append(waiter)
+            }
+        }
+        completionWaiters = pending
     }
 }
 

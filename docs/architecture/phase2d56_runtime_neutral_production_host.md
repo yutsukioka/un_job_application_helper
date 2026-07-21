@@ -148,10 +148,19 @@ The host does not retain a hidden previous-result cache or roll results back.
 
 ## 11. Public-Search Task Ownership
 
-The host creates one unstructured host-owned public-search task through
-`AtlasPublicJobSearching`. A superseding search cancels the prior task. Stop
-cancels and awaits the active search. Search never selects a vault or invokes
-runtime, lifecycle, unlock, or private compatibility services.
+The host creates unstructured host-owned public-search service tasks through
+`AtlasPublicJobSearching`. Every created task is retained until terminal
+completion. The current-operation marker controls result authority separately
+from the private retained-operation collection: supersession cancels the prior
+task and immediately starts the new task, but does not abandon ownership of the
+older task. A superseded completion removes its retained handle before current
+operation and generation checks, then returns the fixed unavailable result
+without mutating public state.
+
+Caller cancellation does not transfer ownership away from the host. Completed
+tasks are removed rather than accumulated, and retention stores no previous
+query, result, search history, or rollback state. Search never selects a vault
+or invokes runtime, lifecycle, unlock, or private compatibility services.
 
 ## 12. Search Generation And Stale-Result Rejection
 
@@ -175,10 +184,15 @@ descriptions.
 Public search is independent of panel presentation and vault locking. Opening
 the panel does not cancel a search. Explicit lock preserves public query and
 results and does not cancel an unrelated public-search task. Terminal stop is
-the operation that cancels all remaining public work. Host publications are
-serialized, so a search update carries the current non-sensitive unlock state
-without racing the presentation-owner acknowledgement for selection, submit,
-lock, or reconciliation.
+the operation that drains all remaining public work. It captures current and
+superseded unfinished tasks, cancels every captured task before awaiting any
+one, and awaits every task before terminal completion. A service that ignores
+cancellation can therefore delay stop; this is preferred to allowing work
+created by the host to outlive the stopped host. No detached cleanup monitor or
+timeout abandons that work. Host publications are serialized, so a search
+update carries the current non-sensitive unlock state without racing the
+presentation-owner acknowledgement for selection, submit, lock, or
+reconciliation.
 
 ## 14. Lazy Vault Selection
 
@@ -407,9 +421,13 @@ API is imported by the host.
 `stop()` is explicit and coalesced. It closes admission, cancels public search
 and selection work, contains active unlock work, runs a terminal runtime and
 presentation barrier, finishes the presentation pipeline, and leaves the host
-terminal. A pipeline that started before a failed start is still finished by a
-later stop. Cancellation completion also clears `isSearching` before the
-terminal private-free state is published.
+terminal. Its search drain invalidates current result authority, captures every
+retained current or superseded task, issues cancellation to all of them, and
+only then awaits each terminal completion. The local capture preserves host
+ownership while the drain runs, and completion cleanup is idempotent with the
+search caller's own cleanup. A pipeline that started before a failed start is
+still finished by a later stop. Search-drain completion also clears
+`isSearching` before the terminal private-free state is published.
 
 Stop advances host generation synchronously with entering stopping lifetime and
 closing admission, before it creates or awaits teardown work. It also abandons
@@ -438,6 +456,9 @@ terminal teardown the owner remains on reconciliation flow through pipeline
 finish and a final authoritative runtime `.locked` check. Only then does a new
 generation install and acknowledge terminal locked owner flow. A finish or
 runtime-verification failure therefore cannot leave the owner falsely locked.
+Repeated stop callers and `willTerminate` join this same terminal drain. An
+explicit nonterminal vault lock remains independent and neither cancels nor
+awaits public-search service work solely because the vault is locking.
 
 ## 33. Host Generation
 
@@ -645,6 +666,13 @@ acknowledgement, changed runtime to unlocked, and proved the barrier reopened
 from its earlier status result. The tests use checked-continuation publication,
 lifecycle, and owner gates rather than timing delays.
 
+Cycle 17 captured deterministic red evidence with a cancellation-ignoring
+superseded search. The prior exact head completed terminal stop while that
+service call remained active. The permanent regressions use independent
+checked-continuation gates to retain current and multiple superseded tasks,
+prove current-result authority remains separate, and verify all cancellation
+requests precede terminal draining without sleeps.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -713,6 +741,14 @@ service suspension and remains empty with unavailable freshness after failure.
 The supersession regression also begins from a successful result and proves
 that neither a cancelled search nor its former freshness can overwrite the
 newer query. A source guard rejects hidden previous-result caches.
+Cycle 17 adds cancellation-ignoring service coverage for current plus
+superseded tasks, three-operation cancellation and drain ordering, completed
+handle removal, responsive supersession, caller cancellation, late success and
+failure containment, coalesced repeated stop, `willTerminate`, and nonterminal
+vault-lock independence. Source guards require a private retained-operation
+registry, distinct current marker, cancel-all-before-await loops, and reject
+detached cleanup, timeout abandonment, and hidden result storage. Cycle 16
+query/result/cache coherence remains unchanged.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
