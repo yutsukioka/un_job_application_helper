@@ -1712,15 +1712,22 @@ public actor AtlasVaultProductionHost:
             ) else {
             return .stale
         }
-        guard await dependencies.presentationOwner.resetPresentation(
-            to: state,
-            generation: expectedGeneration
-        ) else {
-            return generation == expectedGeneration ? .failed : .stale
+        let ownerAcknowledged = await dependencies.presentationOwner
+            .resetPresentation(
+                to: state,
+                generation: expectedGeneration
+            )
+        guard generation == expectedGeneration else {
+            return .stale
         }
-        return generation == expectedGeneration
-            ? .acknowledged
-            : .stale
+        guard !requiresLifecycleFence
+            || publicationLifecycleFenceIsCurrent(
+                revision: publicationLifecycleRevision,
+                safeCheckRevision: publicationSafeCheckRevision
+            ) else {
+            return .stale
+        }
+        return ownerAcknowledged ? .acknowledged : .failed
     }
 
     private func publicationLifecycleFenceIsCurrent(

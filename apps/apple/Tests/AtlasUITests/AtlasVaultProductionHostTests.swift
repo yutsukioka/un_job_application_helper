@@ -2035,8 +2035,12 @@ final class AtlasVaultProductionHostTests: XCTestCase {
                 range: publicationStart.lowerBound..<hostSource.endIndex
             ),
             let ownerReset = hostSource.range(
-                of: "dependencies.presentationOwner.resetPresentation(",
+                of: ".resetPresentation(",
                 range: publicationStart.lowerBound..<hostSource.endIndex
+            ),
+            let publicationFenceHelper = hostSource.range(
+                of: "private func publicationLifecycleFenceIsCurrent(",
+                range: ownerReset.upperBound..<hostSource.endIndex
             ) else {
             XCTFail("Publication capture structure is missing")
             return
@@ -2053,6 +2057,16 @@ final class AtlasVaultProductionHostTests: XCTestCase {
                 separatedBy: "guard !requiresLifecycleFence"
             ).count - 1,
             2
+        )
+        let publicationAfterOwner = String(
+            hostSource[
+                ownerReset.upperBound..<publicationFenceHelper.lowerBound
+            ]
+        )
+        await expectTrue(
+            publicationAfterOwner.contains(
+                "guard !requiresLifecycleFence"
+            )
         )
         for required in [
             "let admissionLifecycleRevision = lifecycleEventRevision",

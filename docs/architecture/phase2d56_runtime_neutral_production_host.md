@@ -462,10 +462,12 @@ owner acknowledgement.
 An interactive captured flow also carries the current lifecycle revision and
 safe-check marker as an admission fence. The host revalidates that fence after
 acquiring the FIFO permit and again after pipeline acknowledgement, before
-calling the owner. A safe lifecycle check that starts while an interactive
-publication is queued or suspended therefore makes that publication stale; the
-captured interactive flow is never delivered to the owner. Closed flows remain
-eligible to carry current public-shell data while lifecycle validation proceeds.
+calling the owner. It revalidates once more after owner acknowledgement before
+treating the logical publication as accepted. A safe lifecycle check that starts
+while an interactive publication is queued or suspended therefore makes that
+publication stale instead of allowing callers to commit its obsolete admission
+decision. Closed flows remain eligible to carry current public-shell data while
+lifecycle validation proceeds.
 Each permit has a host-private identity. Terminal stop can revoke a stale permit
 and fail its queued waiters closed after installing the owner-generation fence,
 allowing terminal publication to proceed without waiting for an abandoned
@@ -688,6 +690,11 @@ non-interactive reconciliation, while successful relock may reopen only after
 the new status, lock, and final-status proof. The structural guard requires two
 interactive lifecycle-fence checks before owner reset and the late runtime-proof
 path.
+Cycle 15 adds the matching post-owner fence: an interactive publication is not
+reported as acknowledged when its lifecycle revision or safe-check ownership
+changes while the owner reset is suspended. The source guard requires the two
+pre-owner checks and the final post-owner check, with no further await before
+the publication result is returned.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
