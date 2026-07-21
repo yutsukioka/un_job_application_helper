@@ -109,6 +109,12 @@ cannot begin source observation until explicit start activates the source.
 Concurrent start callers share the same starting handshake and return only
 after the one source observation is active.
 
+If terminal stop arrives during that handshake, stop first marks lifetime as
+stopping and then joins the retained start operation. A successfully started
+pipeline is finished through the terminal barrier; if the handshake never
+started or failed, stop reaches the conservative locked terminal state without
+publishing through an inactive pipeline.
+
 The intended ready shell is sent to the owner while actor admission is still
 closed. Only after the owner acknowledgement and generation check succeed does
 the actor atomically enter `started` and open admission. Start after terminal
@@ -165,7 +171,11 @@ lock, or reconciliation.
 `requestUnlockPanel()` is the only initial selection trigger. It reserves the
 selection operation and closes admission before awaiting the selector.
 Concurrent requests join one host-owned completion and invoke the selector once.
-Selection is generation checked after every suspension.
+The initiating request and every concurrent request wait on the same actor-owned
+continuation set. Lock or stop cancels and abandons the selector task, then
+releases every caller without waiting for a platform selector that ignores task
+cancellation. A late selector result is discarded. Selection is generation
+checked after every suspension.
 
 ## 15. No-Vault Behavior
 
@@ -324,7 +334,8 @@ stop request upgrades an in-flight nonterminal barrier without allowing that
 barrier to reopen admission. Failed acknowledgement remains a terminal,
 non-interactive reconciliation flow; restart is not supported. A late cancel or
 disappearance completion cannot replace stopped lifetime with nonterminal
-reconciliation.
+reconciliation. Stop also joins a retained start operation before deciding
+whether an active presentation pipeline requires the terminal barrier.
 
 ## 33. Host Generation
 
@@ -364,6 +375,11 @@ Publication waits until the observable adapter has consumed the sequence. The
 pipeline then verifies that the adapter's current snapshot equals the intended
 private-free snapshot. Rejected private payloads are not sanitized and emitted;
 they fail at wrapper construction and leave current state unchanged.
+
+Terminal source finish drains activation, observation-start, sequence, delivery,
+and acknowledgement waiters exactly once. Wait helpers called after finish
+return immediately, so teardown cannot strand a start or test-maintenance
+continuation.
 
 ## 37. Presentation-Owner Reset Acknowledgement
 
@@ -446,6 +462,9 @@ terminal search-indicator cleanup, and no-vault preservation across a failed
 publication barrier. Concurrent pipeline starts coalesce behind one completed
 observation handshake. Panel callbacks during reconciliation and late callback
 completion after terminal stop use deterministic suspension-gate regressions.
+Additional teardown regressions cover unfulfilled pipeline waiter release,
+terminal stop during the presentation-start handshake, and immediate release of
+all callers when a suspended selector is abandoned.
 
 ## 45. Go/No-Go Update
 

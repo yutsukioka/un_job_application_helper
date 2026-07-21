@@ -252,6 +252,30 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectTrue(await pipeline.finish())
     }
 
+    func testPipelineFinishReleasesUnfulfilledInternalWaiters() async throws {
+        let pipelineSource = try source(
+            named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        guard pipelineSource.contains("resumeTerminalWaiters()") else {
+            XCTFail("Terminal source finish must release every waiter")
+            return
+        }
+
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let waiter = Task {
+            await pipeline.waitUntilSequenceForTesting(3)
+        }
+
+        await expectTrue(await pipeline.finish())
+        await waiter.value
+        await expectFalse(
+            await pipeline.publish(
+                try privateFreeSnapshot(.activating)
+            )
+        )
+    }
+
     func testHostConstructionInvokesNoDependencyAndStartsInactive() async throws {
         let graph = try makeGraph()
         await expectTrue(await graph.host.isInactiveForTesting())
@@ -699,7 +723,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectTrue(await graph.owner.allStatesArePrivateFree())
     }
 
-    func testStopDuringSuspendedSelectionReleasesConcurrentPanelWaiter() async throws {
+    func testStopDuringSuspendedSelectionReleasesEveryPanelCaller() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
         let gate = HostSuspensionGate()
         let selectedID = try selectedVaultID()
         let graph = try makeGraph(
@@ -714,9 +739,17 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let stopped = await graph.host.stop()
 
         await expectFalse(stopped.publicShell.canRequestUnlock)
+        guard hostSource.contains("completeSelection") else {
+            XCTFail("Teardown must release the initiating selection caller")
+            await gate.release()
+            _ = await first.value
+            _ = await second.value
+            return
+        }
+
+        await expectEqual((await first.value).mode, .lockedPublic)
         await expectEqual((await second.value).mode, .lockedPublic)
         await gate.release()
-        await expectEqual((await first.value).mode, .lockedPublic)
         await expectEqual(graph.controllerBuilder.callCount, 0)
     }
 
@@ -1165,6 +1198,30 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await assertStartStopped(graph.host)
     }
 
+    func testStopCoordinatesWithSuspendedPresentationStartHandshake() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        let startGate = HostSuspensionGate()
+        let graph = try makeGraph(presentationStartGate: startGate)
+        let start = Task { await captureStart(graph.host) }
+        await startGate.waitUntilEntered()
+        let stop = Task { await graph.host.stop() }
+
+        guard hostSource.contains("awaitStartingOperationBeforeStop") else {
+            XCTFail("Stop must coordinate with an in-flight start handshake")
+            await startGate.release()
+            _ = await stop.value
+            _ = await start.value
+            return
+        }
+
+        await startGate.release()
+        let stopped = await stop.value
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectEqual(await start.value, .failure(.stopped))
+        await assertStartStopped(graph.host)
+    }
+
     func testConcurrentStopCoalescesLocksAndFinishesPrivateFree() async throws {
         let gate = HostSuspensionGate()
         let graph = try makeGraph(
@@ -1381,6 +1438,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             unlockState(.failed),
         submitGate: HostSuspensionGate? = nil,
         cancelGate: HostSuspensionGate? = nil,
+        presentationStartGate: HostSuspensionGate? = nil,
         ownerGate: HostSuspensionGate? = nil,
         cancelResult: AtlasVaultUnlockPresentationState =
             unlockState(.cancelled),
@@ -1401,7 +1459,9 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             lockGate: runtimeLockGate
         )
         let lifecycle = HostLifecycleFake()
-        let presentation = HostPresentationFake()
+        let presentation = HostPresentationFake(
+            startGate: presentationStartGate
+        )
         let owner = HostPresentationOwnerFake(gate: ownerGate)
         let coordinator = HostUnlockCoordinatorFake()
         let controller = HostUnlockControllerFake(
@@ -1963,9 +2023,17 @@ private actor HostPresentationFake:
         privateState: nil
     )
     private var statuses: [AtlasVaultPresentationStatus] = []
+    private let startGate: HostSuspensionGate?
+
+    init(startGate: HostSuspensionGate?) {
+        self.startGate = startGate
+    }
 
     func start() async -> Bool {
         startCalls += 1
+        if let startGate {
+            await startGate.wait()
+        }
         return true
     }
 

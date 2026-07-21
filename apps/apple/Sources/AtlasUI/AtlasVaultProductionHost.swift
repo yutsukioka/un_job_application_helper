@@ -347,17 +347,17 @@ public actor AtlasVaultProductionHost:
                 return .failure(.unavailable)
             }
         }
-        selectionOperation = SelectionOperation(
+        let operation = SelectionOperation(
             id: id,
             generation: selectionGeneration,
             task: task
         )
-        let result = await task.value
-        guard let operation = selectionOperation,
-              operation.id == id else {
-            return flowState()
+        selectionOperation = operation
+        Task { [weak self] in
+            let result = await task.value
+            await self?.completeSelection(id: id, result: result)
         }
-        return await finishSelection(operation, result: result)
+        return await waitForSelectionCompletion(operation)
     }
 
     public func selectUnlockMethod(
@@ -714,10 +714,16 @@ public actor AtlasVaultProductionHost:
         guard lifetime == .starting else {
             return .failure(.stopped)
         }
-        guard await dependencies.presentation.start() else {
-            lifetime = .inactive
+        let presentationStarted = await dependencies.presentation.start()
+        guard presentationStarted else {
+            let wasStopped = lifetime == .stopping || lifetime == .stopped
+            if !wasStopped {
+                lifetime = .inactive
+            }
             closeUnlockAdmission()
-            return .failure(.presentationUnavailable)
+            return .failure(
+                wasStopped ? .stopped : .presentationUnavailable
+            )
         }
         presentationWasStarted = true
         guard lifetime == .starting else {
@@ -790,6 +796,13 @@ public actor AtlasVaultProductionHost:
     }
 
     private func performStop() async -> AtlasLockedShellUnlockFlowState {
+        await awaitStartingOperationBeforeStop()
+        guard presentationWasStarted else {
+            lifetime = .stopped
+            closeUnlockAdmission()
+            return flowState()
+        }
+
         searchGeneration &+= 1
         let search = searchOperation
         searchOperation = nil
@@ -803,6 +816,16 @@ public actor AtlasVaultProductionHost:
         lifetime = .stopped
         closeUnlockAdmission()
         return state
+    }
+
+    private func awaitStartingOperationBeforeStop() async {
+        guard let operation = startOperation else {
+            return
+        }
+        _ = await operation.task.value
+        if startOperation?.id == operation.id {
+            startOperation = nil
+        }
     }
 
     private func finishSubmit(
@@ -917,6 +940,20 @@ public actor AtlasVaultProductionHost:
         selectionOperation = nil
         resumeSelectionWaiters(with: state)
         return state
+    }
+
+    private func completeSelection(
+        id: UUID,
+        result: Result<
+            AtlasVaultIDSelection,
+            AtlasVaultIDSelectionError
+        >
+    ) async {
+        guard let operation = selectionOperation,
+              operation.id == id else {
+            return
+        }
+        _ = await finishSelection(operation, result: result)
     }
 
     private func waitForSelectionCompletion(

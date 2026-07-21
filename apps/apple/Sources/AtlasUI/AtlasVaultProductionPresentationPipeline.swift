@@ -108,6 +108,7 @@ private actor AtlasVaultProductionPresentationUpdateSource:
         for waiter in activationWaiters {
             waiter.resume(returning: false)
         }
+        resumeTerminalWaiters()
         invalidateObservation()
     }
 
@@ -142,7 +143,7 @@ private actor AtlasVaultProductionPresentationUpdateSource:
     }
 
     func waitUntilSequence(_ sequence: UInt64) async {
-        guard latestSequence() < sequence else {
+        guard acceptingUpdates, latestSequence() < sequence else {
             return
         }
         await withCheckedContinuation { continuation in
@@ -254,6 +255,20 @@ private actor AtlasVaultProductionPresentationUpdateSource:
             for waiter in waiters {
                 waiter.resume()
             }
+        }
+    }
+
+    private func resumeTerminalWaiters() {
+        let observationWaiters = observationStartWaiters
+        observationStartWaiters.removeAll()
+        for waiter in observationWaiters {
+            waiter.resume()
+        }
+
+        let terminalSequenceWaiters = sequenceWaiters.values.flatMap { $0 }
+        sequenceWaiters.removeAll()
+        for waiter in terminalSequenceWaiters {
+            waiter.resume()
         }
     }
 }
