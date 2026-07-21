@@ -865,30 +865,17 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         }
     }
 
-    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() {
+    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() throws {
         let expected = Set([
-            "phase2d56_runtime_neutral_production_host.md",
-            "AtlasVaultProductionHostContracts.swift",
-            "AtlasVaultProductionPresentationPipeline.swift",
-            "AtlasVaultProductionHost.swift",
-            "AtlasVaultProductionHostTests.swift",
-            "AtlasVaultProductionHostFactoryTests.swift",
-        ])
-        let actual = Set([
-            architectureDocumentURL().lastPathComponent,
-            sourceURL(named: "AtlasVaultProductionHostContracts.swift")
-                .lastPathComponent,
-            sourceURL(
-                named: "AtlasVaultProductionPresentationPipeline.swift"
-            ).lastPathComponent,
-            sourceURL(named: "AtlasVaultProductionHost.swift")
-                .lastPathComponent,
-            testURL(named: "AtlasVaultProductionHostTests.swift")
-                .lastPathComponent,
-            URL(fileURLWithPath: #filePath).lastPathComponent,
+            "docs/architecture/phase2d56_runtime_neutral_production_host.md",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionHostContracts.swift",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionPresentationPipeline.swift",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionHost.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostTests.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostFactoryTests.swift",
         ])
 
-        XCTAssertEqual(actual, expected)
+        XCTAssertEqual(try phaseChangedFiles(), expected)
     }
 
     private func makeDependencyGraph() throws -> FactoryDependencyGraph {
@@ -1100,6 +1087,98 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+
+    private func phaseChangedFiles() throws -> Set<String> {
+        let history = try gitOutput([
+            "log",
+            "--format=%H%x09%s",
+            "-n",
+            "200",
+        ])
+        let entries: [(sha: String, subject: String)] = history
+            .split(separator: "\n")
+            .compactMap { line -> (sha: String, subject: String)? in
+                let parts = line.split(
+                    separator: "\t",
+                    maxSplits: 1,
+                    omittingEmptySubsequences: false
+                )
+                guard parts.count == 2 else {
+                    return nil
+                }
+                return (sha: String(parts[0]), subject: String(parts[1]))
+            }
+
+        let committed: String
+        if let red = entries.first(where: {
+            $0.subject == "Test AtlasVault runtime-neutral production host"
+        }) {
+            let baseline = try gitOutput([
+                "rev-parse",
+                "\(red.sha)^",
+            ])
+            committed = try gitOutput([
+                "diff",
+                "--name-only",
+                "\(baseline)..HEAD",
+            ])
+        } else {
+            let merged = try XCTUnwrap(
+                entries.first(where: {
+                    $0.subject
+                        == "Add AtlasVault runtime-neutral production host tests"
+                }),
+                "Phase 2D-56 history is unavailable"
+            )
+            committed = try gitOutput([
+                "diff",
+                "--name-only",
+                "\(merged.sha)^..\(merged.sha)",
+            ])
+        }
+
+        let working = try gitOutput([
+            "diff",
+            "--name-only",
+            "HEAD",
+        ])
+        let untracked = try gitOutput([
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ])
+        return Set(
+            [committed, working, untracked]
+                .joined(separator: "\n")
+                .split(separator: "\n")
+                .map(String.init)
+        )
+    }
+
+    private func gitOutput(_ arguments: [String]) throws -> String {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.currentDirectoryURL = repositoryRootURL()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "AtlasVaultProductionHostFactoryTests",
+                code: Int(process.terminationStatus),
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        String(decoding: data, as: UTF8.self),
+                ]
+            )
+        }
+        return String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -1421,6 +1500,11 @@ private final class FactoryPresentationOwnerSpy:
         await recorder.record()
         return true
     }
+
+    @MainActor
+    func supersedePresentationGeneration(
+        _ generation: AtlasVaultProductionHostGeneration
+    ) async {}
 
     func totalCalls() async -> Int {
         await recorder.totalCalls()

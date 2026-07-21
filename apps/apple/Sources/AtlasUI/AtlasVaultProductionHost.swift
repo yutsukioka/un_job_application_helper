@@ -580,15 +580,11 @@ public actor AtlasVaultProductionHost:
         guard lifetime != .inactive else {
             return flowState()
         }
-        if lifetime == .started,
-           submitOperation == nil,
-           selectedVaultID == nil,
-           unlockState.status == .locked,
-           !isUnlockPanelPresented {
-            if await dependencies.runtime.status() == .locked {
-                return flowState()
-            }
+        if let barrierOperation {
+            return await barrierOperation.task.value
         }
+        closeUnlockAdmission()
+        _ = advanceGeneration()
         return await runPrivateFreeBarrier(terminal: false)
     }
 
@@ -1016,7 +1012,6 @@ public actor AtlasVaultProductionHost:
                 lifetime = .stopping
                 closeUnlockAdmission()
                 _ = advanceGeneration()
-                invalidatePublicationPermit()
                 return await runPrivateFreeBarrier(terminal: true)
             }
             return await barrierOperation.task.value
@@ -1025,9 +1020,11 @@ public actor AtlasVaultProductionHost:
         lifetime = terminalBarrierRequested ? .stopping : .reconciling
         closeUnlockAdmission()
         let id = UUID()
+        let operationGeneration = generation
         let task = Task { [self] in
             await performPrivateFreeBarrier(
                 operationID: id,
+                operationGeneration: operationGeneration,
                 terminal: terminalBarrierRequested
             )
         }
@@ -1045,10 +1042,20 @@ public actor AtlasVaultProductionHost:
 
     private func performPrivateFreeBarrier(
         operationID: UUID,
+        operationGeneration: AtlasVaultProductionHostGeneration,
         terminal: Bool
     ) async -> AtlasLockedShellUnlockFlowState {
         guard barrierOperation?.id == operationID else {
             return flowState()
+        }
+        if terminal {
+            await dependencies.presentationOwner
+                .supersedePresentationGeneration(operationGeneration)
+            guard barrierOperation?.id == operationID,
+                  generation == operationGeneration else {
+                return flowState()
+            }
+            invalidatePublicationPermit()
         }
         abandonSelectionAndResumeCallers()
         let preservesNoVault = shell.vaultStatus == .noVault
@@ -1394,7 +1401,6 @@ public actor AtlasVaultProductionHost:
         lifetime = .stopping
         closeUnlockAdmission()
         _ = advanceGeneration()
-        invalidatePublicationPermit()
     }
 
     private func failStartForPresentation() -> Result<

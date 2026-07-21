@@ -283,10 +283,12 @@ the ready shell while admission is still closed, then atomically reopens it.
 ## 27. Explicit Lock
 
 `lock()` is explicit and coalesces with an in-flight barrier. It closes
-admission first, contains active unlock work, commands runtime lock as needed,
-notifies the controller, and completes both presentation acknowledgements.
-Public search state is preserved. Controller and selected identifier are cleared
-only after barrier success.
+admission and advances generation before its first await, contains active unlock
+work, commands runtime lock as needed, notifies the controller, and completes
+both presentation acknowledgements. It has no admission-open runtime-status fast
+path; an already-locked runtime follows the same private-free barrier without an
+unnecessary lock command. Public search state is preserved. Controller and
+selected identifier are cleared only after barrier success.
 
 ## 28. Lifecycle Event Handling
 
@@ -341,10 +343,12 @@ Stop before start performs no dependency call and becomes terminal. Stop after
 start commands runtime lock even if runtime initially reports locked. A terminal
 stop request upgrades an in-flight nonterminal barrier without allowing that
 barrier to reopen admission. The terminal request revokes any stale publication
-permit, cancels and replaces the nonterminal barrier operation, and starts the
+permit only after the MainActor owner has acknowledged a newer generation
+fence. It cancels and replaces the nonterminal barrier operation and starts the
 terminal barrier without awaiting the stale operation. The replaced operation
-checks its operation identity after every suspension and cannot mutate terminal
-state when a late dependency returns. Failed acknowledgement remains a terminal,
+checks its operation identity after every suspension, while the owner rejects
+the fenced stale generation, so neither can mutate terminal state when a late
+dependency returns. Failed acknowledgement remains a terminal,
 non-interactive reconciliation flow; restart is not supported. A late cancel or
 disappearance completion cannot replace stopped lifetime with nonterminal
 reconciliation. Stop also joins a retained start operation before deciding
@@ -379,9 +383,10 @@ permit at a time across the pipeline and MainActor owner reset. This prevents
 reentrant public-shell updates from overtaking owner acknowledgements while
 allowing public search and unlock admission to keep independent generations.
 Each permit has a host-private identity. Terminal stop can revoke a stale permit
-and fail its queued waiters closed, allowing terminal publication to proceed
-without waiting for an abandoned nonterminal owner acknowledgement. A late
-holder cannot release or replace the terminal permit.
+and fail its queued waiters closed after installing the owner-generation fence,
+allowing terminal publication to proceed without waiting for an abandoned
+nonterminal owner acknowledgement. A late holder cannot release or replace the
+terminal permit.
 
 Sequence values, subscriber counts, and current status are absent from public
 descriptions.
@@ -411,9 +416,14 @@ is resumed as unacknowledged instead of blocking teardown.
 receives only sanitized locked-shell flow plus an opaque host generation. It
 receives no runtime, vault identifier, key, path, or service object.
 
-The host revalidates generation after the owner await. Tests suspend the
-MainActor fake deterministically and prove that admission remains closed until
-acknowledgement. Phase 2D-56 does not implement the concrete owner.
+The owner contract exposes `supersedePresentationGeneration(_:)`. Before
+revoking a stale permit, terminal teardown awaits this MainActor generation
+fence. An owner must reject a reset whose generation is no longer current and
+must recheck after every suspension before mutating presentation. The host also
+revalidates generation after every owner await. Tests suspend the MainActor fake
+deterministically and prove that admission remains closed until acknowledgement
+and that a stale reset cannot reinstall pre-stop flow after terminal finish.
+Phase 2D-56 does not implement the concrete owner.
 
 ## 38. Private-Free Barrier
 
@@ -433,9 +443,10 @@ The barrier order is:
 
 Every barrier operation has a private identity that is revalidated after each
 await. Terminal stop replaces an in-flight nonterminal identity immediately,
-revokes its publication permit, and begins a new terminal barrier. Late stale
-runtime, controller, pipeline, or owner completion therefore returns the current
-private-free flow without changing terminal state.
+establishes a newer owner-generation fence, revokes the stale publication permit,
+and begins terminal publication. Late stale runtime, controller, pipeline, or
+owner completion therefore returns the current private-free flow without
+changing terminal state.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
 stop. A no-vault shell remains no-vault with admission closed across both
@@ -499,7 +510,10 @@ publish is unacknowledged, selector release before a suspended owner barrier,
 and immediate terminal generation invalidation are also covered. Final teardown
 regressions hold a cancellation-ignoring public search while selection is
 abandoned and hold a stale nonterminal owner acknowledgement while terminal stop
-completes through a replacement barrier.
+completes through a replacement barrier. The owner fake commits only the newest
+generation after suspension, explicit lock closes admission before runtime
+status, and the exact allowlist is derived from Git phase history plus current
+tracked and untracked changes rather than reconstructed from expected paths.
 
 ## 45. Go/No-Go Update
 

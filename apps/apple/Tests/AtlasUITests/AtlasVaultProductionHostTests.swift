@@ -1198,6 +1198,30 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testLockClosesAdmissionBeforeAwaitingRuntimeStatus() async throws {
+        let statusGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .locked,
+            runtimeStatusGate: statusGate
+        )
+        _ = try await graph.host.start()
+
+        let lock = Task { await graph.host.lock() }
+        await statusGate.waitUntilEntered()
+        let panel = await graph.host.requestUnlockPanel()
+
+        await expectFalse(panel.publicShell.canRequestUnlock)
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+
+        await statusGate.release()
+        let locked = await lock.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+    }
+
     func testLifecycleNeverUnlocksAndLockingEventsCompleteBarrier() async throws {
         let graph = try makeGraph()
         _ = try await graph.host.start()
@@ -1422,7 +1446,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
 
         guard hostSource.contains("invalidatePublicationPermit()"),
               hostSource.contains("barrierOperation.task.cancel()"),
-              hostSource.contains("operationID: id") else {
+              hostSource.contains("operationID: id"),
+              hostSource.contains("supersedePresentationGeneration") else {
             XCTFail("Terminal stop must supersede stale nonterminal barriers")
             await ownerGate.release()
             _ = await lock.value
@@ -1439,6 +1464,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         _ = await lock.value
         await assertStartStopped(graph.host)
         await expectEqual(await graph.presentation.finishCount(), 1)
+        await expectEqual(await graph.owner.staleResetCount(), 1)
+        await expectEqual(await graph.owner.latestMode(), .lockedPublic)
     }
 
     func testStopAcknowledgementFailureRemainsTerminalReconciliation() async throws {
@@ -1595,6 +1622,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         selection: HostVaultSelectorFake.Outcome = .success(.none),
         selectionGate: HostSuspensionGate? = nil,
         runtimeStatus: AtlasVaultRuntimeStatus = .locked,
+        runtimeStatusGate: HostSuspensionGate? = nil,
         runtimeLockGate: HostSuspensionGate? = nil,
         submitResult: AtlasVaultUnlockPresentationState =
             unlockState(.failed),
@@ -1618,6 +1646,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
         let runtime = HostRuntimeFake(
             status: runtimeStatus,
+            statusGate: runtimeStatusGate,
             lockGate: runtimeLockGate
         )
         let lifecycle = HostLifecycleFake()
@@ -2073,6 +2102,7 @@ private actor HostVaultSelectorFake: AtlasVaultIDSelecting {
 private actor HostRuntimeFake: AtlasVaultRuntimeFacading {
     private var runtimeStatus: AtlasVaultRuntimeStatus
     private var lockResult: AtlasVaultRuntimeStatus = .locked
+    private var nextStatusGate: HostSuspensionGate?
     private var nextLockGate: HostSuspensionGate?
     private var statusCallCount = 0
     private var activationCallCount = 0
@@ -2081,14 +2111,21 @@ private actor HostRuntimeFake: AtlasVaultRuntimeFacading {
 
     init(
         status: AtlasVaultRuntimeStatus,
+        statusGate: HostSuspensionGate?,
         lockGate: HostSuspensionGate?
     ) {
         runtimeStatus = status
+        nextStatusGate = statusGate
         nextLockGate = lockGate
     }
 
     func status() async -> AtlasVaultRuntimeStatus {
         statusCallCount += 1
+        let gate = nextStatusGate
+        nextStatusGate = nil
+        if let gate {
+            await gate.wait()
+        }
         return runtimeStatus
     }
 
@@ -2277,23 +2314,43 @@ private actor HostPresentationOwnerRecorder {
     private var generations: [AtlasVaultProductionHostGeneration] = []
     private var results: [Bool] = []
     private var nextGate: HostSuspensionGate?
+    private var currentGeneration: AtlasVaultProductionHostGeneration?
+    private var staleResets = 0
 
     init(gate: HostSuspensionGate?) {
         nextGate = gate
     }
 
-    func reset(
-        state: AtlasLockedShellUnlockFlowState,
+    func beginReset(
         generation: AtlasVaultProductionHostGeneration
     ) -> (result: Bool, gate: HostSuspensionGate?) {
-        states.append(state)
-        generations.append(generation)
+        currentGeneration = generation
         let gate = nextGate
         nextGate = nil
         return (
             results.isEmpty ? true : results.removeFirst(),
             gate
         )
+    }
+
+    func finishReset(
+        state: AtlasLockedShellUnlockFlowState,
+        generation: AtlasVaultProductionHostGeneration,
+        result: Bool
+    ) -> Bool {
+        guard currentGeneration == generation else {
+            staleResets += 1
+            return false
+        }
+        states.append(state)
+        generations.append(generation)
+        return result
+    }
+
+    func supersede(
+        generation: AtlasVaultProductionHostGeneration
+    ) {
+        currentGeneration = generation
     }
 
     func setResults(_ values: [Bool]) {
@@ -2315,6 +2372,14 @@ private actor HostPresentationOwnerRecorder {
         }
     }
 
+    func staleResetCount() -> Int {
+        staleResets
+    }
+
+    func latestMode() -> AtlasLockedShellUnlockFlowMode? {
+        states.last?.mode
+    }
+
     private static let privateMarker =
         "FAKE_PRIVATE_STATE_MUST_NOT_APPEAR"
 }
@@ -2334,14 +2399,24 @@ private final class HostPresentationOwnerFake:
         to state: AtlasLockedShellUnlockFlowState,
         generation: AtlasVaultProductionHostGeneration
     ) async -> Bool {
-        let plan = await recorder.reset(
-            state: state,
+        let plan = await recorder.beginReset(
             generation: generation
         )
         if let gate = plan.gate {
             await gate.wait()
         }
-        return plan.result
+        return await recorder.finishReset(
+            state: state,
+            generation: generation,
+            result: plan.result
+        )
+    }
+
+    @MainActor
+    func supersedePresentationGeneration(
+        _ generation: AtlasVaultProductionHostGeneration
+    ) async {
+        await recorder.supersede(generation: generation)
     }
 
     func setResults(_ results: [Bool]) async {
@@ -2358,6 +2433,14 @@ private final class HostPresentationOwnerFake:
 
     func allStatesArePrivateFree() async -> Bool {
         await recorder.allStatesArePrivateFree()
+    }
+
+    func staleResetCount() async -> Int {
+        await recorder.staleResetCount()
+    }
+
+    func latestMode() async -> AtlasLockedShellUnlockFlowMode? {
+        await recorder.latestMode()
     }
 }
 
