@@ -64,6 +64,26 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testPipelineConcurrentStartWaitsForOneCompletedHandshake() async throws {
+        let pipelineSource = try source(
+            named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        await expectTrue(pipelineSource.contains("case starting"))
+        await expectTrue(pipelineSource.contains("startWaiters"))
+
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        async let firstStart = pipeline.start()
+        async let secondStart = pipeline.start()
+        let results = await (firstStart, secondStart)
+
+        await expectTrue(results.0)
+        await expectTrue(results.1)
+        await expectEqual(
+            await pipeline.observationStartCountForTesting(),
+            1
+        )
+    }
+
     func testPipelinePublishesOrderedPrivateFreeSnapshotsAndCurrentValue() async throws {
         let pipeline = AtlasVaultProductionPresentationPipeline()
         await expectTrue(await pipeline.start())
@@ -1037,6 +1057,11 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             [.didEnterBackground]
         )
         await expectEqual(await acknowledging.runtime.totalCalls(), 0)
+
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        await expectFalse(
+            hostSource.contains("if case .willTerminate = event")
+        )
     }
 
     func testProtectedDataLossLocksAndTerminationStopsTerminally() async throws {

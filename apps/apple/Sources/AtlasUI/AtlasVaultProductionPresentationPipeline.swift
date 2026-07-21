@@ -265,6 +265,7 @@ public actor AtlasVaultProductionPresentationPipeline:
 {
     private enum State {
         case inactive
+        case starting
         case active
         case finishing
         case finished
@@ -275,6 +276,7 @@ public actor AtlasVaultProductionPresentationPipeline:
     private var state: State = .inactive
     private var anchorSubscription: AtlasVaultPresentationSubscription?
     private var anchorTask: Task<Void, Never>?
+    private var startWaiters: [CheckedContinuation<Bool, Never>] = []
     private var finishWaiters: [CheckedContinuation<Bool, Never>] = []
 
     public init() {
@@ -289,13 +291,17 @@ public actor AtlasVaultProductionPresentationPipeline:
         switch state {
         case .active:
             return true
+        case .starting:
+            return await withCheckedContinuation { continuation in
+                startWaiters.append(continuation)
+            }
         case .finishing, .finished:
             return false
         case .inactive:
             break
         }
 
-        state = .active
+        state = .starting
         await source.activate()
         let subscription = await observable.subscribe()
         anchorSubscription = subscription
@@ -303,6 +309,8 @@ public actor AtlasVaultProductionPresentationPipeline:
             for await _ in subscription.snapshots {}
         }
         await source.waitUntilObservationStarted()
+        state = .active
+        resumeStartWaiters(with: true)
         return true
     }
 
@@ -334,6 +342,13 @@ public actor AtlasVaultProductionPresentationPipeline:
         switch state {
         case .finished:
             return true
+        case .starting:
+            guard await withCheckedContinuation({ continuation in
+                startWaiters.append(continuation)
+            }) else {
+                return false
+            }
+            return await finish()
         case .finishing:
             return await withCheckedContinuation { continuation in
                 finishWaiters.append(continuation)
@@ -395,6 +410,14 @@ public actor AtlasVaultProductionPresentationPipeline:
 
     func waitUntilSequenceForTesting(_ sequence: UInt64) async {
         await source.waitUntilSequence(sequence)
+    }
+
+    private func resumeStartWaiters(with result: Bool) {
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: result)
+        }
     }
 
     private func resumeFinishWaiters(with result: Bool) {

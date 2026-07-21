@@ -564,18 +564,13 @@ public actor AtlasVaultProductionHost:
 
         await dependencies.lifecycle.handle(event)
 
-        if case .willTerminate = event {
-            return await stop()
-        }
-        guard lifetime != .inactive, lifetime != .starting else {
-            return flowState()
-        }
-        guard isPublicOperationAvailable else {
-            return flowState()
-        }
-
         switch event {
         case .didBecomeActive, .protectedDataBecameAvailable:
+            guard lifetime != .inactive,
+                  lifetime != .starting,
+                  isPublicOperationAvailable else {
+                return flowState()
+            }
             let lifecycleStatus = await dependencies.lifecycle.status()
             let runtimeStatus = await dependencies.runtime.status()
             let mayReopen = lifetime == .started
@@ -596,6 +591,11 @@ public actor AtlasVaultProductionHost:
             }
             return flowState()
         case .willResignActive:
+            guard lifetime != .inactive,
+                  lifetime != .starting,
+                  isPublicOperationAvailable else {
+                return flowState()
+            }
             if submitOperation != nil {
                 return await cancelUnlock()
             }
@@ -607,6 +607,11 @@ public actor AtlasVaultProductionHost:
             }
             return flowState()
         case .didEnterBackground, .protectedDataBecameUnavailable:
+            guard lifetime != .inactive,
+                  lifetime != .starting,
+                  isPublicOperationAvailable else {
+                return flowState()
+            }
             return await runPrivateFreeBarrier(terminal: false)
         case .willTerminate:
             return await stop()

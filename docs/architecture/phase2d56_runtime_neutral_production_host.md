@@ -106,6 +106,8 @@ remains closed throughout every await.
 The pipeline source has its own activation gate. A subscription requested
 before `start()` may observe only the adapter's initial private-free value; it
 cannot begin source observation until explicit start activates the source.
+Concurrent start callers share the same starting handshake and return only
+after the one source observation is active.
 
 The intended ready shell is sent to the owner while actor admission is still
 closed. Only after the owner acknowledgement and generation check succeed does
@@ -278,8 +280,10 @@ runtime is locked, no grace lock is pending, and host lifecycle state is safe.
 Close events are recorded and forwarded while the host is inactive or starting.
 They invalidate admission before suspension, so an event received during
 snapshot restore or owner acknowledgement cannot be lost. Start performs no
-runtime or lifecycle query and remains conservatively closed until a later
-post-start safe lifecycle event proves admission may reopen.
+runtime or lifecycle query. With no prior close event, safe initial lifecycle
+flags permit admission only after both start acknowledgements. A close event
+before or during start keeps admission closed until a later post-start safe
+lifecycle event proves admission may reopen.
 
 `willResignActive` closes admission and contains active submit work.
 Lock-producing events complete host-owned private-free barriers before return.
@@ -431,7 +435,8 @@ completion during suspended selection and submit proves that public-only
 publication does not invalidate unlock admission. Additional regressions cover
 pre-start source activation, lifecycle close events before and during start,
 terminal search-indicator cleanup, and no-vault preservation across a failed
-publication barrier.
+publication barrier. Concurrent pipeline starts coalesce behind one completed
+observation handshake.
 
 ## 45. Go/No-Go Update
 
