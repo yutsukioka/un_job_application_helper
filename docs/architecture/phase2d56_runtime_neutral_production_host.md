@@ -201,8 +201,11 @@ and owner installation are acknowledged before admission can reopen.
 A validated selected identifier creates exactly one controller through
 `AtlasVaultUnlockPresentationControllerBuilding`. Controller creation is lazy,
 and repeated panel requests reuse the retained controller for the current host
-lifetime. Controller state is revalidated after awaits so lock or stop cannot be
-overwritten by late selection completion.
+lifetime. A retained controller left in `cancelled` by an ordinary panel cancel
+is reset through its existing `select(nil)` path before the next panel is shown;
+selection and controller construction are not repeated. Controller state is
+revalidated after awaits so lock or stop cannot be overwritten by late
+completion.
 
 ## 18. Local-Key-Only Production Capability
 
@@ -354,7 +357,11 @@ dependency returns. Failed acknowledgement remains a terminal,
 non-interactive reconciliation flow; restart is not supported. A late cancel or
 disappearance completion cannot replace stopped lifetime with nonterminal
 reconciliation. Stop also joins a retained start operation before deciding
-whether an active presentation pipeline requires the terminal barrier.
+whether an active presentation pipeline requires the terminal barrier. During
+terminal teardown the owner remains on reconciliation flow through pipeline
+finish and a final authoritative runtime `.locked` check. Only then does a new
+generation install and acknowledge terminal locked owner flow. A finish or
+runtime-verification failure therefore cannot leave the owner falsely locked.
 
 ## 33. Host Generation
 
@@ -519,6 +526,8 @@ abandoned and hold a stale nonterminal owner acknowledgement while terminal stop
 completes through a replacement barrier. The owner fake commits only the newest
 generation after suspension, explicit lock closes admission before runtime
 status, and a failed runtime verification keeps the owner in reconciliation.
+Retained-controller coverage cancels and reopens the panel without reselection,
+and terminal finish/runtime failures keep the owner in reconciliation.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an

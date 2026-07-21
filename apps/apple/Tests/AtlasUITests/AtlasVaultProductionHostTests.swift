@@ -750,10 +750,14 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(cancelled.mode, .lockedPublic)
         await expectTrue(cancelled.publicShell.canRequestUnlock)
 
-        _ = await graph.host.requestUnlockPanel()
+        let reopened = await graph.host.requestUnlockPanel()
+        await expectEqual(reopened.mode, .unlockPanel)
+        await expectEqual(reopened.unlockPanelState?.status, .locked)
         let disappeared = await graph.host.unlockPanelDidDisappear()
         await expectEqual(disappeared.mode, .lockedPublic)
         await expectTrue(disappeared.publicShell.canRequestUnlock)
+        await expectEqual(await graph.selector.selectCount(), 1)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
         await expectEqual(await graph.controller.cancelCount(), 1)
         await expectEqual(await graph.controller.disappearanceCount(), 1)
         await expectTrue(await graph.owner.allStatesArePrivateFree())
@@ -1504,7 +1508,33 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             stopped.unlockPanelState?.status,
             .hostReconciliationRequired
         )
+        await expectEqual(await graph.owner.latestMode(), .unlockPanel)
+        await expectEqual(
+            await graph.owner.latestUnlockStatus(),
+            .hostReconciliationRequired
+        )
         await expectFalse(stopped.publicShell.canRequestUnlock)
+        await assertStartStopped(graph.host)
+    }
+
+    func testTerminalRuntimeFailureKeepsPresentationOwnerInReconciliation()
+        async throws
+    {
+        let graph = try makeGraph(runtimeStatus: .unlocked)
+        _ = try await graph.host.start()
+        await graph.runtime.setLockResult(.unlocked)
+
+        let stopped = await graph.host.stop()
+
+        await expectEqual(
+            stopped.unlockPanelState?.status,
+            .hostReconciliationRequired
+        )
+        await expectEqual(await graph.owner.latestMode(), .unlockPanel)
+        await expectEqual(
+            await graph.owner.latestUnlockStatus(),
+            .hostReconciliationRequired
+        )
         await assertStartStopped(graph.host)
     }
 

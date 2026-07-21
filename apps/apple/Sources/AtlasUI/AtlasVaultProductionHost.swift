@@ -322,10 +322,17 @@ public actor AtlasVaultProductionHost:
         if let unlockController {
             closeUnlockAdmission()
             let operationGeneration = advanceGeneration()
-            let current = await unlockController.currentState()
+            var current = await unlockController.currentState()
             guard generation == operationGeneration,
                   lifetime == .started else {
                 return flowState()
+            }
+            if current.status == .cancelled {
+                current = await unlockController.select(nil)
+                guard generation == operationGeneration,
+                      lifetime == .started else {
+                    return flowState()
+                }
             }
             isUnlockPanelPresented = true
             unlockState = current
@@ -1125,18 +1132,10 @@ public actor AtlasVaultProductionHost:
             vaultStatus: preservesNoVault ? .noVault : .locked,
             canRequestUnlock: false
         )
-        let lockedOwnerState: AtlasLockedShellUnlockFlowState?
-        if terminal {
-            unlockState = lockedUnlockState()
-            isUnlockPanelPresented = false
-            lockedOwnerState = nil
-        } else {
-            lockedOwnerState = flowState()
-        }
         let lockedPublication = await publishAndReset(
             status: lockedPresentationStatus,
             expectedGeneration: lockedGeneration,
-            ownerState: lockedOwnerState
+            ownerState: flowState()
         )
         guard barrierOperation?.id == operationID else {
             return flowState()
@@ -1202,6 +1201,31 @@ public actor AtlasVaultProductionHost:
                 return flowState()
             }
             barrierSucceeded = barrierSucceeded && finished
+            if barrierSucceeded {
+                let terminalRuntimeStatus = await dependencies.runtime.status()
+                guard barrierOperation?.id == operationID else {
+                    return flowState()
+                }
+                barrierSucceeded = terminalRuntimeStatus == .locked
+            }
+            if barrierSucceeded {
+                let terminalOwnerGeneration = advanceGeneration()
+                let terminalState = AtlasLockedShellUnlockFlowState(
+                    publicShell: shell,
+                    unlockPresentationState: lockedUnlockState(),
+                    isUnlockPanelPresented: false
+                )
+                let ownerAcknowledged = await dependencies.presentationOwner
+                    .resetPresentation(
+                        to: terminalState,
+                        generation: terminalOwnerGeneration
+                    )
+                guard barrierOperation?.id == operationID,
+                      generation == terminalOwnerGeneration else {
+                    return flowState()
+                }
+                barrierSucceeded = ownerAcknowledged
+            }
             closeUnlockAdmission()
             if barrierSucceeded {
                 selectedVaultID = nil
