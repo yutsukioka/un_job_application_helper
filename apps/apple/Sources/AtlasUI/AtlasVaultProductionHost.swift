@@ -72,6 +72,11 @@ public actor AtlasVaultProductionHost:
         case failed
     }
 
+    private typealias PublicationPermitContinuation = CheckedContinuation<
+        UUID?,
+        Never
+    >
+
     private struct StartOperation {
         let id: UUID
         let task: Task<
@@ -157,8 +162,8 @@ public actor AtlasVaultProductionHost:
         AtlasLockedShellUnlockFlowState,
         Never
     >] = []
-    private var publicationInProgress = false
-    private var publicationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var publicationPermitID: UUID?
+    private var publicationWaiters: [PublicationPermitContinuation] = []
     private var submitOperation: SubmitOperation?
     private var barrierOperation: BarrierOperation?
     private var stopOperation: StopOperation?
@@ -209,6 +214,7 @@ public actor AtlasVaultProductionHost:
         }
 
         beginTerminalStop()
+        abandonSelectionAndResumeCallers()
         let id = UUID()
         let task = Task { [self] in
             await performStop()
@@ -1004,14 +1010,16 @@ public actor AtlasVaultProductionHost:
             || lifetime == .stopped
             || stopOperation != nil
         if let barrierOperation {
-            let result = await barrierOperation.task.value
             if terminalBarrierRequested && !barrierOperation.terminal {
-                if self.barrierOperation?.id == barrierOperation.id {
-                    self.barrierOperation = nil
-                }
+                barrierOperation.task.cancel()
+                self.barrierOperation = nil
+                lifetime = .stopping
+                closeUnlockAdmission()
+                _ = advanceGeneration()
+                invalidatePublicationPermit()
                 return await runPrivateFreeBarrier(terminal: true)
             }
-            return result
+            return await barrierOperation.task.value
         }
 
         lifetime = terminalBarrierRequested ? .stopping : .reconciling
@@ -1019,6 +1027,7 @@ public actor AtlasVaultProductionHost:
         let id = UUID()
         let task = Task { [self] in
             await performPrivateFreeBarrier(
+                operationID: id,
                 terminal: terminalBarrierRequested
             )
         }
@@ -1035,8 +1044,12 @@ public actor AtlasVaultProductionHost:
     }
 
     private func performPrivateFreeBarrier(
+        operationID: UUID,
         terminal: Bool
     ) async -> AtlasLockedShellUnlockFlowState {
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
         abandonSelectionAndResumeCallers()
         let preservesNoVault = shell.vaultStatus == .noVault
             && selectedVaultID == nil
@@ -1055,6 +1068,9 @@ public actor AtlasVaultProductionHost:
             status: .locking,
             expectedGeneration: reconciliationGeneration
         )
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
         var barrierSucceeded: Bool
         if case .acknowledged = reconciliationPublication {
             barrierSucceeded = true
@@ -1065,20 +1081,35 @@ public actor AtlasVaultProductionHost:
         let active = submitOperation
         if active != nil, let unlockController {
             _ = await unlockController.cancel()
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
         }
         if let active {
             _ = await active.task.value
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
             if submitOperation?.id == active.id {
                 submitOperation = nil
             }
         }
 
         let initialRuntimeStatus = await dependencies.runtime.status()
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
         if terminal || initialRuntimeStatus != .locked {
             await dependencies.runtime.lock()
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
         }
         if let unlockController {
             _ = await unlockController.hostDidLock()
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
         }
 
         let lockedGeneration = advanceGeneration()
@@ -1092,16 +1123,26 @@ public actor AtlasVaultProductionHost:
             status: lockedPresentationStatus,
             expectedGeneration: lockedGeneration
         )
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
         if case .acknowledged = lockedPublication {
         } else {
             barrierSucceeded = false
         }
 
         let observable = await dependencies.presentation.currentSnapshot()
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
         if observable.privateState != nil {
             barrierSucceeded = false
         }
-        if await dependencies.runtime.status() != .locked {
+        let finalRuntimeStatus = await dependencies.runtime.status()
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
+        if finalRuntimeStatus != .locked {
             barrierSucceeded = false
         }
 
@@ -1124,6 +1165,9 @@ public actor AtlasVaultProductionHost:
                 expectedGeneration: ordinaryGeneration,
                 ownerState: ordinaryState
             )
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
             if case .acknowledged = ordinaryPublication {
                 selectedVaultID = nil
                 unlockController = nil
@@ -1137,6 +1181,9 @@ public actor AtlasVaultProductionHost:
 
         if terminal {
             let finished = await dependencies.presentation.finish()
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
             barrierSucceeded = barrierSucceeded && finished
             closeUnlockAdmission()
             if barrierSucceeded {
@@ -1216,9 +1263,11 @@ public actor AtlasVaultProductionHost:
         expectedGeneration: AtlasVaultProductionHostGeneration,
         ownerState: AtlasLockedShellUnlockFlowState? = nil
     ) async -> PublicationResult {
-        await acquirePublicationPermit()
+        guard let publicationPermit = await acquirePublicationPermit() else {
+            return .stale
+        }
         defer {
-            releasePublicationPermit()
+            releasePublicationPermit(publicationPermit)
         }
         guard generation == expectedGeneration else {
             return .stale
@@ -1345,6 +1394,7 @@ public actor AtlasVaultProductionHost:
         lifetime = .stopping
         closeUnlockAdmission()
         _ = advanceGeneration()
+        invalidatePublicationPermit()
     }
 
     private func failStartForPresentation() -> Result<
@@ -1366,23 +1416,38 @@ public actor AtlasVaultProductionHost:
         resumeSelectionWaiters(with: abandonedState)
     }
 
-    private func acquirePublicationPermit() async {
-        guard publicationInProgress else {
-            publicationInProgress = true
-            return
+    private func acquirePublicationPermit() async -> UUID? {
+        guard publicationPermitID != nil else {
+            let identifier = UUID()
+            publicationPermitID = identifier
+            return identifier
         }
-        await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             publicationWaiters.append(continuation)
         }
     }
 
-    private func releasePublicationPermit() {
+    private func releasePublicationPermit(_ identifier: UUID) {
+        guard publicationPermitID == identifier else {
+            return
+        }
         guard !publicationWaiters.isEmpty else {
-            publicationInProgress = false
+            publicationPermitID = nil
             return
         }
         let next = publicationWaiters.removeFirst()
-        next.resume()
+        let nextIdentifier = UUID()
+        publicationPermitID = nextIdentifier
+        next.resume(returning: nextIdentifier)
+    }
+
+    private func invalidatePublicationPermit() {
+        publicationPermitID = nil
+        let waiters = publicationWaiters
+        publicationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: nil)
+        }
     }
 
     private func closeUnlockAdmission() {

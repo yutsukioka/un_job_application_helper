@@ -329,16 +329,22 @@ later stop. Cancellation completion also clears `isSearching` before the
 terminal private-free state is published.
 
 Stop advances host generation synchronously with entering stopping lifetime and
-closing admission, before it creates or awaits teardown work. Any later request
-for a nonterminal barrier inherits this terminal intent rather than replacing
-stopping or stopped lifetime with reconciliation.
+closing admission, before it creates or awaits teardown work. It also abandons
+selection and resumes every panel caller before awaiting either a retained start
+operation or a cancellation-ignoring public search. Any later request for a
+nonterminal barrier inherits this terminal intent rather than replacing stopping
+or stopped lifetime with reconciliation.
 
 ## 32. Terminal Stop Policy
 
 Stop before start performs no dependency call and becomes terminal. Stop after
 start commands runtime lock even if runtime initially reports locked. A terminal
 stop request upgrades an in-flight nonterminal barrier without allowing that
-barrier to reopen admission. Failed acknowledgement remains a terminal,
+barrier to reopen admission. The terminal request revokes any stale publication
+permit, cancels and replaces the nonterminal barrier operation, and starts the
+terminal barrier without awaiting the stale operation. The replaced operation
+checks its operation identity after every suspension and cannot mutate terminal
+state when a late dependency returns. Failed acknowledgement remains a terminal,
 non-interactive reconciliation flow; restart is not supported. A late cancel or
 disappearance completion cannot replace stopped lifetime with nonterminal
 reconciliation. Stop also joins a retained start operation before deciding
@@ -372,6 +378,10 @@ cancellation removes only that subscriber. The host grants one FIFO publication
 permit at a time across the pipeline and MainActor owner reset. This prevents
 reentrant public-shell updates from overtaking owner acknowledgements while
 allowing public search and unlock admission to keep independent generations.
+Each permit has a host-private identity. Terminal stop can revoke a stale permit
+and fail its queued waiters closed, allowing terminal publication to proceed
+without waiting for an abandoned nonterminal owner acknowledgement. A late
+holder cannot release or replace the terminal permit.
 
 Sequence values, subscriber counts, and current status are absent from public
 descriptions.
@@ -420,6 +430,12 @@ The barrier order is:
 9. verify runtime is exactly locked;
 10. acknowledge the intended ready shell while admission remains closed;
 11. atomically clear private-operation ownership and reopen admission.
+
+Every barrier operation has a private identity that is revalidated after each
+await. Terminal stop replaces an in-flight nonterminal identity immediately,
+revokes its publication permit, and begins a new terminal barrier. Late stale
+runtime, controller, pipeline, or owner completion therefore returns the current
+private-free flow without changing terminal state.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
 stop. A no-vault shell remains no-vault with admission closed across both
@@ -480,7 +496,10 @@ Additional teardown regressions cover unfulfilled pipeline waiter release,
 terminal stop during the presentation-start handshake, and immediate release of
 all callers when a suspended selector is abandoned. Terminal finish while a
 publish is unacknowledged, selector release before a suspended owner barrier,
-and immediate terminal generation invalidation are also covered.
+and immediate terminal generation invalidation are also covered. Final teardown
+regressions hold a cancellation-ignoring public search while selection is
+abandoned and hold a stale nonterminal owner acknowledgement while terminal stop
+completes through a replacement barrier.
 
 ## 45. Go/No-Go Update
 

@@ -827,6 +827,60 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(graph.controllerBuilder.callCount, 0)
     }
 
+    func testStopReleasesSelectionCallersBeforeWaitingForSearchTeardown() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        let searchGate = HostSuspensionGate()
+        let selectionGate = HostSuspensionGate()
+        let searchResult = try makeSearchResult(
+            jobID: "FAKE_STOP_SELECTION_JOB",
+            title: "Fake Stop Selection Role"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                HostPublicJobsFake.Plan(
+                    result: .success(searchResult),
+                    gate: searchGate,
+                    releasesGateOnCancellation: false
+                )
+            ],
+            selection: .success(.selected(try selectedVaultID())),
+            selectionGate: selectionGate
+        )
+        _ = try await graph.host.start()
+        let request = try searchRequest(
+            query: "FAKE_STOP_SELECTION_QUERY"
+        )
+        let search = Task {
+            await captureSearch(graph.host, request)
+        }
+        await searchGate.waitUntilEntered()
+        let panel = Task { await graph.host.requestUnlockPanel() }
+        await selectionGate.waitUntilEntered()
+        let stop = Task { await graph.host.stop() }
+        await graph.publicJobs.waitUntilCancellation()
+
+        guard hostSource.contains(
+            "beginTerminalStop()\n        abandonSelectionAndResumeCallers()"
+        ) else {
+            XCTFail("Stop must release selection callers before search teardown")
+            await searchGate.release()
+            await selectionGate.release()
+            _ = await stop.value
+            _ = await search.value
+            _ = await panel.value
+            return
+        }
+
+        let abandoned = await panel.value
+        await expectEqual(abandoned.mode, .lockedPublic)
+        await expectFalse(abandoned.publicShell.canRequestUnlock)
+        await searchGate.release()
+        await expectEqual((await stop.value).mode, .lockedPublic)
+        await expectThrowsError(try await search.value.get())
+        await selectionGate.release()
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+    }
+
     func testSuccessfulSubmitUsesHostOwnedTaskAndAuthoritativeRuntimeStatus() async throws {
         let graph = try makeGraph(
             selection: .success(
@@ -1355,6 +1409,38 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await assertStartStopped(graph.host)
     }
 
+    func testTerminalStopSupersedesSuspendedNonterminalBarrier() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+        let ownerGate = HostSuspensionGate()
+        let graph = try makeGraph(runtimeStatus: .unlocked)
+        _ = try await graph.host.start()
+        await graph.owner.setGate(ownerGate)
+
+        let lock = Task { await graph.host.lock() }
+        await ownerGate.waitUntilEntered()
+        let stop = Task { await graph.host.stop() }
+
+        guard hostSource.contains("invalidatePublicationPermit()"),
+              hostSource.contains("barrierOperation.task.cancel()"),
+              hostSource.contains("operationID: id") else {
+            XCTFail("Terminal stop must supersede stale nonterminal barriers")
+            await ownerGate.release()
+            _ = await lock.value
+            _ = await stop.value
+            return
+        }
+
+        let stopped = await stop.value
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await assertStartStopped(graph.host)
+
+        await ownerGate.release()
+        _ = await lock.value
+        await assertStartStopped(graph.host)
+        await expectEqual(await graph.presentation.finishCount(), 1)
+    }
+
     func testStopAcknowledgementFailureRemainsTerminalReconciliation() async throws {
         let graph = try makeGraph()
         _ = try await graph.host.start()
@@ -1792,16 +1878,19 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
             AtlasPublicJobServiceError
         >
         let gate: HostSuspensionGate?
+        let releasesGateOnCancellation: Bool
 
         init(
             result: Result<
                 AtlasPublicJobSearchResult,
                 AtlasPublicJobServiceError
             >,
-            gate: HostSuspensionGate? = nil
+            gate: HostSuspensionGate? = nil,
+            releasesGateOnCancellation: Bool = true
         ) {
             self.result = result
             self.gate = gate
+            self.releasesGateOnCancellation = releasesGateOnCancellation
         }
     }
 
@@ -1845,7 +1934,10 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
                 await gate.wait()
             } onCancel: {
                 Task {
-                    await self.recordCancellationAndRelease(gate)
+                    await self.recordCancellation(
+                        gate,
+                        releasesGate: plan.releasesGateOnCancellation
+                    )
                 }
             }
         }
@@ -1892,8 +1984,9 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         }
     }
 
-    private func recordCancellationAndRelease(
-        _ gate: HostSuspensionGate
+    private func recordCancellation(
+        _ gate: HostSuspensionGate,
+        releasesGate: Bool
     ) async {
         cancellationCalls += 1
         let waiters = cancellationWaiters
@@ -1901,7 +1994,9 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         for waiter in waiters {
             waiter.resume()
         }
-        await gate.release()
+        if releasesGate {
+            await gate.release()
+        }
     }
 }
 
