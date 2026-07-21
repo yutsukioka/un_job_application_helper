@@ -895,6 +895,8 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertTrue(discovery.contains("--diff-filter=A"))
         XCTAssertTrue(discovery.contains("--is-shallow-repository"))
         XCTAssertTrue(discovery.contains("phase2D56BoundaryMarker"))
+        XCTAssertTrue(discovery.contains("phase2D56DocumentPath"))
+        XCTAssertTrue(discovery.contains("phaseEnd"))
         XCTAssertFalse(discovery.contains("\"-n\""))
         XCTAssertFalse(
             discovery.contains(
@@ -1137,19 +1139,15 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
                 "apps/apple/Tests/AtlasUITests",
             ])
         } else {
-            let introduction = try XCTUnwrap(
-                try gitOutput([
-                    "log",
-                    "--diff-filter=A",
-                    "--format=%H",
-                    "--",
-                    phase2D56AnchorPath,
-                ])
-                .split(separator: "\n")
-                .first
-                .map(String.init),
-                "Phase 2D-56 path introduction is unavailable"
+            let introduction = try phaseIntroductionCommit(
+                for: phase2D56AnchorPath
             )
+            let documentIntroduction = try phaseIntroductionCommit(
+                for: phase2D56DocumentPath
+            )
+            let phaseEnd = introduction == documentIntroduction
+                ? introduction
+                : "HEAD"
             let baseline = try gitOutput([
                 "rev-parse",
                 "\(introduction)^",
@@ -1157,7 +1155,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             committed = try gitOutput([
                 "diff",
                 "--name-only",
-                "\(baseline)..HEAD",
+                "\(baseline)..\(phaseEnd)",
             ])
         }
 
@@ -1185,6 +1183,26 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
 
     private var phase2D56AnchorPath: String {
         "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostTests.swift"
+    }
+
+    private var phase2D56DocumentPath: String {
+        "docs/architecture/phase2d56_runtime_neutral_production_host.md"
+    }
+
+    private func phaseIntroductionCommit(for path: String) throws -> String {
+        try XCTUnwrap(
+            try gitOutput([
+                "log",
+                "--diff-filter=A",
+                "--format=%H",
+                "--",
+                path,
+            ])
+            .split(separator: "\n")
+            .first
+            .map(String.init),
+            "Phase 2D-56 path introduction is unavailable"
+        )
     }
 
     private func gitOutput(_ arguments: [String]) throws -> String {

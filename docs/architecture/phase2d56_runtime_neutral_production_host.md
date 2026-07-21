@@ -521,8 +521,11 @@ generation after suspension, explicit lock closes admission before runtime
 status, and a failed runtime verification keeps the owner in reconciliation.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
-or commit-subject dependency. A repository ownership marker provides the same
-six-file enumeration when Git reports a shallow checkout.
+or commit-subject dependency. Distinct test/document introductions identify an
+active multi-commit feature branch and extend the range through `HEAD`; one
+shared introduction identifies the squash commit and terminates the range at
+that commit so later phases are excluded. A repository ownership marker
+provides the same six-file enumeration when Git reports a shallow checkout.
 
 ## 45. Go/No-Go Update
 
