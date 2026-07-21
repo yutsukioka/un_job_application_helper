@@ -455,6 +455,10 @@ cancellation removes only that subscriber. The host grants one FIFO publication
 permit at a time across the pipeline and MainActor owner reset. This prevents
 reentrant public-shell updates from overtaking owner acknowledgements while
 allowing public search and unlock admission to keep independent generations.
+Each logical publication captures its intended locked-shell owner flow before
+awaiting the permit or pipeline. Actor reentrancy may mutate later host state,
+but that mutation cannot be substituted into the already-started publication's
+owner acknowledgement.
 Each permit has a host-private identity. Terminal stop can revoke a stale permit
 and fail its queued waiters closed after installing the owner-generation fence,
 allowing terminal publication to proceed without waiting for an abandoned
@@ -496,10 +500,13 @@ must recheck after every suspension before mutating presentation. Supersede is a
 stale-work fence, not permanent exclusivity for one token: a later valid reset
 may establish its supplied opaque generation, then commit only while that exact
 generation remains current. The host also revalidates generation after every
-owner await. Tests suspend the MainActor fake deterministically and prove that
-admission remains closed until acknowledgement and that a stale reset cannot
-reinstall pre-stop flow after terminal finish. Phase 2D-56 does not implement
-the concrete owner.
+owner await. Pipeline and owner acknowledgement are one logical publication: the
+owner receives the flow captured before the pipeline await, never a reentrant
+replacement assembled after pipeline acknowledgement. Tests suspend both seams
+deterministically and prove that admission remains closed until acknowledgement,
+that a stale reset cannot reinstall pre-stop flow after terminal finish, and
+that public-shell reentrancy cannot change an in-flight publication's owner
+flow. Phase 2D-56 does not implement the concrete owner.
 
 ## 38. Private-Free Barrier
 
@@ -515,7 +522,8 @@ The barrier order is:
    generation;
 8. verify observable private freedom;
 9. verify runtime is exactly locked;
-10. acknowledge the intended ready shell while admission remains closed;
+10. capture lifecycle revision and safe-check ownership, then acknowledge the
+    intended ready shell while admission remains closed;
 11. atomically clear private-operation ownership and reopen admission.
 
 Every barrier operation has a private identity that is revalidated after each
@@ -524,6 +532,14 @@ establishes a newer owner-generation fence, revokes the stale publication permit
 and begins terminal publication. Late stale runtime, controller, pipeline, or
 owner completion therefore returns the current private-free flow without
 changing terminal state.
+
+For a nonterminal barrier, step 11 requires the lifecycle revision and safe-check
+marker captured in step 10 to remain unchanged after owner acknowledgement. If
+a safe lifecycle check begins or completes during that await, the barrier keeps
+admission closed and republishes the current target under the same host
+generation. It commits only a target whose lifecycle fence and transient reopen
+predicate remain current. A stale pre-check decision therefore cannot reopen
+selection while lifecycle safety is still being established.
 
 Failure at any gate remains non-interactive and retryable, or terminal for
 stop. A no-vault shell remains no-vault with admission closed across both
@@ -582,6 +598,13 @@ temporary runtime state poisoned a later lock barrier, and concurrent safe
 events both published. A separate factory regression proved the Git helper's
 `Foundation.Process` use lacked a macOS compile boundary.
 
+Cycle 13 captured deterministic red evidence for two acknowledgement races. A
+suspended pipeline publish allowed a second public search to replace the owner
+flow of the first logical publication. Separately, a safe lifecycle event begun
+during the ordinary barrier owner acknowledgement allowed the stale barrier
+decision to reopen admission and invoke vault selection. Both tests failed on
+the prior exact head without timing delays.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -627,6 +650,11 @@ publication fence ensures a target computed while a safe marker was active
 cannot commit after that marker changes. A deterministic submit gate also proves
 a locked runtime status read is not reused after the submit clears its transient
 blocker while runtime becomes unlocked during owner acknowledgement.
+Cycle 13 adds a pipeline suspension regression proving owner flow is captured
+before publication awaits, plus a targeted interactive-owner gate proving a
+nonterminal barrier cannot reopen admission across a newer lifecycle revision or
+active safe-check marker. A structural guard enforces both capture and
+post-acknowledgement fence shapes without comparing whole functions.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an

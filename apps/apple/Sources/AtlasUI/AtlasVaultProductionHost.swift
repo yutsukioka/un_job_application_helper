@@ -1371,24 +1371,36 @@ public actor AtlasVaultProductionHost:
         if barrierSucceeded && !terminal {
             unlockState = lockedUnlockState()
             isUnlockPanelPresented = false
-            let mayOpen = lifecycleIsActive
-                && protectedDataIsAvailable
-                && lifecycleAdmissionPermitted
-                && safeLifecycleCheckRevision == nil
-                && !isTerminated
-                && shell.vaultStatus != .noVault
-            let ordinaryShell = shellReplacingCanRequestUnlock(mayOpen)
-            let ordinaryState = flowState(publicShell: ordinaryShell)
             let ordinaryGeneration = advanceGeneration()
-            let ordinaryPublication = await publishAndReset(
-                status: lockedPresentationStatus,
-                expectedGeneration: ordinaryGeneration,
-                ownerState: ordinaryState
-            )
-            guard barrierOperation?.id == operationID else {
-                return flowState()
-            }
-            if case .acknowledged = ordinaryPublication {
+            while barrierSucceeded {
+                let admissionLifecycleRevision = lifecycleEventRevision
+                let admissionSafeCheckRevision = safeLifecycleCheckRevision
+                let mayOpen = barrierCompletionAdmissionPermitted
+                let ordinaryShell = shellReplacingCanRequestUnlock(mayOpen)
+                let ordinaryState = flowState(publicShell: ordinaryShell)
+                let ordinaryPublication = await publishAndReset(
+                    status: lockedPresentationStatus,
+                    expectedGeneration: ordinaryGeneration,
+                    ownerState: ordinaryState
+                )
+                guard barrierOperation?.id == operationID else {
+                    return flowState()
+                }
+                guard case .acknowledged = ordinaryPublication,
+                      generation == ordinaryGeneration else {
+                    barrierSucceeded = false
+                    break
+                }
+                guard lifecycleEventRevision == admissionLifecycleRevision,
+                      safeLifecycleCheckRevision
+                        == admissionSafeCheckRevision else {
+                    closeUnlockAdmission()
+                    continue
+                }
+                guard !mayOpen || barrierCompletionAdmissionPermitted else {
+                    closeUnlockAdmission()
+                    continue
+                }
                 selectedVaultID = nil
                 unlockController = nil
                 lifetime = .started
@@ -1396,7 +1408,6 @@ public actor AtlasVaultProductionHost:
                 shell = ordinaryShell
                 return flowState()
             }
-            barrierSucceeded = false
         }
 
         if terminal {
@@ -1525,6 +1536,19 @@ public actor AtlasVaultProductionHost:
             && unlockStatePermitsAdmission
     }
 
+    private var barrierCompletionAdmissionPermitted: Bool {
+        lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && stopOperation == nil
+            && shell.vaultStatus != .noVault
+            && unlockStatePermitsAdmission
+    }
+
     private var unlockStatePermitsAdmission: Bool {
         switch unlockState.status {
         case .activating, .unlocked, .hostReconciliationRequired:
@@ -1544,6 +1568,7 @@ public actor AtlasVaultProductionHost:
         expectedGeneration: AtlasVaultProductionHostGeneration,
         ownerState: AtlasLockedShellUnlockFlowState? = nil
     ) async -> PublicationResult {
+        let state = ownerState ?? flowState()
         guard let publicationPermit = await acquirePublicationPermit() else {
             return .stale
         }
@@ -1568,7 +1593,6 @@ public actor AtlasVaultProductionHost:
         guard generation == expectedGeneration else {
             return .stale
         }
-        let state = ownerState ?? flowState()
         guard await dependencies.presentationOwner.resetPresentation(
             to: state,
             generation: expectedGeneration
