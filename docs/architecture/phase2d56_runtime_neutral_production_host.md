@@ -315,34 +315,60 @@ selected identifier are cleared only after barrier success.
 Every lifecycle event is forwarded to the neutral lifecycle coordinator. The
 host adds no platform notification framework. `didBecomeActive` and
 `protectedDataBecameAvailable` never unlock. Before forwarding either event, the
-host synchronously closes lifecycle admission and public unlock admission and
-captures, but does not advance, the current host generation. This prevents the
+host synchronously closes transient public unlock admission and captures, but
+does not advance, the current host generation. It does not clear persistent
+lifecycle eligibility merely because a safety check started. This prevents the
 safe event itself from invalidating valid selection or submit work.
 
-Lifecycle handling, lifecycle status, and runtime status are awaited in that
-order and generation/lifetime are revalidated after each suspension. Admission
-may reopen only while the same generation is started and unterminated, lifecycle
-is active, protected data is available, no grace lock or lifecycle failure is
-present, runtime is exactly locked, no selection, submit, barrier, or stop is
-active, vault status is not `noVault`, and reconciliation is absent. The host
-publishes exactly one private-free target while actor admission remains closed:
-an interactive target when every condition passes, or an acknowledged closed
-target when any condition fails. Actor shell and admission state commit only
-after pipeline and owner acknowledgement and final generation revalidation.
-Acknowledgement failure enters the existing private-free barrier.
+Each lifecycle event receives a private monotonic revision. A newer safe or
+close event makes an older completion stale, and only the current safe revision
+may commit lifecycle eligibility or clear the current in-progress marker. A
+close event synchronously persists lifecycle ineligibility and invalidates the
+older check. The revision is process-local, private, and absent from public
+state and diagnostics.
+
+Lifecycle handling and lifecycle status are awaited before persistent
+eligibility is derived solely from active state, protected-data availability,
+termination, pending grace lock, and lifecycle failure. Runtime state, host
+lifetime, selection, submit, barrier, stop, and presentation acknowledgement do
+not alter that persistent fact. An inactive or starting host records the fact
+without calling runtime or publishing through an unready pipeline. Start waits
+for an in-progress safe check before selecting and acknowledging its final
+public target, so a safe event during restore or owner reset needs no second
+lifecycle event.
+
+For a started host, runtime status is then awaited and generation, lifetime, and
+lifecycle revision are revalidated after every suspension. Actual admission may
+reopen only while lifecycle eligibility is true, runtime is exactly locked, no
+safe check, selection, submit, barrier, or stop is active, vault status is not
+`noVault`, and reconciliation is absent. The host publishes one private-free
+interactive or closed target while actor admission remains closed. Actor shell
+and admission state commit only after pipeline and owner acknowledgement and a
+final lifecycle-revision check. If a selection or submit reaches its terminal
+state during acknowledgement, the host republishes the now-current target
+before clearing the safe-check marker. Ordinary publications also capture that
+marker and cannot commit a target calculated on the other side of the marker's
+transition. Acknowledgement failure enters the existing private-free barrier.
 
 A later generation-winning lock, lock-producing lifecycle event, or stop makes
 the safe-reopen completion stale, so it cannot publish or reopen over the newer
 state. A safe event arriving while selection or submit is active keeps admission
-closed without invalidating that operation merely by changing generation.
+closed without invalidating that operation merely by changing generation. When
+the lifecycle result is safe, the persistent eligibility remains true; the
+operation's reviewed terminal path can reopen admission without another
+lifecycle event. A temporarily activating, unlocked, or saving runtime likewise
+keeps actual admission closed without converting lifecycle eligibility into a
+persistent denial.
 
 Close events are recorded and forwarded while the host is inactive or starting.
 They invalidate admission before suspension, so an event received during
 snapshot restore or owner acknowledgement cannot be lost. Start performs no
 runtime or lifecycle query. With no prior close event, safe initial lifecycle
 flags permit admission only after both start acknowledgements. A close event
-before or during start keeps admission closed until a later post-start safe
-lifecycle event proves admission may reopen.
+before or during start keeps admission closed. A safe event before or during
+start records authoritative eligibility without runtime, selection, controller,
+or presentation work, and successful start uses that result after its normal
+acknowledgements.
 
 `willResignActive` closes admission and contains active submit work.
 Lock-producing events complete host-owned private-free barriers before return.
@@ -546,6 +572,14 @@ Separate post-success cancel and disappearance tests proved uncertain callback
 states bypassed reconciliation. Production behavior changed only after both red
 states were recorded.
 
+Cycle 12 captured a second deterministic red checkpoint for the distinction
+between lifecycle eligibility and transient admission. The red suite proved
+safe events before and during start skipped authoritative lifecycle status,
+selection and submit blockers persisted a false lifecycle permission, a
+temporary runtime state poisoned a later lock barrier, and concurrent safe
+events both published. A separate factory regression proved the Git helper's
+`Foundation.Process` use lacked a macOS compile boundary.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -582,6 +616,13 @@ lock, and non-invalidation of suspended selection. Callback regressions cover
 post-success disappearance and cancellation, a defensive direct `unlocked`
 result, full barrier effects, ordinary pre-success behavior, and failed-barrier
 retry.
+Cycle 12 adds safe events before start and during snapshot/owner suspension,
+selection and submit terminal reopening without another lifecycle event,
+temporary-runtime recovery, newest-safe-event ownership, and closed transient
+admission while a safe check is in progress. Source coverage rejects assigning
+temporary `mayReopen` results back into persistent lifecycle eligibility. The
+publication fence ensures a target computed while a safe marker was active
+cannot commit after that marker changes.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
@@ -589,6 +630,9 @@ active multi-commit feature branch and extend the range through `HEAD`; one
 shared introduction identifies the squash commit and terminates the range at
 that commit so later phases are excluded. A repository ownership marker
 provides the same six-file enumeration when Git reports a shallow checkout.
+The Git inspection implementation, including `Foundation.Process`, is compiled
+only on macOS. The repository-hygiene allowlist test throws `XCTSkip` on other
+Apple platforms, so the iOS test target has no compiled `Process` path.
 
 ## 45. Go/No-Go Update
 
@@ -599,8 +643,11 @@ provides the same six-file enumeration when Git reports a shallow checkout.
 - Runtime-neutral production host actor: implemented.
 - Process-global unlock admission: implemented in one host actor.
 - Authoritative reconciliation: implemented.
-- Acknowledged lifecycle safe reopen: implemented with per-await generation
+- Acknowledged lifecycle safe reopen: implemented with separate persistent
+  lifecycle eligibility, transient admission, and per-await revision/generation
   revalidation.
+- Cross-platform factory tests: Git/`Process` inspection is macOS-only and
+  explicitly skipped elsewhere.
 - Post-success cancel/disappearance reconciliation: implemented symmetrically.
 - Owner-reset acknowledgement seam: implemented and testable.
 - Concrete MainActor presentation owner: not implemented.

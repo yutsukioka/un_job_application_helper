@@ -150,6 +150,9 @@ public actor AtlasVaultProductionHost:
     private var lifecycleIsActive = true
     private var protectedDataIsAvailable = true
     private var lifecycleAdmissionPermitted = true
+    private var lifecycleEventRevision: UInt64 = 0
+    private var safeLifecycleCheckRevision: UInt64?
+    private var safeLifecycleCheckWaiters: [CheckedContinuation<Void, Never>] = []
     private var isTerminated = false
     private var restoreAttempted = false
     private var presentationWasStarted = false
@@ -615,15 +618,18 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
         updateLifecycleState(for: event)
+        lifecycleEventRevision &+= 1
+        let eventRevision = lifecycleEventRevision
         let safeReopenGeneration: AtlasVaultProductionHostGeneration?
         if event.isSafeReopenEvent {
-            lifecycleAdmissionPermitted = false
+            safeLifecycleCheckRevision = eventRevision
             closeUnlockAdmission()
             safeReopenGeneration = generation
         } else {
             safeReopenGeneration = nil
         }
         if event.closesUnlockAdmission {
+            invalidateSafeLifecycleCheck()
             lifecycleAdmissionPermitted = false
             closeUnlockAdmission()
             _ = advanceGeneration()
@@ -637,7 +643,8 @@ public actor AtlasVaultProductionHost:
                 return flowState()
             }
             return await finishSafeReopen(
-                expectedGeneration: safeReopenGeneration
+                expectedGeneration: safeReopenGeneration,
+                lifecycleRevision: eventRevision
             )
         case .willResignActive:
             guard lifetime != .inactive,
@@ -698,6 +705,14 @@ public actor AtlasVaultProductionHost:
     private var isUnlockOperationAvailable: Bool {
         lifetime == .started
             && unlockAdmissionOpen
+            && !isTerminated
+    }
+
+    private var startAdmissionPermitted: Bool {
+        lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
             && !isTerminated
     }
 
@@ -771,27 +786,37 @@ public actor AtlasVaultProductionHost:
             return failStartForPresentation()
         }
 
-        let mayOpen = lifecycleIsActive
-            && protectedDataIsAvailable
-            && lifecycleAdmissionPermitted
-            && !isTerminated
-        let startedShell = shellReplacingCanRequestUnlock(mayOpen)
-        let startedState = flowState(publicShell: startedShell)
         let startedGeneration = advanceGeneration()
-        let finalPublication = await publishAndReset(
-            status: .locked,
-            expectedGeneration: startedGeneration,
-            ownerState: startedState
-        )
-        guard case .acknowledged = finalPublication,
-              lifetime == .starting,
-              generation == startedGeneration else {
-            return failStartForPresentation()
+        while true {
+            await waitForSafeLifecycleCheckCompletion()
+            guard lifetime == .starting,
+                  generation == startedGeneration else {
+                return failStartForPresentation()
+            }
+
+            let mayOpen = startAdmissionPermitted
+            let startedShell = shellReplacingCanRequestUnlock(mayOpen)
+            let startedState = flowState(publicShell: startedShell)
+            let finalPublication = await publishAndReset(
+                status: .locked,
+                expectedGeneration: startedGeneration,
+                ownerState: startedState
+            )
+            guard case .acknowledged = finalPublication,
+                  lifetime == .starting,
+                  generation == startedGeneration else {
+                return failStartForPresentation()
+            }
+            guard safeLifecycleCheckRevision == nil,
+                  startAdmissionPermitted == mayOpen else {
+                continue
+            }
+
+            lifetime = .started
+            shell = startedShell
+            unlockAdmissionOpen = mayOpen
+            return .success(flowState())
         }
-        lifetime = .started
-        shell = startedShell
-        unlockAdmissionOpen = mayOpen
-        return .success(flowState())
     }
 
     private func performStop() async -> AtlasLockedShellUnlockFlowState {
@@ -919,6 +944,7 @@ public actor AtlasVaultProductionHost:
             isUnlockPanelPresented = false
         }
 
+        selectionOperation = nil
         let publication: PublicationResult
         switch result {
         case .success(.none):
@@ -936,7 +962,6 @@ public actor AtlasVaultProductionHost:
         } else {
             state = flowState()
         }
-        selectionOperation = nil
         resumeSelectionWaiters(with: state)
         return state
     }
@@ -981,60 +1006,86 @@ public actor AtlasVaultProductionHost:
     }
 
     private func finishSafeReopen(
-        expectedGeneration: AtlasVaultProductionHostGeneration
+        expectedGeneration: AtlasVaultProductionHostGeneration,
+        lifecycleRevision: UInt64
     ) async -> AtlasLockedShellUnlockFlowState {
-        guard isCurrentSafeReopen(expectedGeneration) else {
+        guard isCurrentLifecycleCheck(lifecycleRevision) else {
             return flowState()
         }
         let lifecycleStatus = await dependencies.lifecycle.status()
-        guard isCurrentSafeReopen(expectedGeneration) else {
+        guard isCurrentLifecycleCheck(lifecycleRevision) else {
+            return flowState()
+        }
+        lifecycleAdmissionPermitted = persistentLifecycleEligibility(
+            lifecycleStatus
+        )
+        guard lifetime == .started,
+              generation == expectedGeneration,
+              !isTerminated else {
+            clearSafeLifecycleCheck(lifecycleRevision)
             return flowState()
         }
         let runtimeStatus = await dependencies.runtime.status()
-        guard isCurrentSafeReopen(expectedGeneration) else {
+        guard isCurrentSafeReopen(
+            expectedGeneration,
+            lifecycleRevision: lifecycleRevision
+        ) else {
+            clearSafeLifecycleCheck(lifecycleRevision)
             return flowState()
         }
 
-        let mayReopen = maySafelyReopen(
+        var mayReopen = maySafelyReopen(
             expectedGeneration: expectedGeneration,
-            lifecycleStatus: lifecycleStatus,
+            lifecycleRevision: lifecycleRevision,
             runtimeStatus: runtimeStatus
         )
-        let targetShell = shellReplacingCanRequestUnlock(mayReopen)
-        let targetState = flowState(publicShell: targetShell)
-        let publication = await publishAndReset(
-            status: presentationStatus,
-            expectedGeneration: expectedGeneration,
-            ownerState: targetState
-        )
-        guard isCurrentSafeReopen(expectedGeneration) else {
-            return flowState()
-        }
-
-        switch publication {
-        case .acknowledged:
-            guard !mayReopen || maySafelyReopen(
+        while true {
+            let targetShell = shellReplacingCanRequestUnlock(mayReopen)
+            let targetState = flowState(publicShell: targetShell)
+            let publication = await publishAndReset(
+                status: presentationStatus,
                 expectedGeneration: expectedGeneration,
-                lifecycleStatus: lifecycleStatus,
-                runtimeStatus: runtimeStatus
+                ownerState: targetState
+            )
+            guard isCurrentSafeReopen(
+                expectedGeneration,
+                lifecycleRevision: lifecycleRevision
             ) else {
+                clearSafeLifecycleCheck(lifecycleRevision)
+                return flowState()
+            }
+
+            switch publication {
+            case .acknowledged:
+                let currentMayReopen = maySafelyReopen(
+                    expectedGeneration: expectedGeneration,
+                    lifecycleRevision: lifecycleRevision,
+                    runtimeStatus: runtimeStatus
+                )
+                guard currentMayReopen == mayReopen else {
+                    mayReopen = currentMayReopen
+                    continue
+                }
+                clearSafeLifecycleCheck(lifecycleRevision)
+                replaceShell(canRequestUnlock: mayReopen)
+                unlockAdmissionOpen = mayReopen
+                return flowState()
+            case .stale:
+                clearSafeLifecycleCheck(lifecycleRevision)
+                return flowState()
+            case .failed:
+                clearSafeLifecycleCheck(lifecycleRevision)
                 return await runPrivateFreeBarrier(terminal: false)
             }
-            lifecycleAdmissionPermitted = mayReopen
-            replaceShell(canRequestUnlock: mayReopen)
-            unlockAdmissionOpen = mayReopen
-            return flowState()
-        case .stale:
-            return flowState()
-        case .failed:
-            return await runPrivateFreeBarrier(terminal: false)
         }
     }
 
     private func isCurrentSafeReopen(
-        _ expectedGeneration: AtlasVaultProductionHostGeneration
+        _ expectedGeneration: AtlasVaultProductionHostGeneration,
+        lifecycleRevision: UInt64
     ) -> Bool {
-        generation == expectedGeneration
+        isCurrentLifecycleCheck(lifecycleRevision)
+            && generation == expectedGeneration
             && lifetime == .started
             && barrierOperation == nil
             && stopOperation == nil
@@ -1043,19 +1094,70 @@ public actor AtlasVaultProductionHost:
 
     private func maySafelyReopen(
         expectedGeneration: AtlasVaultProductionHostGeneration,
-        lifecycleStatus: AtlasVaultLifecycleStatus,
+        lifecycleRevision: UInt64,
         runtimeStatus: AtlasVaultRuntimeStatus
     ) -> Bool {
-        isCurrentSafeReopen(expectedGeneration)
-            && lifecycleIsActive
-            && protectedDataIsAvailable
-            && !lifecycleStatus.hasPendingGraceLock
-            && lifecycleStatus.failure == nil
+        isCurrentSafeReopen(
+            expectedGeneration,
+            lifecycleRevision: lifecycleRevision
+        )
+            && lifecycleAdmissionPermitted
             && runtimeStatus == .locked
             && selectionOperation == nil
             && submitOperation == nil
             && shell.vaultStatus != .noVault
             && unlockState.status != .hostReconciliationRequired
+    }
+
+    private func isCurrentLifecycleCheck(_ revision: UInt64) -> Bool {
+        lifecycleEventRevision == revision
+            && safeLifecycleCheckRevision == revision
+            && lifetime != .stopping
+            && lifetime != .stopped
+            && !isTerminated
+    }
+
+    private func persistentLifecycleEligibility(
+        _ status: AtlasVaultLifecycleStatus
+    ) -> Bool {
+        lifecycleIsActive
+            && protectedDataIsAvailable
+            && !isTerminated
+            && !status.hasPendingGraceLock
+            && status.failure == nil
+    }
+
+    private func clearSafeLifecycleCheck(_ revision: UInt64) {
+        if safeLifecycleCheckRevision == revision {
+            safeLifecycleCheckRevision = nil
+            resumeSafeLifecycleCheckWaiters()
+        }
+    }
+
+    private func invalidateSafeLifecycleCheck() {
+        safeLifecycleCheckRevision = nil
+        resumeSafeLifecycleCheckWaiters()
+    }
+
+    private func waitForSafeLifecycleCheckCompletion() async {
+        guard safeLifecycleCheckRevision != nil else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            guard safeLifecycleCheckRevision != nil else {
+                continuation.resume()
+                return
+            }
+            safeLifecycleCheckWaiters.append(continuation)
+        }
+    }
+
+    private func resumeSafeLifecycleCheckWaiters() {
+        let waiters = safeLifecycleCheckWaiters
+        safeLifecycleCheckWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     private func requiresPrivateFreeReconciliation(
@@ -1257,6 +1359,7 @@ public actor AtlasVaultProductionHost:
             let mayOpen = lifecycleIsActive
                 && protectedDataIsAvailable
                 && lifecycleAdmissionPermitted
+                && safeLifecycleCheckRevision == nil
                 && !isTerminated
                 && shell.vaultStatus != .noVault
             let ordinaryShell = shellReplacingCanRequestUnlock(mayOpen)
@@ -1362,11 +1465,9 @@ public actor AtlasVaultProductionHost:
         guard lifetime == .started else {
             return .stale
         }
-        let mayOpen = lifecycleIsActive
-            && protectedDataIsAvailable
-            && lifecycleAdmissionPermitted
-            && !isTerminated
-            && shell.vaultStatus != .noVault
+        let admissionLifecycleRevision = lifecycleEventRevision
+        let admissionSafeCheckRevision = safeLifecycleCheckRevision
+        let mayOpen = transientAdmissionPermitted
         let readyShell = shellReplacingCanRequestUnlock(mayOpen)
         let readyState = flowState(publicShell: readyShell)
         let readyGeneration = generation
@@ -1380,9 +1481,33 @@ public actor AtlasVaultProductionHost:
               lifetime == .started else {
             return publication
         }
+        guard lifecycleEventRevision == admissionLifecycleRevision,
+              safeLifecycleCheckRevision == admissionSafeCheckRevision else {
+            closeUnlockAdmission()
+            return .stale
+        }
+        guard !mayOpen || transientAdmissionPermitted else {
+            closeUnlockAdmission()
+            return .stale
+        }
         shell = readyShell
         unlockAdmissionOpen = mayOpen
         return .acknowledged
+    }
+
+    private var transientAdmissionPermitted: Bool {
+        lifetime == .started
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && barrierOperation == nil
+            && stopOperation == nil
+            && shell.vaultStatus != .noVault
+            && unlockState.status != .hostReconciliationRequired
     }
 
     private func publishAndReset(
@@ -1519,6 +1644,7 @@ public actor AtlasVaultProductionHost:
 
     private func beginTerminalStop() {
         lifetime = .stopping
+        invalidateSafeLifecycleCheck()
         closeUnlockAdmission()
         _ = advanceGeneration()
     }

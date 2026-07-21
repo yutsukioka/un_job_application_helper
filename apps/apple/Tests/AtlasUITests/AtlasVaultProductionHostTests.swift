@@ -1577,9 +1577,183 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(graph.controllerBuilder.callCount, 0)
         await selectionGate.release()
 
-        await expectEqual((await panel.value).mode, .unlockPanel)
+        let selected = await panel.value
+        await expectEqual(selected.mode, .unlockPanel)
+        await expectTrue(selected.publicShell.canRequestUnlock)
         await expectEqual(await graph.selector.selectCount(), 1)
         await expectEqual(graph.controllerBuilder.callCount, 1)
+    }
+
+    func testSafeLifecycleEligibilityPersistsBeforeAndDuringStart() async throws {
+        for event in [
+            AtlasVaultLifecycleEvent.didBecomeActive,
+            .protectedDataBecameAvailable,
+        ] {
+            let graph = try makeGraph()
+
+            let beforeStart = await graph.host.handleLifecycleEvent(event)
+
+            await expectFalse(beforeStart.publicShell.canRequestUnlock)
+            await expectEqual(await graph.lifecycle.totalCalls(), 2)
+            await expectEqual(await graph.runtime.totalCalls(), 0)
+            await expectEqual(await graph.presentation.totalCalls(), 0)
+            await expectEqual(await graph.owner.totalCalls(), 0)
+            await expectTrue(
+                (try await graph.host.start()).publicShell.canRequestUnlock
+            )
+        }
+
+        let restoreGate = HostSuspensionGate()
+        let restoring = try makeGraph(snapshotGate: restoreGate)
+        let restoreStart = Task { await captureStart(restoring.host) }
+        await restoreGate.waitUntilEntered()
+
+        _ = await restoring.host.handleLifecycleEvent(.didBecomeActive)
+
+        await expectEqual(await restoring.lifecycle.totalCalls(), 2)
+        await expectEqual(await restoring.runtime.totalCalls(), 0)
+        await restoreGate.release()
+        await expectTrue(
+            (try await restoreStart.value.get()).publicShell.canRequestUnlock
+        )
+
+        let ownerGate = HostSuspensionGate()
+        let acknowledging = try makeGraph(ownerGate: ownerGate)
+        let ownerStart = Task { await captureStart(acknowledging.host) }
+        await ownerGate.waitUntilEntered()
+
+        _ = await acknowledging.host.handleLifecycleEvent(
+            .protectedDataBecameAvailable
+        )
+
+        await expectEqual(await acknowledging.lifecycle.totalCalls(), 2)
+        await expectEqual(await acknowledging.runtime.totalCalls(), 0)
+        await ownerGate.release()
+        await expectTrue(
+            (try await ownerStart.value.get()).publicShell.canRequestUnlock
+        )
+    }
+
+    func testSafeLifecycleEligibilitySurvivesActiveSubmit() async throws {
+        let submitGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            submitResult: unlockState(.failed),
+            submitGate: submitGate
+        )
+        try await prepareLocalKeyUnlock(graph)
+        let submit = Task {
+            await graph.host.submitUnlock(.localKey, timeout: nil)
+        }
+        await submitGate.waitUntilEntered()
+
+        let checking = await graph.host.handleLifecycleEvent(
+            .protectedDataBecameAvailable
+        )
+
+        await expectFalse(checking.publicShell.canRequestUnlock)
+        await expectTrue(await graph.host.hasActiveSubmitForTesting())
+        await submitGate.release()
+        let completed = await submit.value
+        await expectTrue(completed.publicShell.canRequestUnlock)
+        await expectEqual(await graph.controller.submitCount(), 1)
+    }
+
+    func testSafeLifecycleEligibilitySurvivesTemporaryRuntimeState() async throws {
+        let graph = try makeGraph(runtimeStatus: .activating)
+        await expectTrue(
+            (try await graph.host.start()).publicShell.canRequestUnlock
+        )
+
+        let checking = await graph.host.handleLifecycleEvent(.didBecomeActive)
+
+        await expectFalse(checking.publicShell.canRequestUnlock)
+        await graph.runtime.setStatus(.locked)
+        let locked = await graph.host.lock()
+        await expectTrue(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.lifecycle.events(), [.didBecomeActive])
+    }
+
+    func testLatestSafeLifecycleEventOwnsEligibilityCommit() async throws {
+        let firstHandleGate = HostSuspensionGate()
+        let graph = try makeGraph(lifecycleHandleGate: firstHandleGate)
+        _ = try await graph.host.start()
+        let ownerCalls = await graph.owner.totalCalls()
+        let first = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await firstHandleGate.waitUntilEntered()
+
+        let second = await graph.host.handleLifecycleEvent(
+            .protectedDataBecameAvailable
+        )
+
+        await expectTrue(second.publicShell.canRequestUnlock)
+        await firstHandleGate.release()
+        _ = await first.value
+        await expectEqual(await graph.owner.totalCalls(), ownerCalls + 1)
+    }
+
+    func testLifecycleCloseEventSupersedesSuspendedSafeEvent() async throws {
+        let safeHandleGate = HostSuspensionGate()
+        let graph = try makeGraph(lifecycleHandleGate: safeHandleGate)
+        _ = try await graph.host.start()
+        let safe = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await safeHandleGate.waitUntilEntered()
+
+        let closed = await graph.host.handleLifecycleEvent(.willResignActive)
+        let ownerCallsAfterClose = await graph.owner.totalCalls()
+
+        await expectFalse(closed.publicShell.canRequestUnlock)
+        await safeHandleGate.release()
+        _ = await safe.value
+        await expectEqual(
+            await graph.owner.totalCalls(),
+            ownerCallsAfterClose
+        )
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(
+            await graph.lifecycle.events(),
+            [.didBecomeActive, .willResignActive]
+        )
+    }
+
+    func testSafeLifecycleCheckBlocksSelectionReopenUntilCurrentCheckFinishes() async throws {
+        let selectionGate = HostSuspensionGate()
+        let lifecycleStatusGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            selectionGate: selectionGate,
+            lifecycleStatusGate: lifecycleStatusGate
+        )
+        _ = try await graph.host.start()
+        let panel = Task { await graph.host.requestUnlockPanel() }
+        await selectionGate.waitUntilEntered()
+        let lifecycle = Task {
+            await graph.host.handleLifecycleEvent(.didBecomeActive)
+        }
+        await lifecycleStatusGate.waitUntilEntered()
+
+        await selectionGate.release()
+        let selected = await panel.value
+        await expectFalse(selected.publicShell.canRequestUnlock)
+
+        await lifecycleStatusGate.release()
+        let reopened = await lifecycle.value
+        await expectTrue(reopened.publicShell.canRequestUnlock)
+    }
+
+    func testLifecycleEligibilityIsSeparateFromTransientAdmissionInSource() async throws {
+        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
+
+        await expectTrue(hostSource.contains("lifecycleEventRevision"))
+        await expectTrue(hostSource.contains("safeLifecycleCheckRevision"))
+        await expectFalse(
+            hostSource.contains("lifecycleAdmissionPermitted = mayReopen")
+        )
     }
 
     func testLifecycleNeverUnlocksAndLockingEventsCompleteBarrier() async throws {

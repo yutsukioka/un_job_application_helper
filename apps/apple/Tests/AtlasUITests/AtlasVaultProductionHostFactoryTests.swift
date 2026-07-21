@@ -879,6 +879,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     }
 
     func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() throws {
+#if os(macOS)
         let expected = Set([
             "docs/architecture/phase2d56_runtime_neutral_production_host.md",
             "apps/apple/Sources/AtlasUI/AtlasVaultProductionHostContracts.swift",
@@ -889,6 +890,11 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         ])
 
         XCTAssertEqual(try phaseChangedFiles(), expected)
+#else
+        throw XCTSkip(
+            "Git-based Phase 2D-56 allowlist verification requires macOS"
+        )
+#endif
     }
 
     func testPhaseFileDiscoveryIsIndependentOfRecentCommitSubjects() throws {
@@ -918,6 +924,31 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         XCTAssertFalse(
             discovery.contains(
                 "Add AtlasVault runtime-neutral production host tests"
+            )
+        )
+    }
+
+    func testGitPhaseInspectionIsCompiledOnlyOnMacOS() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let allowlistTest = try sourceSection(
+            source,
+            from: "    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() throws {",
+            to: "    func testPhaseFileDiscoveryIsIndependentOfRecentCommitSubjects() throws {"
+        )
+
+        XCTAssertTrue(allowlistTest.contains("#if os(macOS)"))
+        XCTAssertTrue(allowlistTest.contains("throw XCTSkip("))
+        XCTAssertTrue(
+            source.contains(
+                "#if os(macOS)\n    private func phaseChangedFiles()"
+            )
+        )
+        XCTAssertFalse(
+            source.contains(
+                "#if !os(macOS)\n    private func gitOutput"
             )
         )
     }
@@ -1133,6 +1164,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
+#if os(macOS)
     private func phaseChangedFiles() throws -> Set<String> {
         let isShallow = try gitOutput([
             "rev-parse",
@@ -1241,6 +1273,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         return String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+#endif
 }
 
 private struct FactoryDependencyGraph {
