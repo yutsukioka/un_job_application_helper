@@ -422,7 +422,8 @@ public final class AtlasVaultProductionCompositionHarness:
                 lifetime = .stopped
                 throw AtlasVaultProductionCompositionError.startUnavailable
             }
-            return try await startOperation.task.value.get()
+            let result = await startOperation.task.value
+            return try startResultAfterAwait(result)
         case .inactive:
             break
         }
@@ -464,7 +465,7 @@ public final class AtlasVaultProductionCompositionHarness:
                 }
             }
         }
-        return try result.get()
+        return try startResultAfterOperation(result)
     }
 
     public func stop() async -> AtlasLockedShellUnlockFlowState {
@@ -536,6 +537,31 @@ public final class AtlasVaultProductionCompositionHarness:
         for waiter in waiters {
             waiter.resume()
         }
+    }
+
+    private func startResultAfterAwait(
+        _ result: StartOutcome
+    ) throws -> AtlasLockedShellUnlockFlowState {
+        if case .started = result {
+            switch lifetime {
+            case .starting, .started:
+                break
+            case .inactive, .stopping, .stopped:
+                throw AtlasVaultProductionCompositionError.stopped
+            }
+        }
+        return try result.get()
+    }
+
+    private func startResultAfterOperation(
+        _ result: StartOutcome
+    ) throws -> AtlasLockedShellUnlockFlowState {
+        if case .started = result {
+            guard case .started = lifetime else {
+                throw AtlasVaultProductionCompositionError.stopped
+            }
+        }
+        return try result.get()
     }
 }
 

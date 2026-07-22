@@ -230,7 +230,11 @@ not exposed.
 `start()` first starts and handshakes lifecycle forwarding, then invokes host
 start. Concurrent callers share one retained operation. A successful repeated
 start is idempotent, and caller cancellation does not transfer ownership of
-the retained operation.
+the retained operation. After every retained-task await, a successful outcome
+is accepted only while startup still owns the lifetime or has committed the
+started lifetime. If terminal stop has moved the harness to stopping or
+stopped, both the initiating caller and every joining caller receive the fixed
+stopped error instead of observing a stale successful start.
 
 ## 38. Start Failure
 
@@ -243,7 +247,8 @@ The owner remains private-free, and the public error is fixed and redacted.
 ## 39. Explicit Terminal Stop
 
 `stop()` is explicit, retained, coalesced, idempotent, and terminal. It returns
-the host's private-free terminal flow and rejects a later start.
+the host's private-free terminal flow, rejects a later start, and wins over a
+successful host-start result that completes after terminal intent.
 
 ## 40. Lifecycle and Stop Concurrency
 
@@ -340,7 +345,10 @@ the strict owner fence, actual Phase 2D-56 terminal behavior, retained lifecycle
 work, harness ownership, injected concrete graph, actions, and source bounds.
 Exact-head review added a red structural regression for readiness registration
 before task launch and replaced a tautological shared-root assertion with
-observable owner-state and delegated-action evidence.
+observable owner-state and delegated-action evidence. Later cycles proved that
+startup failure drains both host and lifecycle work, and that terminal stop
+wins over late successful results for both initiating and joining start
+callers.
 
 ## 55. Test Coverage
 

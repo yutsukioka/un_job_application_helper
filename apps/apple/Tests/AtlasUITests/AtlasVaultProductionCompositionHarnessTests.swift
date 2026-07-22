@@ -247,6 +247,80 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testTerminalStopWinsForInitiatingAndJoiningStartCallers()
+        async
+    {
+        let source = HarnessLifecycleSource()
+        let startGate = HarnessSuspensionGate()
+        let stopGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            startGate: startGate,
+            stopGate: stopGate
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let first = Task { @MainActor in try await harness.start() }
+        await startGate.waitUntilEntered(1)
+
+        let joinerEntered = expectation(description: "joining start entered")
+        let second = Task { @MainActor in
+            joinerEntered.fulfill()
+            return try await harness.start()
+        }
+        await fulfillment(of: [joinerEntered], timeout: 1)
+        await Task.yield()
+
+        let stop = Task { @MainActor in await harness.stop() }
+        await stopGate.waitUntilEntered(1)
+        await harness.waitUntilStoppingForTesting()
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+
+        await startGate.release(call: 1)
+        await XCTAssertThrowsErrorAsync(try await first.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        await XCTAssertThrowsErrorAsync(try await second.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        await harnessExpectEqual(await host.startCallCount(), 1)
+
+        await stopGate.release(call: 1)
+        let stoppedState = await stop.value
+        XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    func testStartOutcomeChecksTerminalWinnerForBothCallerPaths()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        XCTAssertTrue(
+            source.contains(
+                "return try startResultAfterAwait("
+            )
+        )
+        XCTAssertTrue(
+            source.contains(
+                "return try startResultAfterOperation("
+            )
+        )
+        XCTAssertTrue(
+            source.contains(
+                "throw AtlasVaultProductionCompositionError.stopped"
+            )
+        )
+    }
+
+    @MainActor
     func testHarnessStartFailureStopsForwardingAndLeavesPrivateFreeOwner()
         async
     {
