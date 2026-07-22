@@ -234,9 +234,11 @@ the retained operation.
 
 ## 38. Start Failure
 
-A host-start failure stops and drains lifecycle forwarding, leaves the owner
-in its initial private-free state when no host reset committed, and makes this
-first harness terminal. The public error is fixed and redacted.
+A host-start failure begins host terminal stop and lifecycle-forwarder stop as
+structured concurrent work, then awaits both before returning. The retained
+start outcome carries the host's private-free terminal state, so a later
+explicit harness stop is idempotent rather than starting a second teardown.
+The owner remains private-free, and the public error is fixed and redacted.
 
 ## 39. Explicit Terminal Stop
 

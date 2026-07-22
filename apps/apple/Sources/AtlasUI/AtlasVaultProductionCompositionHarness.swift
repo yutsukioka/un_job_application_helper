@@ -322,15 +322,23 @@ public final class AtlasVaultProductionCompositionHarness:
         case stopped
     }
 
+    private enum StartOutcome {
+        case started(AtlasLockedShellUnlockFlowState)
+        case failed(AtlasLockedShellUnlockFlowState)
+
+        func get() throws -> AtlasLockedShellUnlockFlowState {
+            switch self {
+            case let .started(state):
+                state
+            case .failed:
+                throw AtlasVaultProductionCompositionError.startUnavailable
+            }
+        }
+    }
+
     private struct StartOperation {
         let identifier: UUID
-        let task: Task<
-            Result<
-                AtlasLockedShellUnlockFlowState,
-                AtlasVaultProductionCompositionError
-            >,
-            Never
-        >
+        let task: Task<StartOutcome, Never>
     }
 
     private struct StopOperation {
@@ -423,23 +431,22 @@ public final class AtlasVaultProductionCompositionHarness:
         let identifier = UUID()
         let host = host
         let lifecycleForwarder = lifecycleForwarder
-        let task = Task<
-            Result<
-                AtlasLockedShellUnlockFlowState,
-                AtlasVaultProductionCompositionError
-            >,
-            Never
-        > {
+        let task = Task<StartOutcome, Never> {
             guard await lifecycleForwarder.start() else {
-                return Result.failure(
-                    AtlasVaultProductionCompositionError.startUnavailable
-                )
+                async let hostState = host.stop()
+                async let lifecycleStop: Void = lifecycleForwarder.stop()
+                let state = await hostState
+                _ = await lifecycleStop
+                return .failed(state)
             }
             do {
-                return .success(try await host.start())
+                return .started(try await host.start())
             } catch {
-                await lifecycleForwarder.stop()
-                return .failure(.startUnavailable)
+                async let hostState = host.stop()
+                async let lifecycleStop: Void = lifecycleForwarder.stop()
+                let state = await hostState
+                _ = await lifecycleStop
+                return .failed(state)
             }
         }
         let operation = StartOperation(identifier: identifier, task: task)
@@ -449,9 +456,10 @@ public final class AtlasVaultProductionCompositionHarness:
             startOperation = nil
             if lifetime == .starting {
                 switch result {
-                case .success:
+                case .started:
                     lifetime = .started
-                case .failure:
+                case let .failed(state):
+                    terminalState = state
                     lifetime = .stopped
                 }
             }

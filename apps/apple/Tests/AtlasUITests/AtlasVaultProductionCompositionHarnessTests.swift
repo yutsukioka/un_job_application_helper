@@ -263,6 +263,7 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await source.emit(.didBecomeActive)
 
         await harnessExpectEqual(await host.lifecycleEvents(), [])
+        await harnessExpectEqual(await host.stopCallCount(), 1)
         XCTAssertEqual(harness.presentationOwner.flowState.mode, .lockedPublic)
         XCTAssertFalse(
             harness.presentationOwner.flowState.publicShell.canRequestUnlock
@@ -274,6 +275,35 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 .stopped
             )
         }
+        _ = await harness.stop()
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    func testHarnessStartFailureAwaitsStructuredHostAndLifecycleDrain()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let startTask = try XCTUnwrap(
+            source.range(of: "        let task = Task<")
+        )
+        let operation = try XCTUnwrap(
+            source.range(
+                of: "        let operation = StartOperation(",
+                range: startTask.upperBound..<source.endIndex
+            )
+        )
+        let body = String(source[startTask.lowerBound..<operation.lowerBound])
+
+        XCTAssertTrue(body.contains("async let hostState = host.stop()"))
+        XCTAssertTrue(
+            body.contains(
+                "async let lifecycleStop: Void = lifecycleForwarder.stop()"
+            )
+        )
+        XCTAssertTrue(body.contains("await hostState"))
+        XCTAssertTrue(body.contains("await lifecycleStop"))
     }
 
     @MainActor
