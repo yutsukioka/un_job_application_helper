@@ -431,8 +431,9 @@ public final class AtlasVaultProductionCompositionHarness:
         case .stopping, .stopped:
             throw AtlasVaultProductionCompositionError.stopped
         case .started:
-            guard !(await lifecycleForwarder.isTerminal()) else {
-                lifetime = .stopped
+            guard !(await lifecycleForwarder
+                .hasTerminalLifecycleIntent()) else {
+                _ = await stop()
                 throw AtlasVaultProductionCompositionError.stopped
             }
             return await host.currentFlowState()

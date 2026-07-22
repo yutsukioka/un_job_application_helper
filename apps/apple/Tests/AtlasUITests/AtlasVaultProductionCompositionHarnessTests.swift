@@ -461,6 +461,52 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedStartHonorsTerminalIntentBeforeForwarderFinishes()
+        async throws
+    {
+        let source = HarnessLifecycleSource()
+        let stopGate = HarnessSuspensionGate()
+        let lifecycleGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            stopGate: stopGate,
+            lifecycleGate: lifecycleGate
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let initialState = try await harness.start()
+        XCTAssertTrue(initialState.publicShell.canRequestUnlock)
+
+        await source.emit(.willTerminate)
+        await host.waitUntilLifecycleEventCount(1)
+        await lifecycleGate.waitUntilEntered(1)
+
+        let winnerProbe = HarnessFirstStartWinnerProbe()
+        let repeatedStart = Task { @MainActor in try await harness.start() }
+        let repeatedOutcome = Task { @MainActor in
+            let outcome = await Self.startOutcome(repeatedStart)
+            await winnerProbe.record(.startReturned)
+            return outcome
+        }
+        let stopObserver = Task {
+            await stopGate.waitUntilEntered(1)
+            await winnerProbe.record(.stopBegan)
+        }
+
+        let winner = await winnerProbe.first()
+        XCTAssertEqual(winner, .stopBegan)
+
+        let cleanupStop = Task { @MainActor in await harness.stop() }
+        await stopGate.waitUntilEntered(1)
+        await lifecycleGate.release(call: 1)
+        await stopGate.release(call: 1)
+
+        _ = await cleanupStop.value
+        await harnessExpectEqual(await repeatedOutcome.value, .stopped)
+        await stopObserver.value
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    @MainActor
     func testTerminalLifecyclePreservesStoppedWhenRetainedHostStartFails()
         async
     {
@@ -560,6 +606,36 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
 
         XCTAssertTrue(helper.contains("hasTerminalLifecycleIntent()"))
         XCTAssertFalse(helper.contains("lifecycleForwarder.isTerminal()"))
+    }
+
+    func testAlreadyStartedBranchJoinsStopOnTerminalIntent() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let start = try XCTUnwrap(
+            source.range(of: "public func start() async throws")
+        )
+        let stop = try XCTUnwrap(
+            source.range(
+                of: "public func stop() async",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let startBody = String(source[start.lowerBound..<stop.lowerBound])
+        let started = try XCTUnwrap(startBody.range(of: "case .started:"))
+        let starting = try XCTUnwrap(
+            startBody.range(
+                of: "case .starting:",
+                range: started.upperBound..<startBody.endIndex
+            )
+        )
+        let startedBranch = String(
+            startBody[started.lowerBound..<starting.lowerBound]
+        )
+
+        XCTAssertTrue(startedBranch.contains("hasTerminalLifecycleIntent()"))
+        XCTAssertTrue(startedBranch.contains("_ = await stop()"))
+        XCTAssertFalse(startedBranch.contains("lifecycleForwarder.isTerminal()"))
     }
 
     func testStoppingWaiterTreatsAlreadyStoppedAsTerminal() throws {
