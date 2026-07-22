@@ -358,6 +358,48 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testTerminalLifecycleWinsWhileRetainedHostStartIsInFlight() async {
+        let source = HarnessLifecycleSource()
+        let startGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(startGate: startGate)
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let first = Task { @MainActor in try await harness.start() }
+        await startGate.waitUntilEntered(1)
+
+        let joinerEntered = expectation(
+            description: "joining lifecycle-terminated start entered"
+        )
+        let second = Task { @MainActor in
+            joinerEntered.fulfill()
+            return try await harness.start()
+        }
+        await fulfillment(of: [joinerEntered], timeout: 1)
+        await Task.yield()
+
+        await source.emit(.willTerminate)
+        await host.waitUntilLifecycleEventCount(1)
+        await harness.waitUntilLifecycleTerminationForTesting()
+        await startGate.release(call: 1)
+
+        await XCTAssertThrowsErrorAsync(try await first.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        await XCTAssertThrowsErrorAsync(try await second.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        let stoppedState = await harness.stop()
+        XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
     func testStartOutcomeChecksTerminalWinnerForBothCallerPaths()
         throws
     {
@@ -675,7 +717,8 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     func testProductionLikeInjectedGraphStartsNoVaultAndStopsPrivateFree()
         async throws
     {
-        let temporaryRoot = FileManager.default.temporaryDirectory
+        let temporaryRoot = try AtlasVaultTestFileSystemSupport
+            .canonicalTemporaryRoot()
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
             at: temporaryRoot,
@@ -797,6 +840,38 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         }
         XCTAssertFalse(source.contains("derivePassphraseVaultKey: { data"))
         XCTAssertFalse(source.contains("deriveRecoveryVaultKey: { data"))
+    }
+
+    func testProductionLikeIntegrationUsesCanonicalTemporaryRoot() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let integrationMarker = try XCTUnwrap(
+            source.range(
+                of: "    func testProductionLikeInjectedGraphStartsNoVaultAndStopsPrivateFree()"
+            )
+        )
+        let nextTestMarker = try XCTUnwrap(
+            source.range(
+                of: "    func testOneHarnessCreatesMultipleRootsOverOneOwnerWithoutStarting()",
+                range: integrationMarker.upperBound..<source.endIndex
+            )
+        )
+        let integrationBody = String(
+            source[integrationMarker.lowerBound..<nextTestMarker.lowerBound]
+        )
+        XCTAssertTrue(
+            integrationBody.contains("AtlasVaultTestFileSystemSupport")
+        )
+        XCTAssertTrue(
+            integrationBody.contains(".canonicalTemporaryRoot()")
+        )
+        XCTAssertFalse(
+            integrationBody.contains(
+                "FileManager.default." + "temporaryDirectory"
+            )
+        )
     }
 
     @MainActor

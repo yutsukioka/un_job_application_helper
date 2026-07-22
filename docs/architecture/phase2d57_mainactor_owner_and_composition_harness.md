@@ -240,7 +240,11 @@ stopped, both the initiating caller and every joining caller receive the fixed
 stopped error instead of observing a stale successful start. Explicit terminal
 intent is retained separately from a normal startup failure, so a retained
 start that fails because stop won also reports stopped, while an ordinary
-startup failure continues to report the fixed start-unavailable error.
+startup failure continues to report the fixed start-unavailable error. Before
+either retained-start caller path commits a successful outcome, the harness
+rechecks lifecycle-forwarder terminal state. A completed stream or
+`.willTerminate` winner clears retained-start authority, runs or joins terminal
+stop, and returns the fixed stopped error rather than a stale started flow.
 
 ## 38. Start Failure
 
@@ -356,7 +360,10 @@ startup failure drains both host and lifecycle work, and that terminal stop
 wins over late successful results for both initiating and joining start
 callers. The final review cycle additionally proved that stop-induced failed
 start outcomes preserve terminal semantics and that a naturally completed
-lifecycle task remains retained until explicit stop drains it.
+lifecycle task remains retained until explicit stop drains it. Subsequent
+review added a deterministic terminal-lifecycle/start race, canonicalized the
+integration-test temporary root, and made owner test-gate waiter removal use a
+copied key array rather than mutating a dictionary during key iteration.
 
 ## 55. Test Coverage
 
@@ -365,8 +372,10 @@ stale suspended resets, observer publication, real host start/stop/termination,
 serial lifecycle order, race-free subscription readiness, stream completion,
 stop drain including the task-completion boundary, concurrent start/stop for
 both successful and failed retained starts, failure cleanup, URL and policy
-validation, zero-call assembly, no-vault integration, shared owner/action
-roots, and app-entry/source guards.
+validation, lifecycle termination during retained host start, zero-call
+assembly, no-vault integration from a canonical temporary root, shared
+owner/action roots, safe deterministic suspension gates, and app-entry/source
+guards.
 
 ## 56. Go/No-Go Update
 

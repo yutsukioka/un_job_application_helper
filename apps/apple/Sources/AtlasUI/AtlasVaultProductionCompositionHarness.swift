@@ -427,6 +427,7 @@ public final class AtlasVaultProductionCompositionHarness:
                 throw AtlasVaultProductionCompositionError.startUnavailable
             }
             let result = await startOperation.task.value
+            try await stopIfLifecycleTerminatedDuringStart(result)
             return try startResultAfterAwait(result)
         case .inactive:
             break
@@ -457,6 +458,7 @@ public final class AtlasVaultProductionCompositionHarness:
         let operation = StartOperation(identifier: identifier, task: task)
         startOperation = operation
         let result = await task.value
+        try await stopIfLifecycleTerminatedDuringStart(result)
         if startOperation?.identifier == identifier {
             startOperation = nil
             if lifetime == .starting {
@@ -542,6 +544,23 @@ public final class AtlasVaultProductionCompositionHarness:
         for waiter in waiters {
             waiter.resume()
         }
+    }
+
+    private func stopIfLifecycleTerminatedDuringStart(
+        _ result: StartOutcome
+    ) async throws {
+        guard case .started = result else {
+            return
+        }
+        guard !terminalStopRequested else {
+            return
+        }
+        guard await lifecycleForwarder.isTerminal() else {
+            return
+        }
+        startOperation = nil
+        _ = await stop()
+        throw AtlasVaultProductionCompositionError.stopped
     }
 
     private func startResultAfterAwait(

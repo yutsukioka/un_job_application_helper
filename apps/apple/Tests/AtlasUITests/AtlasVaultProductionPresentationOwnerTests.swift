@@ -321,6 +321,34 @@ final class AtlasVaultProductionPresentationOwnerTests: XCTestCase {
         XCTAssertTrue(source.contains("GenerationAuthority"))
     }
 
+    func testResetHookCopiesWaiterKeysBeforeDictionaryMutation() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let hookMarker = try XCTUnwrap(
+            source.range(
+                of: "private final class OwnerResetHook",
+                options: .backwards
+            )
+        )
+        let graphMarker = try XCTUnwrap(
+            source.range(
+                of: "private struct OwnerHostGraph",
+                range: hookMarker.upperBound..<source.endIndex
+            )
+        )
+        let hookBody = String(
+            source[hookMarker.lowerBound..<graphMarker.lowerBound]
+        )
+        XCTAssertTrue(
+            hookBody.contains("let readyKeys = callWaiters.keys.filter")
+        )
+        XCTAssertFalse(
+            hookBody.contains("for key in callWaiters." + "keys where")
+        )
+    }
+
     private func requireObservableObject<T: ObservableObject>(_ value: T) {}
 
     private func requireOwnerResetter<Owner>(
@@ -467,11 +495,9 @@ private final class OwnerResetHook {
     func call() async {
         entered += 1
         let call = entered
-        let waiters = callWaiters
-            .filter { $0.key <= entered }
-            .flatMap(\.value)
-        for key in callWaiters.keys where key <= entered {
-            callWaiters[key] = nil
+        let readyKeys = callWaiters.keys.filter { $0 <= entered }
+        let waiters = readyKeys.flatMap {
+            callWaiters.removeValue(forKey: $0) ?? []
         }
         for waiter in waiters {
             waiter.resume()
