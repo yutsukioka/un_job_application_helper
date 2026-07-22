@@ -470,10 +470,15 @@ non-interactive reconciliation flow; restart is not supported. A late cancel or
 disappearance completion cannot replace stopped lifetime with nonterminal
 reconciliation. Stop also joins a retained start operation before deciding
 whether an active presentation pipeline requires the terminal barrier. During
-terminal teardown the owner remains on reconciliation flow through pipeline
-finish and a final authoritative runtime `.locked` check. Only then does a new
-generation install and acknowledge terminal locked owner flow. A finish or
-runtime-verification failure therefore cannot leave the owner falsely locked.
+terminal teardown, the barrier generation supplied to
+`supersedePresentationGeneration(_:)` is also the exact generation used by the
+first reconciliation reset. The host does not advance between those two owner
+calls. Only after that reset commits the superseded generation may later
+ordinary generations install the locked and final terminal owner states. The
+owner remains on reconciliation flow through pipeline finish and a final
+authoritative runtime `.locked` check. Only then does a new generation install
+and acknowledge terminal locked owner flow. A finish or runtime-verification
+failure therefore cannot leave the owner falsely locked.
 Repeated stop callers and `willTerminate` join this same terminal drain. An
 explicit nonterminal vault lock remains independent and neither cancels nor
 awaits public-search service work solely because the vault is locking.
@@ -571,8 +576,10 @@ The owner contract exposes `supersedePresentationGeneration(_:)`. Before
 revoking a stale permit, terminal teardown awaits this MainActor generation
 fence. An owner must reject a reset whose generation is no longer current and
 must recheck after every suspension before mutating presentation. Supersede is a
-stale-work fence, not permanent exclusivity for one token: a later valid reset
-may establish its supplied opaque generation, then commit only while that exact
+stale-work fence, not permanent exclusivity for one token. Its first accepted
+reset must use the exact superseding generation. A successful commit of that
+generation establishes the fence; only then may a later ordinary reset establish
+its supplied opaque generation, and every reset may commit only while its exact
 generation remains current. The host also revalidates generation after every
 owner await. Pipeline and owner acknowledgement are one logical publication: the
 owner receives the flow captured before the pipeline await, never a reentrant
@@ -607,9 +614,12 @@ The barrier order is:
 Every barrier operation has a private identity that is revalidated after each
 await. Terminal stop replaces an in-flight nonterminal identity immediately,
 establishes a newer owner-generation fence, revokes the stale publication permit,
-and begins terminal publication. Late stale runtime, controller, pipeline, or
-owner completion therefore returns the current private-free flow without
-changing terminal state.
+and begins terminal publication with an exact-generation reconciliation reset.
+The nonterminal barrier retains its existing pre-publication generation advance;
+the terminal barrier deliberately does not advance until the exact superseded
+generation has committed. Late stale runtime, controller, pipeline, or owner
+completion therefore returns the current private-free flow without changing
+terminal state.
 
 For a nonterminal barrier, advancing from step 10 to the ordinary commit in
 step 12 requires the captured lifecycle revision and safe-check marker to remain
@@ -717,6 +727,15 @@ regressions cover two and many successive overwrites, subscriber delivery of
 only the newest buffered snapshot, monotonic sequence accounting, normal
 delivery, and finish-time waiter release while preserving the one-slot bound.
 
+The post-merge owner-generation follow-up captured deterministic red evidence
+against an owner enforcing the concrete Phase 2D-57 fence. Terminal stop first
+returned reconciliation after rejecting two post-supersede reset generations;
+after a successful unlock, the same mismatch left the owner on
+`unlockedTransition`. The permanent regressions require the first terminal reset
+to commit the exact superseded generation before any later generation is
+accepted, including terminal lifecycle handling and replacement of a suspended
+nonterminal owner reset.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -803,6 +822,11 @@ are removed before resumption, multiple overwrites all terminate, the newest
 buffer remains deliverable to current state and subscribers, finish releases
 the final publisher, acknowledged sequence advances only through delivery, and
 no update queue replaces bounded newest-value buffering.
+The owner-generation follow-up adds strict-owner terminal stop,
+`willTerminate`, prior-unlocked-state replacement, and suspended stale-reset
+coverage. A structural guard requires the terminal reconciliation generation to
+be the barrier generation, while the strict fake rejects every different reset
+until that exact generation commits.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
