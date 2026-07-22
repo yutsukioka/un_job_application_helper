@@ -401,6 +401,66 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testTerminalLifecycleIntentWinsBeforeForwarderFinishes() async {
+        let source = HarnessLifecycleSource()
+        let startGate = HarnessSuspensionGate()
+        let stopGate = HarnessSuspensionGate()
+        let lifecycleGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            startGate: startGate,
+            stopGate: stopGate,
+            lifecycleGate: lifecycleGate
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let first = Task { @MainActor in try await harness.start() }
+        await startGate.waitUntilEntered(1)
+
+        let joinerEntered = expectation(
+            description: "joining terminal-intent start entered"
+        )
+        let second = Task { @MainActor in
+            joinerEntered.fulfill()
+            return try await harness.start()
+        }
+        await fulfillment(of: [joinerEntered], timeout: 1)
+        await Task.yield()
+
+        await source.emit(.willTerminate)
+        await host.waitUntilLifecycleEventCount(1)
+        await lifecycleGate.waitUntilEntered(1)
+
+        let winnerProbe = HarnessFirstStartWinnerProbe()
+        let firstOutcome = Task { @MainActor in
+            let outcome = await Self.startOutcome(first)
+            await winnerProbe.record(.startReturned)
+            return outcome
+        }
+        let secondOutcome = Task { @MainActor in
+            await Self.startOutcome(second)
+        }
+        let stopObserver = Task {
+            await stopGate.waitUntilEntered(1)
+            await winnerProbe.record(.stopBegan)
+        }
+
+        await startGate.release(call: 1)
+        let winner = await winnerProbe.first()
+        XCTAssertEqual(winner, .stopBegan)
+
+        let cleanupStop = Task { @MainActor in await harness.stop() }
+        await stopGate.waitUntilEntered(1)
+        await lifecycleGate.release(call: 1)
+        await stopGate.release(call: 1)
+
+        _ = await cleanupStop.value
+        await harnessExpectEqual(await firstOutcome.value, .stopped)
+        await harnessExpectEqual(await secondOutcome.value, .stopped)
+        await stopObserver.value
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    @MainActor
     func testTerminalLifecyclePreservesStoppedWhenRetainedHostStartFails()
         async
     {
@@ -479,6 +539,27 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("case terminal("))
         XCTAssertTrue(source.contains("hasTerminalLifecycleIntent()"))
+    }
+
+    func testSuccessfulStartChecksTerminalIntentBeforeCommitting() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let start = try XCTUnwrap(
+            source.range(
+                of: "private func stopIfLifecycleTerminatedDuringStart("
+            )
+        )
+        let end = try XCTUnwrap(
+            source.range(
+                of: "private func startResultAfterAwait(",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let helper = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(helper.contains("hasTerminalLifecycleIntent()"))
+        XCTAssertFalse(helper.contains("lifecycleForwarder.isTerminal()"))
     }
 
     func testStoppingWaiterTreatsAlreadyStoppedAsTerminal() throws {
@@ -1033,6 +1114,19 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         )
     }
 
+    private static func startOutcome(
+        _ task: Task<AtlasLockedShellUnlockFlowState, any Error>
+    ) async -> HarnessStartCallerOutcome {
+        do {
+            _ = try await task.value
+            return .started
+        } catch let error as AtlasVaultProductionCompositionError {
+            return error == .stopped ? .stopped : .otherFailure
+        } catch {
+            return .otherFailure
+        }
+    }
+
     private static func source(named name: String) throws -> String {
         let appleRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1119,6 +1213,44 @@ private actor HarnessBoolRecorder {
 
     func value() -> Bool? {
         stored
+    }
+}
+
+private enum HarnessStartCallerOutcome: Equatable, Sendable {
+    case started
+    case stopped
+    case otherFailure
+}
+
+private enum HarnessStartWinner: Equatable, Sendable {
+    case startReturned
+    case stopBegan
+}
+
+private actor HarnessFirstStartWinnerProbe {
+    private var stored: HarnessStartWinner?
+    private var waiters:
+        [CheckedContinuation<HarnessStartWinner, Never>] = []
+
+    func record(_ winner: HarnessStartWinner) {
+        guard stored == nil else {
+            return
+        }
+        stored = winner
+        let currentWaiters = waiters
+        waiters.removeAll()
+        for waiter in currentWaiters {
+            waiter.resume(returning: winner)
+        }
+    }
+
+    func first() async -> HarnessStartWinner {
+        if let stored {
+            return stored
+        }
+        return await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
     }
 }
 

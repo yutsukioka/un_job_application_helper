@@ -584,7 +584,8 @@ public final class AtlasVaultProductionCompositionHarness:
             lifetime = .stopped
             throw AtlasVaultProductionCompositionError.stopped
         case .started:
-            guard await lifecycleForwarder.isTerminal() else {
+            guard await lifecycleForwarder
+                .hasTerminalLifecycleIntent() else {
                 return
             }
             startOperation = nil

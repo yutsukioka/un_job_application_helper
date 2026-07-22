@@ -248,7 +248,11 @@ stop, and returns the fixed stopped error rather than a stale started flow. A
 terminal lifecycle intent is recorded before `.willTerminate` awaits the host.
 If that event makes the retained host start fail, the private start outcome
 preserves the terminal witness through structured failure cleanup, so both
-caller paths return stopped rather than relabeling it start-unavailable.
+caller paths return stopped rather than relabeling it start-unavailable. The
+same terminal-intent witness fences a successful retained host start while the
+`.willTerminate` callback is still in flight; startup cannot return an
+interactive flow merely because forwarding has not yet reached its completed
+terminal state.
 
 ## 38. Start Failure
 
@@ -372,7 +376,9 @@ next exact-head cycle also proved that an in-flight terminal lifecycle event
 which makes retained host start fail remains a terminal stopped outcome. A
 test-only stopping waiter treats both stopping and already-stopped lifetimes as
 terminal, preventing deterministic race probes from suspending after teardown
-has already completed.
+has already completed. A retained-start race also holds `.willTerminate`
+handling open and proves terminal intent begins stop before either successful
+start caller can return.
 
 ## 55. Test Coverage
 
@@ -385,7 +391,8 @@ validation, lifecycle termination during retained host start, zero-call
 assembly, no-vault integration from a canonical temporary root, shared
 owner/action roots, terminal lifecycle failures during retained start, safe
 deterministic suspension gates including the already-stopped waiter boundary,
-and app-entry/source guards.
+in-flight terminal-intent fencing before forwarder completion, and
+app-entry/source guards.
 
 ## 56. Go/No-Go Update
 
