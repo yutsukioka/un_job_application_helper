@@ -21,6 +21,7 @@ public actor AtlasVaultProductionLifecycleForwarder:
     private var forwardingTask: Task<Void, Never>?
     private var startWaiters: [CheckedContinuation<Bool, Never>] = []
     private var terminalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var terminalLifecycleRequested = false
 
     public init(
         source: any AtlasVaultPlatformLifecycleEventSourcing,
@@ -31,6 +32,9 @@ public actor AtlasVaultProductionLifecycleForwarder:
     }
 
     public func start() async -> Bool {
+        guard !terminalLifecycleRequested else {
+            return false
+        }
         switch state {
         case .active:
             return true
@@ -61,6 +65,9 @@ public actor AtlasVaultProductionLifecycleForwarder:
                           mayForward(identifier) else {
                         break
                     }
+                    if event == .willTerminate {
+                        terminalLifecycleRequested = true
+                    }
                     _ = await host.handleLifecycleEvent(event)
                     if event == .willTerminate {
                         break
@@ -78,6 +85,7 @@ public actor AtlasVaultProductionLifecycleForwarder:
         }
 
         state = .terminal
+        terminalLifecycleRequested = true
         resumeStartWaiters(with: false)
         resumeTerminalWaiters()
         let task = forwardingTask
@@ -108,6 +116,10 @@ public actor AtlasVaultProductionLifecycleForwarder:
             return true
         }
         return false
+    }
+
+    func hasTerminalLifecycleIntent() -> Bool {
+        terminalLifecycleRequested || isTerminal()
     }
 
     func hasRetainedForwardingTaskForTesting() -> Bool {
@@ -328,6 +340,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private enum StartOutcome {
         case started(AtlasLockedShellUnlockFlowState)
         case failed(AtlasLockedShellUnlockFlowState)
+        case terminal(AtlasLockedShellUnlockFlowState)
 
         func get() throws -> AtlasLockedShellUnlockFlowState {
             switch self {
@@ -335,6 +348,8 @@ public final class AtlasVaultProductionCompositionHarness:
                 state
             case .failed:
                 throw AtlasVaultProductionCompositionError.startUnavailable
+            case .terminal:
+                throw AtlasVaultProductionCompositionError.stopped
             }
         }
     }
@@ -443,16 +458,20 @@ public final class AtlasVaultProductionCompositionHarness:
                 async let lifecycleStop: Void = lifecycleForwarder.stop()
                 let state = await hostState
                 _ = await lifecycleStop
-                return .failed(state)
+                return .terminal(state)
             }
             do {
                 return .started(try await host.start())
             } catch {
+                let lifecycleTerminated = await lifecycleForwarder
+                    .hasTerminalLifecycleIntent()
                 async let hostState = host.stop()
                 async let lifecycleStop: Void = lifecycleForwarder.stop()
                 let state = await hostState
                 _ = await lifecycleStop
-                return .failed(state)
+                return lifecycleTerminated
+                    ? .terminal(state)
+                    : .failed(state)
             }
         }
         let operation = StartOperation(identifier: identifier, task: task)
@@ -465,7 +484,7 @@ public final class AtlasVaultProductionCompositionHarness:
                 switch result {
                 case .started:
                     lifetime = .started
-                case let .failed(state):
+                case let .failed(state), let .terminal(state):
                     terminalState = state
                     lifetime = .stopped
                 }
@@ -549,18 +568,26 @@ public final class AtlasVaultProductionCompositionHarness:
     private func stopIfLifecycleTerminatedDuringStart(
         _ result: StartOutcome
     ) async throws {
-        guard case .started = result else {
-            return
-        }
         guard !terminalStopRequested else {
             return
         }
-        guard await lifecycleForwarder.isTerminal() else {
+        switch result {
+        case .failed:
             return
+        case let .terminal(state):
+            terminalStopRequested = true
+            startOperation = nil
+            terminalState = state
+            lifetime = .stopped
+            throw AtlasVaultProductionCompositionError.stopped
+        case .started:
+            guard await lifecycleForwarder.isTerminal() else {
+                return
+            }
+            startOperation = nil
+            _ = await stop()
+            throw AtlasVaultProductionCompositionError.stopped
         }
-        startOperation = nil
-        _ = await stop()
-        throw AtlasVaultProductionCompositionError.stopped
     }
 
     private func startResultAfterAwait(

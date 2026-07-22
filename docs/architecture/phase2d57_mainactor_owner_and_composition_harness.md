@@ -244,7 +244,11 @@ startup failure continues to report the fixed start-unavailable error. Before
 either retained-start caller path commits a successful outcome, the harness
 rechecks lifecycle-forwarder terminal state. A completed stream or
 `.willTerminate` winner clears retained-start authority, runs or joins terminal
-stop, and returns the fixed stopped error rather than a stale started flow.
+stop, and returns the fixed stopped error rather than a stale started flow. A
+terminal lifecycle intent is recorded before `.willTerminate` awaits the host.
+If that event makes the retained host start fail, the private start outcome
+preserves the terminal witness through structured failure cleanup, so both
+caller paths return stopped rather than relabeling it start-unavailable.
 
 ## 38. Start Failure
 
@@ -363,7 +367,9 @@ start outcomes preserve terminal semantics and that a naturally completed
 lifecycle task remains retained until explicit stop drains it. Subsequent
 review added a deterministic terminal-lifecycle/start race, canonicalized the
 integration-test temporary root, and made owner test-gate waiter removal use a
-copied key array rather than mutating a dictionary during key iteration.
+copied key array rather than mutating a dictionary during key iteration. The
+next exact-head cycle also proved that an in-flight terminal lifecycle event
+which makes retained host start fail remains a terminal stopped outcome.
 
 ## 55. Test Coverage
 
@@ -374,8 +380,8 @@ stop drain including the task-completion boundary, concurrent start/stop for
 both successful and failed retained starts, failure cleanup, URL and policy
 validation, lifecycle termination during retained host start, zero-call
 assembly, no-vault integration from a canonical temporary root, shared
-owner/action roots, safe deterministic suspension gates, and app-entry/source
-guards.
+owner/action roots, terminal lifecycle failures during retained start, safe
+deterministic suspension gates, and app-entry/source guards.
 
 ## 56. Go/No-Go Update
 

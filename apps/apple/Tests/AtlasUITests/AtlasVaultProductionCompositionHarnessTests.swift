@@ -400,6 +400,61 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await harnessExpectEqual(await host.stopCallCount(), 1)
     }
 
+    @MainActor
+    func testTerminalLifecyclePreservesStoppedWhenRetainedHostStartFails()
+        async
+    {
+        let source = HarnessLifecycleSource()
+        let startGate = HarnessSuspensionGate()
+        let stopGate = HarnessSuspensionGate()
+        let lifecycleGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            startGate: startGate,
+            stopGate: stopGate,
+            lifecycleGate: lifecycleGate,
+            failStartAfterLifecycleTermination: true
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let first = Task { @MainActor in try await harness.start() }
+        await startGate.waitUntilEntered(1)
+
+        let joinerEntered = expectation(
+            description: "joining lifecycle-failed start entered"
+        )
+        let second = Task { @MainActor in
+            joinerEntered.fulfill()
+            return try await harness.start()
+        }
+        await fulfillment(of: [joinerEntered], timeout: 1)
+        await Task.yield()
+
+        await source.emit(.willTerminate)
+        await host.waitUntilLifecycleEventCount(1)
+        await lifecycleGate.waitUntilEntered(1)
+        await startGate.release(call: 1)
+        await stopGate.waitUntilEntered(1)
+
+        await lifecycleGate.release(call: 1)
+        await stopGate.release(call: 1)
+
+        await XCTAssertThrowsErrorAsync(try await first.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        await XCTAssertThrowsErrorAsync(try await second.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        let stoppedState = await harness.stop()
+        XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
     func testStartOutcomeChecksTerminalWinnerForBothCallerPaths()
         throws
     {
@@ -422,6 +477,8 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 "throw AtlasVaultProductionCompositionError.stopped"
             )
         )
+        XCTAssertTrue(source.contains("case terminal("))
+        XCTAssertTrue(source.contains("hasTerminalLifecycleIntent()"))
     }
 
     @MainActor
@@ -1052,6 +1109,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
     private let lifecycleGate: HarnessSuspensionGate?
     private let startFailure: HarnessFakeError?
     private let failStartAfterStop: Bool
+    private let failStartAfterLifecycleTermination: Bool
     private let searchFailure: AtlasPublicJobServiceError?
     private var flow = AtlasVaultProductionCompositionHarnessTests
         .lockedFlow(canRequestUnlock: true)
@@ -1068,6 +1126,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
     private var lastTimeout: Duration?
     private var methods: [AtlasVaultUnlockMethod?] = []
     private var handledEvents: [AtlasVaultLifecycleEvent] = []
+    private var lifecycleTerminationHandled = false
     private var lifecycleInFlight = 0
     private var maxLifecycleInFlight = 0
     private var lifecycleWaiters:
@@ -1079,6 +1138,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         lifecycleGate: HarnessSuspensionGate? = nil,
         startFailure: HarnessFakeError? = nil,
         failStartAfterStop: Bool = false,
+        failStartAfterLifecycleTermination: Bool = false,
         searchFailure: AtlasPublicJobServiceError? = nil
     ) {
         self.startGate = startGate
@@ -1086,6 +1146,8 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         self.lifecycleGate = lifecycleGate
         self.startFailure = startFailure
         self.failStartAfterStop = failStartAfterStop
+        self.failStartAfterLifecycleTermination =
+            failStartAfterLifecycleTermination
         self.searchFailure = searchFailure
     }
 
@@ -1098,6 +1160,10 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
             throw startFailure
         }
         if failStartAfterStop, stops > 0 {
+            throw HarnessFakeError.start
+        }
+        if failStartAfterLifecycleTermination,
+           lifecycleTerminationHandled {
             throw HarnessFakeError.start
         }
         return flow
@@ -1174,6 +1240,9 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         lifecycleInFlight += 1
         maxLifecycleInFlight = max(maxLifecycleInFlight, lifecycleInFlight)
         handledEvents.append(event)
+        if event == .willTerminate {
+            lifecycleTerminationHandled = true
+        }
         let count = handledEvents.count
         let keys = lifecycleWaiters.keys.filter { $0 <= count }
         let waiters = keys.flatMap {
