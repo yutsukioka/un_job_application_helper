@@ -48,28 +48,27 @@ public actor AtlasVaultProductionLifecycleForwarder:
         state = .starting(identifier)
         let source = source
         let host = host
-        let task = Task { [weak self] in
-            let stream = await source.events()
-            guard let self,
-                  await self.markSubscriptionReady(identifier) else {
-                return
-            }
-
-            for await event in stream {
-                guard !Task.isCancelled,
-                      await self.mayForward(identifier) else {
-                    break
-                }
-                _ = await host.handleLifecycleEvent(event)
-                if event == .willTerminate {
-                    break
-                }
-            }
-            await self.forwardingDidFinish(identifier)
-        }
-        forwardingTask = task
         return await withCheckedContinuation { continuation in
             startWaiters.append(continuation)
+            let task = Task { [self] in
+                let stream = await source.events()
+                guard markSubscriptionReady(identifier) else {
+                    return
+                }
+
+                for await event in stream {
+                    guard !Task.isCancelled,
+                          mayForward(identifier) else {
+                        break
+                    }
+                    _ = await host.handleLifecycleEvent(event)
+                    if event == .willTerminate {
+                        break
+                    }
+                }
+                forwardingDidFinish(identifier)
+            }
+            forwardingTask = task
         }
     }
 

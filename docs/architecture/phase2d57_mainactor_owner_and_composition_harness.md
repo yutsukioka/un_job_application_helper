@@ -99,9 +99,12 @@ source, host, event, or task detail.
 
 ## 16. Explicit Lifecycle Start
 
-Construction subscribes to nothing. `start()` creates and retains one task,
-waits for the source-subscription handshake, and is idempotent while active.
-This lets the composition prove forwarding is ready before host startup.
+Construction subscribes to nothing. `start()` registers its initial readiness
+continuation before it creates and retains the forwarding task, so an
+immediately available stream cannot race past the waiter. The task strongly
+owns the forwarder until stream completion or explicit stop breaks that
+ownership cycle. The subscription handshake remains idempotent while active
+and lets the composition prove forwarding is ready before host startup.
 
 ## 17. Event Ordering
 
@@ -333,14 +336,18 @@ Three compile-valid red files were committed before production source. Their
 focused builds failed on absent Phase 2D-57 types. Green tests then exercised
 the strict owner fence, actual Phase 2D-56 terminal behavior, retained lifecycle
 work, harness ownership, injected concrete graph, actions, and source bounds.
+Exact-head review added a red structural regression for readiness registration
+before task launch and replaced a tautological shared-root assertion with
+observable owner-state and delegated-action evidence.
 
 ## 55. Test Coverage
 
 Coverage includes initial privacy, ordinary and exact fenced generations,
 stale suspended resets, observer publication, real host start/stop/termination,
-serial lifecycle order, stream completion, stop drain, concurrent start/stop,
-failure cleanup, URL and policy validation, zero-call assembly, no-vault
-integration, shared roots, and app-entry/source guards.
+serial lifecycle order, race-free subscription readiness, stream completion,
+stop drain, concurrent start/stop, failure cleanup, URL and policy validation,
+zero-call assembly, no-vault integration, shared owner/action roots, and
+app-entry/source guards.
 
 ## 56. Go/No-Go Update
 

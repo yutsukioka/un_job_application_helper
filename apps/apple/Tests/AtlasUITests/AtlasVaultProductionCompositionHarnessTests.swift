@@ -36,6 +36,36 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await forwarder.stop()
     }
 
+    func testForwarderRegistersInitialStartWaiterBeforeLaunchingTask()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let startMarker = try XCTUnwrap(
+            source.range(of: "    public func start() async -> Bool {")
+        )
+        let stopMarker = try XCTUnwrap(
+            source.range(
+                of: "    public func stop() async {",
+                range: startMarker.upperBound..<source.endIndex
+            )
+        )
+        let startBody = String(
+            source[startMarker.lowerBound..<stopMarker.lowerBound]
+        )
+        let initialWaiter = try XCTUnwrap(
+            startBody.range(
+                of: "startWaiters.append(continuation)",
+                options: .backwards
+            )
+        )
+        let taskLaunch = try XCTUnwrap(startBody.range(of: "let task = Task"))
+
+        XCTAssertLessThan(initialWaiter.lowerBound, taskLaunch.lowerBound)
+        XCTAssertFalse(startBody.contains("[weak self]"))
+    }
+
     func testForwarderForwardsEventsInExactSerialOrder() async {
         let source = HarnessLifecycleSource()
         let eventGate = HarnessSuspensionGate()

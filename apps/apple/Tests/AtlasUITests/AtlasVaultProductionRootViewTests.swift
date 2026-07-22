@@ -36,11 +36,12 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         XCTAssertEqual(owner.flowState.mode, .lockedPublic)
     }
 
-    func testTwoRootsCanShareOneOwnerAndActionAuthority() {
+    func testTwoRootsCanShareOneOwnerAndActionAuthority() async throws {
         let owner = AtlasVaultProductionPresentationOwner()
+        let recorder = RootActionRecorder()
         let publicActions = AtlasLockedPublicShellActions(
             search: { _ in },
-            requestUnlock: {}
+            requestUnlock: { await recorder.recordUnlockRequest() }
         )
         let unlockActions = AtlasExplicitUnlockViewActions(
             select: { _ in },
@@ -62,7 +63,38 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
 
         requireView(type(of: first))
         requireView(type(of: second))
-        XCTAssertTrue(owner === owner)
+        XCTAssertTrue(try observedOwner(in: first) === owner)
+        XCTAssertTrue(try observedOwner(in: second) === owner)
+
+        let sharedFlow = AtlasLockedShellUnlockFlowState(
+            publicShell: AtlasLockedPublicShellModel(
+                vaultStatus: .noVault,
+                serviceStatus: .unavailable,
+                canRequestUnlock: false
+            ),
+            unlockPresentationState: AtlasVaultUnlockPresentationState(
+                capabilities: .currentProduction,
+                selectedMethod: nil,
+                status: .locked
+            ),
+            isUnlockPanelPresented: false
+        )
+        let resetAccepted = await owner.resetPresentation(
+            to: sharedFlow,
+            generation: AtlasVaultProductionHostGeneration()
+        )
+        XCTAssertTrue(resetAccepted)
+
+        let firstBody = first.body
+        let secondBody = second.body
+        XCTAssertEqual(try flowState(in: firstBody), sharedFlow)
+        XCTAssertEqual(try flowState(in: secondBody), sharedFlow)
+        let firstPublicActions = try embeddedPublicActions(in: firstBody)
+        let secondPublicActions = try embeddedPublicActions(in: secondBody)
+        await firstPublicActions.requestUnlock()
+        await secondPublicActions.requestUnlock()
+        let requestCount = await recorder.unlockRequestCount()
+        XCTAssertEqual(requestCount, 2)
     }
 
     func testRootSourceIsThinObservedOwnerLockedFlowComposition() throws {
@@ -136,6 +168,41 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
 
     private func requireView<Content: View>(_ type: Content.Type) {}
 
+    private func observedOwner(
+        in root: AtlasVaultProductionRootView
+    ) throws -> AtlasVaultProductionPresentationOwner {
+        let child = Mirror(reflecting: root).children.first {
+            $0.label == "_owner"
+        }
+        let storage = try XCTUnwrap(
+            child?.value
+                as? ObservedObject<AtlasVaultProductionPresentationOwner>
+        )
+        return storage.wrappedValue
+    }
+
+    private func flowState<Content: View>(
+        in view: Content
+    ) throws -> AtlasLockedShellUnlockFlowState {
+        let child = Mirror(reflecting: view).children.first {
+            $0.label == "state"
+        }
+        return try XCTUnwrap(
+            child?.value as? AtlasLockedShellUnlockFlowState
+        )
+    }
+
+    private func embeddedPublicActions<Content: View>(
+        in view: Content
+    ) throws -> AtlasLockedPublicShellActions {
+        let child = Mirror(reflecting: view).children.first {
+            $0.label == "publicShellActions"
+        }
+        return try XCTUnwrap(
+            child?.value as? AtlasLockedPublicShellActions
+        )
+    }
+
     private static func source(named name: String) throws -> String {
         try String(
             contentsOf: appleRoot()
@@ -150,5 +217,17 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+}
+
+private actor RootActionRecorder {
+    private var unlockRequests = 0
+
+    func recordUnlockRequest() {
+        unlockRequests += 1
+    }
+
+    func unlockRequestCount() -> Int {
+        unlockRequests
     }
 }
