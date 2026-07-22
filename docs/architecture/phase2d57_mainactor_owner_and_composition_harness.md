@@ -116,7 +116,10 @@ and serial host delivery are preserved.
 
 `stop()` marks the forwarder terminal, cancels its retained task, and awaits
 that exact task. A callback already executing may delay stop; it cannot outlive
-completed stop. Restart is rejected.
+completed stop. Natural stream completion and `.willTerminate` mark forwarding
+terminal but retain the completed task handle until explicit stop joins and
+clears it. This closes the completion window in which terminal state could
+otherwise become visible before task completion. Restart is rejected.
 
 ## 19. Will-Terminate Behavior
 
@@ -234,7 +237,10 @@ the retained operation. After every retained-task await, a successful outcome
 is accepted only while startup still owns the lifetime or has committed the
 started lifetime. If terminal stop has moved the harness to stopping or
 stopped, both the initiating caller and every joining caller receive the fixed
-stopped error instead of observing a stale successful start.
+stopped error instead of observing a stale successful start. Explicit terminal
+intent is retained separately from a normal startup failure, so a retained
+start that fails because stop won also reports stopped, while an ordinary
+startup failure continues to report the fixed start-unavailable error.
 
 ## 38. Start Failure
 
@@ -348,16 +354,19 @@ before task launch and replaced a tautological shared-root assertion with
 observable owner-state and delegated-action evidence. Later cycles proved that
 startup failure drains both host and lifecycle work, and that terminal stop
 wins over late successful results for both initiating and joining start
-callers.
+callers. The final review cycle additionally proved that stop-induced failed
+start outcomes preserve terminal semantics and that a naturally completed
+lifecycle task remains retained until explicit stop drains it.
 
 ## 55. Test Coverage
 
 Coverage includes initial privacy, ordinary and exact fenced generations,
 stale suspended resets, observer publication, real host start/stop/termination,
 serial lifecycle order, race-free subscription readiness, stream completion,
-stop drain, concurrent start/stop, failure cleanup, URL and policy validation,
-zero-call assembly, no-vault integration, shared owner/action roots, and
-app-entry/source guards.
+stop drain including the task-completion boundary, concurrent start/stop for
+both successful and failed retained starts, failure cleanup, URL and policy
+validation, zero-call assembly, no-vault integration, shared owner/action
+roots, and app-entry/source guards.
 
 ## 56. Go/No-Go Update
 

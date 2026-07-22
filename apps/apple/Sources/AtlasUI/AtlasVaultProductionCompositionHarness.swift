@@ -110,6 +110,10 @@ public actor AtlasVaultProductionLifecycleForwarder:
         return false
     }
 
+    func hasRetainedForwardingTaskForTesting() -> Bool {
+        forwardingTask != nil
+    }
+
     func waitUntilTerminalForTesting() async {
         guard !isTerminal() else {
             return
@@ -139,7 +143,6 @@ public actor AtlasVaultProductionLifecycleForwarder:
         switch state {
         case .starting(identifier), .active(identifier):
             state = .terminal
-            forwardingTask = nil
             resumeStartWaiters(with: false)
             resumeTerminalWaiters()
         case .inactive, .terminal, .starting, .active:
@@ -356,6 +359,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
     private var terminalState: AtlasLockedShellUnlockFlowState?
+    private var terminalStopRequested = false
     private var stoppingWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
@@ -469,6 +473,7 @@ public final class AtlasVaultProductionCompositionHarness:
     }
 
     public func stop() async -> AtlasLockedShellUnlockFlowState {
+        terminalStopRequested = true
         if let stopOperation {
             return await stopOperation.task.value
         }
@@ -542,6 +547,9 @@ public final class AtlasVaultProductionCompositionHarness:
     private func startResultAfterAwait(
         _ result: StartOutcome
     ) throws -> AtlasLockedShellUnlockFlowState {
+        guard !terminalStopRequested else {
+            throw AtlasVaultProductionCompositionError.stopped
+        }
         if case .started = result {
             switch lifetime {
             case .starting, .started:
@@ -556,6 +564,9 @@ public final class AtlasVaultProductionCompositionHarness:
     private func startResultAfterOperation(
         _ result: StartOutcome
     ) throws -> AtlasLockedShellUnlockFlowState {
+        guard !terminalStopRequested else {
+            throw AtlasVaultProductionCompositionError.stopped
+        }
         if case .started = result {
             guard case .started = lifetime else {
                 throw AtlasVaultProductionCompositionError.stopped

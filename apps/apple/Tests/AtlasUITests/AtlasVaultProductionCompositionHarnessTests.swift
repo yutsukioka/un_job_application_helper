@@ -148,6 +148,26 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await forwarder.stop()
     }
 
+    func testForwarderRetainsTerminalTaskUntilStopDrainsIt() async {
+        let source = HarnessLifecycleSource()
+        let forwarder = AtlasVaultProductionLifecycleForwarder(
+            source: source,
+            host: HarnessHostFake()
+        )
+
+        await harnessExpectTrue(await forwarder.start())
+        await source.finish()
+        await forwarder.waitUntilTerminalForTesting()
+        await harnessExpectTrue(
+            await forwarder.hasRetainedForwardingTaskForTesting()
+        )
+
+        await forwarder.stop()
+        await harnessExpectFalse(
+            await forwarder.hasRetainedForwardingTaskForTesting()
+        )
+    }
+
     func testForwarderHandlesStreamCompletionAndWillTerminateTerminally()
         async
     {
@@ -294,6 +314,48 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         let stoppedState = await stop.value
         XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
         await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    @MainActor
+    func testTerminalStopWinsWhenRetainedStartFailsForAllCallers() async {
+        let source = HarnessLifecycleSource()
+        let startGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            startGate: startGate,
+            failStartAfterStop: true
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        let first = Task { @MainActor in try await harness.start() }
+        await startGate.waitUntilEntered(1)
+
+        let joinerEntered = expectation(
+            description: "joining failed start entered"
+        )
+        let second = Task { @MainActor in
+            joinerEntered.fulfill()
+            return try await harness.start()
+        }
+        await fulfillment(of: [joinerEntered], timeout: 1)
+        await Task.yield()
+
+        let stoppedState = await harness.stop()
+        XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+
+        await startGate.release(call: 1)
+        await XCTAssertThrowsErrorAsync(try await first.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
+        await XCTAssertThrowsErrorAsync(try await second.value) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultProductionCompositionError,
+                .stopped
+            )
+        }
     }
 
     func testStartOutcomeChecksTerminalWinnerForBothCallerPaths()
@@ -914,6 +976,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
     private let stopGate: HarnessSuspensionGate?
     private let lifecycleGate: HarnessSuspensionGate?
     private let startFailure: HarnessFakeError?
+    private let failStartAfterStop: Bool
     private let searchFailure: AtlasPublicJobServiceError?
     private var flow = AtlasVaultProductionCompositionHarnessTests
         .lockedFlow(canRequestUnlock: true)
@@ -940,12 +1003,14 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         stopGate: HarnessSuspensionGate? = nil,
         lifecycleGate: HarnessSuspensionGate? = nil,
         startFailure: HarnessFakeError? = nil,
+        failStartAfterStop: Bool = false,
         searchFailure: AtlasPublicJobServiceError? = nil
     ) {
         self.startGate = startGate
         self.stopGate = stopGate
         self.lifecycleGate = lifecycleGate
         self.startFailure = startFailure
+        self.failStartAfterStop = failStartAfterStop
         self.searchFailure = searchFailure
     }
 
@@ -956,6 +1021,9 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         }
         if let startFailure {
             throw startFailure
+        }
+        if failStartAfterStop, stops > 0 {
+            throw HarnessFakeError.start
         }
         return flow
     }
