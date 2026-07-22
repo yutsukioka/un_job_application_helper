@@ -111,11 +111,25 @@ cannot begin source observation until explicit start activates the source.
 Concurrent start callers share the same starting handshake and return only
 after the one source observation is active.
 
+An explicit nonterminal lock requested during that handshake records one
+host-private deferred lock intent and closes transient admission synchronously.
+It does not advance host generation, change `starting` lifetime, call runtime,
+publish teardown state, or invoke the owner. The lock caller joins the retained
+start operation. A successful start includes the pending intent in its final
+admission calculation, acknowledges and returns a private-free non-interactive
+flow, and only then lets one ordinary barrier consume all concurrent startup
+lock requests. No panel selection can enter between start completion and that
+barrier because actor admission remains closed. Caller cancellation does not
+erase the host-owned intent. A failed start clears the intent without running a
+barrier against an inactive pipeline.
+
 If terminal stop arrives during that handshake, stop first marks lifetime as
 stopping and then joins the retained start operation. A successfully started
 pipeline is finished through the terminal barrier; if the handshake never
 started or failed, stop reaches the conservative locked terminal state without
-publishing through an inactive pipeline.
+publishing through an inactive pipeline. Terminal intent also clears and
+dominates any deferred nonterminal lock, whose callers join terminal teardown
+instead of starting a later ordinary barrier.
 
 The intended ready shell is sent to the owner while actor admission is still
 closed. Only after the owner acknowledgement and generation check succeed does
@@ -329,12 +343,16 @@ the ready shell while admission is still closed, then atomically reopens it.
 ## 27. Explicit Lock
 
 `lock()` is explicit and coalesces with an in-flight barrier. It closes
-admission and advances generation before its first await, contains active unlock
-work, commands runtime lock as needed, notifies the controller, and completes
-both presentation acknowledgements. It has no admission-open runtime-status fast
-path; an already-locked runtime follows the same private-free barrier without an
-unnecessary lock command. Public search state is preserved. Controller and
-selected identifier are cleared only after barrier success.
+admission before its first await. During `started` or `reconciling` lifetime it
+retains the reviewed generation advance and private-free barrier behavior:
+active unlock work is contained, runtime is locked as needed, the controller is
+notified, and both presentation acknowledgements complete. During `starting`,
+the deferred-intent policy in section 8 applies instead; no generation or
+barrier work begins until successful startup. It has no admission-open
+runtime-status fast path; an already-locked runtime follows the same
+private-free barrier without an unnecessary lock command. Public search state
+is preserved. Controller and selected identifier are cleared only after
+barrier success.
 
 ## 28. Lifecycle Event Handling
 
@@ -482,8 +500,15 @@ non-nil private state.
 ## 35. Presentation Sequencing
 
 Accepted publications receive monotonically increasing private sequence values.
-The source retains at most the newest undelivered update. Multiple subscribers
-use the existing observable adapter's newest-value buffering. Subscriber
+The source retains at most the newest undelivered update. When a newer update
+replaces an occupied one-slot buffer, the source removes every acknowledgement
+waiter for the overwritten sequence and resumes each exactly once with `false`.
+The overwritten update is never delivered later; the new buffered update
+remains eligible for delivery. Because `sendAndWait()` and `enqueue(_:)` run on
+the same source actor, the earlier call registers its acknowledgement
+continuation before a later enqueue can supersede it. No failed-sequence set,
+pending-update array, or unbounded queue is needed. Multiple subscribers use
+the existing observable adapter's newest-value buffering. Subscriber
 cancellation removes only that subscriber. The host grants one FIFO publication
 permit at a time across the pipeline and MainActor owner reset. This prevents
 reentrant public-shell updates from overtaking owner acknowledgements while
@@ -516,6 +541,13 @@ Publication waits until the observable adapter has consumed the sequence. The
 pipeline then verifies that the adapter's current snapshot equals the intended
 private-free snapshot. Rejected private payloads are not sanitized and emitted;
 they fail at wrapper construction and leave current state unchanged.
+
+Intentional one-slot supersession is a negative acknowledgement, not an
+acknowledgement timeout. Overwrite removes old waiters before resuming them
+`false` and does not advance `acknowledgedSequence`; that value advances only
+when the observation requests its next update after actual delivery. Successive
+overwrites therefore terminate every older publisher while preserving the
+latest buffered publisher until delivery, finish, or observation invalidation.
 
 Terminal source finish drains activation, observation-start, sequence, delivery,
 and acknowledgement waiters exactly once. Wait helpers called after finish
@@ -673,6 +705,18 @@ checked-continuation gates to retain current and multiple superseded tasks,
 prove current-result authority remains separate, and verify all cancellation
 requests precede terminal draining without sleeps.
 
+Cycle 18 captured both final exact-head findings before production changes. A
+presentation-start gate proved that explicit lock changed lifetime/generation
+and made an otherwise successful start return `.stopped`. A real pipeline with
+delivery suspended proved that replacing the buffered update left the older
+publisher pending until the deadlock watchdog. Permanent regressions suspend
+presentation start, snapshot restore, initial publication, and owner reset;
+cover concurrent locks, caller cancellation, start failure, and terminal-stop
+dominance; and prove no selector or runtime work enters early. Pipeline
+regressions cover two and many successive overwrites, subscriber delivery of
+only the newest buffered snapshot, monotonic sequence accounting, normal
+delivery, and finish-time waiter release while preserving the one-slot bound.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -749,6 +793,16 @@ vault-lock independence. Source guards require a private retained-operation
 registry, distinct current marker, cancel-all-before-await loops, and reject
 detached cleanup, timeout abandonment, and hidden result storage. Cycle 16
 query/result/cache coherence remains unchanged.
+Cycle 18 adds gated startup-lock coverage at every start suspension seam. It
+proves the deferred intent closes admission without changing start generation
+or lifetime, successful start returns non-interactive, concurrent callers share
+one post-start barrier, terminal stop wins, failed start invokes no inactive
+barrier, and caller cancellation cannot create an admission window. Real
+pipeline coverage proves overwritten publishers return `false`, waiter entries
+are removed before resumption, multiple overwrites all terminate, the newest
+buffer remains deliverable to current state and subscribers, finish releases
+the final publisher, acknowledged sequence advances only through delivery, and
+no update queue replaces bounded newest-value buffering.
 The exact allowlist is derived from the tracked test file's path-introduction
 history plus current tracked and untracked changes, without a bounded log scan
 or commit-subject dependency. Distinct test/document introductions identify an
@@ -775,6 +829,10 @@ Apple platforms, so the iOS test target has no compiled `Process` path.
 - Cross-platform factory tests: Git/`Process` inspection is macOS-only and
   explicitly skipped elsewhere.
 - Post-success cancel/disappearance reconciliation: implemented symmetrically.
+- Explicit lock during startup: deferred, admission-closing, start-preserving,
+  coalesced, and terminal-stop dominated.
+- Buffered publication acknowledgements: overwritten sequences fail `false`
+  while one-slot newest-value delivery remains bounded.
 - Owner-reset acknowledgement seam: implemented and testable.
 - Concrete MainActor presentation owner: not implemented.
 - Production composition root: not implemented.

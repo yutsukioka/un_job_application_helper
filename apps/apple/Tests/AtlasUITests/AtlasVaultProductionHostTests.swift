@@ -188,6 +188,197 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testPipelineBufferedOverwriteFailsSupersededPublisherAndDeliversNewest()
+        async throws
+    {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        await pipeline.suspendDeliveryForTesting()
+        let activating = try privateFreeSnapshot(.activating)
+        let unlocked = try privateFreeSnapshot(.unlocked)
+        let firstCompleted = expectation(
+            description: "overwritten publication completes"
+        )
+        let first = Task {
+            let result = await pipeline.publish(activating)
+            firstCompleted.fulfill()
+            return result
+        }
+        await pipeline.waitUntilSequenceForTesting(1)
+        let newest = Task {
+            await pipeline.publish(unlocked)
+        }
+        await pipeline.waitUntilSequenceForTesting(2)
+
+        await fulfillment(of: [firstCompleted], timeout: 0.5)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            0
+        )
+        await expectEqual(
+            await pipeline.currentSnapshot().status,
+            .locked
+        )
+
+        await pipeline.resumeDeliveryForTesting()
+        await expectFalse(await first.value)
+        await expectTrue(await newest.value)
+        await expectEqual(
+            await pipeline.currentSnapshot().status,
+            .unlocked
+        )
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            2
+        )
+        await expectTrue(await pipeline.finish())
+    }
+
+    func testPipelineSuccessiveBufferedOverwritesFailEverySupersededPublisher()
+        async throws
+    {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        let subscription = await pipeline.subscribe()
+        var iterator = subscription.snapshots.makeAsyncIterator()
+        await expectEqual((await iterator.next())?.status, .locked)
+        await pipeline.suspendDeliveryForTesting()
+        let activating = try privateFreeSnapshot(.activating)
+        let locking = try privateFreeSnapshot(.locking)
+        let unlocked = try privateFreeSnapshot(.unlocked)
+        let firstCompleted = expectation(description: "first superseded")
+        let secondCompleted = expectation(description: "second superseded")
+        let first = Task {
+            let result = await pipeline.publish(activating)
+            firstCompleted.fulfill()
+            return result
+        }
+        await pipeline.waitUntilSequenceForTesting(1)
+        let second = Task {
+            let result = await pipeline.publish(locking)
+            secondCompleted.fulfill()
+            return result
+        }
+        await pipeline.waitUntilSequenceForTesting(2)
+        let newest = Task {
+            await pipeline.publish(unlocked)
+        }
+        await pipeline.waitUntilSequenceForTesting(3)
+
+        await fulfillment(
+            of: [firstCompleted, secondCompleted],
+            timeout: 0.5
+        )
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            0
+        )
+
+        await pipeline.resumeDeliveryForTesting()
+        await expectFalse(await first.value)
+        await expectFalse(await second.value)
+        await expectTrue(await newest.value)
+        await expectEqual(await pipeline.latestSequenceForTesting(), 3)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            3
+        )
+        await expectEqual(
+            await pipeline.currentSnapshot().status,
+            .unlocked
+        )
+        await expectEqual((await iterator.next())?.status, .unlocked)
+        await subscription.cancel()
+        await expectTrue(await pipeline.finish())
+    }
+
+    func testPipelineBufferedOverwriteStressTerminatesAllPublishersBoundedly()
+        async throws
+    {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        await pipeline.suspendDeliveryForTesting()
+        let snapshots = try (0..<12).map { index in
+            try privateFreeSnapshot(index.isMultiple(of: 2) ? .activating : .locking)
+        }
+        var tasks: [Task<Bool, Never>] = []
+        var superseded: [XCTestExpectation] = []
+
+        for (index, snapshot) in snapshots.enumerated() {
+            let completion: XCTestExpectation?
+            if index == snapshots.count - 1 {
+                completion = nil
+            } else {
+                let expectation = expectation(
+                    description: "superseded sequence \(index + 1)"
+                )
+                superseded.append(expectation)
+                completion = expectation
+            }
+            tasks.append(Task {
+                let result = await pipeline.publish(snapshot)
+                completion?.fulfill()
+                return result
+            })
+            await pipeline.waitUntilSequenceForTesting(UInt64(index + 1))
+        }
+
+        await fulfillment(of: superseded, timeout: 0.5)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            0
+        )
+        await pipeline.resumeDeliveryForTesting()
+        for task in tasks.dropLast() {
+            await expectFalse(await task.value)
+        }
+        await expectTrue(await tasks.last?.value ?? false)
+        await expectEqual(await pipeline.latestSequenceForTesting(), 12)
+        await expectEqual(
+            await pipeline.acknowledgedSequenceForTesting(),
+            12
+        )
+        await expectTrue(await pipeline.finish())
+    }
+
+    func testPipelineFinishFailsNewestBufferedPublisherAfterSupersession()
+        async throws
+    {
+        let pipeline = AtlasVaultProductionPresentationPipeline()
+        await expectTrue(await pipeline.start())
+        await pipeline.suspendDeliveryForTesting()
+        let activating = try privateFreeSnapshot(.activating)
+        let locking = try privateFreeSnapshot(.locking)
+        let firstCompleted = expectation(description: "superseded before finish")
+        let first = Task {
+            let result = await pipeline.publish(activating)
+            firstCompleted.fulfill()
+            return result
+        }
+        await pipeline.waitUntilSequenceForTesting(1)
+        let newest = Task {
+            await pipeline.publish(locking)
+        }
+        await pipeline.waitUntilSequenceForTesting(2)
+
+        await fulfillment(of: [firstCompleted], timeout: 0.5)
+        await expectTrue(await pipeline.finish())
+        await expectFalse(await first.value)
+        await expectFalse(await newest.value)
+        await expectEqual(
+            await pipeline.currentSnapshot(),
+            AtlasVaultPresentationSnapshot(
+                status: .locked,
+                privateState: nil
+            )
+        )
+        await expectFalse(
+            await pipeline.publish(
+                try privateFreeSnapshot(.unlocked)
+            )
+        )
+    }
+
     func testPipelineSubscribersCancellationAndNewestValueBuffering() async throws {
         let pipeline = AtlasVaultProductionPresentationPipeline()
         await expectTrue(await pipeline.start())
@@ -430,6 +621,195 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await assertStartPresentationFailure(ownerFailure.host)
         _ = await ownerFailure.host.requestUnlockPanel()
         await expectEqual(await ownerFailure.selector.selectCount(), 0)
+    }
+
+    func testLockDuringSuspendedPresentationStartDefersUntilStartSucceeds()
+        async throws
+    {
+        let startGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            presentationStartGate: startGate
+        )
+        let start = Task { await captureStart(graph.host) }
+        await startGate.waitUntilEntered()
+        let lock = Task { await graph.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await expectFalse(
+            (await graph.host.currentFlowState())
+                .publicShell.canRequestUnlock
+        )
+        _ = await graph.host.requestUnlockPanel()
+        await expectEqual(await graph.selector.selectCount(), 0)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+
+        await startGate.release()
+        let started = try await start.value.get()
+        await expectFalse(started.publicShell.canRequestUnlock)
+        await expectEqual(started.mode, .lockedPublic)
+        let locked = await lock.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testLockDuringSuspendedSnapshotRestorePreservesRestoredPublicState()
+        async throws
+    {
+        let restoreGate = HostSuspensionGate()
+        let snapshot = try makeSnapshot(jobID: "FAKE_DEFERRED_LOCK_SNAPSHOT")
+        let graph = try makeGraph(
+            snapshot: .success(snapshot),
+            snapshotGate: restoreGate
+        )
+        let start = Task { await captureStart(graph.host) }
+        await restoreGate.waitUntilEntered()
+        let lock = Task { await graph.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        await expectEqual(await graph.runtime.totalCalls(), 0)
+        await restoreGate.release()
+        let started = try await start.value.get()
+        await expectFalse(started.publicShell.canRequestUnlock)
+        await expectEqual(started.publicShell.publicJobs, snapshot.jobs)
+        let locked = await lock.value
+        await expectEqual(locked.publicShell.publicJobs, snapshot.jobs)
+        await expectEqual(locked.publicShell.cacheFreshness, .stale)
+    }
+
+    func testCallerCancellationDoesNotDiscardDeferredStartupLockIntent()
+        async throws
+    {
+        let startGate = HostSuspensionGate()
+        let graph = try makeGraph(presentationStartGate: startGate)
+        let start = Task { await captureStart(graph.host) }
+        await startGate.waitUntilEntered()
+        let lock = Task { await graph.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        lock.cancel()
+        await startGate.release()
+
+        let started = try await start.value.get()
+        await expectFalse(started.publicShell.canRequestUnlock)
+        let locked = await lock.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(await graph.runtime.totalCalls(), 2)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+    }
+
+    func testLockDuringInitialPublicationOrOwnerResetDoesNotFailStart()
+        async throws
+    {
+        for suspension in ["pipeline", "owner"] {
+            let gate = HostSuspensionGate()
+            let graph = try makeGraph(
+                selection: .success(.selected(try selectedVaultID()))
+            )
+            if suspension == "pipeline" {
+                await graph.presentation.setPublishGate(gate)
+            } else {
+                await graph.owner.setGate(
+                    gate,
+                    whenCanRequestUnlock: true
+                )
+            }
+            let start = Task { await captureStart(graph.host) }
+            await gate.waitUntilEntered()
+            let lock = Task { await graph.host.lock() }
+            for _ in 0..<8 {
+                await Task.yield()
+            }
+
+            await expectEqual(await graph.runtime.totalCalls(), 0)
+            await expectFalse(
+                (await graph.host.currentFlowState())
+                    .publicShell.canRequestUnlock
+            )
+            _ = await graph.host.requestUnlockPanel()
+            await expectEqual(await graph.selector.selectCount(), 0)
+            await gate.release()
+
+            let started = try await start.value.get()
+            await expectFalse(started.publicShell.canRequestUnlock)
+            await expectEqual((await lock.value).mode, .lockedPublic)
+            await expectEqual(await graph.selector.selectCount(), 0)
+            await expectEqual(
+                await graph.owner.latestCanRequestUnlock(),
+                true
+            )
+        }
+    }
+
+    func testConcurrentLocksDuringStartCoalesceAndTerminalStopDominates()
+        async throws
+    {
+        let coalescedGate = HostSuspensionGate()
+        let coalesced = try makeGraph(
+            presentationStartGate: coalescedGate
+        )
+        let coalescedStart = Task { await captureStart(coalesced.host) }
+        await coalescedGate.waitUntilEntered()
+        let firstLock = Task { await coalesced.host.lock() }
+        let secondLock = Task { await coalesced.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        await coalescedGate.release()
+
+        let started = try await coalescedStart.value.get()
+        await expectFalse(started.publicShell.canRequestUnlock)
+        _ = await firstLock.value
+        _ = await secondLock.value
+        await expectEqual(await coalesced.runtime.totalCalls(), 2)
+
+        let stopGate = HostSuspensionGate()
+        let stopped = try makeGraph(presentationStartGate: stopGate)
+        let stoppedStart = Task { await captureStart(stopped.host) }
+        await stopGate.waitUntilEntered()
+        let deferredLock = Task { await stopped.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        let stop = Task { await stopped.host.stop() }
+        await stopGate.release()
+
+        await expectEqual(await stoppedStart.value, .failure(.stopped))
+        await expectEqual((await deferredLock.value).mode, .lockedPublic)
+        await expectEqual((await stop.value).mode, .lockedPublic)
+        await expectEqual(await stopped.presentation.finishCount(), 1)
+        await assertStartStopped(stopped.host)
+    }
+
+    func testFailedStartConsumesDeferredLockWithoutInactivePipelineBarrier()
+        async throws
+    {
+        let publicationGate = HostSuspensionGate()
+        let graph = try makeGraph()
+        await graph.presentation.setPublishResults([false])
+        await graph.presentation.setPublishGate(publicationGate)
+        let start = Task { await captureStart(graph.host) }
+        await publicationGate.waitUntilEntered()
+        let lock = Task { await graph.host.lock() }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        await publicationGate.release()
+
+        await expectEqual(
+            await start.value,
+            .failure(.presentationUnavailable)
+        )
+        let locked = await lock.value
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectFalse(locked.publicShell.canRequestUnlock)
+        await expectEqual(await graph.runtime.totalCalls(), 0)
     }
 
     func testPublicSearchUpdatesShellWithoutPrivateDependencies() async throws {
@@ -2897,6 +3277,58 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let host = try source(named: "AtlasVaultProductionHost.swift")
         await expectTrue(host.contains("beginTerminalStop()"))
         await expectTrue(host.contains("terminalBarrierRequested"))
+        await expectTrue(
+            host.contains("explicitLockRequestedDuringStart")
+        )
+        await expectTrue(
+            host.contains("awaitDeferredExplicitLock")
+        )
+        guard let lockStart = host.range(of: "public func lock()"),
+              let lifecycleStart = host.range(
+                  of: "public func handleLifecycleEvent",
+                  range: lockStart.upperBound..<host.endIndex
+              ) else {
+            XCTFail("Host lock source boundary is required")
+            return
+        }
+        let lockSource = String(
+            host[lockStart.lowerBound..<lifecycleStart.lowerBound]
+        )
+        guard let normalLockPath = lockSource.range(
+            of: "case .started, .reconciling:"
+        ) else {
+            XCTFail("Starting lock must have an explicit deferred branch")
+            return
+        }
+        let startingLockPath = String(
+            lockSource[..<normalLockPath.lowerBound]
+        )
+        await expectTrue(
+            startingLockPath.contains("explicitLockRequestedDuringStart = true")
+        )
+        await expectTrue(
+            startingLockPath.contains("awaitDeferredExplicitLock")
+        )
+        await expectFalse(startingLockPath.contains("advanceGeneration()"))
+        await expectFalse(
+            startingLockPath.contains("runPrivateFreeBarrier")
+        )
+        guard let performStart = host.range(of: "private func performStart()"),
+              let performStop = host.range(
+                  of: "private func performStop()",
+                  range: performStart.upperBound..<host.endIndex
+              ) else {
+            XCTFail("Host start source boundary is required")
+            return
+        }
+        let startSource = String(
+            host[performStart.lowerBound..<performStop.lowerBound]
+        )
+        await expectTrue(
+            startSource.components(
+                separatedBy: "&& !explicitLockRequestedDuringStart"
+            ).count >= 3
+        )
         for forbidden in [
             "privateState(",
             "AtlasVaultPrivateStateSnapshot",
@@ -2941,6 +3373,41 @@ final class AtlasVaultProductionHostTests: XCTestCase {
 
         let pipeline = try source(
             named: "AtlasVaultProductionPresentationPipeline.swift"
+        )
+        await expectTrue(
+            pipeline.contains("failAcknowledgementWaiters")
+        )
+        await expectFalse(
+            pipeline.contains("[AtlasVaultPresentationUpdate]")
+        )
+        guard let enqueueStart = pipeline.range(
+            of: "private func enqueue(_ update:"
+        ),
+        let activationStart = pipeline.range(
+            of: "private func waitUntilActivated()",
+            range: enqueueStart.upperBound..<pipeline.endIndex
+        ) else {
+            XCTFail("Pipeline enqueue source boundary is required")
+            return
+        }
+        let enqueueSource = String(
+            pipeline[enqueueStart.lowerBound..<activationStart.lowerBound]
+        )
+        guard let failWaiters = enqueueSource.range(
+            of: "failAcknowledgementWaiters"
+        ),
+        let replaceBuffer = enqueueSource.range(
+            of: "bufferedUpdate = update"
+        ) else {
+            XCTFail("Buffered overwrite must fail the prior sequence")
+            return
+        }
+        await expectTrue(failWaiters.lowerBound < replaceBuffer.lowerBound)
+        await expectTrue(
+            enqueueSource.contains("removeValue(\n            forKey: sequence")
+        )
+        await expectTrue(
+            enqueueSource.contains("waiter.resume(returning: false)")
         )
         for forbidden in [
             "SwiftUI",

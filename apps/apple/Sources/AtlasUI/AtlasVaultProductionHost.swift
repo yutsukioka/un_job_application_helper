@@ -154,6 +154,7 @@ public actor AtlasVaultProductionHost:
     private var safeLifecycleCheckRevision: UInt64?
     private var safeLifecycleCheckWaiters: [CheckedContinuation<Void, Never>] = []
     private var isTerminated = false
+    private var explicitLockRequestedDuringStart = false
     private var restoreAttempted = false
     private var presentationWasStarted = false
     private var selectedVaultID: AtlasSelectedVaultID?
@@ -213,6 +214,7 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
         if lifetime == .inactive, !presentationWasStarted {
+            explicitLockRequestedDuringStart = false
             closeUnlockAdmission()
             lifetime = .stopped
             return flowState()
@@ -608,11 +610,21 @@ public actor AtlasVaultProductionHost:
     }
 
     public func lock() async -> AtlasLockedShellUnlockFlowState {
-        guard lifetime != .stopped, lifetime != .stopping else {
+        switch lifetime {
+        case .stopped, .stopping:
             return flowState()
-        }
-        guard lifetime != .inactive else {
+        case .inactive:
             return flowState()
+        case .starting:
+            explicitLockRequestedDuringStart = true
+            closeUnlockAdmission()
+            guard let startOperation else {
+                explicitLockRequestedDuringStart = false
+                return flowState()
+            }
+            return await awaitDeferredExplicitLock(startOperation)
+        case .started, .reconciling:
+            break
         }
         if let barrierOperation {
             return await barrierOperation.task.value
@@ -810,6 +822,7 @@ public actor AtlasVaultProductionHost:
             }
 
             let mayOpen = startAdmissionPermitted
+                && !explicitLockRequestedDuringStart
             let startedShell = shellReplacingCanRequestUnlock(mayOpen)
             let startedState = flowState(publicShell: startedShell)
             let finalPublication = await publishAndReset(
@@ -829,8 +842,10 @@ public actor AtlasVaultProductionHost:
             case .failed:
                 return failStartForPresentation()
             }
+            let currentMayOpen = startAdmissionPermitted
+                && !explicitLockRequestedDuringStart
             guard safeLifecycleCheckRevision == nil,
-                  startAdmissionPermitted == mayOpen else {
+                  currentMayOpen == mayOpen else {
                 continue
             }
 
@@ -881,6 +896,73 @@ public actor AtlasVaultProductionHost:
         if startOperation?.id == operation.id {
             startOperation = nil
         }
+    }
+
+    private func awaitDeferredExplicitLock(
+        _ operation: StartOperation
+    ) async -> AtlasLockedShellUnlockFlowState {
+        let startResult = await operation.task.value
+        if startOperation?.id == operation.id {
+            startOperation = nil
+        }
+
+        guard case .success = startResult else {
+            switch lifetime {
+            case .stopping:
+                if let stopOperation {
+                    return await stopOperation.task.value
+                }
+                if let barrierOperation {
+                    return await barrierOperation.task.value
+                }
+            case .stopped, .inactive, .starting, .started, .reconciling:
+                break
+            }
+            return flowState()
+        }
+
+        switch lifetime {
+        case .stopping:
+            explicitLockRequestedDuringStart = false
+            if let stopOperation {
+                return await stopOperation.task.value
+            }
+            if let barrierOperation {
+                return await barrierOperation.task.value
+            }
+            return flowState()
+        case .stopped:
+            explicitLockRequestedDuringStart = false
+            return flowState()
+        case .inactive:
+            explicitLockRequestedDuringStart = false
+            closeUnlockAdmission()
+            return flowState()
+        case .starting:
+            explicitLockRequestedDuringStart = false
+            closeUnlockAdmission()
+            return flowState()
+        case .reconciling:
+            explicitLockRequestedDuringStart = false
+            if let barrierOperation {
+                return await barrierOperation.task.value
+            }
+            return flowState()
+        case .started:
+            break
+        }
+
+        guard explicitLockRequestedDuringStart else {
+            if let barrierOperation {
+                return await barrierOperation.task.value
+            }
+            return flowState()
+        }
+
+        explicitLockRequestedDuringStart = false
+        closeUnlockAdmission()
+        _ = advanceGeneration()
+        return await runPrivateFreeBarrier(terminal: false)
     }
 
     private func finishSubmit(
@@ -1854,6 +1936,7 @@ public actor AtlasVaultProductionHost:
     }
 
     private func beginTerminalStop() {
+        explicitLockRequestedDuringStart = false
         lifetime = .stopping
         invalidateSafeLifecycleCheck()
         closeUnlockAdmission()
@@ -1868,6 +1951,7 @@ public actor AtlasVaultProductionHost:
         if lifetime == .stopping || lifetime == .stopped {
             return .failure(.stopped)
         }
+        explicitLockRequestedDuringStart = false
         lifetime = .inactive
         return .failure(.presentationUnavailable)
     }

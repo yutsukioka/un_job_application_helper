@@ -154,12 +154,26 @@ private actor AtlasVaultProductionPresentationUpdateSource:
 
     private func enqueue(_ update: AtlasVaultPresentationUpdate) {
         guard !deliverySuspended, let pendingNext else {
+            if let overwritten = bufferedUpdate {
+                failAcknowledgementWaiters(
+                    for: overwritten.sequence
+                )
+            }
             bufferedUpdate = update
             return
         }
         self.pendingNext = nil
         deliveredSequenceAwaitingAcknowledgement = update.sequence
         pendingNext.resume(returning: update)
+    }
+
+    private func failAcknowledgementWaiters(for sequence: UInt64) {
+        let waiters = acknowledgementWaiters.removeValue(
+            forKey: sequence
+        ) ?? []
+        for waiter in waiters {
+            waiter.resume(returning: false)
+        }
     }
 
     private func waitUntilActivated() async -> Bool {
