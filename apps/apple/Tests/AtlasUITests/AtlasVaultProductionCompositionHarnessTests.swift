@@ -481,6 +481,25 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         XCTAssertTrue(source.contains("hasTerminalLifecycleIntent()"))
     }
 
+    func testStoppingWaiterTreatsAlreadyStoppedAsTerminal() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let start = try XCTUnwrap(
+            source.range(of: "func waitUntilStoppingForTesting() async {")
+        )
+        let end = try XCTUnwrap(
+            source.range(
+                of: "func waitUntilLifecycleTerminationForTesting() async {",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let waiter = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(waiter.contains("case .stopping, .stopped:"))
+        XCTAssertFalse(waiter.contains("guard lifetime != .stopping"))
+    }
+
     @MainActor
     func testHarnessStartFailureStopsForwardingAndLeavesPrivateFreeOwner()
         async

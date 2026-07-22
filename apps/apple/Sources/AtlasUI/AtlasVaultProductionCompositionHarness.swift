@@ -545,8 +545,11 @@ public final class AtlasVaultProductionCompositionHarness:
     }
 
     func waitUntilStoppingForTesting() async {
-        guard lifetime != .stopping else {
+        switch lifetime {
+        case .stopping, .stopped:
             return
+        case .inactive, .starting, .started:
+            break
         }
         await withCheckedContinuation { continuation in
             stoppingWaiters.append(continuation)

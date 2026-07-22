@@ -369,7 +369,10 @@ review added a deterministic terminal-lifecycle/start race, canonicalized the
 integration-test temporary root, and made owner test-gate waiter removal use a
 copied key array rather than mutating a dictionary during key iteration. The
 next exact-head cycle also proved that an in-flight terminal lifecycle event
-which makes retained host start fail remains a terminal stopped outcome.
+which makes retained host start fail remains a terminal stopped outcome. A
+test-only stopping waiter treats both stopping and already-stopped lifetimes as
+terminal, preventing deterministic race probes from suspending after teardown
+has already completed.
 
 ## 55. Test Coverage
 
@@ -381,7 +384,8 @@ both successful and failed retained starts, failure cleanup, URL and policy
 validation, lifecycle termination during retained host start, zero-call
 assembly, no-vault integration from a canonical temporary root, shared
 owner/action roots, terminal lifecycle failures during retained start, safe
-deterministic suspension gates, and app-entry/source guards.
+deterministic suspension gates including the already-stopped waiter boundary,
+and app-entry/source guards.
 
 ## 56. Go/No-Go Update
 
