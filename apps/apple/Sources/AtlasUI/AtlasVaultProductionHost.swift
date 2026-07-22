@@ -1387,14 +1387,18 @@ public actor AtlasVaultProductionHost:
         let lockedPresentationStatus: AtlasVaultPresentationStatus =
             preservesNoVault ? .noVault : .locked
         closeUnlockAdmission()
-        _ = advanceGeneration()
+        let reconciliationGeneration: AtlasVaultProductionHostGeneration
+        if terminal {
+            reconciliationGeneration = operationGeneration
+        } else {
+            reconciliationGeneration = advanceGeneration()
+        }
         unlockState = AtlasVaultUnlockPresentationState(
             capabilities: .currentProduction,
             selectedMethod: nil,
             status: .hostReconciliationRequired
         )
         isUnlockPanelPresented = true
-        let reconciliationGeneration = generation
         let reconciliationPublication = await publishAndReset(
             status: .locking,
             expectedGeneration: reconciliationGeneration

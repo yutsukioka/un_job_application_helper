@@ -3197,10 +3197,93 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await assertStartStopped(graph.host)
     }
 
+    func testTerminalStopCommitsExactSupersededOwnerGenerationBeforeAdvancing()
+        async throws
+    {
+        let graph = try makeGraph(
+            ownerRequiresExactSupersededGeneration: true
+        )
+        _ = try await graph.host.start()
+
+        let stopped = await graph.host.stop()
+
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(await graph.owner.supersedeCallCount(), 1)
+        await expectEqual(
+            await graph.owner.committedSupersededResetCount(),
+            1
+        )
+        await expectEqual(
+            await graph.owner.rejectedSupersededResetCount(),
+            0
+        )
+        await expectEqual(await graph.owner.latestMode(), .lockedPublic)
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+        await assertStartStopped(graph.host)
+    }
+
+    func testTerminalStopReplacesUnlockedOwnerStateWithExactSupersedeFence()
+        async throws
+    {
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            runtimeStatus: .unlocked,
+            submitResult: unlockState(.unlocked),
+            ownerRequiresExactSupersededGeneration: true
+        )
+        try await prepareLocalKeyUnlock(graph)
+        await expectEqual(
+            (await graph.host.submitUnlock(.localKey, timeout: nil)).mode,
+            .unlockedTransition
+        )
+        await expectEqual(await graph.owner.latestMode(), .unlockedTransition)
+
+        let stopped = await graph.host.stop()
+
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectEqual(await graph.owner.latestMode(), .lockedPublic)
+        await expectEqual(
+            await graph.owner.committedSupersededResetCount(),
+            1
+        )
+        await expectEqual(
+            await graph.owner.rejectedSupersededResetCount(),
+            0
+        )
+        await expectTrue(await graph.owner.allStatesArePrivateFree())
+        await assertStartStopped(graph.host)
+    }
+
+    func testWillTerminateUsesExactSupersededOwnerGeneration() async throws {
+        let graph = try makeGraph(
+            ownerRequiresExactSupersededGeneration: true
+        )
+        _ = try await graph.host.start()
+
+        let stopped = await graph.host.handleLifecycleEvent(.willTerminate)
+
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectEqual(await graph.owner.supersedeCallCount(), 1)
+        await expectEqual(
+            await graph.owner.committedSupersededResetCount(),
+            1
+        )
+        await expectEqual(
+            await graph.owner.rejectedSupersededResetCount(),
+            0
+        )
+        await expectEqual(await graph.owner.latestMode(), .lockedPublic)
+        await assertStartStopped(graph.host)
+    }
+
     func testTerminalStopSupersedesSuspendedNonterminalBarrier() async throws {
         let hostSource = try source(named: "AtlasVaultProductionHost.swift")
         let ownerGate = HostSuspensionGate()
-        let graph = try makeGraph(runtimeStatus: .unlocked)
+        let graph = try makeGraph(
+            runtimeStatus: .unlocked,
+            ownerRequiresExactSupersededGeneration: true
+        )
         _ = try await graph.host.start()
         await graph.owner.setGate(ownerGate)
 
@@ -3229,6 +3312,14 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await assertStartStopped(graph.host)
         await expectEqual(await graph.presentation.finishCount(), 1)
         await expectEqual(await graph.owner.staleResetCount(), 1)
+        await expectEqual(
+            await graph.owner.committedSupersededResetCount(),
+            1
+        )
+        await expectEqual(
+            await graph.owner.rejectedSupersededResetCount(),
+            0
+        )
         await expectEqual(await graph.owner.latestMode(), .lockedPublic)
     }
 
@@ -3328,6 +3419,25 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             startSource.components(
                 separatedBy: "&& !explicitLockRequestedDuringStart"
             ).count >= 3
+        )
+        guard let barrierStart = host.range(
+            of: "private func performPrivateFreeBarrier"
+        ),
+        let publishCurrentStart = host.range(
+            of: "private func publishCurrentFlow",
+            range: barrierStart.upperBound..<host.endIndex
+        ) else {
+            XCTFail("Host private-free barrier source boundary is required")
+            return
+        }
+        let barrierSource = String(
+            host[barrierStart.lowerBound..<publishCurrentStart.lowerBound]
+        )
+        await expectTrue(
+            barrierSource.contains(
+                "reconciliationGeneration = operationGeneration"
+            ),
+            "The first terminal owner reset must use the superseded generation"
         )
         for forbidden in [
             "privateState(",
@@ -3561,6 +3671,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         cancelGate: HostSuspensionGate? = nil,
         presentationStartGate: HostSuspensionGate? = nil,
         ownerGate: HostSuspensionGate? = nil,
+        ownerRequiresExactSupersededGeneration: Bool = false,
         cancelResult: AtlasVaultUnlockPresentationState =
             unlockState(.cancelled),
         disappearanceResult: AtlasVaultUnlockPresentationState =
@@ -3588,7 +3699,11 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let presentation = HostPresentationFake(
             startGate: presentationStartGate
         )
-        let owner = HostPresentationOwnerFake(gate: ownerGate)
+        let owner = HostPresentationOwnerFake(
+            gate: ownerGate,
+            requiresExactSupersededGeneration:
+                ownerRequiresExactSupersededGeneration
+        )
         let coordinator = HostUnlockCoordinatorFake()
         let controller = HostUnlockControllerFake(
             submitResult: submitResult,
@@ -4409,17 +4524,34 @@ private actor HostPresentationOwnerRecorder {
         gate: HostSuspensionGate
     )?
     private var currentGeneration: AtlasVaultProductionHostGeneration?
+    private let requiresExactSupersededGeneration: Bool
+    private var requiredSupersededGeneration:
+        AtlasVaultProductionHostGeneration?
+    private var supersedeCalls = 0
+    private var committedSupersededResets = 0
+    private var rejectedSupersededResets = 0
     private var staleResets = 0
     private var callWaiters: [CallWaiter] = []
 
-    init(gate: HostSuspensionGate?) {
+    init(
+        gate: HostSuspensionGate?,
+        requiresExactSupersededGeneration: Bool
+    ) {
         nextGate = gate
+        self.requiresExactSupersededGeneration =
+            requiresExactSupersededGeneration
     }
 
     func beginReset(
         state: AtlasLockedShellUnlockFlowState,
         generation: AtlasVaultProductionHostGeneration
-    ) -> (result: Bool, gate: HostSuspensionGate?) {
+    ) -> (accepted: Bool, result: Bool, gate: HostSuspensionGate?) {
+        if requiresExactSupersededGeneration,
+           let requiredSupersededGeneration,
+           generation != requiredSupersededGeneration {
+            rejectedSupersededResets += 1
+            return (false, false, nil)
+        }
         currentGeneration = generation
         let gate: HostSuspensionGate?
         if let admissionGate,
@@ -4432,6 +4564,7 @@ private actor HostPresentationOwnerRecorder {
             nextGate = nil
         }
         return (
+            true,
             results.isEmpty ? true : results.removeFirst(),
             gate
         )
@@ -4446,6 +4579,11 @@ private actor HostPresentationOwnerRecorder {
             staleResets += 1
             return false
         }
+        if result,
+           requiredSupersededGeneration == generation {
+            requiredSupersededGeneration = nil
+            committedSupersededResets += 1
+        }
         states.append(state)
         generations.append(generation)
         resumeCallWaiters()
@@ -4455,7 +4593,11 @@ private actor HostPresentationOwnerRecorder {
     func supersede(
         generation: AtlasVaultProductionHostGeneration
     ) {
+        supersedeCalls += 1
         currentGeneration = generation
+        if requiresExactSupersededGeneration {
+            requiredSupersededGeneration = generation
+        }
     }
 
     func setResults(_ values: [Bool]) {
@@ -4518,6 +4660,18 @@ private actor HostPresentationOwnerRecorder {
         staleResets
     }
 
+    func supersedeCallCount() -> Int {
+        supersedeCalls
+    }
+
+    func committedSupersededResetCount() -> Int {
+        committedSupersededResets
+    }
+
+    func rejectedSupersededResetCount() -> Int {
+        rejectedSupersededResets
+    }
+
     func latestMode() -> AtlasLockedShellUnlockFlowMode? {
         states.last?.mode
     }
@@ -4551,8 +4705,15 @@ private final class HostPresentationOwnerFake:
 {
     private let recorder: HostPresentationOwnerRecorder
 
-    init(gate: HostSuspensionGate? = nil) {
-        recorder = HostPresentationOwnerRecorder(gate: gate)
+    init(
+        gate: HostSuspensionGate? = nil,
+        requiresExactSupersededGeneration: Bool = false
+    ) {
+        recorder = HostPresentationOwnerRecorder(
+            gate: gate,
+            requiresExactSupersededGeneration:
+                requiresExactSupersededGeneration
+        )
     }
 
     @MainActor
@@ -4564,6 +4725,9 @@ private final class HostPresentationOwnerFake:
             state: state,
             generation: generation
         )
+        guard plan.accepted else {
+            return false
+        }
         if let gate = plan.gate {
             await gate.wait()
         }
@@ -4613,6 +4777,18 @@ private final class HostPresentationOwnerFake:
 
     func staleResetCount() async -> Int {
         await recorder.staleResetCount()
+    }
+
+    func supersedeCallCount() async -> Int {
+        await recorder.supersedeCallCount()
+    }
+
+    func committedSupersededResetCount() async -> Int {
+        await recorder.committedSupersededResetCount()
+    }
+
+    func rejectedSupersededResetCount() async -> Int {
+        await recorder.rejectedSupersededResetCount()
     }
 
     func latestMode() async -> AtlasLockedShellUnlockFlowMode? {
