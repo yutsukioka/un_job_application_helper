@@ -1,3 +1,4 @@
+// Phase 2D-56 repository boundary.
 import Foundation
 
 public enum AtlasPublicServiceAvailability:
@@ -464,6 +465,101 @@ public protocol AtlasVaultIDSelecting: Sendable {
         -> AtlasVaultIDSelection
 }
 
+public enum AtlasVaultProductionHostError:
+    Error,
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case stopped
+    case presentationUnavailable
+
+    public var description: String {
+        switch self {
+        case .stopped:
+            "stopped"
+        case .presentationUnavailable:
+            "presentationUnavailable"
+        }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public struct AtlasVaultProductionHostGeneration:
+    Hashable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private let token = UUID()
+
+    public init() {}
+
+    public var description: String {
+        "AtlasVaultProductionHostGeneration(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public struct AtlasVaultPrivateFreePresentationSnapshot:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    public let snapshot: AtlasVaultPresentationSnapshot
+
+    public init(
+        validating snapshot: AtlasVaultPresentationSnapshot
+    ) throws(AtlasVaultProductionHostError) {
+        guard snapshot.privateState == nil else {
+            throw AtlasVaultProductionHostError.presentationUnavailable
+        }
+        self.snapshot = snapshot
+    }
+
+    public var description: String {
+        "AtlasVaultPrivateFreePresentationSnapshot(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public protocol AtlasVaultProductionPresentationCoordinating:
+    AtlasVaultPresentationObserving
+{
+    func start() async -> Bool
+    func publish(
+        _ value: AtlasVaultPrivateFreePresentationSnapshot
+    ) async -> Bool
+    func finish() async -> Bool
+}
+
+public protocol AtlasVaultProductionPresentationOwnerResetting: Sendable {
+    /// Invalidates owner work associated with superseded host generations.
+    /// A reset may establish its supplied generation and may commit only while
+    /// that generation remains current after each suspension.
+    @MainActor
+    func supersedePresentationGeneration(
+        _ generation: AtlasVaultProductionHostGeneration
+    ) async
+
+    @MainActor
+    func resetPresentation(
+        to state: AtlasLockedShellUnlockFlowState,
+        generation: AtlasVaultProductionHostGeneration
+    ) async -> Bool
+}
+
 public protocol AtlasVaultProductionHosting: Sendable {
     func start() async throws -> AtlasLockedShellUnlockFlowState
     func stop() async -> AtlasLockedShellUnlockFlowState
@@ -505,7 +601,10 @@ public struct AtlasVaultProductionHostDependencies:
     public let vaultIDSelector: any AtlasVaultIDSelecting
     public let runtime: any AtlasVaultRuntimeFacading
     public let lifecycle: any AtlasVaultLifecycleCoordinating
-    public let presentation: any AtlasVaultPresentationObserving
+    public let presentation:
+        any AtlasVaultProductionPresentationCoordinating
+    public let presentationOwner:
+        any AtlasVaultProductionPresentationOwnerResetting
     public let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
     public let unlockControllerBuilder:
         any AtlasVaultUnlockPresentationControllerBuilding
@@ -516,7 +615,9 @@ public struct AtlasVaultProductionHostDependencies:
         vaultIDSelector: any AtlasVaultIDSelecting,
         runtime: any AtlasVaultRuntimeFacading,
         lifecycle: any AtlasVaultLifecycleCoordinating,
-        presentation: any AtlasVaultPresentationObserving,
+        presentation: any AtlasVaultProductionPresentationCoordinating,
+        presentationOwner:
+            any AtlasVaultProductionPresentationOwnerResetting,
         unlockCoordinator: any AtlasVaultUnlockRequestCoordinating,
         unlockControllerBuilder:
             any AtlasVaultUnlockPresentationControllerBuilding
@@ -527,6 +628,7 @@ public struct AtlasVaultProductionHostDependencies:
         self.runtime = runtime
         self.lifecycle = lifecycle
         self.presentation = presentation
+        self.presentationOwner = presentationOwner
         self.unlockCoordinator = unlockCoordinator
         self.unlockControllerBuilder = unlockControllerBuilder
     }
