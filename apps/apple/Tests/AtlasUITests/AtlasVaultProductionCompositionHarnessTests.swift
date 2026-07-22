@@ -507,6 +507,86 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testExplicitStopWinsWhileRepeatedStartAwaitsCurrentFlow()
+        async throws
+    {
+        let source = HarnessLifecycleSource()
+        let currentFlowGate = HarnessSuspensionGate()
+        let stopGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            stopGate: stopGate,
+            currentFlowGate: currentFlowGate
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        _ = try await harness.start()
+        let repeatedStart = Task { @MainActor in try await harness.start() }
+        await currentFlowGate.waitUntilEntered(1)
+
+        let stop = Task { @MainActor in await harness.stop() }
+        await stopGate.waitUntilEntered(1)
+        await stopGate.release(call: 1)
+        let stoppedState = await stop.value
+        XCTAssertFalse(stoppedState.publicShell.canRequestUnlock)
+
+        await currentFlowGate.release(call: 1)
+        await harnessExpectEqual(
+            await Self.startOutcome(repeatedStart),
+            .stopped
+        )
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    @MainActor
+    func testLateTerminalIntentWinsWhileRepeatedStartAwaitsCurrentFlow()
+        async throws
+    {
+        let source = HarnessLifecycleSource()
+        let currentFlowGate = HarnessSuspensionGate()
+        let stopGate = HarnessSuspensionGate()
+        let lifecycleGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            stopGate: stopGate,
+            lifecycleGate: lifecycleGate,
+            currentFlowGate: currentFlowGate
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+
+        _ = try await harness.start()
+        let repeatedStart = Task { @MainActor in try await harness.start() }
+        await currentFlowGate.waitUntilEntered(1)
+
+        await source.emit(.willTerminate)
+        await host.waitUntilLifecycleEventCount(1)
+        await lifecycleGate.waitUntilEntered(1)
+
+        let winnerProbe = HarnessFirstStartWinnerProbe()
+        let repeatedOutcome = Task { @MainActor in
+            let outcome = await Self.startOutcome(repeatedStart)
+            await winnerProbe.record(.startReturned)
+            return outcome
+        }
+        let stopObserver = Task {
+            await stopGate.waitUntilEntered(1)
+            await winnerProbe.record(.stopBegan)
+        }
+
+        await currentFlowGate.release(call: 1)
+        let winner = await winnerProbe.first()
+        XCTAssertEqual(winner, .stopBegan)
+
+        let cleanupStop = Task { @MainActor in await harness.stop() }
+        await stopGate.waitUntilEntered(1)
+        await lifecycleGate.release(call: 1)
+        await stopGate.release(call: 1)
+
+        _ = await cleanupStop.value
+        await harnessExpectEqual(await repeatedOutcome.value, .stopped)
+        await stopObserver.value
+        await harnessExpectEqual(await host.stopCallCount(), 1)
+    }
+
+    @MainActor
     func testTerminalLifecyclePreservesStoppedWhenRetainedHostStartFails()
         async
     {
@@ -636,6 +716,45 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         XCTAssertTrue(startedBranch.contains("hasTerminalLifecycleIntent()"))
         XCTAssertTrue(startedBranch.contains("_ = await stop()"))
         XCTAssertFalse(startedBranch.contains("lifecycleForwarder.isTerminal()"))
+    }
+
+    func testAlreadyStartedBranchRechecksEveryAwaitBeforeSuccess() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let start = try XCTUnwrap(
+            source.range(of: "public func start() async throws")
+        )
+        let stop = try XCTUnwrap(
+            source.range(
+                of: "public func stop() async",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let startBody = String(source[start.lowerBound..<stop.lowerBound])
+        let started = try XCTUnwrap(startBody.range(of: "case .started:"))
+        let starting = try XCTUnwrap(
+            startBody.range(
+                of: "case .starting:",
+                range: started.upperBound..<startBody.endIndex
+            )
+        )
+        let startedBranch = String(
+            startBody[started.lowerBound..<starting.lowerBound]
+        )
+        let currentFlow = try XCTUnwrap(
+            startedBranch.range(of: "await host.currentFlowState()")
+        )
+        let finalIntent = try XCTUnwrap(
+            startedBranch.range(
+                of: "hasTerminalLifecycleIntent()",
+                options: .backwards
+            )
+        )
+
+        XCTAssertLessThan(currentFlow.lowerBound, finalIntent.lowerBound)
+        XCTAssertTrue(startedBranch.contains("terminalStopRequested"))
+        XCTAssertTrue(startedBranch.contains("case .started = lifetime"))
     }
 
     func testStoppingWaiterTreatsAlreadyStoppedAsTerminal() throws {
@@ -1334,6 +1453,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
     private let startGate: HarnessSuspensionGate?
     private let stopGate: HarnessSuspensionGate?
     private let lifecycleGate: HarnessSuspensionGate?
+    private let currentFlowGate: HarnessSuspensionGate?
     private let startFailure: HarnessFakeError?
     private let failStartAfterStop: Bool
     private let failStartAfterLifecycleTermination: Bool
@@ -1363,6 +1483,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         startGate: HarnessSuspensionGate? = nil,
         stopGate: HarnessSuspensionGate? = nil,
         lifecycleGate: HarnessSuspensionGate? = nil,
+        currentFlowGate: HarnessSuspensionGate? = nil,
         startFailure: HarnessFakeError? = nil,
         failStartAfterStop: Bool = false,
         failStartAfterLifecycleTermination: Bool = false,
@@ -1371,6 +1492,7 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
         self.startGate = startGate
         self.stopGate = stopGate
         self.lifecycleGate = lifecycleGate
+        self.currentFlowGate = currentFlowGate
         self.startFailure = startFailure
         self.failStartAfterStop = failStartAfterStop
         self.failStartAfterLifecycleTermination =
@@ -1407,7 +1529,10 @@ private actor HarnessHostFake: AtlasVaultProductionHosting {
     }
 
     func currentFlowState() async -> AtlasLockedShellUnlockFlowState {
-        flow
+        if let currentFlowGate {
+            await currentFlowGate.suspend()
+        }
+        return flow
     }
 
     func searchPublicJobs(

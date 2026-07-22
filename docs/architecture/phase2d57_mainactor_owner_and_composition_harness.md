@@ -254,7 +254,11 @@ same terminal-intent witness fences a successful retained host start while the
 interactive flow merely because forwarding has not yet reached its completed
 terminal state. The already-started idempotent path uses the same witness and
 runs or joins terminal stop before returning stopped, so a repeated start
-cannot expose current interactive state during that interval.
+cannot expose current interactive state during that interval. Because fetching
+the current host flow is an actor suspension point, that path fences both
+before and after the fetch on terminal intent, explicit-stop authority, and
+started lifetime. Explicit stop or later lifecycle intent therefore cannot win
+during the await and still be followed by stale success.
 
 ## 38. Start Failure
 
@@ -382,7 +386,9 @@ has already completed. A retained-start race also holds `.willTerminate`
 handling open and proves terminal intent begins stop before either successful
 start caller can return. A separate already-started regression proves a
 repeated start joins that same terminal drain rather than returning current
-state.
+state. Additional reentrancy regressions suspend current-flow retrieval and
+prove both explicit stop and a later terminal lifecycle intent win before the
+repeated start can return.
 
 ## 55. Test Coverage
 
@@ -396,7 +402,8 @@ assembly, no-vault integration from a canonical temporary root, shared
 owner/action roots, terminal lifecycle failures during retained start, safe
 deterministic suspension gates including the already-stopped waiter boundary,
 in-flight terminal-intent fencing before forwarder completion, and
-repeated-start terminal-intent fencing, and app-entry/source guards.
+repeated-start terminal-intent fencing across current-flow suspension,
+explicit-stop winner preservation, and app-entry/source guards.
 
 ## 56. Go/No-Go Update
 

@@ -431,12 +431,24 @@ public final class AtlasVaultProductionCompositionHarness:
         case .stopping, .stopped:
             throw AtlasVaultProductionCompositionError.stopped
         case .started:
-            guard !(await lifecycleForwarder
-                .hasTerminalLifecycleIntent()) else {
+            let terminalIntentBeforeState = await lifecycleForwarder
+                .hasTerminalLifecycleIntent()
+            guard !terminalStopRequested,
+                  case .started = lifetime,
+                  !terminalIntentBeforeState else {
                 _ = await stop()
                 throw AtlasVaultProductionCompositionError.stopped
             }
-            return await host.currentFlowState()
+            let state = await host.currentFlowState()
+            let terminalIntentAfterState = await lifecycleForwarder
+                .hasTerminalLifecycleIntent()
+            guard !terminalStopRequested,
+                  case .started = lifetime,
+                  !terminalIntentAfterState else {
+                _ = await stop()
+                throw AtlasVaultProductionCompositionError.stopped
+            }
+            return state
         case .starting:
             guard let startOperation else {
                 lifetime = .stopped
