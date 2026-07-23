@@ -268,7 +268,7 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: .newlines)
         guard process.terminationStatus == 0 else {
             throw EntryPlanFakeError.command(output)
         }

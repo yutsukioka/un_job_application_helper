@@ -14,6 +14,7 @@ final class AtlasIOSProcessLifecycleEventSourceTests: XCTestCase {
         XCTAssertEqual(observer.stopCount, 0)
         XCTAssertTrue(source.description.contains("<redacted>"))
         XCTAssertFalse(source.description.contains("FAKE_SOURCE_SCENE"))
+        XCTAssertEqual(source.debugDescription, source.description)
         let hasProducer = await source.hasRetainedProducerTaskForTesting()
         XCTAssertFalse(hasProducer)
     }
@@ -124,6 +125,13 @@ final class AtlasIOSProcessLifecycleEventSourceTests: XCTestCase {
         XCTAssertEqual(observer.stopCount, 1)
         let hasProducer = await source.hasRetainedProducerTaskForTesting()
         XCTAssertFalse(hasProducer)
+
+        let laterStream = await source.events()
+        var laterIterator = laterStream.makeAsyncIterator()
+        let laterEvent = await laterIterator.next()
+        observer.finish()
+        XCTAssertNil(laterEvent)
+        XCTAssertEqual(observer.stopCount, 1)
     }
 
     func testConsumerCancellationCancelsAndDrainsProducer() async {
@@ -205,6 +213,9 @@ final class AtlasIOSProcessLifecycleEventSourceTests: XCTestCase {
             "connectedScenes",
             "isProtectedDataAvailable",
             "removeObserver",
+            "tokens.append",
+            "MainActor.preconditionIsolated()",
+            "bufferingPolicy: .unbounded",
             "#if canImport(UIKit)",
         ] {
             XCTAssertTrue(source.contains(required), required)

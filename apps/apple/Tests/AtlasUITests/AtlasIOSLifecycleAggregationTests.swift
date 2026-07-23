@@ -163,6 +163,16 @@ final class AtlasIOSLifecycleAggregationTests: XCTestCase {
 
         XCTAssertEqual(
             aggregator.consume(
+                .sceneConnected(first, state: .background)
+            ),
+            []
+        )
+        XCTAssertEqual(
+            aggregator.consume(.sceneDisconnected(first)),
+            []
+        )
+        XCTAssertEqual(
+            aggregator.consume(
                 .sceneConnected(first, state: .foregroundInactive)
             ),
             []
@@ -178,6 +188,19 @@ final class AtlasIOSLifecycleAggregationTests: XCTestCase {
                 .sceneConnected(second, state: .foregroundActive)
             ),
             []
+        )
+    }
+
+    func testDisconnectingOneOfTwoActiveScenesKeepsProcessActive() {
+        var aggregator = bootstrapped(
+            scenes: [first: .foregroundActive, second: .foregroundActive],
+            application: .background
+        )
+
+        XCTAssertEqual(aggregator.consume(.sceneDisconnected(first)), [])
+        XCTAssertEqual(
+            aggregator.consume(.sceneWillResignActive(second)),
+            [.willResignActive]
         )
     }
 
