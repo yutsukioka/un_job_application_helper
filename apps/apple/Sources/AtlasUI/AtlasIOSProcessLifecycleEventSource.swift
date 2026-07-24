@@ -5,9 +5,15 @@ import Synchronization
 import UIKit
 #endif
 
+enum AtlasIOSLifecycleSystemDelivery: Sendable {
+    case signal(AtlasIOSLifecycleSignal)
+    case readinessBoundary(UUID)
+}
+
 struct AtlasIOSLifecycleSystemObservation: Sendable {
     let bootstrap: AtlasIOSLifecycleBootstrap
-    let signals: AsyncStream<AtlasIOSLifecycleSignal>
+    let deliveries: AsyncStream<AtlasIOSLifecycleSystemDelivery>
+    let requestReadinessBoundary: @Sendable (UUID) async -> Void
 }
 
 @MainActor
@@ -65,20 +71,20 @@ public actor AtlasIOSProcessLifecycleEventSource:
     }
     #endif
 
-    public func events() async -> AsyncStream<AtlasVaultLifecycleEvent> {
+    public func subscription() async
+        -> AtlasVaultPlatformLifecycleEventSubscription
+    {
         guard case .inactive = state else {
-            return Self.finishedStream()
+            return Self.finishedSubscription()
         }
         state = .starting
 
         let observation = await observer.beginObservation()
         var aggregator = AtlasIOSLifecycleAggregator()
-        let output = AsyncStream<AtlasVaultLifecycleEvent>.makeStream(
-            bufferingPolicy: .unbounded
-        )
-        for event in aggregator.bootstrap(observation.bootstrap) {
-            output.continuation.yield(event)
-        }
+        let bootstrapEvents = aggregator.bootstrap(observation.bootstrap)
+        let output =
+            AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>
+                .makeStream(bufferingPolicy: .unbounded)
 
         let identifier = UUID()
         let cancellationRelay =
@@ -92,7 +98,7 @@ public actor AtlasIOSProcessLifecycleEventSource:
         let task = Task { [self] in
             await runProducer(
                 identifier: identifier,
-                signals: observation.signals,
+                deliveries: observation.deliveries,
                 output: output.continuation,
                 aggregator: aggregator,
                 cancellationRelay: cancellationRelay
@@ -101,7 +107,11 @@ public actor AtlasIOSProcessLifecycleEventSource:
         cancellationRelay.install(task)
         producerTask = task
         state = .active(identifier)
-        return output.stream
+        return AtlasVaultPlatformLifecycleEventSubscription(
+            bootstrapEvents: bootstrapEvents,
+            events: output.stream,
+            requestReadinessBoundary: observation.requestReadinessBoundary
+        )
     }
 
     public nonisolated var description: String {
@@ -134,24 +144,30 @@ public actor AtlasIOSProcessLifecycleEventSource:
 
     private func runProducer(
         identifier: UUID,
-        signals: AsyncStream<AtlasIOSLifecycleSignal>,
-        output: AsyncStream<AtlasVaultLifecycleEvent>.Continuation,
+        deliveries: AsyncStream<AtlasIOSLifecycleSystemDelivery>,
+        output:
+            AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>.Continuation,
         aggregator initialAggregator: AtlasIOSLifecycleAggregator,
         cancellationRelay: AtlasIOSLifecycleProducerCancellationRelay
     ) async {
         var aggregator = initialAggregator
         var reachedTermination = false
 
-        for await signal in signals {
+        for await delivery in deliveries {
             guard !Task.isCancelled else {
                 break
             }
-            let events = aggregator.consume(signal)
-            for event in events {
-                output.yield(event)
-                if event == .willTerminate {
-                    reachedTermination = true
+            switch delivery {
+            case let .signal(signal):
+                let events = aggregator.consume(signal)
+                for event in events {
+                    output.yield(.event(event))
+                    if event == .willTerminate {
+                        reachedTermination = true
+                    }
                 }
+            case let .readinessBoundary(identifier):
+                output.yield(.readinessBoundary(identifier))
             }
             if reachedTermination {
                 break
@@ -177,12 +193,18 @@ public actor AtlasIOSProcessLifecycleEventSource:
         }
     }
 
-    private static func finishedStream()
-        -> AsyncStream<AtlasVaultLifecycleEvent>
+    private static func finishedSubscription()
+        -> AtlasVaultPlatformLifecycleEventSubscription
     {
-        AsyncStream { continuation in
+        let events = AsyncStream<AtlasVaultPlatformLifecycleEventDelivery> {
+            continuation in
             continuation.finish()
         }
+        return AtlasVaultPlatformLifecycleEventSubscription(
+            bootstrapEvents: [],
+            events: events,
+            requestReadinessBoundary: { _ in }
+        )
     }
 }
 
@@ -193,8 +215,8 @@ private final class AtlasUIKitLifecycleSystemObserver:
 {
     private var notificationCenter: NotificationCenter?
     private var tokens: [AtlasUIKitLifecycleNotificationToken] = []
-    private var signalContinuation:
-        AsyncStream<AtlasIOSLifecycleSignal>.Continuation?
+    private var deliveryContinuation:
+        AsyncStream<AtlasIOSLifecycleSystemDelivery>.Continuation?
     private var isObserving = false
 
     nonisolated init() {}
@@ -203,21 +225,25 @@ private final class AtlasUIKitLifecycleSystemObserver:
         guard !isObserving else {
             return AtlasIOSLifecycleSystemObservation(
                 bootstrap: Self.conservativeFinishedBootstrap(),
-                signals: Self.finishedSignalStream()
+                deliveries: Self.finishedDeliveryStream(),
+                requestReadinessBoundary: { _ in }
             )
         }
 
         isObserving = true
-        let signalPair = AsyncStream<AtlasIOSLifecycleSignal>.makeStream(
-            bufferingPolicy: .unbounded
-        )
-        signalContinuation = signalPair.continuation
+        let deliveryPair =
+            AsyncStream<AtlasIOSLifecycleSystemDelivery>
+                .makeStream(bufferingPolicy: .unbounded)
+        deliveryContinuation = deliveryPair.continuation
         notificationCenter = .default
         registerObservers()
         let bootstrap = captureBootstrap()
         return AtlasIOSLifecycleSystemObservation(
             bootstrap: bootstrap,
-            signals: signalPair.stream
+            deliveries: deliveryPair.stream,
+            requestReadinessBoundary: { [weak self] identifier in
+                await self?.emit(.readinessBoundary(identifier))
+            }
         )
     }
 
@@ -232,8 +258,8 @@ private final class AtlasUIKitLifecycleSystemObserver:
             }
         }
         tokens.removeAll()
-        signalContinuation?.finish()
-        signalContinuation = nil
+        deliveryContinuation?.finish()
+        deliveryContinuation = nil
         notificationCenter = nil
     }
 
@@ -344,7 +370,11 @@ private final class AtlasUIKitLifecycleSystemObserver:
     }
 
     private func emit(_ signal: AtlasIOSLifecycleSignal) {
-        signalContinuation?.yield(signal)
+        emit(.signal(signal))
+    }
+
+    private func emit(_ delivery: AtlasIOSLifecycleSystemDelivery) {
+        deliveryContinuation?.yield(delivery)
     }
 
     private static func identifier(
@@ -385,8 +415,8 @@ private final class AtlasUIKitLifecycleSystemObserver:
         }
     }
 
-    private static func finishedSignalStream()
-        -> AsyncStream<AtlasIOSLifecycleSignal>
+    private static func finishedDeliveryStream()
+        -> AsyncStream<AtlasIOSLifecycleSystemDelivery>
     {
         AsyncStream { continuation in
             continuation.finish()

@@ -307,9 +307,21 @@ private actor EntryPlanLifecycleSource:
 {
     private var subscriptions = 0
 
-    func events() async -> AsyncStream<AtlasVaultLifecycleEvent> {
+    func subscription() async
+        -> AtlasVaultPlatformLifecycleEventSubscription
+    {
         subscriptions += 1
-        return AsyncStream { _ in }
+        let pair =
+            AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>.makeStream(
+                bufferingPolicy: .unbounded
+            )
+        return AtlasVaultPlatformLifecycleEventSubscription(
+            bootstrapEvents: [],
+            events: pair.stream,
+            requestReadinessBoundary: { identifier in
+                pair.continuation.yield(.readinessBoundary(identifier))
+            }
+        )
     }
 
     func subscriptionCount() -> Int {

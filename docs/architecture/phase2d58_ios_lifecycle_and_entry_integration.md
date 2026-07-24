@@ -17,19 +17,26 @@ plan into the application, alter navigation, or render private state.
 Phase 2D-57 merged one neutral lifecycle source protocol, retained serial
 forwarder, MainActor presentation owner, production-like composition harness,
 and unwired public root. Its reviewed merge is the direct baseline for this
-phase.
+phase. The Phase 2D-57 lifecycle-readiness follow-up then replaced stream-only
+readiness with an explicit bootstrap-plus-live subscription and a serialized
+readiness boundary.
 
 ## 4. Existing Neutral Lifecycle Protocol
 
-`AtlasVaultPlatformLifecycleEventSourcing` returns an asynchronous stream of
-`AtlasVaultLifecycleEvent`. Phase 2D-58 conforms to that existing contract and
-does not expand the neutral event model.
+`AtlasVaultPlatformLifecycleEventSourcing.subscription()` returns
+`AtlasVaultPlatformLifecycleEventSubscription`. The subscription separates an
+ordered `bootstrapEvents` array from a lossless stream of
+`AtlasVaultPlatformLifecycleEventDelivery` values and exposes an explicit
+readiness-boundary request. There is no stream-only compatibility API or
+protocol default that silently declares an empty bootstrap.
 
 ## 5. Concrete iOS Process Source
 
 `AtlasIOSProcessLifecycleEventSource` is one process-scoped, single-use event
 source. It translates system observation through the pure reducer and exposes
-only neutral host lifecycle events.
+only neutral host lifecycle events. Snapshot-derived bootstrap events are
+returned separately; subsequent events and readiness boundaries use the live
+delivery stream.
 
 ## 6. Construction Side Effects
 
@@ -58,7 +65,8 @@ untracked task per notification.
 The driver registers every notification observer before capturing initial
 state. Registration and capture occur synchronously in one MainActor turn, so
 callbacks cannot interleave with capture and any queued live signal follows
-the bootstrap.
+the captured snapshot. Notification callbacks and readiness-boundary requests
+then enter the same MainActor-owned internal delivery continuation.
 
 ## 10. Initial Scene Snapshot
 
@@ -78,7 +86,10 @@ begin operation. No protected-data state is read at source construction.
 ## 13. Bootstrap Event Ordering
 
 The reducer emits protected-data availability first and process phase second.
-This gives the host data-protection state before any active-state admission.
+The source returns that array without repeating it in the live stream. The
+Phase 2D-57 forwarder awaits both events before requesting and draining the
+readiness boundary, so host startup cannot overtake an initial inactive or
+background phase.
 
 ## 14. Scene Identity Privacy
 
@@ -152,27 +163,36 @@ terminal, and causes the source to finish. All later signals are ignored.
 
 ## 27. Source Single-Subscription Policy
 
-The first `events()` call starts the one process observation. Every later call
-returns an immediately finished stream and cannot install another observer.
+The first `subscription()` call starts the one process observation. Every
+later call explicitly returns empty bootstrap events, an immediately finished
+delivery stream, and a no-op boundary request; it cannot install another
+observer or producer.
 
 ## 28. Source Task Ownership
 
 The source retains one producer task from creation through terminal cleanup.
-Consumer cancellation synchronously cancels that retained producer, whose own
-terminal path completes cleanup.
+That task serially consumes one internal stream containing both raw system
+signals and readiness-boundary markers. It reduces signals to `.event` values
+and forwards boundary UUIDs unchanged. Consumer cancellation synchronously
+cancels that retained producer, whose own terminal path completes cleanup.
 
 ## 29. Observation-Token Cleanup
 
 The MainActor driver retains every observer token. Producer cancellation,
 input completion, and termination all call the idempotent stop path, remove
-all tokens, and finish the raw signal continuation exactly once.
+all tokens, and finish the ordered internal delivery continuation exactly
+once.
 
 ## 30. Lossless Lifecycle Buffering Policy
 
-Both raw and public streams use lossless unbounded buffering for one
-low-frequency, process-lifetime subscription. No one-slot buffer may discard
-termination or protected-data events; terminal cleanup bounds the buffer
-lifetime.
+Both internal and public streams use lossless unbounded buffering for one
+low-frequency, process-lifetime subscription. Raw UIKit signals and readiness
+markers share the internal stream: a signal inserted before the MainActor
+boundary request is reduced and delivered before the marker, while a later
+signal remains after it. The public request closure delegates to that observer
+channel and never yields a marker directly, so a marker cannot overtake
+already-buffered system input. No one-slot buffer may discard termination or
+protected-data events; terminal cleanup bounds the buffer lifetime.
 
 ## 31. App-Entry Route Model
 
@@ -264,20 +284,29 @@ paths, URLs, or dependency details.
 
 The three focused suites were committed in a valid red state before production
 source existed. Their failures were missing reducer, source, and entry-plan
-types rather than malformed tests.
+types rather than malformed tests. After the readiness follow-up merged, the
+rebased source and fake conformers produced a second valid red state because
+the removed `events()` API no longer satisfied `subscription()`. The
+adaptation tests were written before the concrete source change.
 
 ## 49. Test Coverage
 
 Deterministic tests cover bootstrap order, multi-window transitions,
 connection and disconnection, fallback behavior, protected data, termination,
 single subscription, cancellation drain, observer boundaries, fail-closed
-route selection, lazy identity reuse, and current app-entry isolation.
+route selection, lazy identity reuse, and current app-entry isolation. Source
+integration tests additionally prove separate bootstrap delivery,
+protected-data-first active/inactive/background readiness, immediate and burst
+signals before a matching boundary, later signals after it, pre-boundary
+termination, and explicit finished second subscriptions.
 
 ## 50. Go/No-Go Update
 
-- Neutral lifecycle source protocol: implemented previously.
+- Neutral lifecycle source protocol: implemented previously and strengthened
+  by the merged Phase 2D-57 readiness follow-up.
 - Pure iOS scene aggregator: implemented.
-- Concrete iOS lifecycle source: implemented.
+- Concrete iOS lifecycle source: implemented with explicit bootstrap and
+  ordered live-delivery readiness boundaries.
 - UIKit notification observation: implemented.
 - Multi-scene aggregation: implemented.
 - Protected-data delivery: implemented.
@@ -296,7 +325,9 @@ route selection, lazy identity reuse, and current app-entry isolation.
 Actual app-entry ownership, route rendering, explicit process start/stop, and
 multi-window root distribution remain deferred. No private rendering,
 passphrase/recovery provider, migration, cloud behavior, or production
-navigation belongs to this phase.
+navigation belongs to this phase. The prior Phase 2D-57 readiness blocker is
+resolved by the merged follow-up, this concrete-source adaptation, and the
+direct source-forwarder integration regressions.
 
 ## 52. Next Product Gate
 
