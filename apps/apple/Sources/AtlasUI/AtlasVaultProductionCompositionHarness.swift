@@ -1,7 +1,21 @@
 import Foundation
 
+public struct AtlasVaultPlatformLifecycleEventSubscription: Sendable {
+    public let bootstrapEvents: [AtlasVaultLifecycleEvent]
+    public let events: AsyncStream<AtlasVaultLifecycleEvent>
+
+    public init(
+        bootstrapEvents: [AtlasVaultLifecycleEvent],
+        events: AsyncStream<AtlasVaultLifecycleEvent>
+    ) {
+        self.bootstrapEvents = bootstrapEvents
+        self.events = events
+    }
+}
+
 public protocol AtlasVaultPlatformLifecycleEventSourcing: Sendable {
-    func events() async -> AsyncStream<AtlasVaultLifecycleEvent>
+    func subscription() async
+        -> AtlasVaultPlatformLifecycleEventSubscription
 }
 
 public actor AtlasVaultProductionLifecycleForwarder:
@@ -55,12 +69,36 @@ public actor AtlasVaultProductionLifecycleForwarder:
         return await withCheckedContinuation { continuation in
             startWaiters.append(continuation)
             let task = Task { [self] in
-                let stream = await source.events()
-                guard markSubscriptionReady(identifier) else {
+                let subscription = await source.subscription()
+                guard !Task.isCancelled,
+                      mayProcessBootstrap(identifier) else {
                     return
                 }
 
-                for await event in stream {
+                for event in subscription.bootstrapEvents {
+                    guard !Task.isCancelled,
+                          mayProcessBootstrap(identifier) else {
+                        return
+                    }
+                    if event == .willTerminate {
+                        terminalLifecycleRequested = true
+                    }
+                    _ = await host.handleLifecycleEvent(event)
+                    guard !Task.isCancelled,
+                          mayProcessBootstrap(identifier) else {
+                        return
+                    }
+                    if event == .willTerminate {
+                        forwardingDidFinish(identifier)
+                        return
+                    }
+                }
+
+                guard markBootstrapReady(identifier) else {
+                    return
+                }
+
+                for await event in subscription.events {
                     guard !Task.isCancelled,
                           mayForward(identifier) else {
                         break
@@ -86,11 +124,11 @@ public actor AtlasVaultProductionLifecycleForwarder:
 
         state = .terminal
         terminalLifecycleRequested = true
-        resumeStartWaiters(with: false)
         resumeTerminalWaiters()
         let task = forwardingTask
         task?.cancel()
         await task?.value
+        resumeStartWaiters(with: false)
         forwardingTask = nil
     }
 
@@ -135,7 +173,14 @@ public actor AtlasVaultProductionLifecycleForwarder:
         }
     }
 
-    private func markSubscriptionReady(_ identifier: UUID) -> Bool {
+    private func mayProcessBootstrap(_ identifier: UUID) -> Bool {
+        guard case .starting(identifier) = state else {
+            return false
+        }
+        return true
+    }
+
+    private func markBootstrapReady(_ identifier: UUID) -> Bool {
         guard case .starting(identifier) = state else {
             return false
         }

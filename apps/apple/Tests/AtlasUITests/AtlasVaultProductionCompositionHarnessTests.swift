@@ -1751,16 +1751,18 @@ private actor HarnessLifecycleSource: AtlasVaultPlatformLifecycleEventSourcing {
         self.bootstrapEvents = bootstrapEvents
     }
 
-    func events() async -> AsyncStream<AtlasVaultLifecycleEvent> {
+    func subscription() async
+        -> AtlasVaultPlatformLifecycleEventSubscription
+    {
         subscriptions += 1
         let pair = AsyncStream<AtlasVaultLifecycleEvent>.makeStream(
             bufferingPolicy: .unbounded
         )
         continuation = pair.continuation
-        for event in bootstrapEvents {
-            pair.continuation.yield(event)
-        }
-        return pair.stream
+        return AtlasVaultPlatformLifecycleEventSubscription(
+            bootstrapEvents: bootstrapEvents,
+            events: pair.stream
+        )
     }
 
     func emit(_ event: AtlasVaultLifecycleEvent) {

@@ -87,45 +87,66 @@ path, private model, or dependency object.
 
 ## 14. Lifecycle Source Protocol
 
-`AtlasVaultPlatformLifecycleEventSourcing` supplies an asynchronous stream of
-neutral `AtlasVaultLifecycleEvent` values. Calling `events()` is deferred until
-explicit forwarder start.
+`AtlasVaultPlatformLifecycleEventSourcing` supplies an explicit
+`AtlasVaultPlatformLifecycleEventSubscription`. Each subscription contains an
+ordered array of safety bootstrap events and a stream of subsequent live
+events. Every source must declare that boundary, including an explicit empty
+array when no bootstrap is required. There is no stream-only compatibility
+default that could silently classify platform bootstrap as live traffic.
+
+A concrete platform source installs observation, captures its initial
+lifecycle snapshot, and returns the resulting bootstrap array together with a
+live stream that buffers signals arriving after the snapshot. Subscription is
+deferred until explicit forwarder start.
 
 ## 15. Lifecycle Forwarder
 
 `AtlasVaultProductionLifecycleForwarder` is an actor that owns one source, one
-host, one stream-consumer task, and terminal state. Its descriptions expose no
-source, host, event, or task detail.
+host, one bootstrap-and-stream consumer task, and terminal state. Its
+descriptions expose no source, host, event, or task detail.
 
 ## 16. Explicit Lifecycle Start
 
 Construction subscribes to nothing. `start()` registers its initial readiness
 continuation before it creates and retains the forwarding task, so an
-immediately available stream cannot race past the waiter. The task strongly
-owns the forwarder until stream completion or explicit stop breaks that
-ownership cycle. The subscription handshake remains idempotent while active
-and lets the composition prove forwarding is ready before host startup.
+immediately available subscription cannot race past the waiter. The retained
+task obtains one subscription and serially forwards every explicitly declared
+bootstrap event, awaiting each host callback. Only after the full bootstrap
+array has been handled does the forwarder become active and resume all start
+waiters with `true`. The bootstrap count is variable; readiness uses the array
+boundary, not an event-name or fixed-count heuristic.
+
+Protected-data-first bootstrap order is preserved. Initial active, inactive,
+or background phase is therefore handled before composition host startup can
+begin. A live event that arrives during bootstrap stays buffered in the
+subscription stream until readiness has been acknowledged. Concurrent starts
+share the same subscription and bootstrap handshake.
 
 ## 17. Event Ordering
 
-The forwarding task iterates one stream and awaits each host lifecycle call
-before reading the next event. No per-event child task exists, so source order
-and serial host delivery are preserved.
+The forwarding task first iterates bootstrap events and then the live stream,
+awaiting each host lifecycle call before taking the next value. No bootstrap
+event is suppressed or reordered, and no live event can overtake bootstrap.
+No per-event child task exists, so serial host delivery is preserved.
 
 ## 18. Lifecycle Stop and Task Drain
 
 `stop()` marks the forwarder terminal, cancels its retained task, and awaits
-that exact task. A callback already executing may delay stop; it cannot outlive
-completed stop. Natural stream completion and `.willTerminate` mark forwarding
-terminal but retain the completed task handle until explicit stop joins and
-clears it. This closes the completion window in which terminal state could
-otherwise become visible before task completion. Restart is rejected.
+that exact task before resolving any pending start waiter with `false`. A
+bootstrap callback already executing may delay stop; it cannot outlive
+completed stop, and later bootstrap or live events are not forwarded. Natural
+stream completion and `.willTerminate` mark forwarding terminal but retain the
+completed task handle until explicit stop joins and clears it. This closes the
+completion window in which terminal state could otherwise become visible
+before task completion. Restart is rejected.
 
 ## 19. Will-Terminate Behavior
 
-The forwarder awaits one `.willTerminate` host call and then ends consumption.
-It does not synthesize a second stop event. Later harness stop joins the host's
-already-terminal policy idempotently.
+The forwarder records terminal intent before awaiting one `.willTerminate`
+host call and then ends consumption. When termination appears in bootstrap,
+the forwarder never becomes ready, all start waiters receive `false`, and
+normal host startup is prevented. It does not synthesize a second stop event.
+Later harness stop joins the host's already-terminal policy idempotently.
 
 ## 20. Composition Configuration
 
@@ -230,11 +251,14 @@ not exposed.
 
 ## 37. Explicit Start
 
-`start()` first starts and handshakes lifecycle forwarding, then invokes host
-start. Concurrent callers share one retained operation. A successful repeated
-start is idempotent, and caller cancellation does not transfer ownership of
-the retained operation. After every retained-task await, a successful outcome
-is accepted only while startup still owns the lifetime or has committed the
+`start()` first starts lifecycle forwarding and waits until every declared
+bootstrap event has been handled, then invokes host start. This means a
+protected-data event followed by an inactive or background phase cannot expose
+the host's default active assumptions between subscription and startup.
+Concurrent callers share one retained operation. A successful repeated start
+is idempotent, and caller cancellation does not transfer ownership of the
+retained operation. After every retained-task await, a successful outcome is
+accepted only while startup still owns the lifetime or has committed the
 started lifetime. If terminal stop has moved the harness to stopping or
 stopped, both the initiating caller and every joining caller receive the fixed
 stopped error instead of observing a stale successful start. Explicit terminal
@@ -390,6 +414,14 @@ state. Additional reentrancy regressions suspend current-flow retrieval and
 prove both explicit stop and a later terminal lifecycle intent win before the
 repeated start can return.
 
+The lifecycle-readiness follow-up added deterministic red evidence showing
+that the old stream-only handshake returned before protected-data and initial
+phase callbacks completed. Green regressions now cover empty, one-event,
+two-event, and three-event bootstrap arrays; protected-data-first active,
+inactive, and background startup; concurrent start callers; buffered live
+traffic; bootstrap termination; and stop while a bootstrap callback is
+suspended.
+
 ## 55. Test Coverage
 
 Coverage includes initial privacy, ordinary and exact fenced generations,
@@ -403,7 +435,10 @@ owner/action roots, terminal lifecycle failures during retained start, safe
 deterministic suspension gates including the already-stopped waiter boundary,
 in-flight terminal-intent fencing before forwarder completion, and
 repeated-start terminal-intent fencing across current-flow suspension,
-explicit-stop winner preservation, and app-entry/source guards.
+explicit-stop winner preservation, explicit bootstrap-boundary ordering,
+variable bootstrap length, bootstrap-sensitive host startup, buffered live
+events, bootstrap termination, stop-during-bootstrap drain, and
+app-entry/source guards.
 
 ## 56. Go/No-Go Update
 
@@ -412,6 +447,8 @@ explicit-stop winner preservation, and app-entry/source guards.
 - MainActor production presentation owner: implemented.
 - Owner generation fencing: implemented.
 - Neutral lifecycle source protocol: implemented.
+- Explicit bootstrap-plus-live lifecycle subscription: implemented.
+- Bootstrap-complete lifecycle readiness: implemented.
 - Lifecycle forwarder: implemented.
 - Production-like composition factory: implemented.
 - Production-like composition harness: implemented.
@@ -437,4 +474,8 @@ Phase 2D-58 must implement the concrete iOS process lifecycle event source,
 multi-scene lifecycle aggregation, protected-data and termination delivery, and
 an app-entry integration design/test harness that preserves
 `ATLAS_REFERENCE_CAPTURE` isolation. It must not modify `AtlasIOSHostApp`;
-only a later reviewed phase may change the normal application route.
+only a later reviewed phase may change the normal application route. Its
+concrete source must map its existing ordered bootstrap array to
+`bootstrapEvents` and its subsequent buffered stream to `events`. The open
+Phase 2D-58 PR must rebase onto this lifecycle-readiness follow-up before its
+readiness finding can be resolved.
