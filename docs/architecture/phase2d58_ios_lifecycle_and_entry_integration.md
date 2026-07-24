@@ -308,13 +308,14 @@ that the historical parent-to-introduction diff contains exactly the seven
 reviewed Phase 2D-58 files. It separately verifies that app entry and reference
 capture were absent from that diff. Permanent source-boundary checks remain on
 the app-entry plan itself, while current index and untracked-path checks reject
-`.atlasvault` and `.venv-review` artifacts through bounded pathspecs rather
-than enumerating the complete index. No current-branch allowlist, current
-app-entry shape, or hard-coded blob identity is treated as a permanent Phase
-2D-58 invariant. Git-backed checks throw a fixed skip on unsupported platforms
-rather than returning fabricated output. A shallow checkout also uses a fixed
-skip because the introduction commit's parent is unavailable; with complete
-history, a missing introduction commit or parent remains a hard failure.
+`.atlasvault` files, `.atlasvault` directories, and `.venv-review` directories
+and their contents through bounded pathspecs rather than enumerating the
+complete index. No current-branch allowlist, current app-entry shape, or
+hard-coded blob identity is treated as a permanent Phase 2D-58 invariant.
+Git-backed checks throw a fixed skip on unsupported platforms rather than
+returning fabricated output. A shallow checkout also uses a fixed skip because
+the introduction commit's parent is unavailable; with complete history, a
+missing introduction commit or parent remains a hard failure.
 
 ## 50. Go/No-Go Update
 

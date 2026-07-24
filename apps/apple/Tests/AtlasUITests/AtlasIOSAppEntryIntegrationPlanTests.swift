@@ -243,6 +243,8 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         XCTAssertTrue(helper.contains(#""--exclude-standard""#))
         XCTAssertTrue(helper.contains(#""--","#))
         XCTAssertTrue(helper.contains(#""**/*.atlasvault""#))
+        XCTAssertTrue(helper.contains(#""**/.atlasvault""#))
+        XCTAssertTrue(helper.contains(#""**/.atlasvault/**""#))
         XCTAssertTrue(helper.contains(#""**/.venv-review/**""#))
     }
 
@@ -377,6 +379,8 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
             "--exclude-standard",
             "--",
             "**/*.atlasvault",
+            "**/.atlasvault",
+            "**/.atlasvault/**",
             "**/.venv-review",
             "**/.venv-review/**"
         )
