@@ -166,32 +166,66 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             "contentsOf: Self.",
             "appleRoot()",
         ].joined()
+        let currentBranchDiff = "origin/master" + "...HEAD"
 
         XCTAssertFalse(source.contains(obsoleteTestName))
         XCTAssertFalse(source.contains(legacyRootAssertion))
         XCTAssertFalse(source.contains(directReferenceAssertion))
         XCTAssertFalse(source.contains(currentEntryLoad))
+        XCTAssertFalse(source.contains(currentBranchDiff))
+        XCTAssertNil(
+            source.range(
+                of: #""[0-9a-f]{40}""#,
+                options: .regularExpression
+            )
+        )
     }
 
-    func testActualAppEntryRemainsUnwiredAndUsesExistingRoot() throws {
-        let entry = try String(
-            contentsOf: Self.appleRoot()
-                .appendingPathComponent(
-                    "AtlasIOSHost/AtlasIOSHost/AtlasIOSHostApp.swift"
-                ),
-            encoding: .utf8
+    func testPhase2D57IntroductionHasExactReviewedScopeAndDidNotWireAppEntry()
+        throws
+    {
+        let shallowRepository = try Self.git(
+            "rev-parse",
+            "--is-shallow-repository"
         )
-
-        XCTAssertTrue(entry.contains("AtlasRootView()"))
-        XCTAssertTrue(entry.contains("ATLAS_REFERENCE_CAPTURE"))
-        for forbidden in [
-            "AtlasVaultProductionRootView",
-            "AtlasVaultProductionCompositionHarness",
-            "AtlasVaultProductionCompositionFactory",
-            "AtlasVaultProductionPresentationOwner",
-        ] {
-            XCTAssertFalse(entry.contains(forbidden), forbidden)
+        guard shallowRepository == "false" else {
+            throw XCTSkip(
+                "Historical Phase 2D-57 scope assertions require complete Git history"
+            )
         }
+        let introduction = try Self.phase2D57IntroductionCommit()
+        _ = try Self.git(
+            "merge-base",
+            "--is-ancestor",
+            introduction,
+            "HEAD"
+        )
+        let parent = try Self.firstParent(of: introduction)
+        let paths = try Self.changedPaths(
+            from: parent,
+            to: introduction
+        )
+        let expected: Set<String> = [
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionCompositionHarness.swift",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionPresentationOwner.swift",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionRootView.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionCompositionHarnessTests.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionPresentationOwnerTests.swift",
+            "apps/apple/Tests/AtlasUITests/AtlasVaultProductionRootViewTests.swift",
+            "docs/architecture/phase2d57_mainactor_owner_and_composition_harness.md",
+        ]
+
+        XCTAssertEqual(paths, expected)
+        XCTAssertFalse(
+            paths.contains(
+                "apps/apple/AtlasIOSHost/AtlasIOSHost/AtlasIOSHostApp.swift"
+            )
+        )
+        XCTAssertFalse(
+            paths.contains(
+                "apps/apple/Sources/AtlasUI/AtlasReferenceCaptureView.swift"
+            )
+        )
     }
 
     private func requireView<Content: View>(_ type: Content.Type) {}
@@ -240,12 +274,78 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         )
     }
 
+    private static func phase2D57IntroductionCommit() throws -> String {
+        let commits = try git(
+            "log",
+            "--reverse",
+            "--format=%H",
+            "--diff-filter=A",
+            "--",
+            "apps/apple/Sources/AtlasUI/AtlasVaultProductionRootView.swift"
+        )
+        return try XCTUnwrap(
+            commits.split(separator: "\n").first.map(String.init)
+        )
+    }
+
+    private static func firstParent(of commit: String) throws -> String {
+        try git("rev-parse", "\(commit)^1")
+    }
+
+    private static func changedPaths(
+        from parent: String,
+        to introduction: String
+    ) throws -> Set<String> {
+        Set(
+            try git(
+                "diff",
+                "--name-only",
+                parent,
+                introduction,
+                "--"
+            )
+            .split(separator: "\n")
+            .map(String.init)
+        )
+    }
+
+    private static func git(_ arguments: String...) throws -> String {
+        #if os(macOS)
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = repositoryRoot()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .newlines)
+        guard process.terminationStatus == 0 else {
+            throw RootViewTestError.command(output)
+        }
+        return output
+        #else
+        throw XCTSkip("Git-backed Phase 2D-57 scope assertions require macOS")
+        #endif
+    }
+
     private static func appleRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+
+    private static func repositoryRoot() -> URL {
+        appleRoot().deletingLastPathComponent().deletingLastPathComponent()
+    }
+}
+
+private enum RootViewTestError: Error {
+    case command(String)
 }
 
 private actor RootActionRecorder {
