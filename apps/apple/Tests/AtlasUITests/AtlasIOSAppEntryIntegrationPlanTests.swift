@@ -242,10 +242,14 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         XCTAssertTrue(helper.contains(#""--others""#))
         XCTAssertTrue(helper.contains(#""--exclude-standard""#))
         XCTAssertTrue(helper.contains(#""--","#))
+        XCTAssertTrue(helper.contains(#""*.atlasvault""#))
+        XCTAssertTrue(helper.contains(#"".atlasvault/**""#))
         XCTAssertTrue(helper.contains(#""**/*.atlasvault""#))
         XCTAssertTrue(helper.contains(#""**/.atlasvault""#))
         XCTAssertTrue(helper.contains(#""**/.atlasvault/**""#))
+        XCTAssertTrue(helper.contains(#"".venv-review/**""#))
         XCTAssertTrue(helper.contains(#""**/.venv-review/**""#))
+        XCTAssertTrue(helper.contains("FileManager.default.fileExists"))
     }
 
     func testHistoricalScopeChecksContainNoCurrentTreeAssumptions() throws {
@@ -372,21 +376,31 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
     }
 
     private static func findArtifacts(named name: String) throws -> [String] {
-        try git(
+        var artifacts = try git(
             "ls-files",
             "--cached",
             "--others",
             "--exclude-standard",
             "--",
+            "*.atlasvault",
+            ".atlasvault",
+            ".atlasvault/**",
             "**/*.atlasvault",
             "**/.atlasvault",
             "**/.atlasvault/**",
+            ".venv-review",
+            ".venv-review/**",
             "**/.venv-review",
             "**/.venv-review/**"
         )
             .split(separator: "\n")
             .map(String.init)
             .filter { $0.contains(name) }
+        let rootArtifact = repositoryRoot().appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: rootArtifact.path) {
+            artifacts.append(name)
+        }
+        return Array(Set(artifacts)).sorted()
     }
 
     private static func git(_ arguments: String...) throws -> String {
