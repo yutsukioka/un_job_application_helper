@@ -145,6 +145,34 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testHistoricalScopeAssertionsDoNotPinCurrentAppEntry() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let obsoleteTestName = [
+            "testActualAppEntryRemainsUnwired",
+            "AndUsesExistingRoot",
+        ].joined()
+        let legacyRootAssertion = [
+            "XCTAssertTrue(entry.contains(\"Atlas",
+            "RootView()\"))",
+        ].joined()
+        let directReferenceAssertion = [
+            "XCTAssertTrue(entry.contains(\"ATLAS_",
+            "REFERENCE_CAPTURE\"))",
+        ].joined()
+        let currentEntryLoad = [
+            "contentsOf: Self.",
+            "appleRoot()",
+        ].joined()
+
+        XCTAssertFalse(source.contains(obsoleteTestName))
+        XCTAssertFalse(source.contains(legacyRootAssertion))
+        XCTAssertFalse(source.contains(directReferenceAssertion))
+        XCTAssertFalse(source.contains(currentEntryLoad))
+    }
+
     func testActualAppEntryRemainsUnwiredAndUsesExistingRoot() throws {
         let entry = try String(
             contentsOf: Self.appleRoot()
