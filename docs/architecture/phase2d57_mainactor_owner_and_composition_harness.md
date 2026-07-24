@@ -357,9 +357,19 @@ hook. Future process integration must call harness start and stop explicitly.
 
 ## 47. No App-Entry or Navigation Wiring
 
-`AtlasIOSHostApp`, `WindowGroup`, reference-capture routing, `AtlasRootView`,
-and production navigation are unchanged. The new root is not reachable from
-normal launch in this phase.
+App-entry non-modification is a historical Phase 2D-57 scope property. The
+commit that introduced `AtlasVaultProductionRootView.swift` left
+`AtlasIOSHostApp`, reference-capture routing, `AtlasRootView`, and production
+navigation unchanged, so the new root was not reachable from normal launch in
+that phase.
+
+The root test discovers that introduction commit dynamically and verifies that
+its first-parent diff contains exactly the seven reviewed Phase 2D-57 files.
+The app entry and `AtlasReferenceCaptureView.swift` are explicitly absent from
+that historical diff. The test does not constrain the current repository to
+retain `AtlasRootView`, pin an app-entry blob or structure, or compare a
+current feature branch with the historical Phase 2D-57 file set. A later
+reviewed integration phase is expected to replace the normal route.
 
 ## 48. No Private Rendering
 
@@ -372,7 +382,10 @@ projection enters the owner, actions, harness, or root.
 A future entry integration must branch on `ATLAS_REFERENCE_CAPTURE` before
 constructing production composition. Reference capture must create no harness,
 source, host, Keychain access, application-support lookup, or network request.
-This phase does not change or enforce that entry path.
+Phase 2D-57 did not change that entry path, as proven by the historical
+introduction diff. The permanent test does not freeze the current
+reference-capture implementation; a later reviewed integration remains
+responsible for preserving this isolation.
 
 ## 50. Future iOS Lifecycle Adapter
 
@@ -402,6 +415,13 @@ identifier, vault identifier, keys, paths, dependency errors, and service
 identities.
 
 ## 54. TDD Evidence
+
+The merge-stability follow-up first added a structural regression that failed
+while the root test still named the obsolete current-app assertion, required
+current `AtlasRootView()`, required direct current reference-capture routing,
+and loaded the current app-entry source. The implementation replaced that
+assertion with a dynamic first-addition and first-parent historical scope
+check. No runtime source changed.
 
 Three compile-valid red files were committed before production source. Their
 focused builds failed on absent Phase 2D-57 types. Green tests then exercised
@@ -465,6 +485,11 @@ explicit-stop winner preservation, explicit bootstrap-boundary ordering,
 variable bootstrap length, bootstrap-sensitive host startup, buffered live
 events, exact live-boundary catch-up, closing-event startup fencing, bootstrap
 termination, stop-during-bootstrap drain, and app-entry/source guards.
+The root suite additionally covers dynamic Phase 2D-57 introduction discovery,
+complete-history handling, exact historical seven-file scope, explicit
+historical app-entry/reference-capture exclusion, absence of current-app and
+current-branch pins, and the permanent public-only, service-free,
+lifecycle-free root-source boundary.
 
 ## 56. Go/No-Go Update
 
@@ -506,3 +531,24 @@ concrete source must map its existing ordered bootstrap array to
 and insert a requested readiness marker into the same ordered system-signal
 production channel. The open Phase 2D-58 PR must rebase onto this
 lifecycle-readiness follow-up before its readiness finding can be resolved.
+
+After the reviewed Phase 2D-58 lifecycle and route-plan work, a later
+app-entry integration may replace the current normal route while preserving
+reference-capture isolation. The merge-stable Phase 2D-57 tests permit that
+reviewed change without weakening the historical Phase 2D-57 scope evidence.
+
+## 59. Root-Test Merge-Stability Follow-Up
+
+Phase 2D-57F2 changes only the root test and this architecture record. The
+introduction commit is discovered from the first addition of
+`AtlasVaultProductionRootView.swift`; no commit or app-entry blob SHA is
+hard-coded. Its first-parent diff must remain exactly the seven reviewed
+Phase 2D-57 files, with the iOS app entry and reference-capture view explicitly
+excluded. Current app-entry contents and current feature-branch diffs are not
+pinned.
+
+The production root's own boundary remains permanent: it is MainActor-owned,
+observes one injected presentation owner, renders only the reviewed locked
+shell/unlock flow, and owns no service, lifecycle, navigation, automatic
+start/stop, or private-state behavior. This follow-up makes that invariant
+compatible with Phase 2D-59 without implementing Phase 2D-59.
