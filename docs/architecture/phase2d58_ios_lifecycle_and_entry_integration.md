@@ -235,10 +235,12 @@ than retrying automatically.
 Future windows must ask the one harness for roots. They must not construct
 per-window lifecycle sources, hosts, runtimes, or owners.
 
-## 39. Current App-Entry Non-Modification
+## 39. Historical App-Entry Non-Modification
 
-`AtlasIOSHostApp.swift` remains byte-identical in this phase. Its current
-recognized capture route and normal `AtlasRootView` route are not changed.
+The Phase 2D-58 introduction commit did not modify `AtlasIOSHostApp.swift` or
+`AtlasReferenceCaptureView.swift`. That scoped historical claim is verified
+from the first commit that added the lifecycle aggregator and its first parent;
+the tests do not constrain later reviewed app-entry phases to the old source.
 
 ## 40. Future App-Entry Integration
 
@@ -294,11 +296,28 @@ adaptation tests were written before the concrete source change.
 Deterministic tests cover bootstrap order, multi-window transitions,
 connection and disconnection, fallback behavior, protected data, termination,
 single subscription, cancellation drain, observer boundaries, fail-closed
-route selection, lazy identity reuse, and current app-entry isolation. Source
-integration tests additionally prove separate bootstrap delivery,
+route selection, lazy identity reuse, and historical app-entry isolation.
+Source integration tests additionally prove separate bootstrap delivery,
 protected-data-first active/inactive/background readiness, immediate and burst
 signals before a matching boundary, later signals after it, pre-boundary
 termination, and explicit finished second subscriptions.
+
+The merge-stability follow-up dynamically finds the first commit that added
+`AtlasIOSLifecycleAggregation.swift`, resolves its first parent, and verifies
+that the historical parent-to-introduction diff contains exactly the seven
+reviewed Phase 2D-58 files. It separately verifies that app entry and reference
+capture were absent from that diff. Permanent source-boundary checks remain on
+the app-entry plan itself. Bounded Git pathspecs check indexed and untracked
+artifact files at the repository root and below it without enumerating the
+complete index. A direct filesystem check additionally rejects exact
+root-level `.atlasvault` and `.venv-review` entries, including empty
+directories. The merge gate's filesystem scans remain authoritative for empty
+nested artifact directories. No current-branch allowlist, current app-entry
+shape, or hard-coded blob identity is treated as a permanent Phase 2D-58
+invariant. Git-backed checks throw a fixed skip on unsupported platforms rather
+than returning fabricated output. A shallow checkout also uses a fixed skip
+because the introduction commit's parent is unavailable; with complete
+history, a missing introduction commit or parent remains a hard failure.
 
 ## 50. Go/No-Go Update
 
