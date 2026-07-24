@@ -219,6 +219,30 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         XCTAssertTrue(try Self.findArtifacts(named: ".venv-review").isEmpty)
     }
 
+    func testUnsupportedGitBackedAssertionsSkipInsteadOfReturningEmpty() throws {
+        let source = try Self.source(
+            at: "Tests/AtlasUITests/AtlasIOSAppEntryIntegrationPlanTests.swift"
+        )
+        let gitStart = try XCTUnwrap(
+            source.range(
+                of: "    private static func git(",
+                options: .backwards
+            )
+        )
+        let gitEnd = try XCTUnwrap(
+            source.range(
+                of: "    private static func appleRoot()",
+                options: .backwards
+            )
+        )
+        let gitHelper = String(
+            source[gitStart.lowerBound..<gitEnd.lowerBound]
+        )
+
+        XCTAssertTrue(gitHelper.contains("throw XCTSkip("))
+        XCTAssertFalse(gitHelper.contains("return \"\""))
+    }
+
     private func makeHarness() -> (
         harness: AtlasVaultProductionCompositionHarness,
         owner: AtlasVaultProductionPresentationOwner,
@@ -274,7 +298,7 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         }
         return output
         #else
-        return ""
+        throw XCTSkip("Git-backed app-entry assertions require macOS")
         #endif
     }
 
