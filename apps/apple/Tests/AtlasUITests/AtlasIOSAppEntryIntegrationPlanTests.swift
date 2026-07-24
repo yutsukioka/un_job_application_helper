@@ -218,6 +218,31 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         XCTAssertTrue(try Self.findArtifacts(named: ".venv-review").isEmpty)
     }
 
+    func testArtifactGuardChecksTrackedAndUntrackedPaths() throws {
+        let source = try Self.source(
+            at: "Tests/AtlasUITests/AtlasIOSAppEntryIntegrationPlanTests.swift"
+        )
+        let helperStart = try XCTUnwrap(
+            source.range(
+                of: "    private static func findArtifacts(",
+                options: .backwards
+            )
+        )
+        let helperEnd = try XCTUnwrap(
+            source.range(
+                of: "    private static func git(",
+                options: .backwards
+            )
+        )
+        let helper = String(
+            source[helperStart.lowerBound..<helperEnd.lowerBound]
+        )
+
+        XCTAssertTrue(helper.contains(#""--cached""#))
+        XCTAssertTrue(helper.contains(#""--others""#))
+        XCTAssertTrue(helper.contains(#""--exclude-standard""#))
+    }
+
     func testHistoricalScopeChecksContainNoCurrentTreeAssumptions() throws {
         let source = try Self.source(
             at: "Tests/AtlasUITests/AtlasIOSAppEntryIntegrationPlanTests.swift"
@@ -342,7 +367,7 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
     }
 
     private static func findArtifacts(named name: String) throws -> [String] {
-        try git("ls-files", "--others", "--exclude-standard")
+        try git("ls-files", "--cached", "--others", "--exclude-standard")
             .split(separator: "\n")
             .map(String.init)
             .filter { $0.contains(name) }
