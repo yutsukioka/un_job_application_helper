@@ -90,14 +90,18 @@ path, private model, or dependency object.
 `AtlasVaultPlatformLifecycleEventSourcing` supplies an explicit
 `AtlasVaultPlatformLifecycleEventSubscription`. Each subscription contains an
 ordered array of safety bootstrap events and a stream of subsequent live
-events. Every source must declare that boundary, including an explicit empty
-array when no bootstrap is required. There is no stream-only compatibility
-default that could silently classify platform bootstrap as live traffic.
+event deliveries. It also provides an explicit readiness-boundary request.
+Every source must declare that contract, including an explicit empty array
+when no bootstrap is required. There is no stream-only compatibility default
+that could silently classify platform bootstrap as live traffic.
 
 A concrete platform source installs observation, captures its initial
 lifecycle snapshot, and returns the resulting bootstrap array together with a
-live stream that buffers signals arriving after the snapshot. Subscription is
-deferred until explicit forwarder start.
+live stream that buffers signals arriving after the snapshot. When the
+forwarder requests a readiness boundary, the source inserts the matching
+control delivery into the same serialized production channel as live events.
+Every live event observed before that request must precede the marker.
+Subscription is deferred until explicit forwarder start.
 
 ## 15. Lifecycle Forwarder
 
@@ -111,23 +115,28 @@ Construction subscribes to nothing. `start()` registers its initial readiness
 continuation before it creates and retains the forwarding task, so an
 immediately available subscription cannot race past the waiter. The retained
 task obtains one subscription and serially forwards every explicitly declared
-bootstrap event, awaiting each host callback. Only after the full bootstrap
-array has been handled does the forwarder become active and resume all start
-waiters with `true`. The bootstrap count is variable; readiness uses the array
-boundary, not an event-name or fixed-count heuristic.
+bootstrap event, awaiting each host callback. It then requests a unique live
+readiness boundary and drains every live event ahead of the matching marker.
+Only after the full bootstrap array and that bounded catch-up have been
+handled does the forwarder become active and resume all start waiters with
+`true`. Bootstrap and catch-up counts are variable; readiness uses explicit
+boundaries, not an event-name or fixed-count heuristic.
 
 Protected-data-first bootstrap order is preserved. Initial active, inactive,
 or background phase is therefore handled before composition host startup can
 begin. A live event that arrives during bootstrap stays buffered in the
-subscription stream until readiness has been acknowledged. Concurrent starts
-share the same subscription and bootstrap handshake.
+subscription stream, then is handled before readiness because it precedes the
+requested marker. Events after the marker remain live traffic. Concurrent
+starts share the same subscription and bootstrap handshake.
 
 ## 17. Event Ordering
 
-The forwarding task first iterates bootstrap events and then the live stream,
-awaiting each host lifecycle call before taking the next value. No bootstrap
+The forwarding task iterates bootstrap events, live catch-up through the exact
+readiness marker, and then subsequent live traffic. It awaits each host
+lifecycle call before taking the next value. No bootstrap or pre-boundary live
 event is suppressed or reordered, and no live event can overtake bootstrap.
-No per-event child task exists, so serial host delivery is preserved.
+The readiness marker is control-only and is never sent to the host. No
+per-event child task exists, so serial host delivery is preserved.
 
 ## 18. Lifecycle Stop and Task Drain
 
@@ -143,10 +152,11 @@ before task completion. Restart is rejected.
 ## 19. Will-Terminate Behavior
 
 The forwarder records terminal intent before awaiting one `.willTerminate`
-host call and then ends consumption. When termination appears in bootstrap,
-the forwarder never becomes ready, all start waiters receive `false`, and
-normal host startup is prevented. It does not synthesize a second stop event.
-Later harness stop joins the host's already-terminal policy idempotently.
+host call and then ends consumption. When termination appears in bootstrap or
+pre-readiness live catch-up, the forwarder never becomes ready, all start
+waiters receive `false`, and normal host startup is prevented. It does not
+synthesize a second stop event. Later harness stop joins the host's
+already-terminal policy idempotently.
 
 ## 20. Composition Configuration
 
@@ -422,6 +432,13 @@ inactive, and background startup; concurrent start callers; buffered live
 traffic; bootstrap termination; and stop while a bootstrap callback is
 suspended.
 
+Exact-head review then exposed a queued-live race between bootstrap completion
+and waiter scheduling. A deterministic red regression buffered a closing live
+event while bootstrap handling was suspended and proved host startup could
+win. The correction adds an exact live-delivery marker, drains every delivery
+ahead of it before readiness, and leaves events after it on the normal live
+path.
+
 ## 55. Test Coverage
 
 Coverage includes initial privacy, ordinary and exact fenced generations,
@@ -437,8 +454,8 @@ in-flight terminal-intent fencing before forwarder completion, and
 repeated-start terminal-intent fencing across current-flow suspension,
 explicit-stop winner preservation, explicit bootstrap-boundary ordering,
 variable bootstrap length, bootstrap-sensitive host startup, buffered live
-events, bootstrap termination, stop-during-bootstrap drain, and
-app-entry/source guards.
+events, exact live-boundary catch-up, closing-event startup fencing, bootstrap
+termination, stop-during-bootstrap drain, and app-entry/source guards.
 
 ## 56. Go/No-Go Update
 
@@ -448,7 +465,7 @@ app-entry/source guards.
 - Owner generation fencing: implemented.
 - Neutral lifecycle source protocol: implemented.
 - Explicit bootstrap-plus-live lifecycle subscription: implemented.
-- Bootstrap-complete lifecycle readiness: implemented.
+- Bootstrap-and-catch-up-complete lifecycle readiness: implemented.
 - Lifecycle forwarder: implemented.
 - Production-like composition factory: implemented.
 - Production-like composition harness: implemented.
@@ -476,6 +493,7 @@ an app-entry integration design/test harness that preserves
 `ATLAS_REFERENCE_CAPTURE` isolation. It must not modify `AtlasIOSHostApp`;
 only a later reviewed phase may change the normal application route. Its
 concrete source must map its existing ordered bootstrap array to
-`bootstrapEvents` and its subsequent buffered stream to `events`. The open
-Phase 2D-58 PR must rebase onto this lifecycle-readiness follow-up before its
-readiness finding can be resolved.
+`bootstrapEvents`, wrap its subsequent buffered values as event deliveries,
+and insert a requested readiness marker into the same ordered system-signal
+production channel. The open Phase 2D-58 PR must rebase onto this
+lifecycle-readiness follow-up before its readiness finding can be resolved.

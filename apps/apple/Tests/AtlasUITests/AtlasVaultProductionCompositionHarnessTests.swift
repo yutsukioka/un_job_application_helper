@@ -213,7 +213,9 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await forwarder.stop()
     }
 
-    func testLiveEventBufferedUntilBootstrapReadinessCompletes() async {
+    func testLiveEventBufferedDuringBootstrapIsHandledBeforeReadiness()
+        async
+    {
         let source = HarnessLifecycleSource(
             bootstrapEvents: [
                 .protectedDataBecameAvailable,
@@ -253,10 +255,18 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await harnessExpectNil(await completion.value())
 
         await eventGate.release(call: 2)
-        await harnessExpectTrue(await start.value)
         await eventGate.waitUntilEntered(3)
+        await harnessExpectNil(await completion.value())
+        await harnessExpectEqual(
+            await host.lifecycleEvents(),
+            [
+                .protectedDataBecameAvailable,
+                .didEnterBackground,
+                .didBecomeActive,
+            ]
+        )
         await eventGate.release(call: 3)
-        await host.waitUntilLifecycleEventCount(3)
+        await harnessExpectTrue(await start.value)
         await harnessExpectEqual(
             await host.lifecycleEvents(),
             [
@@ -396,6 +406,76 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testHarnessDrainsClosingLiveEventBufferedDuringBootstrapBeforeStart()
+        async throws
+    {
+        let source = HarnessLifecycleSource(
+            bootstrapEvents: [.protectedDataBecameAvailable]
+        )
+        let eventGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(
+            lifecycleGate: eventGate,
+            bootstrapSensitiveStart: true
+        )
+        let harness = Self.makeHarness(host: host, source: source)
+        let start = Task { @MainActor in try await harness.start() }
+
+        await eventGate.waitUntilEntered(1)
+        await source.emit(.didEnterBackground)
+        await harnessExpectEqual(await host.startCallCount(), 0)
+        await eventGate.release(call: 1)
+
+        await eventGate.waitUntilEntered(2)
+        await harnessExpectEqual(await host.startCallCount(), 0)
+        await eventGate.release(call: 2)
+
+        let state = try await start.value
+        XCTAssertFalse(state.publicShell.canRequestUnlock)
+        await harnessExpectEqual(await host.startCallCount(), 1)
+        await harnessExpectEqual(
+            await host.lifecycleEvents(),
+            [
+                .protectedDataBecameAvailable,
+                .didEnterBackground,
+            ]
+        )
+        _ = await harness.stop()
+    }
+
+    @MainActor
+    func testHarnessBufferedLiveTerminationDuringBootstrapPreventsStart()
+        async
+    {
+        let source = HarnessLifecycleSource(
+            bootstrapEvents: [.protectedDataBecameUnavailable]
+        )
+        let eventGate = HarnessSuspensionGate()
+        let host = HarnessHostFake(lifecycleGate: eventGate)
+        let harness = Self.makeHarness(host: host, source: source)
+        let start = Task { @MainActor in try await harness.start() }
+
+        await eventGate.waitUntilEntered(1)
+        await source.emit(.willTerminate)
+        await harnessExpectEqual(await host.startCallCount(), 0)
+        await eventGate.release(call: 1)
+
+        await eventGate.waitUntilEntered(2)
+        await harnessExpectEqual(await host.startCallCount(), 0)
+        await eventGate.release(call: 2)
+
+        await harnessExpectEqual(await Self.startOutcome(start), .stopped)
+        await harnessExpectEqual(await host.startCallCount(), 0)
+        await harnessExpectEqual(
+            await host.lifecycleEvents(),
+            [
+                .protectedDataBecameUnavailable,
+                .willTerminate,
+            ]
+        )
+        _ = await harness.stop()
+    }
+
+    @MainActor
     func testBootstrapTerminationPreventsNormalHarnessHostStart() async {
         let source = HarnessLifecycleSource(
             bootstrapEvents: [
@@ -443,6 +523,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         )
         XCTAssertTrue(source.contains("bootstrapEvents"))
         XCTAssertTrue(source.contains("func subscription()"))
+        XCTAssertTrue(
+            source.contains(
+                "public enum AtlasVaultPlatformLifecycleEventDelivery"
+            )
+        )
+        XCTAssertTrue(source.contains("requestReadinessBoundary"))
         XCTAssertFalse(
             source.contains(
                 "func events() async -> AsyncStream<AtlasVaultLifecycleEvent>"
@@ -457,13 +543,27 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         let bootstrapLoop = try XCTUnwrap(
             source.range(of: "for event in subscription.bootstrapEvents")
         )
+        let boundaryRequest = try XCTUnwrap(
+            source.range(of: "subscription.requestReadinessBoundary")
+        )
+        let catchUpLoop = try XCTUnwrap(
+            source.range(
+                of: "while let delivery = await iterator.next()"
+            )
+        )
         let readiness = try XCTUnwrap(
             source.range(of: "markBootstrapReady")
         )
         let liveLoop = try XCTUnwrap(
-            source.range(of: "for await event in subscription.events")
+            source.range(
+                of: "while let delivery = await iterator.next()",
+                options: [],
+                range: catchUpLoop.upperBound..<source.endIndex
+            )
         )
-        XCTAssertLessThan(bootstrapLoop.lowerBound, readiness.lowerBound)
+        XCTAssertLessThan(bootstrapLoop.lowerBound, boundaryRequest.lowerBound)
+        XCTAssertLessThan(boundaryRequest.lowerBound, catchUpLoop.lowerBound)
+        XCTAssertLessThan(catchUpLoop.lowerBound, readiness.lowerBound)
         XCTAssertLessThan(readiness.lowerBound, liveLoop.lowerBound)
     }
 
@@ -1745,7 +1845,8 @@ private enum HarnessFakeError: Error, Sendable {
 private actor HarnessLifecycleSource: AtlasVaultPlatformLifecycleEventSourcing {
     private let bootstrapEvents: [AtlasVaultLifecycleEvent]
     private var subscriptions = 0
-    private var continuation: AsyncStream<AtlasVaultLifecycleEvent>.Continuation?
+    private var continuation:
+        AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>.Continuation?
 
     init(bootstrapEvents: [AtlasVaultLifecycleEvent] = []) {
         self.bootstrapEvents = bootstrapEvents
@@ -1755,18 +1856,23 @@ private actor HarnessLifecycleSource: AtlasVaultPlatformLifecycleEventSourcing {
         -> AtlasVaultPlatformLifecycleEventSubscription
     {
         subscriptions += 1
-        let pair = AsyncStream<AtlasVaultLifecycleEvent>.makeStream(
+        let pair = AsyncStream<
+            AtlasVaultPlatformLifecycleEventDelivery
+        >.makeStream(
             bufferingPolicy: .unbounded
         )
         continuation = pair.continuation
         return AtlasVaultPlatformLifecycleEventSubscription(
             bootstrapEvents: bootstrapEvents,
-            events: pair.stream
+            events: pair.stream,
+            requestReadinessBoundary: { [self] identifier in
+                await emitReadinessBoundary(identifier)
+            }
         )
     }
 
     func emit(_ event: AtlasVaultLifecycleEvent) {
-        continuation?.yield(event)
+        continuation?.yield(.event(event))
     }
 
     func finish() {
@@ -1775,6 +1881,10 @@ private actor HarnessLifecycleSource: AtlasVaultPlatformLifecycleEventSourcing {
 
     func subscriptionCount() -> Int {
         subscriptions
+    }
+
+    private func emitReadinessBoundary(_ identifier: UUID) {
+        continuation?.yield(.readinessBoundary(identifier))
     }
 }
 
