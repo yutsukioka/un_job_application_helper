@@ -164,6 +164,15 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
     }
 
     func testHistoricalPhaseIntroductionHasExactReviewedScope() throws {
+        let shallowRepository = try Self.git(
+            "rev-parse",
+            "--is-shallow-repository"
+        )
+        guard shallowRepository == "false" else {
+            throw XCTSkip(
+                "Historical Phase 2D-58 scope assertions require complete Git history"
+            )
+        }
         let expected: Set<String> = [
             "apps/apple/Sources/AtlasUI/AtlasIOSAppEntryIntegrationPlan.swift",
             "apps/apple/Sources/AtlasUI/AtlasIOSLifecycleAggregation.swift",
@@ -228,6 +237,55 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
             )
         )
         XCTAssertFalse(source.contains(legacyRootRequirement))
+    }
+
+    func testHistoricalScopeRequiresCompleteGitHistoryBeforeTraversal() throws {
+        let source = try Self.source(
+            at: "Tests/AtlasUITests/AtlasIOSAppEntryIntegrationPlanTests.swift"
+        )
+        let testStart = try XCTUnwrap(
+            source.range(
+                of: "    func testHistoricalPhaseIntroductionHasExactReviewedScope()"
+            )
+        )
+        let testEnd = try XCTUnwrap(
+            source.range(
+                of: "    func testCurrentWorktreeContainsNoPhaseArtifacts()"
+            )
+        )
+        let historicalScopeTest = String(
+            source[testStart.lowerBound..<testEnd.lowerBound]
+        )
+        let historyGuard = try XCTUnwrap(
+            historicalScopeTest.range(
+                of: "let shallowRepository = try Self.git("
+            )
+        )
+        XCTAssertTrue(
+            historicalScopeTest.contains(#""--is-shallow-repository""#)
+        )
+        let historyTraversal = try XCTUnwrap(
+            historicalScopeTest.range(
+                of: #""--diff-filter=A""#,
+                options: .backwards
+            )
+        )
+
+        XCTAssertLessThan(
+            historicalScopeTest.distance(
+                from: historicalScopeTest.startIndex,
+                to: historyGuard.lowerBound
+            ),
+            historicalScopeTest.distance(
+                from: historicalScopeTest.startIndex,
+                to: historyTraversal.lowerBound
+            )
+        )
+        XCTAssertTrue(
+            historicalScopeTest.contains(
+                "Historical Phase 2D-58 scope assertions require complete Git history"
+            )
+        )
     }
 
     func testUnsupportedGitBackedAssertionsSkipInsteadOfReturningEmpty() throws {

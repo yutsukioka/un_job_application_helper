@@ -311,7 +311,10 @@ the app-entry plan itself, while current worktree checks continue to reject
 `.atlasvault` and `.venv-review` artifacts. No current-branch allowlist,
 current app-entry shape, or hard-coded blob identity is treated as a permanent
 Phase 2D-58 invariant. Git-backed checks throw a fixed skip on unsupported
-platforms rather than returning fabricated output.
+platforms rather than returning fabricated output. A shallow checkout also
+uses a fixed skip because the introduction commit's parent is unavailable;
+with complete history, a missing introduction commit or parent remains a hard
+failure.
 
 ## 50. Go/No-Go Update
 
