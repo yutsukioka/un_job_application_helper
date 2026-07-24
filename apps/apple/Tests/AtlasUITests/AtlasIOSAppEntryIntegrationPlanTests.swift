@@ -163,36 +163,7 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         }
     }
 
-    func testCurrentAppEntryAndReferenceCaptureRemainUnmodified() throws {
-        let appEntry = try Self.source(
-            at: "AtlasIOSHost/AtlasIOSHost/AtlasIOSHostApp.swift"
-        )
-        XCTAssertTrue(appEntry.contains("ATLAS_REFERENCE_CAPTURE"))
-        XCTAssertTrue(appEntry.contains("AtlasReferenceCaptureView"))
-        XCTAssertTrue(appEntry.contains("AtlasRootView"))
-        XCTAssertFalse(appEntry.contains("AtlasIOSProcessLifecycleEventSource"))
-        XCTAssertFalse(appEntry.contains("AtlasIOSAppEntryIntegrationPlan"))
-        XCTAssertFalse(appEntry.contains("AtlasVaultProductionCompositionHarness"))
-        XCTAssertEqual(
-            try Self.git(
-                "rev-parse",
-                "HEAD:apps/apple/AtlasIOSHost/AtlasIOSHost/AtlasIOSHostApp.swift"
-            ),
-            "f056a7b10a575e54f70622ca2f6aded60edaa335"
-        )
-        XCTAssertEqual(
-            try Self.git(
-                "diff",
-                "--name-only",
-                "origin/master",
-                "--",
-                "apps/apple/Sources/AtlasUI/AtlasReferenceCaptureView.swift"
-            ),
-            ""
-        )
-    }
-
-    func testExactPhaseAllowlistAndNoArtifacts() throws {
+    func testHistoricalPhaseIntroductionHasExactReviewedScope() throws {
         let expected: Set<String> = [
             "apps/apple/Sources/AtlasUI/AtlasIOSAppEntryIntegrationPlan.swift",
             "apps/apple/Sources/AtlasUI/AtlasIOSLifecycleAggregation.swift",
@@ -202,21 +173,61 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
             "apps/apple/Tests/AtlasUITests/AtlasIOSProcessLifecycleEventSourceTests.swift",
             "docs/architecture/phase2d58_ios_lifecycle_and_entry_integration.md",
         ]
-        let committed = try Self.git(
-            "diff", "--name-only", "origin/master...HEAD"
+        let introductionCommits = try Self.git(
+            "log",
+            "--reverse",
+            "--format=%H",
+            "--diff-filter=A",
+            "--",
+            "apps/apple/Sources/AtlasUI/AtlasIOSLifecycleAggregation.swift"
         )
-        let status = try Self.git("status", "--porcelain=v1")
+        let introduction = try XCTUnwrap(
+            introductionCommits.split(separator: "\n").first.map(String.init)
+        )
+        let parent = try Self.git("rev-parse", "\(introduction)^1")
         let paths = Set(
-            (committed.split(separator: "\n").map(String.init)
-                + status.split(separator: "\n").map {
-                    String($0.dropFirst(3))
-                })
-                .filter { !$0.isEmpty }
+            try Self.git("diff", "--name-only", parent, introduction, "--")
+                .split(separator: "\n")
+                .map(String.init)
         )
 
         XCTAssertEqual(paths, expected)
+        XCTAssertFalse(
+            paths.contains(
+                "apps/apple/AtlasIOSHost/AtlasIOSHost/AtlasIOSHostApp.swift"
+            )
+        )
+        XCTAssertFalse(
+            paths.contains(
+                "apps/apple/Sources/AtlasUI/AtlasReferenceCaptureView.swift"
+            )
+        )
+    }
+
+    func testCurrentWorktreeContainsNoPhaseArtifacts() throws {
         XCTAssertTrue(try Self.findArtifacts(named: ".atlasvault").isEmpty)
         XCTAssertTrue(try Self.findArtifacts(named: ".venv-review").isEmpty)
+    }
+
+    func testHistoricalScopeChecksContainNoCurrentTreeAssumptions() throws {
+        let source = try Self.source(
+            at: "Tests/AtlasUITests/AtlasIOSAppEntryIntegrationPlanTests.swift"
+        )
+        let currentBranchDiff = "origin/master" + "...HEAD"
+        let legacyRootRequirement = [
+            "XCTAssertTrue(appEntry.contains(",
+            "\"AtlasRootView\"",
+            "))",
+        ].joined()
+
+        XCTAssertFalse(source.contains(currentBranchDiff))
+        XCTAssertNil(
+            source.range(
+                of: #""[0-9a-f]{40}""#,
+                options: .regularExpression
+            )
+        )
+        XCTAssertFalse(source.contains(legacyRootRequirement))
     }
 
     func testUnsupportedGitBackedAssertionsSkipInsteadOfReturningEmpty() throws {
