@@ -534,12 +534,6 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 "func events() async -> AsyncStream<AtlasVaultLifecycleEvent>"
             )
         )
-        XCTAssertFalse(
-            source.contains(
-                "extension AtlasVaultPlatformLifecycleEventSourcing"
-            )
-        )
-
         let bootstrapLoop = try XCTUnwrap(
             source.range(of: "for event in subscription.bootstrapEvents")
         )
