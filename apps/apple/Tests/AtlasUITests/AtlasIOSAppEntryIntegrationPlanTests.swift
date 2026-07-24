@@ -241,6 +241,9 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
         XCTAssertTrue(helper.contains(#""--cached""#))
         XCTAssertTrue(helper.contains(#""--others""#))
         XCTAssertTrue(helper.contains(#""--exclude-standard""#))
+        XCTAssertTrue(helper.contains(#""--","#))
+        XCTAssertTrue(helper.contains(#""**/*.atlasvault""#))
+        XCTAssertTrue(helper.contains(#""**/.venv-review/**""#))
     }
 
     func testHistoricalScopeChecksContainNoCurrentTreeAssumptions() throws {
@@ -367,7 +370,16 @@ final class AtlasIOSAppEntryIntegrationPlanTests: XCTestCase {
     }
 
     private static func findArtifacts(named name: String) throws -> [String] {
-        try git("ls-files", "--cached", "--others", "--exclude-standard")
+        try git(
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "**/*.atlasvault",
+            "**/.venv-review",
+            "**/.venv-review/**"
+        )
             .split(separator: "\n")
             .map(String.init)
             .filter { $0.contains(name) }
