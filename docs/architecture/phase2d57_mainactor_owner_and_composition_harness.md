@@ -101,6 +101,11 @@ live stream that buffers signals arriving after the snapshot. When the
 forwarder requests a readiness boundary, the source inserts the matching
 control delivery into the same serialized production channel as live events.
 Every live event observed before that request must precede the marker.
+The live stream must use a lossless policy for its low-frequency,
+safety-relevant lifecycle deliveries; a source may not use a dropping or
+nonbuffering policy. The forwarder establishes its stream iterator before
+requesting the marker, so the requested control delivery is observable through
+the same retained subscription path.
 Subscription is deferred until explicit forwarder start.
 
 ## 15. Lifecycle Forwarder
@@ -116,11 +121,12 @@ continuation before it creates and retains the forwarding task, so an
 immediately available subscription cannot race past the waiter. The retained
 task obtains one subscription and serially forwards every explicitly declared
 bootstrap event, awaiting each host callback. It then requests a unique live
-readiness boundary and drains every live event ahead of the matching marker.
-Only after the full bootstrap array and that bounded catch-up have been
-handled does the forwarder become active and resume all start waiters with
-`true`. Bootstrap and catch-up counts are variable; readiness uses explicit
-boundaries, not an event-name or fixed-count heuristic.
+readiness boundary after establishing the live-stream iterator, and drains
+every live event ahead of the matching marker. Only after the full bootstrap
+array and that bounded catch-up have been handled does the forwarder become
+active and resume all start waiters with `true`. Bootstrap and catch-up counts
+are variable; readiness uses explicit boundaries, not an event-name or
+fixed-count heuristic.
 
 Protected-data-first bootstrap order is preserved. Initial active, inactive,
 or background phase is therefore handled before composition host startup can
@@ -437,7 +443,10 @@ and waiter scheduling. A deterministic red regression buffered a closing live
 event while bootstrap handling was suspended and proved host startup could
 win. The correction adds an exact live-delivery marker, drains every delivery
 ahead of it before readiness, and leaves events after it on the normal live
-path.
+path. A later review regression proved the live-stream iterator is established
+before the marker request; the source contract also requires lossless
+lifecycle buffering so the marker and preceding safety events cannot be
+dropped.
 
 ## 55. Test Coverage
 

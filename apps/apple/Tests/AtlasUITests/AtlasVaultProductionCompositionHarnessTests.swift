@@ -537,6 +537,11 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         let bootstrapLoop = try XCTUnwrap(
             source.range(of: "for event in subscription.bootstrapEvents")
         )
+        let iteratorCreation = try XCTUnwrap(
+            source.range(
+                of: "var iterator = subscription.events.makeAsyncIterator()"
+            )
+        )
         let boundaryRequest = try XCTUnwrap(
             source.range(of: "subscription.requestReadinessBoundary")
         )
@@ -555,7 +560,11 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 range: catchUpLoop.upperBound..<source.endIndex
             )
         )
-        XCTAssertLessThan(bootstrapLoop.lowerBound, boundaryRequest.lowerBound)
+        XCTAssertLessThan(bootstrapLoop.lowerBound, iteratorCreation.lowerBound)
+        XCTAssertLessThan(
+            iteratorCreation.lowerBound,
+            boundaryRequest.lowerBound
+        )
         XCTAssertLessThan(boundaryRequest.lowerBound, catchUpLoop.lowerBound)
         XCTAssertLessThan(catchUpLoop.lowerBound, readiness.lowerBound)
         XCTAssertLessThan(readiness.lowerBound, liveLoop.lowerBound)

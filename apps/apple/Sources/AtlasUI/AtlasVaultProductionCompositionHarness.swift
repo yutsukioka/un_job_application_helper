@@ -99,6 +99,7 @@ public actor AtlasVaultProductionLifecycleForwarder:
                     }
                 }
 
+                var iterator = subscription.events.makeAsyncIterator()
                 let readinessBoundary = UUID()
                 await subscription.requestReadinessBoundary(
                     readinessBoundary
@@ -107,7 +108,6 @@ public actor AtlasVaultProductionLifecycleForwarder:
                       mayProcessBootstrap(identifier) else {
                     return
                 }
-                var iterator = subscription.events.makeAsyncIterator()
                 var reachedReadinessBoundary = false
 
                 while let delivery = await iterator.next() {
