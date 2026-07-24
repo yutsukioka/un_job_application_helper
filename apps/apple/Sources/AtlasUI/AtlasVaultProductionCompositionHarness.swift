@@ -1,7 +1,35 @@
 import Foundation
 
+public enum AtlasVaultPlatformLifecycleEventDelivery: Sendable {
+    case event(AtlasVaultLifecycleEvent)
+    case readinessBoundary(UUID)
+}
+
+public struct AtlasVaultPlatformLifecycleEventSubscription: Sendable {
+    public let bootstrapEvents: [AtlasVaultLifecycleEvent]
+    public let events: AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>
+    private let readinessBoundaryRequest:
+        @Sendable (UUID) async -> Void
+
+    public init(
+        bootstrapEvents: [AtlasVaultLifecycleEvent],
+        events: AsyncStream<AtlasVaultPlatformLifecycleEventDelivery>,
+        requestReadinessBoundary:
+            @escaping @Sendable (UUID) async -> Void
+    ) {
+        self.bootstrapEvents = bootstrapEvents
+        self.events = events
+        readinessBoundaryRequest = requestReadinessBoundary
+    }
+
+    public func requestReadinessBoundary(_ identifier: UUID) async {
+        await readinessBoundaryRequest(identifier)
+    }
+}
+
 public protocol AtlasVaultPlatformLifecycleEventSourcing: Sendable {
-    func events() async -> AsyncStream<AtlasVaultLifecycleEvent>
+    func subscription() async
+        -> AtlasVaultPlatformLifecycleEventSubscription
 }
 
 public actor AtlasVaultProductionLifecycleForwarder:
@@ -55,15 +83,74 @@ public actor AtlasVaultProductionLifecycleForwarder:
         return await withCheckedContinuation { continuation in
             startWaiters.append(continuation)
             let task = Task { [self] in
-                let stream = await source.events()
-                guard markSubscriptionReady(identifier) else {
+                let subscription = await source.subscription()
+                guard !Task.isCancelled,
+                      mayProcessBootstrap(identifier) else {
                     return
                 }
 
-                for await event in stream {
+                for event in subscription.bootstrapEvents {
+                    guard await forwardBeforeReadiness(
+                        event,
+                        identifier: identifier,
+                        host: host
+                    ) else {
+                        return
+                    }
+                }
+
+                var iterator = subscription.events.makeAsyncIterator()
+                let readinessBoundary = UUID()
+                await subscription.requestReadinessBoundary(
+                    readinessBoundary
+                )
+                guard !Task.isCancelled,
+                      mayProcessBootstrap(identifier) else {
+                    return
+                }
+                var reachedReadinessBoundary = false
+
+                while let delivery = await iterator.next() {
+                    guard !Task.isCancelled,
+                          mayProcessBootstrap(identifier) else {
+                        return
+                    }
+                    switch delivery {
+                    case let .event(event):
+                        guard await forwardBeforeReadiness(
+                            event,
+                            identifier: identifier,
+                            host: host
+                        ) else {
+                            return
+                        }
+                    case let .readinessBoundary(candidate):
+                        guard candidate == readinessBoundary else {
+                            continue
+                        }
+                        reachedReadinessBoundary = true
+                    }
+                    if reachedReadinessBoundary {
+                        break
+                    }
+                }
+
+                guard reachedReadinessBoundary else {
+                    forwardingDidFinish(identifier)
+                    return
+                }
+
+                guard markBootstrapReady(identifier) else {
+                    return
+                }
+
+                while let delivery = await iterator.next() {
                     guard !Task.isCancelled,
                           mayForward(identifier) else {
                         break
+                    }
+                    guard case let .event(event) = delivery else {
+                        continue
                     }
                     if event == .willTerminate {
                         terminalLifecycleRequested = true
@@ -86,11 +173,11 @@ public actor AtlasVaultProductionLifecycleForwarder:
 
         state = .terminal
         terminalLifecycleRequested = true
-        resumeStartWaiters(with: false)
         resumeTerminalWaiters()
         let task = forwardingTask
         task?.cancel()
         await task?.value
+        resumeStartWaiters(with: false)
         forwardingTask = nil
     }
 
@@ -135,7 +222,38 @@ public actor AtlasVaultProductionLifecycleForwarder:
         }
     }
 
-    private func markSubscriptionReady(_ identifier: UUID) -> Bool {
+    private func mayProcessBootstrap(_ identifier: UUID) -> Bool {
+        guard case .starting(identifier) = state else {
+            return false
+        }
+        return true
+    }
+
+    private func forwardBeforeReadiness(
+        _ event: AtlasVaultLifecycleEvent,
+        identifier: UUID,
+        host: any AtlasVaultProductionHosting
+    ) async -> Bool {
+        guard !Task.isCancelled,
+              mayProcessBootstrap(identifier) else {
+            return false
+        }
+        if event == .willTerminate {
+            terminalLifecycleRequested = true
+        }
+        _ = await host.handleLifecycleEvent(event)
+        guard !Task.isCancelled,
+              mayProcessBootstrap(identifier) else {
+            return false
+        }
+        if event == .willTerminate {
+            forwardingDidFinish(identifier)
+            return false
+        }
+        return true
+    }
+
+    private func markBootstrapReady(_ identifier: UUID) -> Bool {
         guard case .starting(identifier) = state else {
             return false
         }
