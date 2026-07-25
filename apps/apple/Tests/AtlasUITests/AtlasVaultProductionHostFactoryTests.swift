@@ -878,7 +878,9 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         }
     }
 
-    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() throws {
+    func testPhase2D56IntroductionCommitHasExactReviewedSixFileSet()
+        throws
+    {
 #if os(macOS)
         let expected = Set([
             "docs/architecture/phase2d56_runtime_neutral_production_host.md",
@@ -889,33 +891,58 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
             "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostFactoryTests.swift",
         ])
 
-        XCTAssertEqual(try phaseChangedFiles(), expected)
+        let isShallow = try gitOutput([
+            "rev-parse",
+            "--is-shallow-repository",
+        ]) == "true"
+        if isShallow {
+            throw XCTSkip(
+                "Historical Phase 2D-56 scope assertions require complete Git history"
+            )
+        }
+
+        let introduction = try phase2D56IntroductionCommit()
+        let mergeBase = try gitOutput([
+            "merge-base",
+            introduction,
+            "HEAD",
+        ])
+        XCTAssertEqual(
+            mergeBase,
+            introduction,
+            "Phase 2D-56 introduction commit must be an ancestor of HEAD"
+        )
+        let parent = try firstParent(of: introduction)
+        XCTAssertEqual(
+            try changedPaths(from: parent, to: introduction),
+            expected
+        )
 #else
         throw XCTSkip(
-            "Git-based Phase 2D-56 allowlist verification requires macOS"
+            "Git-based Phase 2D-56 historical scope verification requires macOS"
         )
 #endif
     }
 
-    func testPhaseFileDiscoveryIsIndependentOfRecentCommitSubjects() throws {
+    func testHistoricalPhaseDiscoveryUsesNoBranchOrCommitSubjectPins()
+        throws
+    {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),
             encoding: .utf8
         )
         let discovery = try sourceSection(
             source,
-            from: "    private func phase"
-                + "ChangedFiles() throws -> Set<String> {",
+            from: "    private func phase2D56"
+                + "IntroductionCommit() throws -> String {",
             to: "    private func gitOutput"
                 + "(_ arguments: [String]) throws -> String {"
         )
 
+        XCTAssertTrue(discovery.contains("--reverse"))
         XCTAssertTrue(discovery.contains("--diff-filter=A"))
-        XCTAssertTrue(discovery.contains("--is-shallow-repository"))
-        XCTAssertTrue(discovery.contains("phase2D56BoundaryMarker"))
-        XCTAssertTrue(discovery.contains("phase2D56DocumentPath"))
-        XCTAssertTrue(discovery.contains("phaseEnd"))
         XCTAssertFalse(discovery.contains("\"-n\""))
+        XCTAssertFalse(discovery.contains("origin/master"))
         XCTAssertFalse(
             discovery.contains(
                 "Test AtlasVault runtime-neutral production host"
@@ -928,6 +955,57 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         )
     }
 
+    func testPhaseScopeAssertionIsHistoricalAndMergeStable() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let scopeTest = try sourceSection(
+            source,
+            from: "    func testPhase2D56"
+                + "IntroductionCommitHasExactReviewedSixFileSet()",
+            to: "    func testHistoricalPhase"
+                + "DiscoveryUsesNoBranchOrCommitSubjectPins()"
+        )
+        let discovery = try sourceSection(
+            source,
+            from: "    private func phase2D56"
+                + "IntroductionCommit() throws -> String {",
+            to: "    private func gitOutput"
+                + "(_ arguments: [String]) throws -> String {"
+        )
+        let workingBinding = "let " + "working = try gitOutput"
+        let untrackedBinding = "let " + "untracked = try gitOutput"
+        let untrackedCommand = "\"ls-" + "files\""
+        let untrackedOption = "\"--" + "others\""
+        let obsoletePhaseTerm = "phase" + "End"
+        let boundaryMarker = "phase2D56" + "BoundaryMarker"
+
+        XCTAssertTrue(scopeTest.contains("--is-shallow-repository"))
+        XCTAssertTrue(
+            scopeTest.contains(
+                "Historical Phase 2D-56 scope assertions require complete Git history"
+            )
+        )
+        XCTAssertTrue(scopeTest.contains("let mergeBase = try gitOutput(["))
+        XCTAssertTrue(
+            scopeTest.contains(
+                "Phase 2D-56 introduction commit must be an ancestor of HEAD"
+            )
+        )
+        XCTAssertFalse(scopeTest.contains("\"--is-ancestor\""))
+        XCTAssertTrue(discovery.contains("\"--reverse\""))
+        XCTAssertTrue(discovery.contains("\"--diff-filter=A\""))
+        XCTAssertTrue(discovery.contains("firstParent"))
+        XCTAssertTrue(discovery.contains("changedPaths"))
+        XCTAssertFalse(discovery.contains(workingBinding))
+        XCTAssertFalse(discovery.contains(untrackedBinding))
+        XCTAssertFalse(discovery.contains(untrackedCommand))
+        XCTAssertFalse(discovery.contains(untrackedOption))
+        XCTAssertFalse(discovery.contains(obsoletePhaseTerm))
+        XCTAssertFalse(discovery.contains(boundaryMarker))
+    }
+
     func testGitPhaseInspectionIsCompiledOnlyOnMacOS() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),
@@ -935,15 +1013,18 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         )
         let allowlistTest = try sourceSection(
             source,
-            from: "    func testPhaseFileSetIsExactlyTheAllowlistedSixFiles() throws {",
-            to: "    func testPhaseFileDiscoveryIsIndependentOfRecentCommitSubjects() throws {"
+            from: "    func testPhase2D56"
+                + "IntroductionCommitHasExactReviewedSixFileSet()",
+            to: "    func testHistoricalPhase"
+                + "DiscoveryUsesNoBranchOrCommitSubjectPins()"
         )
 
         XCTAssertTrue(allowlistTest.contains("#if os(macOS)"))
         XCTAssertTrue(allowlistTest.contains("throw XCTSkip("))
         XCTAssertTrue(
             source.contains(
-                "#if os(macOS)\n    private func phaseChangedFiles()"
+                "#if os(macOS)\n    private func phase2D56"
+                    + "IntroductionCommit()"
             )
         )
         XCTAssertFalse(
@@ -1165,88 +1246,47 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     }
 
 #if os(macOS)
-    private func phaseChangedFiles() throws -> Set<String> {
-        let isShallow = try gitOutput([
-            "rev-parse",
-            "--is-shallow-repository",
-        ]) == "true"
-        let committed: String
-        if isShallow {
-            committed = try gitOutput([
-                "grep",
-                "-l",
-                "-F",
-                phase2D56BoundaryMarker,
-                "--",
-                "docs",
-                "apps/apple/Sources/AtlasUI",
-                "apps/apple/Tests/AtlasUITests",
-            ])
-        } else {
-            let introduction = try phaseIntroductionCommit(
-                for: phase2D56AnchorPath
-            )
-            let documentIntroduction = try phaseIntroductionCommit(
-                for: phase2D56DocumentPath
-            )
-            let phaseEnd = introduction == documentIntroduction
-                ? introduction
-                : "HEAD"
-            let baseline = try gitOutput([
-                "rev-parse",
-                "\(introduction)^",
-            ])
-            committed = try gitOutput([
-                "diff",
-                "--name-only",
-                "\(baseline)..\(phaseEnd)",
-            ])
-        }
-
-        let working = try gitOutput([
-            "diff",
-            "--name-only",
-            "HEAD",
-        ])
-        let untracked = try gitOutput([
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-        ])
-        return Set(
-            [committed, working, untracked]
-                .joined(separator: "\n")
-                .split(separator: "\n")
-                .map(String.init)
-        )
-    }
-
-    private var phase2D56BoundaryMarker: String {
-        "Phase 2D-56 repository boundary"
-    }
-
-    private var phase2D56AnchorPath: String {
-        "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostTests.swift"
-    }
-
-    private var phase2D56DocumentPath: String {
-        "docs/architecture/phase2d56_runtime_neutral_production_host.md"
-    }
-
-    private func phaseIntroductionCommit(for path: String) throws -> String {
+    private func phase2D56IntroductionCommit() throws -> String {
         try XCTUnwrap(
             try gitOutput([
                 "log",
+                "--reverse",
                 "--diff-filter=A",
                 "--format=%H",
                 "--",
-                path,
+                "apps/apple/Tests/AtlasUITests/AtlasVaultProductionHostTests.swift",
             ])
             .split(separator: "\n")
             .first
             .map(String.init),
-            "Phase 2D-56 path introduction is unavailable"
+            "Phase 2D-56 introduction commit is unavailable"
         )
+    }
+
+    private func firstParent(of commit: String) throws -> String {
+        try gitOutput([
+            "rev-parse",
+            "\(commit)^1",
+        ])
+    }
+
+    private func changedPaths(
+        from parent: String,
+        to introduction: String
+    ) throws -> Set<String> {
+        let lines = try gitOutput([
+            "diff",
+            "--name-only",
+            parent,
+            introduction,
+            "--",
+        ])
+        .split(separator: "\n")
+        _ = try XCTUnwrap(
+            lines.first,
+            "Historical Phase 2D-56 introduction diff is empty"
+        )
+        return Set(lines.map(String.init))
     }
 
     private func gitOutput(_ arguments: [String]) throws -> String {
