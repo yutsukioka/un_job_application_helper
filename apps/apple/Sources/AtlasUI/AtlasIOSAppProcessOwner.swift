@@ -89,18 +89,18 @@ public final class AtlasIOSAppProcessOwner:
     private var terminalStopRequested = false
     private var lifetime: Lifetime = .available
 
-    public init(plan: AtlasIOSAppEntryIntegrationPlan) {
+    init(
+        plan: AtlasIOSAppEntryIntegrationPlan,
+        productionFactory:
+            @escaping @MainActor () throws
+                -> any AtlasIOSAppProcessHarness
+    ) {
         route = plan.route
         presentation = Self.initialPresentation(for: plan.route)
         if plan.route == .production {
-            productionFactory = {
-                guard let harness = try plan.productionHarnessIfNeeded() else {
-                    throw AtlasIOSAppProcessOwnerError.productionUnavailable
-                }
-                return harness
-            }
+            self.productionFactory = productionFactory
         } else {
-            productionFactory = nil
+            self.productionFactory = nil
         }
     }
 
@@ -119,22 +119,30 @@ public final class AtlasIOSAppProcessOwner:
 
     #if canImport(UIKit)
     public convenience init(environment: [String: String]) {
+        let productionFactory:
+            @MainActor () throws
+                -> AtlasVaultProductionCompositionHarness = {
+            let configuration = try Self.productionConfiguration(
+                environment: environment
+            )
+            let lifecycleSource =
+                AtlasIOSProcessLifecycleEventSource()
+            return try AtlasVaultProductionCompositionFactory
+                .makeUnwiredProductionLike(
+                    configuration: configuration,
+                    lifecycleEvents: lifecycleSource
+                )
+        }
         let plan = AtlasIOSAppEntryIntegrationPlan(
             environment: environment,
+            productionFactory: productionFactory
+        )
+        self.init(
+            plan: plan,
             productionFactory: {
-                let configuration = try Self.productionConfiguration(
-                    environment: environment
-                )
-                let lifecycleSource =
-                    AtlasIOSProcessLifecycleEventSource()
-                return try AtlasVaultProductionCompositionFactory
-                    .makeUnwiredProductionLike(
-                        configuration: configuration,
-                        lifecycleEvents: lifecycleSource
-                    )
+                try productionFactory()
             }
         )
-        self.init(plan: plan)
     }
     #endif
 

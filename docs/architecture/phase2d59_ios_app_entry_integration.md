@@ -61,8 +61,10 @@ authority.
 ## 6. Route-Plan Reuse
 
 `AtlasIOSAppEntryIntegrationPlan` remains the only parser for
-`ATLAS_REFERENCE_CAPTURE`. The process owner consumes its route and lazy
-production closure. It does not duplicate capture-mode parsing.
+`ATLAS_REFERENCE_CAPTURE`. The process owner consumes its route but owns a
+separate one-shot production factory. It does not duplicate capture-mode
+parsing, and it does not call the plan's caching harness accessor. This keeps
+an independently retained route plan from becoming a second harness owner.
 
 ## 7. Process Delegate
 
@@ -165,9 +167,10 @@ production work.
 
 The owner retains startup independently of any caller waiting for `start()`.
 Caller cancellation therefore cannot orphan the process operation. The lazy
-factory is consumed exactly once and released after transferring the harness,
-so the plan's internal cache cannot remain as a second owner-held reference.
-Stop-before-start releases the unused factory without invoking it.
+factory is consumed exactly once and released after transferring the harness.
+The route plan is not used as a harness cache, so retaining it independently
+cannot retain or later reissue the process harness. Stop-before-start releases
+the unused owner factory without invoking it.
 
 ## 24. Startup Coalescing
 
@@ -314,14 +317,17 @@ not sleeps or locks, prove retained and coalesced startup and terminal stop.
 Focused tests cover route construction, production isolation, lazy startup,
 concurrent callers, cancellation, fixed failure, stop-before-start,
 stop-during-start, terminal restart rejection, configuration policy, shared
-root ownership, rendering boundaries, and actual app source wiring. Existing
-Phase 2D-57 and Phase 2D-58 suites cover production-root boundaries,
-composition, host behavior, route planning, and lifecycle delivery.
+root ownership, retained-plan/harness lifetime separation, rendering
+boundaries, and actual app source wiring. Existing Phase 2D-57 and Phase 2D-58
+suites cover production-root boundaries, composition, host behavior, route
+planning, and lifecycle delivery.
 
 ## 49. iOS Build and Smoke Evidence
 
-The actual `AtlasApple` scheme builds for a generic iOS Simulator destination
-with the changed `@main` app target. No compatible simulator was booted during
+The package-level `AtlasApple` scheme and the actual
+`AtlasIOSHost/AtlasIOSHost.xcodeproj` `AtlasIOSHost` app scheme both build for
+a generic iOS Simulator destination. The direct host build compiles and links
+the changed `@main` target. No compatible simulator was booted during
 verification, so runtime smoke launches are not claimed.
 
 ## 50. Go/No-Go

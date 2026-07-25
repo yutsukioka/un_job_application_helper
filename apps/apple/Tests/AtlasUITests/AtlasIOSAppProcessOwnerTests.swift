@@ -154,6 +154,42 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
         XCTAssertNil(weakToken)
     }
 
+    func testRetainedRoutePlanCannotRetainTransferredProcessHarness() async {
+        var planFactoryCalls = 0
+        let plan = AtlasIOSAppEntryIntegrationPlan(
+            environment: [:],
+            productionFactory: {
+                planFactoryCalls += 1
+                throw ProcessOwnerTestError.production(
+                    "route plan factory must remain unused"
+                )
+            }
+        )
+        var offeredHarness: ProcessHarnessFake? = ProcessHarnessFake()
+        weak var weakHarness = offeredHarness
+        let owner = AtlasIOSAppProcessOwner(
+            plan: plan,
+            productionFactory: {
+                guard let harness = offeredHarness else {
+                    throw ProcessOwnerTestError.production(
+                        "harness already transferred"
+                    )
+                }
+                offeredHarness = nil
+                return harness
+            }
+        )
+
+        expectPresentation(await owner.start(), .productionReady)
+        XCTAssertEqual(planFactoryCalls, 0)
+        XCTAssertNotNil(weakHarness)
+
+        expectPresentation(await owner.stop(), .stopped)
+        XCTAssertEqual(planFactoryCalls, 0)
+        XCTAssertNil(weakHarness)
+        withExtendedLifetime(plan) {}
+    }
+
     func testStopBeforeStartReleasesUnusedProductionFactory() async {
         var token: ProcessFactoryLifetimeToken? =
             ProcessFactoryLifetimeToken()
@@ -405,9 +441,9 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
             "UserDefaults",
             "defaultBaseURL",
             "192.168.",
-            "Task.detached",
-            "nonisolated(unsafe)",
-            "@unchecked Sendable",
+            "Task." + "detached",
+            "nonisolated(" + "unsafe)",
+            "@unchecked " + "Sendable",
             "Codable",
         ] {
             XCTAssertFalse(source.contains(forbidden), forbidden)
@@ -417,6 +453,7 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
         XCTAssertTrue(source.contains("@Published"))
         XCTAssertTrue(source.contains("ATLAS_API_BASE_URL"))
         XCTAssertTrue(source.contains("http://127.0.0.1:8765"))
+        XCTAssertFalse(source.contains("plan.productionHarnessIfNeeded"))
     }
 
     private func makeOwner(
