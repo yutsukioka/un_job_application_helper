@@ -313,6 +313,32 @@ struct AtlasLocalVaultCreationEnvironment: Sendable {
         @Sendable () throws -> Data
 }
 
+struct AtlasLocalVaultCreationSelectionGate<
+    Selector: AtlasVaultIDSelecting
+>: AtlasVaultIDSelecting {
+    let selector: Selector
+    let loadJournal:
+        @Sendable () throws
+            -> AtlasLocalVaultCreationJournal?
+
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
+    {
+        let selection = try await selector.selectVaultID()
+        guard case .selected = selection else {
+            return selection
+        }
+        do {
+            guard try loadJournal() == nil else {
+                return .none
+            }
+        } catch {
+            return .none
+        }
+        return selection
+    }
+}
+
 public actor AtlasLocalVaultCreationCoordinator:
     AtlasLocalVaultCreating,
     CustomStringConvertible,

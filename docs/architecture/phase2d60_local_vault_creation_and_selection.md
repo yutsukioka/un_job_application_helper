@@ -138,14 +138,18 @@ fails closed and retains the resumable journal, key, and store.
 The journal is cleared only after selection read-back succeeds. A clear
 failure leaves selection intact, returns fixed `completionPending`, and does
 not open the unlock panel. Explicit retry verifies the configured vault and
-clears the journal.
+clears the journal. On relaunch, a persisted selection remains masked from
+the host while any creation journal remains, so ordinary unlock cannot bypass
+this explicit completion step.
 
 ## 21. Crash Resumption
 
 An existing journal fixes the same vault identifier, store identifier, and
 creation timestamp across retries. Existing valid key and empty store
 material are reused. A matching selected vault plus journal is verified
-before the journal is cleared.
+before the journal is cleared. A relaunch with that partial state returns to
+the explicit local-vault setup surface; it does not silently enter the
+ordinary selected-vault unlock route.
 
 ## 22. Cancellation and Pause
 
@@ -164,7 +168,10 @@ selection verification.
 
 A selected vault without a journal is treated as configured only after its
 Keychain key and encrypted store validate. The existing store may contain
-valid encrypted records and reviewed wrapped-key metadata.
+valid encrypted records and reviewed wrapped-key metadata. The host-facing
+selection gate exposes that selection only when the creation journal is
+absent. The coordinator continues to read the underlying registry directly
+so it can verify and complete a matching pending transaction.
 
 ## 25. Conflict and Recovery-Required Behavior
 
@@ -212,7 +219,9 @@ automatic action from view construction, `.task`, or appearance callbacks.
 selection retry from exact `noVault`. Retry requires started, active,
 protected-data-available, lifecycle-admitted state with no safe check,
 selection, submit, reconciliation barrier, stop, termination, or existing
-unlock controller.
+unlock controller. A selected vault with an uncleared or unreadable creation
+journal is deliberately projected as `noVault` to this host boundary until an
+explicit setup retry completes or reaches fixed recovery-required state.
 
 ## 32. No Automatic Unlock
 
@@ -232,13 +241,18 @@ submit local-key unlock.
 The production-like composition factory assembles one coordinator from the
 existing runtime services, selection registry, atomic persistence, and the
 same Keychain client used by key and selection storage. Assembly performs no
-I/O.
+I/O. It also assembles a side-effect-free host selection gate over that same
+registry and journal store; journal inspection occurs only during an explicit
+unlock request for a persisted selected vault.
 
 ## 35. Shared Multi-Window Creation Authority
 
 The harness retains one creation presentation owner and action context.
 Every production root made by that process harness receives the same context,
-so windows do not create competing transactions or owners.
+so windows do not create competing transactions or owners. Modal visibility
+is separate per-root state: only the scene that accepts the create action
+presents a sheet, while other scenes observe the shared transaction state
+without presenting duplicate sheets.
 
 ## 36. Harness Terminal Stop
 
@@ -251,7 +265,9 @@ can outlive the stopped harness.
 The production root stores an optional immutable creation context. When
 present, a private nested child observes the injected owner and offers an
 explicit sheet from the locked-public `noVault` state. The root constructs no
-creation authority or service.
+creation authority or service. Each nested root owns only a local Boolean for
+its sheet presentation; it does not duplicate the shared coordinator,
+presentation owner, or actions.
 
 ## 38. Compatibility Initializers
 
@@ -277,7 +293,10 @@ artifacts, and continues to the locked unlock panel.
 After explicit stop, a new harness using the same temporary root and
 in-memory Keychain finds the selected vault without starting creation. A new
 explicit unlock request opens the existing panel, and explicit local-key
-selection and submit unlock the same vault.
+selection and submit unlock the same vault. A second relaunch case injects a
+journal-clear failure after selection readiness, verifies that ordinary
+unlock remains gated, explicitly completes the matching journal, and only
+then opens the existing unlock panel.
 
 ## 42. Empty-Store Hydration
 
@@ -317,14 +336,20 @@ failed for missing creation core/view types, no-vault retry, harness/root
 context, or the blocked fresh-install journey. Persistent evidence records
 the red commit and focused failures.
 
+Exact-head review added deterministic red evidence for two integration
+boundaries: scene-local sheet presentation and relaunch with a selected vault
+plus pending journal. Both were repaired without changing the file allowlist.
+
 ## 48. Test Coverage
 
 Focused coverage includes strict journal encoding, secure generation,
 transaction order, canonical store bytes, durability retry, resumption,
 conflicts, cancellation and coalescing, presentation behavior, view source
 boundaries, host retry, harness compatibility, root compatibility, and the
-fresh-install/relaunch journey. Existing Phase 2D-59 and historical
-merge-stability suites remain required.
+fresh-install/relaunch journey. It also covers pending-journal selection
+gating, explicit post-selection completion after relaunch, and scene-local
+sheet ownership over shared process authority. Existing Phase 2D-59 and
+historical merge-stability suites remain required.
 
 ## 49. iOS Build and End-to-End Evidence
 

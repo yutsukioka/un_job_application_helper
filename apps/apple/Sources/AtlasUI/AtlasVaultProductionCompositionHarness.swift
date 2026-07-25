@@ -855,6 +855,17 @@ public enum AtlasVaultProductionCompositionFactory {
         let vaultSelector = AtlasKeychainVaultSelectionRegistry(
             client: keychainClient
         )
+        let creationJournalStore =
+            AtlasKeychainLocalVaultCreationJournalStore(
+                client: keychainClient
+            )
+        let hostVaultSelector =
+            AtlasLocalVaultCreationSelectionGate(
+                selector: vaultSelector,
+                loadJournal: {
+                    try creationJournalStore.loadJournal()
+                }
+            )
         let runtimeServices = AtlasVaultRuntimeFactory.production(
             directoryLocator: directoryLocator,
             keychainClient: keychainClient,
@@ -894,7 +905,7 @@ public enum AtlasVaultProductionCompositionFactory {
         let hostDependencies = AtlasVaultProductionHostDependencies(
             publicJobs: publicJobs,
             publicSnapshotRestorer: publicSnapshotRestorer,
-            vaultIDSelector: vaultSelector,
+            vaultIDSelector: hostVaultSelector,
             runtime: runtime,
             lifecycle: lifecycle,
             presentation: presentation,
@@ -911,10 +922,7 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasLocalVaultCreationCoordinator.production(
                 runtimeServices: runtimeServices,
                 selectionRegistry: vaultSelector,
-                journalStore:
-                    AtlasKeychainLocalVaultCreationJournalStore(
-                        client: keychainClient
-                    )
+                journalStore: creationJournalStore
             )
         let creationOwner =
             AtlasLocalVaultCreationPresentationOwner(

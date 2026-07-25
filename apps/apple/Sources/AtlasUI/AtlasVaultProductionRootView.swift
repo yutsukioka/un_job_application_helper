@@ -76,6 +76,7 @@ private struct AtlasVaultCreationEnabledRoot: View {
     @ObservedObject var creationOwner:
         AtlasLocalVaultCreationPresentationOwner
     let creationActions: AtlasLocalVaultCreationActions
+    @State private var isCreationPresented = false
 
     var body: some View {
         AtlasLockedShellUnlockFlowView(
@@ -88,7 +89,7 @@ private struct AtlasVaultCreationEnabledRoot: View {
                 HStack {
                     Spacer()
                     Button {
-                        creationActions.present()
+                        presentCreation()
                     } label: {
                         Label(
                             "Create Local Vault",
@@ -105,9 +106,11 @@ private struct AtlasVaultCreationEnabledRoot: View {
         .sheet(
             isPresented: Binding(
                 get: {
-                    creationOwner.presentation != .hidden
+                    isCreationPresented
+                        && creationOwner.presentation != .hidden
                 },
                 set: { isPresented in
+                    isCreationPresented = isPresented
                     if !isPresented {
                         creationActions.dismiss()
                     }
@@ -122,6 +125,20 @@ private struct AtlasVaultCreationEnabledRoot: View {
                 creationOwner.presentation == .creating
             )
         }
+        .onChange(of: creationOwner.presentation) { _, presentation in
+            if presentation == .hidden {
+                isCreationPresented = false
+            }
+        }
+    }
+
+    private func presentCreation() {
+        guard creationOwner.presentation == .hidden else {
+            return
+        }
+        creationActions.present()
+        isCreationPresented =
+            creationOwner.presentation != .hidden
     }
 
     private var showsCreateAction: Bool {

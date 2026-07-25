@@ -177,6 +177,51 @@ final class AtlasLocalVaultCreationTests: XCTestCase {
         XCTAssertFalse(events.contains("storeSelection"))
     }
 
+    func testPendingJournalGatesPersistedSelectionUntilCompletion()
+        async throws
+    {
+        let selected = try AtlasSelectedVaultID(
+            validating: Self.vaultID
+        )
+        let selector = CreationSelectionSource(
+            selection: .selected(selected)
+        )
+        let pending = try Self.journal()
+
+        let pendingGate = AtlasLocalVaultCreationSelectionGate(
+            selector: selector,
+            loadJournal: { pending }
+        )
+        let pendingSelection = try await pendingGate.selectVaultID()
+        XCTAssertEqual(
+            pendingSelection,
+            .none
+        )
+
+        let completedGate = AtlasLocalVaultCreationSelectionGate(
+            selector: selector,
+            loadJournal: { nil }
+        )
+        let completedSelection = try await completedGate.selectVaultID()
+        XCTAssertEqual(
+            completedSelection,
+            .selected(selected)
+        )
+
+        let unreadableGate = AtlasLocalVaultCreationSelectionGate(
+            selector: selector,
+            loadJournal: {
+                throw AtlasLocalVaultCreationFailure.unavailable
+            }
+        )
+        let unavailableSelection =
+            try await unreadableGate.selectVaultID()
+        XCTAssertEqual(
+            unavailableSelection,
+            .none
+        )
+    }
+
     func testConflictingJournalOrStoreFailsClosedWithoutDeletion()
         async throws
     {
@@ -685,6 +730,16 @@ private final class CreationTransactionRig: Sendable {
 
     func setClearFails(_ value: Bool) {
         state.withLock { $0.clearFails = value }
+    }
+}
+
+private struct CreationSelectionSource: AtlasVaultIDSelecting {
+    let selection: AtlasVaultIDSelection
+
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
+    {
+        selection
     }
 }
 

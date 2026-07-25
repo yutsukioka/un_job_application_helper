@@ -1656,9 +1656,11 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
 
         for required in [
             "AtlasLocalVaultCreationCoordinator",
+            "AtlasLocalVaultCreationSelectionGate",
             "AtlasLocalVaultCreationPresentationOwner",
             "runtimeServices: runtimeServices",
             "client: keychainClient",
+            "vaultIDSelector: hostVaultSelector",
             "creationContext",
             "creationOwner.stop",
             "creationContext: nil",

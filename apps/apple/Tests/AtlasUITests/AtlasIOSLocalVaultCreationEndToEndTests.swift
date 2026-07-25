@@ -223,6 +223,124 @@ final class AtlasIOSLocalVaultCreationEndToEndTests: XCTestCase {
         _ = await second.stop()
     }
 
+    func testRelaunchWithSelectedVaultAndPendingJournalRequiresExplicitCompletion()
+        async throws
+    {
+        let root = try AtlasVaultTestFileSystemSupport
+            .canonicalTemporaryRoot()
+            .appendingPathComponent(
+                "phase2d60-pending-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let keychain = E2EMemoryKeychainClient(
+            journalDeleteFailures: 1
+        )
+        let directory = E2EDirectoryLocator(root: root)
+        let publicJobs = E2EPublicJobs()
+        let firstLifecycle = E2ELifecycleSource()
+        let firstTime = E2ELifecycleTime()
+        let first = try AtlasVaultProductionCompositionFactory
+            .makeUnwiredProductionLike(
+                configuration: try Self.configuration(),
+                lifecycleEvents: firstLifecycle,
+                directoryLocator: directory,
+                keychainClient: keychain,
+                atomicFileSystemClient:
+                    AtlasFoundationAtomicFileSystemClient(),
+                lifecycleClock: firstTime,
+                lifecycleSleeper: firstTime,
+                publicJobs: publicJobs,
+                publicSnapshotRestorer: E2EPublicSnapshotRestorer(),
+                unlockRequestSleep: { _ in
+                    throw CancellationError()
+                }
+            )
+
+        _ = try await first.start()
+        await first.publicShellActions.requestUnlock()
+        let firstContext = try XCTUnwrap(
+            first.creationContextForTesting
+        )
+        firstContext.actions.present()
+        firstContext.actions.createOrResume()
+        await firstContext.owner.waitForCurrentOperationForTesting()
+
+        XCTAssertEqual(
+            firstContext.owner.presentation,
+            .completionPending
+        )
+        let registry = AtlasKeychainVaultSelectionRegistry(
+            client: keychain
+        )
+        guard case .selected = try await registry.selectVaultID() else {
+            XCTFail("Selection readiness was not retained")
+            return
+        }
+        XCTAssertNotNil(keychain.creationJournalData())
+        _ = await first.stop()
+
+        let secondLifecycle = E2ELifecycleSource()
+        let secondTime = E2ELifecycleTime()
+        let second = try AtlasVaultProductionCompositionFactory
+            .makeUnwiredProductionLike(
+                configuration: try Self.configuration(),
+                lifecycleEvents: secondLifecycle,
+                directoryLocator: directory,
+                keychainClient: keychain,
+                atomicFileSystemClient:
+                    AtlasFoundationAtomicFileSystemClient(),
+                lifecycleClock: secondTime,
+                lifecycleSleeper: secondTime,
+                publicJobs: publicJobs,
+                publicSnapshotRestorer: E2EPublicSnapshotRestorer(),
+                unlockRequestSleep: { _ in
+                    throw CancellationError()
+                }
+            )
+
+        _ = try await second.start()
+        await second.publicShellActions.requestUnlock()
+        XCTAssertEqual(
+            second.presentationOwner.flowState.publicShell.vaultStatus,
+            .noVault
+        )
+        XCTAssertEqual(
+            second.presentationOwner.flowState.mode,
+            .lockedPublic
+        )
+
+        let secondContext = try XCTUnwrap(
+            second.creationContextForTesting
+        )
+        secondContext.actions.present()
+        secondContext.actions.createOrResume()
+        await secondContext.owner.waitForCurrentOperationForTesting()
+
+        XCTAssertEqual(secondContext.owner.presentation, .hidden)
+        XCTAssertNil(keychain.creationJournalData())
+        XCTAssertEqual(
+            second.presentationOwner.flowState.publicShell.vaultStatus,
+            .locked
+        )
+        XCTAssertEqual(
+            second.presentationOwner.flowState.mode,
+            .unlockPanel
+        )
+        XCTAssertNil(
+            second.presentationOwner.flowState.unlockPanelState?
+                .selectedMethod
+        )
+        _ = await second.stop()
+    }
+
     func testProductionCompositionExposesOneSharedExplicitContext()
         throws
     {
@@ -286,9 +404,16 @@ private final class E2EMemoryKeychainClient:
         var items: [String: AtlasKeychainItem] = [:]
         var operations: [String] = []
         var addServices: [String] = []
+        var journalDeleteFailures: Int
     }
 
-    private let state = Mutex(State())
+    private let state: Mutex<State>
+
+    init(journalDeleteFailures: Int = 0) {
+        state = Mutex(
+            State(journalDeleteFailures: journalDeleteFailures)
+        )
+    }
 
     func add(_ item: AtlasKeychainItem) -> OSStatus {
         state.withLock {
@@ -346,6 +471,14 @@ private final class E2EMemoryKeychainClient:
     func delete(_ query: AtlasKeychainQuery) -> OSStatus {
         state.withLock {
             $0.operations.append("delete:\(query.service)")
+            if query.service
+                == AtlasKeychainLocalVaultCreationJournalStore<
+                    E2EMemoryKeychainClient
+                >.service,
+               $0.journalDeleteFailures > 0 {
+                $0.journalDeleteFailures -= 1
+                return errSecInteractionNotAllowed
+            }
             let removed = $0.items.removeValue(
                 forKey: Self.key(query.service, query.account)
             )
@@ -367,6 +500,19 @@ private final class E2EMemoryKeychainClient:
         state.withLock {
             $0.items[Self.key(service, account)]?.valueData
         }
+    }
+
+    func creationJournalData() -> Data? {
+        data(
+            service:
+                AtlasKeychainLocalVaultCreationJournalStore<
+                    E2EMemoryKeychainClient
+                >.service,
+            account:
+                AtlasKeychainLocalVaultCreationJournalStore<
+                    E2EMemoryKeychainClient
+                >.account
+        )
     }
 
     private static func key(_ service: String, _ account: String) -> String {

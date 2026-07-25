@@ -175,6 +175,35 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testCreationSheetPresentationIsLocalToTheInitiatingRoot()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "@State private var isCreationPresented = false",
+            "guard creationOwner.presentation == .hidden",
+            "isCreationPresented =\n"
+                + "            creationOwner.presentation != .hidden",
+            "isCreationPresented = isPresented",
+            "isCreationPresented\n"
+                + "                        && creationOwner.presentation",
+            ".onChange(of: creationOwner.presentation)",
+            "creationOwner.presentation != .hidden",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains(
+                "isPresented: Binding(\n"
+                    + "                get: {\n"
+                    + "                    creationOwner.presentation"
+            )
+        )
+    }
+
     func testHistoricalScopeAssertionsDoNotPinCurrentAppEntry() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),
