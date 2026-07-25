@@ -499,6 +499,8 @@ final class AtlasLocalVaultCreationTests: XCTestCase {
             "storeSelection",
             "clearJournal",
             "Task.checkCancellation()",
+            "var workingKey = try environment.loadVaultKey",
+            "workingKey.resetBytes",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
@@ -511,6 +513,7 @@ final class AtlasLocalVaultCreationTests: XCTestCase {
             "UserDefaults",
             "LocalAuthentication",
             "LAContext",
+            "var workingKey = key",
         ] {
             XCTAssertFalse(source.contains(forbidden), forbidden)
         }

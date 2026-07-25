@@ -91,7 +91,9 @@ published by the creation presentation layer.
 The transaction keeps working key bytes in mutable `Data` only while resolving
 and using the encrypted store. A `defer` resets the bytes and releases
 capacity where practical. This is best-effort cleanup and is not represented
-as universal Swift memory zeroization.
+as universal Swift memory zeroization. Configured-selection verification loads
+directly into one mutable local `Data` value so a second local copy-on-write
+reference does not defeat that best-effort reset.
 
 ## 14. Canonical Empty Store
 
@@ -348,6 +350,9 @@ plus pending journal. Both were repaired without changing the file allowlist.
 A subsequent exact-head review added deterministic red evidence for reclaiming
 a non-hidden shared setup after the presenting scene disappears. The repair
 uses a transferable UI claim and changes no persistence or process authority.
+Exact-head Copilot review then added deterministic red evidence for resetting
+the local-only warning acknowledgement on each presentation and retaining only
+one mutable local key buffer during configured-selection verification.
 
 ## 48. Test Coverage
 
@@ -359,8 +364,10 @@ fresh-install/relaunch journey. It also covers pending-journal selection
 gating, explicit post-selection completion after relaunch, and scene-local
 sheet ownership over shared process authority. Presentation-owner tests also
 verify that a second scene can take the claim without dismissing the shared
-flow and that stale claim release cannot hide it. Existing Phase 2D-59 and
-historical merge-stability suites remain required.
+flow and that stale claim release cannot hide it. Source-boundary tests verify
+per-presentation acknowledgement reset and the absence of a second local key
+buffer before best-effort wiping. Existing Phase 2D-59 and historical
+merge-stability suites remain required.
 
 ## 49. iOS Build and End-to-End Evidence
 

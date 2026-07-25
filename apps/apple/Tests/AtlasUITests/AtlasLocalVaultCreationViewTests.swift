@@ -269,9 +269,17 @@ final class AtlasLocalVaultCreationViewTests: XCTestCase {
             "Pause Setup",
             "Retry Setup",
             "recovery are not available yet",
+            ".onChange(of: owner.presentation)",
+            "case .hidden, .ready:",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
+        XCTAssertGreaterThanOrEqual(
+            source.components(
+                separatedBy: "acknowledgedDeviceLocalRisk = false"
+            ).count - 1,
+            2
+        )
         for forbidden in [
             "TextField(",
             "SecureField(",

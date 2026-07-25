@@ -416,6 +416,14 @@ public struct AtlasLocalVaultCreationView: View {
         }
         .padding(20)
         .frame(minWidth: 320, idealWidth: 460)
+        .onChange(of: owner.presentation) { _, presentation in
+            switch presentation {
+            case .hidden, .ready:
+                acknowledgedDeviceLocalRisk = false
+            default:
+                break
+            }
+        }
     }
 
     @ViewBuilder

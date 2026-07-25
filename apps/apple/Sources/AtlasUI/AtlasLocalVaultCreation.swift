@@ -589,12 +589,14 @@ public actor AtlasLocalVaultCreationCoordinator:
         environment: AtlasLocalVaultCreationEnvironment
     ) throws {
         guard
-            let key = try environment.loadVaultKey(selected.vaultID),
-            key.count == AtlasVaultRecordCrypto.vaultKeyByteCount
+            var workingKey = try environment.loadVaultKey(
+                selected.vaultID
+            ),
+            workingKey.count
+                == AtlasVaultRecordCrypto.vaultKeyByteCount
         else {
             throw AtlasLocalVaultCreationFailure.recoveryRequired
         }
-        var workingKey = key
         defer {
             if !workingKey.isEmpty {
                 workingKey.resetBytes(
