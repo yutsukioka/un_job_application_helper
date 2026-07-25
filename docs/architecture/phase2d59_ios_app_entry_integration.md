@@ -185,7 +185,10 @@ owner-retained stop task. It never creates production solely to stop it.
 ## 27. Retained Stop
 
 The retained stop task outlives any cancelled waiter. Concurrent and repeated
-`stop()` calls join the same terminal operation.
+`stop()` calls join the same terminal operation. A harness whose start fails
+remains retained until this explicit teardown can stop any partially started
+resources. The owner releases its harness reference only after harness stop
+completes.
 
 ## 28. Start/Stop Race
 

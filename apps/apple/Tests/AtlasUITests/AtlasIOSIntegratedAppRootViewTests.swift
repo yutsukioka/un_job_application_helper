@@ -145,10 +145,11 @@ final class AtlasIOSIntegratedAppRootViewTests: XCTestCase {
     private func observedOwner(
         in root: AtlasIOSIntegratedAppRootView
     ) throws -> AtlasIOSAppProcessOwner {
-        let wrapper = try XCTUnwrap(
-            Mirror(reflecting: root).descendant("_owner")
-                as? ObservedObject<AtlasIOSAppProcessOwner>
-        )
+        let wrappers = Mirror(reflecting: root).children.compactMap {
+            $0.value as? ObservedObject<AtlasIOSAppProcessOwner>
+        }
+        XCTAssertEqual(wrappers.count, 1)
+        let wrapper = try XCTUnwrap(wrappers.first)
         return wrapper.wrappedValue
     }
 

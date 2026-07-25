@@ -161,6 +161,32 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
         XCTAssertEqual(probe.calls, 1)
         XCTAssertEqual(harness.startCalls, 1)
         XCTAssertNil(owner.productionRootView())
+
+        expectPresentation(await owner.stop(), .stopped)
+        XCTAssertEqual(harness.stopCalls, 1)
+    }
+
+    func testTerminalStopReleasesHarnessAfterTeardown() async {
+        var offeredHarness: ProcessHarnessFake? = ProcessHarnessFake()
+        weak var weakHarness = offeredHarness
+        let owner = AtlasIOSAppProcessOwner(
+            route: .production,
+            productionFactory: {
+                guard let harness = offeredHarness else {
+                    throw ProcessOwnerTestError.production(
+                        "harness already transferred"
+                    )
+                }
+                offeredHarness = nil
+                return harness
+            }
+        )
+
+        expectPresentation(await owner.start(), .productionReady)
+        XCTAssertNotNil(weakHarness)
+
+        expectPresentation(await owner.stop(), .stopped)
+        XCTAssertNil(weakHarness)
     }
 
     func testStopBeforeStartConstructsNothingAndRejectsRestart() async {

@@ -338,6 +338,7 @@ public final class AtlasIOSAppProcessOwner:
     ) async -> AtlasIOSAppProcessPresentation {
         if let retainedHarness {
             _ = await retainedHarness.stop()
+            self.retainedHarness = nil
         }
         if let startOperation {
             _ = await startOperation.task.value
