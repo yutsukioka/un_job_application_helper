@@ -928,6 +928,35 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         )
     }
 
+    func testPhaseScopeAssertionIsHistoricalAndMergeStable() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath),
+            encoding: .utf8
+        )
+        let discovery = try sourceSection(
+            source,
+            from: "    private func phase"
+                + "ChangedFiles() throws -> Set<String> {",
+            to: "    private func gitOutput"
+                + "(_ arguments: [String]) throws -> String {"
+        )
+        let workingBinding = "let " + "working = try gitOutput"
+        let untrackedBinding = "let " + "untracked = try gitOutput"
+        let currentHead = "\"" + "HEAD" + "\""
+        let untrackedCommand = "\"ls-" + "files\""
+        let untrackedOption = "\"--" + "others\""
+        let phaseEnd = "phase" + "End"
+        let boundaryMarker = "phase2D56" + "BoundaryMarker"
+
+        XCTAssertFalse(discovery.contains(workingBinding))
+        XCTAssertFalse(discovery.contains(untrackedBinding))
+        XCTAssertFalse(discovery.contains(currentHead))
+        XCTAssertFalse(discovery.contains(untrackedCommand))
+        XCTAssertFalse(discovery.contains(untrackedOption))
+        XCTAssertFalse(discovery.contains(phaseEnd))
+        XCTAssertFalse(discovery.contains(boundaryMarker))
+    }
+
     func testGitPhaseInspectionIsCompiledOnlyOnMacOS() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),
