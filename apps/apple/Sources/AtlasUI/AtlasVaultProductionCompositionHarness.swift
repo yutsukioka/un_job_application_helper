@@ -488,6 +488,7 @@ public final class AtlasVaultProductionCompositionHarness:
 
     private let host: any AtlasVaultProductionHosting
     private let lifecycleForwarder: AtlasVaultProductionLifecycleForwarder
+    private let creationContext: AtlasLocalVaultCreationContext?
     private var lifetime: Lifetime = .inactive
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -495,16 +496,35 @@ public final class AtlasVaultProductionCompositionHarness:
     private var terminalStopRequested = false
     private var stoppingWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(
+    convenience init(
         host: any AtlasVaultProductionHosting,
         presentationOwner: AtlasVaultProductionPresentationOwner,
         lifecycleForwarder: AtlasVaultProductionLifecycleForwarder,
         publicSearchLimit: Int,
         unlockTimeout: Duration
     ) {
+        self.init(
+            host: host,
+            presentationOwner: presentationOwner,
+            lifecycleForwarder: lifecycleForwarder,
+            publicSearchLimit: publicSearchLimit,
+            unlockTimeout: unlockTimeout,
+            creationContext: nil
+        )
+    }
+
+    init(
+        host: any AtlasVaultProductionHosting,
+        presentationOwner: AtlasVaultProductionPresentationOwner,
+        lifecycleForwarder: AtlasVaultProductionLifecycleForwarder,
+        publicSearchLimit: Int,
+        unlockTimeout: Duration,
+        creationContext: AtlasLocalVaultCreationContext?
+    ) {
         self.host = host
         self.presentationOwner = presentationOwner
         self.lifecycleForwarder = lifecycleForwarder
+        self.creationContext = creationContext
 
         publicShellActions = AtlasLockedPublicShellActions(
             search: { query in
@@ -638,9 +658,13 @@ public final class AtlasVaultProductionCompositionHarness:
         let identifier = UUID()
         let host = host
         let lifecycleForwarder = lifecycleForwarder
+        let creationOwner = creationContext?.owner
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
+            if let creationOwner {
+                await creationOwner.stop()
+            }
             let state = await hostState
             _ = await lifecycleStop
             return state
@@ -656,7 +680,15 @@ public final class AtlasVaultProductionCompositionHarness:
     }
 
     public func makeRootView() -> AtlasVaultProductionRootView {
-        AtlasVaultProductionRootView(
+        if let creationContext {
+            return AtlasVaultProductionRootView(
+                owner: presentationOwner,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                creationContext: creationContext
+            )
+        }
+        return AtlasVaultProductionRootView(
             owner: presentationOwner,
             publicShellActions: publicShellActions,
             unlockActions: unlockActions
@@ -673,6 +705,10 @@ public final class AtlasVaultProductionCompositionHarness:
 
     func lifecycleIsRunningForTesting() async -> Bool {
         await lifecycleForwarder.isRunningForTesting()
+    }
+
+    var creationContextForTesting: AtlasLocalVaultCreationContext? {
+        creationContext
     }
 
     func waitUntilStoppingForTesting() async {
@@ -789,7 +825,13 @@ public enum AtlasVaultProductionCompositionFactory {
         keychainClient: KeychainClient,
         atomicFileSystemClient: AtomicFileSystemClient,
         lifecycleClock: LifecycleClock,
-        lifecycleSleeper: LifecycleSleeper
+        lifecycleSleeper: LifecycleSleeper,
+        publicJobs injectedPublicJobs:
+            (any AtlasPublicJobSearching)? = nil,
+        publicSnapshotRestorer injectedPublicSnapshotRestorer:
+            (any AtlasPublicSnapshotRestoring)? = nil,
+        unlockRequestSleep:
+            (@Sendable (Duration) async throws -> Void)? = nil
     ) throws -> AtlasVaultProductionCompositionHarness {
         let productionCapabilities =
             AtlasVaultUnlockCapabilities.currentProduction
@@ -799,14 +841,17 @@ public enum AtlasVaultProductionCompositionFactory {
         }
 
         let apiClient = AtlasAPIClient(baseURL: configuration.apiBaseURL)
-        let publicJobs = AtlasAPIClientPublicJobAdapter(client: apiClient)
+        let publicJobs: any AtlasPublicJobSearching =
+            injectedPublicJobs
+                ?? AtlasAPIClientPublicJobAdapter(client: apiClient)
         let rootProvider = AtlasApplicationSupportVaultRootProvider(
             directoryLocator: directoryLocator
         )
-        let publicSnapshotRestorer =
-            AtlasApplicationSupportPublicSnapshotRestorer(
-                rootProvider: rootProvider
-            )
+        let publicSnapshotRestorer: any AtlasPublicSnapshotRestoring =
+            injectedPublicSnapshotRestorer
+                ?? AtlasApplicationSupportPublicSnapshotRestorer(
+                    rootProvider: rootProvider
+                )
         let vaultSelector = AtlasKeychainVaultSelectionRegistry(
             client: keychainClient
         )
@@ -836,6 +881,9 @@ public enum AtlasVaultProductionCompositionFactory {
             },
             activate: { request in
                 try await runtime.activate(request)
+            },
+            sleep: unlockRequestSleep ?? { duration in
+                try await Task.sleep(for: duration)
             }
         )
         let unlockCoordinator = AtlasVaultUnlockRequestCoordinator(
@@ -859,6 +907,40 @@ public enum AtlasVaultProductionCompositionFactory {
             builder: AtlasVaultProductionHostBuilder()
         )
         let host = hostFactory.makeHost()
+        let creationCoordinator =
+            AtlasLocalVaultCreationCoordinator.production(
+                runtimeServices: runtimeServices,
+                selectionRegistry: vaultSelector,
+                journalStore:
+                    AtlasKeychainLocalVaultCreationJournalStore(
+                        client: keychainClient
+                    )
+            )
+        let creationOwner =
+            AtlasLocalVaultCreationPresentationOwner(
+                creator: creationCoordinator,
+                continueToUnlock: {
+                    await host.requestUnlockPanel()
+                }
+            )
+        let creationActions = AtlasLocalVaultCreationActions(
+            present: { [weak creationOwner] in
+                creationOwner?.present()
+            },
+            dismiss: { [weak creationOwner] in
+                creationOwner?.dismiss()
+            },
+            createOrResume: { [weak creationOwner] in
+                creationOwner?.beginCreateOrResume()
+            },
+            pause: { [weak creationOwner] in
+                await creationOwner?.pause()
+            }
+        )
+        let creationContext = AtlasLocalVaultCreationContext(
+            owner: creationOwner,
+            actions: creationActions
+        )
         let lifecycleForwarder = AtlasVaultProductionLifecycleForwarder(
             source: lifecycleEvents,
             host: host
@@ -868,7 +950,8 @@ public enum AtlasVaultProductionCompositionFactory {
             presentationOwner: presentationOwner,
             lifecycleForwarder: lifecycleForwarder,
             publicSearchLimit: configuration.publicSearchLimit,
-            unlockTimeout: configuration.unlockTimeout
+            unlockTimeout: configuration.unlockTimeout,
+            creationContext: creationContext
         )
     }
 }

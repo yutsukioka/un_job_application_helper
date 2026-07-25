@@ -332,7 +332,10 @@ public actor AtlasVaultProductionHost:
         if let selectionOperation {
             return await waitForSelectionCompletion(selectionOperation)
         }
-        guard isUnlockOperationAvailable else {
+        guard
+            isUnlockOperationAvailable
+                || isNoVaultSelectionRetryAvailable
+        else {
             return flowState()
         }
         if let unlockController {
@@ -735,6 +738,21 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
     }
 
+    private var isNoVaultSelectionRetryAvailable: Bool {
+        lifetime == .started
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && barrierOperation == nil
+            && stopOperation == nil
+            && unlockController == nil
+            && shell.vaultStatus == .noVault
+    }
+
     private var startAdmissionPermitted: Bool {
         lifecycleIsActive
             && protectedDataIsAvailable
@@ -1048,6 +1066,10 @@ public actor AtlasVaultProductionHost:
             unlockController = controller
             unlockState = current
             isUnlockPanelPresented = true
+            replaceShell(
+                vaultStatus: .locked,
+                canRequestUnlock: false
+            )
         case .failure:
             replaceShell(
                 vaultStatus: .keyUnavailable,

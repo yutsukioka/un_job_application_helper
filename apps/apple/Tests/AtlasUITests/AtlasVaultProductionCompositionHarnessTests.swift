@@ -1657,11 +1657,24 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         for required in [
             "AtlasLocalVaultCreationCoordinator",
             "AtlasLocalVaultCreationPresentationOwner",
+            "runtimeServices: runtimeServices",
+            "client: keychainClient",
             "creationContext",
             "creationOwner.stop",
+            "creationContext: nil",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
+        XCTAssertFalse(
+            source.contains(
+                "public let creationContext"
+            )
+        )
+        XCTAssertFalse(
+            source.contains(
+                "public var creationContext"
+            )
+        )
     }
 
     func testCompositionSourceUsesReviewedConcreteAssemblyAndNoPlatformWork()

@@ -1730,10 +1730,29 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         let selected = await graph.host.requestUnlockPanel()
 
         await expectEqual(selected.publicShell.vaultStatus, .locked)
+        await expectTrue(selected.publicShell.canRequestUnlock)
         await expectEqual(selected.mode, .unlockPanel)
         await expectNil(selected.unlockPanelState?.selectedMethod)
         await expectEqual(await graph.selector.selectCount(), 2)
         await expectEqual(graph.controllerBuilder.callCount, 1)
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+    }
+
+    func testNoVaultExplicitRetryReturningNoneRemainsClosed()
+        async throws
+    {
+        let graph = try makeGraph(selection: .success(.none))
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+
+        let retried = await graph.host.requestUnlockPanel()
+
+        await expectEqual(retried.publicShell.vaultStatus, .noVault)
+        await expectFalse(retried.publicShell.canRequestUnlock)
+        await expectEqual(retried.mode, .lockedPublic)
+        await expectNil(retried.unlockPanelState)
+        await expectEqual(await graph.selector.selectCount(), 2)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
         await expectEqual(await graph.runtime.activationCalls(), 0)
     }
 

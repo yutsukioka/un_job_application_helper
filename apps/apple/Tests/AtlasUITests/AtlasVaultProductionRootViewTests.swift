@@ -157,11 +157,22 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             "Create Local Vault",
             "@ObservedObject",
             ".sheet(",
+            "creationContext = nil",
+            "flowState.mode == .lockedPublic",
+            "flowState.publicShell.vaultStatus == .noVault",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
-        XCTAssertFalse(source.contains("static let disabled"))
-        XCTAssertFalse(source.contains("AtlasLocalVaultCreationCoordinator("))
+        for forbidden in [
+            "static let disabled",
+            "AtlasLocalVaultCreationCoordinator(",
+            ".task",
+            ".onAppear",
+            "Keychain",
+            "FileManager",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
     }
 
     func testHistoricalScopeAssertionsDoNotPinCurrentAppEntry() throws {
