@@ -93,7 +93,12 @@ and using the encrypted store. A `defer` resets the bytes and releases
 capacity where practical. This is best-effort cleanup and is not represented
 as universal Swift memory zeroization. Configured-selection verification loads
 directly into one mutable local `Data` value so a second local copy-on-write
-reference does not defeat that best-effort reset.
+reference does not defeat that best-effort reset. Production store access
+captures no key or unlocked session. Each synchronous load or save constructs
+a temporary session from the coordinator-owned buffer, completes the
+persistence call, and releases that session before the coordinator's deferred
+reset. The coordinator buffer is therefore the final live creation-owned
+in-process copy when best-effort wiping begins.
 
 ## 14. Canonical Empty Store
 
@@ -353,6 +358,10 @@ uses a transferable UI claim and changes no persistence or process authority.
 Exact-head Copilot review then added deterministic red evidence for resetting
 the local-only warning acknowledgement on each presentation and retaining only
 one mutable local key buffer during configured-selection verification.
+Final exact-head Codex review added deterministic red evidence that production
+store-access closures retained an unlocked session and its key copy. Store
+access now accepts the coordinator-owned buffer per synchronous operation and
+constructs no session until that operation executes.
 
 ## 48. Test Coverage
 
@@ -366,7 +375,9 @@ sheet ownership over shared process authority. Presentation-owner tests also
 verify that a second scene can take the claim without dismissing the shared
 flow and that stale claim release cannot hide it. Source-boundary tests verify
 per-presentation acknowledgement reset and the absence of a second local key
-buffer before best-effort wiping. Existing Phase 2D-59 and historical
+buffer before best-effort wiping. They also require keyless store-access
+construction and operation-scoped session creation so returned closures retain
+neither a session nor vault-key bytes. Existing Phase 2D-59 and historical
 merge-stability suites remain required.
 
 ## 49. iOS Build and End-to-End Evidence

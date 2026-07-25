@@ -266,11 +266,12 @@ struct AtlasKeychainLocalVaultCreationJournalStore<
 
 struct AtlasLocalVaultCreationStoreAccess: Sendable {
     let load:
-        @Sendable () throws
+        @Sendable (Data) throws
             -> AtlasVaultLocalStoreEnvelope?
     let save:
         @Sendable (
             AtlasVaultLocalStoreEnvelope,
+            Data,
             Bool
         ) throws
             -> AtlasVaultAtomicWriteResult
@@ -302,8 +303,7 @@ struct AtlasLocalVaultCreationEnvironment: Sendable {
         ) throws -> Void
     let makeStoreAccess:
         @Sendable (
-            String,
-            Data
+            String
         ) throws
             -> AtlasLocalVaultCreationStoreAccess
     let generateVaultID: @Sendable () -> String
@@ -540,10 +540,9 @@ public actor AtlasLocalVaultCreationCoordinator:
         }
 
         let storeAccess = try environment.makeStoreAccess(
-            journal.vaultID,
-            vaultKey
+            journal.vaultID
         )
-        if let existingStore = try storeAccess.load() {
+        if let existingStore = try storeAccess.load(vaultKey) {
             try validate(
                 existingStore,
                 journal: journal,
@@ -552,7 +551,11 @@ public actor AtlasLocalVaultCreationCoordinator:
         } else {
             let store = canonicalEmptyStore(journal: journal)
             try Task.checkCancellation()
-            let result = try storeAccess.save(store, false)
+            let result = try storeAccess.save(
+                store,
+                vaultKey,
+                false
+            )
             switch result.commitState {
             case .committed:
                 break
@@ -607,10 +610,9 @@ public actor AtlasLocalVaultCreationCoordinator:
         }
 
         let access = try environment.makeStoreAccess(
-            selected.vaultID,
-            workingKey
+            selected.vaultID
         )
-        guard let store = try access.load() else {
+        guard let store = try access.load(workingKey) else {
             throw AtlasLocalVaultCreationFailure.recoveryRequired
         }
         try validateConfiguredStore(
@@ -791,7 +793,7 @@ extension AtlasLocalVaultCreationCoordinator {
                     throw AtlasLocalVaultCreationFailure.unavailable
                 }
             },
-            makeStoreAccess: { vaultID, vaultKey in
+            makeStoreAccess: { vaultID in
                 let rootURL: URL
                 do {
                     rootURL = try runtimeServices.rootDirectoryProvider
@@ -812,18 +814,19 @@ extension AtlasLocalVaultCreationCoordinator {
                 } catch {
                     throw AtlasLocalVaultCreationFailure.unavailable
                 }
-                let session: AtlasVaultUnlockedSession
-                do {
-                    session = try AtlasVaultUnlockedSession(
-                        vaultID: vaultID,
-                        vaultKey: vaultKey
-                    )
-                } catch {
-                    throw AtlasLocalVaultCreationFailure.recoveryRequired
-                }
                 let persistence = services.persistenceCoordinator
                 return AtlasLocalVaultCreationStoreAccess(
-                    load: {
+                    load: { vaultKey in
+                        let session: AtlasVaultUnlockedSession
+                        do {
+                            session = try AtlasVaultUnlockedSession(
+                                vaultID: vaultID,
+                                vaultKey: vaultKey
+                            )
+                        } catch {
+                            throw AtlasLocalVaultCreationFailure
+                                .recoveryRequired
+                        }
                         do {
                             return try persistence.loadEncryptedStore(
                                 for: session
@@ -832,7 +835,17 @@ extension AtlasLocalVaultCreationCoordinator {
                             throw storeLoadFailure(for: error)
                         }
                     },
-                    save: { store, overwrite in
+                    save: { store, vaultKey, overwrite in
+                        let session: AtlasVaultUnlockedSession
+                        do {
+                            session = try AtlasVaultUnlockedSession(
+                                vaultID: vaultID,
+                                vaultKey: vaultKey
+                            )
+                        } catch {
+                            throw AtlasLocalVaultCreationFailure
+                                .recoveryRequired
+                        }
                         do {
                             return try persistence
                                 .saveEncryptedStoreAtomically(

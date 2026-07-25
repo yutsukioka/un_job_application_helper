@@ -519,6 +519,58 @@ final class AtlasLocalVaultCreationTests: XCTestCase {
         }
     }
 
+    func testProductionStoreAccessDoesNotRetainVaultKeySession()
+        throws
+    {
+        let source = try String(
+            contentsOf: Self.sourceURL(
+                named: "AtlasLocalVaultCreation.swift"
+            ),
+            encoding: .utf8
+        )
+        for required in [
+            "makeStoreAccess: { vaultID in",
+            "load: { vaultKey in",
+            "save: { store, vaultKey, overwrite in",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains(
+                "makeStoreAccess: { vaultID, vaultKey in"
+            )
+        )
+        let factoryStart = try XCTUnwrap(
+            source.range(
+                of: "makeStoreAccess: { vaultID in"
+            )?.lowerBound
+        )
+        let accessReturn = try XCTUnwrap(
+            source.range(
+                of: "return AtlasLocalVaultCreationStoreAccess(",
+                range: factoryStart..<source.endIndex
+            )?.lowerBound
+        )
+        XCTAssertFalse(
+            source[factoryStart..<accessReturn]
+                .contains("AtlasVaultUnlockedSession")
+        )
+        let operationEnd = try XCTUnwrap(
+            source.range(
+                of: "generateVaultID:",
+                range: accessReturn..<source.endIndex
+            )?.lowerBound
+        )
+        XCTAssertEqual(
+            source[accessReturn..<operationEnd]
+                .components(
+                    separatedBy: "AtlasVaultUnlockedSession("
+                )
+                .count - 1,
+            2
+        )
+    }
+
     private static func journal()
         throws -> AtlasLocalVaultCreationJournal
     {
@@ -660,18 +712,18 @@ private final class CreationTransactionRig: Sendable {
                     $0.key = key
                 }
             },
-            makeStoreAccess: { [self] _, _ in
+            makeStoreAccess: { [self] _ in
                 state.withLock {
                     $0.events.append("makeStoreAccess")
                 }
                 return AtlasLocalVaultCreationStoreAccess(
-                    load: { [self] in
+                    load: { [self] _ in
                         state.withLock {
                             $0.events.append("loadStore")
                             return $0.store
                         }
                     },
-                    save: { [self] store, overwrite in
+                    save: { [self] store, _, overwrite in
                         state.withLock {
                             $0.events.append(
                                 "saveStore(\(overwrite))"
