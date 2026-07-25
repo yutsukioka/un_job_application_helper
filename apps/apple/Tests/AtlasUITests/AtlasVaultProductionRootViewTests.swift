@@ -175,7 +175,7 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
-    func testCreationSheetPresentationIsLocalToTheInitiatingRoot()
+    func testCreationSheetIsLocalAndCanTransferToAnotherRoot()
         throws
     {
         let source = try Self.source(
@@ -184,14 +184,16 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
 
         for required in [
             "@State private var isCreationPresented = false",
-            "guard creationOwner.presentation == .hidden",
-            "isCreationPresented =\n"
-                + "            creationOwner.presentation != .hidden",
+            "AtlasLocalVaultCreationPresentationClaim()",
+            "creationActions.claimPresentation(",
+            "creationActions.releasePresentation(",
+            "creationActions.ownsPresentation(",
             "isCreationPresented = isPresented",
             "isCreationPresented\n"
-                + "                        && creationOwner.presentation",
+                + "                        && creationActions"
+                + ".ownsPresentation",
             ".onChange(of: creationOwner.presentation)",
-            "creationOwner.presentation != .hidden",
+            "\"Continue Local Vault Setup\"",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }

@@ -1663,6 +1663,9 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "vaultIDSelector: hostVaultSelector",
             "creationContext",
             "creationOwner.stop",
+            "claimPresentation:",
+            "releasePresentation:",
+            "ownsPresentation:",
             "creationContext: nil",
         ] {
             XCTAssertTrue(source.contains(required), required)

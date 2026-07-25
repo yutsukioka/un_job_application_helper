@@ -77,6 +77,8 @@ private struct AtlasVaultCreationEnabledRoot: View {
         AtlasLocalVaultCreationPresentationOwner
     let creationActions: AtlasLocalVaultCreationActions
     @State private var isCreationPresented = false
+    @State private var presentationClaim =
+        AtlasLocalVaultCreationPresentationClaim()
 
     var body: some View {
         AtlasLockedShellUnlockFlowView(
@@ -92,7 +94,7 @@ private struct AtlasVaultCreationEnabledRoot: View {
                         presentCreation()
                     } label: {
                         Label(
-                            "Create Local Vault",
+                            creationActionTitle,
                             systemImage: "externaldrive.badge.plus"
                         )
                     }
@@ -107,11 +109,17 @@ private struct AtlasVaultCreationEnabledRoot: View {
             isPresented: Binding(
                 get: {
                     isCreationPresented
+                        && creationActions.ownsPresentation(
+                            presentationClaim
+                        )
                         && creationOwner.presentation != .hidden
                 },
                 set: { isPresented in
                     isCreationPresented = isPresented
-                    if !isPresented {
+                    if !isPresented,
+                       creationActions.releasePresentation(
+                           presentationClaim
+                       ) {
                         creationActions.dismiss()
                     }
                 }
@@ -133,17 +141,33 @@ private struct AtlasVaultCreationEnabledRoot: View {
     }
 
     private func presentCreation() {
-        guard creationOwner.presentation == .hidden else {
+        if creationOwner.presentation == .hidden {
+            creationActions.present()
+        }
+        guard creationActions.claimPresentation(
+            presentationClaim
+        ) else {
             return
         }
-        creationActions.present()
-        isCreationPresented =
-            creationOwner.presentation != .hidden
+        isCreationPresented = true
     }
 
     private var showsCreateAction: Bool {
         flowState.mode == .lockedPublic
             && flowState.publicShell.vaultStatus == .noVault
-            && creationOwner.presentation == .hidden
+            && (
+                !isCreationPresented
+                    || !creationActions.ownsPresentation(
+                        presentationClaim
+                    )
+            )
+    }
+
+    private var creationActionTitle: String {
+        if creationOwner.presentation == .hidden {
+            "Create Local Vault"
+        } else {
+            "Continue Local Vault Setup"
+        }
     }
 }

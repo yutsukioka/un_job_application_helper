@@ -43,6 +43,27 @@ public enum AtlasLocalVaultCreationPresentation:
     }
 }
 
+public struct AtlasLocalVaultCreationPresentationClaim:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    fileprivate let identifier: UUID
+
+    public init() {
+        identifier = UUID()
+    }
+
+    public var description: String {
+        "AtlasLocalVaultCreationPresentationClaim(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 @MainActor
 public final class AtlasLocalVaultCreationPresentationOwner:
     ObservableObject,
@@ -56,6 +77,7 @@ public final class AtlasLocalVaultCreationPresentationOwner:
 
     @Published public private(set) var presentation:
         AtlasLocalVaultCreationPresentation = .hidden
+    @Published private var presentationClaimIdentifier: UUID?
 
     private let creator: any AtlasLocalVaultCreating
     private let continueToUnlock:
@@ -84,7 +106,39 @@ public final class AtlasLocalVaultCreationPresentationOwner:
         guard presentation != .creating else {
             return
         }
+        presentationClaimIdentifier = nil
         presentation = .hidden
+    }
+
+    @discardableResult
+    public func claimPresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        guard
+            !terminalStopRequested,
+            presentation != .hidden
+        else {
+            return false
+        }
+        presentationClaimIdentifier = claim.identifier
+        return true
+    }
+
+    @discardableResult
+    public func releasePresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        guard presentationClaimIdentifier == claim.identifier else {
+            return false
+        }
+        presentationClaimIdentifier = nil
+        return true
+    }
+
+    public func ownsPresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        presentationClaimIdentifier == claim.identifier
     }
 
     public func beginCreateOrResume() {
@@ -162,6 +216,7 @@ public final class AtlasLocalVaultCreationPresentationOwner:
         if operation?.identifier == retainedOperation?.identifier {
             operation = nil
         }
+        presentationClaimIdentifier = nil
         presentation = .hidden
     }
 
@@ -213,6 +268,7 @@ public final class AtlasLocalVaultCreationPresentationOwner:
                 operation = nil
                 return
             }
+            presentationClaimIdentifier = nil
             presentation = .hidden
         case let .failure(failure):
             switch failure {
@@ -239,18 +295,45 @@ public struct AtlasLocalVaultCreationActions {
     private let createAction: @MainActor @Sendable () -> Void
     private let pauseAction:
         @MainActor @Sendable () async -> Void
+    private let claimPresentationAction:
+        @MainActor @Sendable (
+            AtlasLocalVaultCreationPresentationClaim
+        ) -> Bool
+    private let releasePresentationAction:
+        @MainActor @Sendable (
+            AtlasLocalVaultCreationPresentationClaim
+        ) -> Bool
+    private let ownsPresentationAction:
+        @MainActor @Sendable (
+            AtlasLocalVaultCreationPresentationClaim
+        ) -> Bool
 
     public init(
         present: @escaping @MainActor @Sendable () -> Void,
         dismiss: @escaping @MainActor @Sendable () -> Void,
         createOrResume:
             @escaping @MainActor @Sendable () -> Void,
-        pause: @escaping @MainActor @Sendable () async -> Void
+        pause: @escaping @MainActor @Sendable () async -> Void,
+        claimPresentation:
+            @escaping @MainActor @Sendable (
+                AtlasLocalVaultCreationPresentationClaim
+            ) -> Bool,
+        releasePresentation:
+            @escaping @MainActor @Sendable (
+                AtlasLocalVaultCreationPresentationClaim
+            ) -> Bool,
+        ownsPresentation:
+            @escaping @MainActor @Sendable (
+                AtlasLocalVaultCreationPresentationClaim
+            ) -> Bool
     ) {
         presentAction = present
         dismissAction = dismiss
         createAction = createOrResume
         pauseAction = pause
+        claimPresentationAction = claimPresentation
+        releasePresentationAction = releasePresentation
+        ownsPresentationAction = ownsPresentation
     }
 
     public func present() {
@@ -267,6 +350,26 @@ public struct AtlasLocalVaultCreationActions {
 
     public func pause() async {
         await pauseAction()
+    }
+
+    @discardableResult
+    public func claimPresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        claimPresentationAction(claim)
+    }
+
+    @discardableResult
+    public func releasePresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        releasePresentationAction(claim)
+    }
+
+    public func ownsPresentation(
+        _ claim: AtlasLocalVaultCreationPresentationClaim
+    ) -> Bool {
+        ownsPresentationAction(claim)
     }
 }
 

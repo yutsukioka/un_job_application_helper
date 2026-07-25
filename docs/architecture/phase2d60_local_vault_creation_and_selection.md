@@ -252,7 +252,11 @@ Every production root made by that process harness receives the same context,
 so windows do not create competing transactions or owners. Modal visibility
 is separate per-root state: only the scene that accepts the create action
 presents a sheet, while other scenes observe the shared transaction state
-without presenting duplicate sheets.
+without presenting duplicate sheets. Presentation uses a transferable,
+non-sensitive scene claim. A surviving scene can explicitly continue a
+non-hidden setup after the initiating window closes; claiming from another
+scene atomically transfers presentation instead of creating a second
+transaction or simultaneous sheet.
 
 ## 36. Harness Terminal Stop
 
@@ -266,8 +270,10 @@ The production root stores an optional immutable creation context. When
 present, a private nested child observes the injected owner and offers an
 explicit sheet from the locked-public `noVault` state. The root constructs no
 creation authority or service. Each nested root owns only a local Boolean for
-its sheet presentation; it does not duplicate the shared coordinator,
-presentation owner, or actions.
+its sheet presentation and a non-sensitive presentation claim; it does not
+duplicate the shared coordinator, presentation owner, or actions. Releasing
+or transferring a claim does not dismiss, cancel, or reset the shared
+transaction.
 
 ## 38. Compatibility Initializers
 
@@ -339,6 +345,9 @@ the red commit and focused failures.
 Exact-head review added deterministic red evidence for two integration
 boundaries: scene-local sheet presentation and relaunch with a selected vault
 plus pending journal. Both were repaired without changing the file allowlist.
+A subsequent exact-head review added deterministic red evidence for reclaiming
+a non-hidden shared setup after the presenting scene disappears. The repair
+uses a transferable UI claim and changes no persistence or process authority.
 
 ## 48. Test Coverage
 
@@ -348,7 +357,9 @@ conflicts, cancellation and coalescing, presentation behavior, view source
 boundaries, host retry, harness compatibility, root compatibility, and the
 fresh-install/relaunch journey. It also covers pending-journal selection
 gating, explicit post-selection completion after relaunch, and scene-local
-sheet ownership over shared process authority. Existing Phase 2D-59 and
+sheet ownership over shared process authority. Presentation-owner tests also
+verify that a second scene can take the claim without dismissing the shared
+flow and that stale claim release cannot hide it. Existing Phase 2D-59 and
 historical merge-stability suites remain required.
 
 ## 49. iOS Build and End-to-End Evidence

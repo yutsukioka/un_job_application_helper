@@ -35,6 +35,41 @@ final class AtlasLocalVaultCreationViewTests: XCTestCase {
         XCTAssertTrue(owner.description.contains("<redacted>"))
     }
 
+    func testPresentationClaimTransfersWithoutDismissingSharedFlow() {
+        let owner = AtlasLocalVaultCreationPresentationOwner(
+            creator: CreationPresenterFake(result: .success(.created)),
+            continueToUnlock: {
+                Self.lockedPanelState()
+            }
+        )
+        let first = AtlasLocalVaultCreationPresentationClaim()
+        let second = AtlasLocalVaultCreationPresentationClaim()
+        XCTAssertEqual(
+            first.description,
+            "AtlasLocalVaultCreationPresentationClaim(<redacted>)"
+        )
+
+        owner.present()
+        XCTAssertTrue(owner.claimPresentation(first))
+        XCTAssertTrue(owner.ownsPresentation(first))
+        XCTAssertFalse(owner.ownsPresentation(second))
+
+        XCTAssertTrue(owner.claimPresentation(second))
+        XCTAssertFalse(owner.ownsPresentation(first))
+        XCTAssertTrue(owner.ownsPresentation(second))
+        XCTAssertFalse(owner.releasePresentation(first))
+        XCTAssertEqual(owner.presentation, .ready)
+
+        XCTAssertTrue(owner.releasePresentation(second))
+        XCTAssertFalse(owner.ownsPresentation(second))
+        XCTAssertEqual(owner.presentation, .ready)
+
+        XCTAssertTrue(owner.claimPresentation(first))
+        owner.dismiss()
+        XCTAssertFalse(owner.ownsPresentation(first))
+        XCTAssertEqual(owner.presentation, .hidden)
+    }
+
     func testSuccessContinuesOnceToUnselectedLockedUnlockPanel()
         async
     {

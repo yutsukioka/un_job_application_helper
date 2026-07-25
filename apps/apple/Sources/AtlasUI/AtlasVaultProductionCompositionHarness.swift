@@ -943,6 +943,15 @@ public enum AtlasVaultProductionCompositionFactory {
             },
             pause: { [weak creationOwner] in
                 await creationOwner?.pause()
+            },
+            claimPresentation: { [weak creationOwner] claim in
+                creationOwner?.claimPresentation(claim) ?? false
+            },
+            releasePresentation: { [weak creationOwner] claim in
+                creationOwner?.releasePresentation(claim) ?? false
+            },
+            ownsPresentation: { [weak creationOwner] claim in
+                creationOwner?.ownsPresentation(claim) ?? false
             }
         )
         let creationContext = AtlasLocalVaultCreationContext(
