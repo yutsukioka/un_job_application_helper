@@ -141,10 +141,14 @@ public final class AtlasLocalVaultCreationPresentationOwner:
         await creator.pause()
         operation.operationTask.cancel()
         await operation.operationTask.value
-        if self.operation?.identifier == operation.identifier {
+        let stillOwnsOperation =
+            self.operation?.identifier == operation.identifier
+        if stillOwnsOperation {
             self.operation = nil
         }
-        if !terminalStopRequested {
+        if !terminalStopRequested,
+           stillOwnsOperation,
+           presentation == .creating {
             presentation = .paused
         }
     }

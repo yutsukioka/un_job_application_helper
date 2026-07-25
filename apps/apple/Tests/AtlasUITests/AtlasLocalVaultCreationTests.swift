@@ -399,6 +399,43 @@ final class AtlasLocalVaultCreationTests: XCTestCase {
         XCTAssertNotEqual(first, second)
     }
 
+    func testProductionStoreLoadSeparatesOperationalAndRecoveryFailures() {
+        for failure in [
+            AtlasVaultPersistenceError.directoryPreparationFailed,
+            .readFailed,
+            .writeFailed,
+            .fileExists,
+        ] {
+            XCTAssertEqual(
+                AtlasLocalVaultCreationCoordinator.storeLoadFailure(
+                    for: failure
+                ),
+                .unavailable
+            )
+        }
+
+        for failure in [
+            AtlasVaultPersistenceError.invalidSession,
+            .corruptStore,
+            .unsupportedStoreVersion,
+            .cryptoFailed,
+        ] {
+            XCTAssertEqual(
+                AtlasLocalVaultCreationCoordinator.storeLoadFailure(
+                    for: failure
+                ),
+                .recoveryRequired
+            )
+        }
+
+        XCTAssertEqual(
+            AtlasLocalVaultCreationCoordinator.storeLoadFailure(
+                for: CancellationError()
+            ),
+            .unavailable
+        )
+    }
+
     func testCreationCoreSourceHasNoWeakGeneratorOrDestructiveRollback()
         throws
     {

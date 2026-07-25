@@ -681,6 +681,28 @@ public actor AtlasLocalVaultCreationCoordinator:
             return false
         }
     }
+
+    static func storeLoadFailure(
+        for error: Error
+    ) -> AtlasLocalVaultCreationFailure {
+        guard let persistenceError =
+            error as? AtlasVaultPersistenceError
+        else {
+            return .unavailable
+        }
+        switch persistenceError {
+        case .invalidSession,
+             .corruptStore,
+             .unsupportedStoreVersion,
+             .cryptoFailed:
+            return .recoveryRequired
+        case .directoryPreparationFailed,
+             .readFailed,
+             .writeFailed,
+             .fileExists:
+            return .unavailable
+        }
+    }
 }
 
 extension AtlasLocalVaultCreationCoordinator {
@@ -779,8 +801,7 @@ extension AtlasLocalVaultCreationCoordinator {
                                 for: session
                             )
                         } catch {
-                            throw AtlasLocalVaultCreationFailure
-                                .recoveryRequired
+                            throw storeLoadFailure(for: error)
                         }
                     },
                     save: { store, overwrite in

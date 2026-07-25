@@ -148,6 +148,46 @@ final class AtlasLocalVaultCreationViewTests: XCTestCase {
         XCTAssertFalse(owner.hasRetainedOperationForTesting)
     }
 
+    func testPauseCannotOverwriteCreationThatCompletedFirst() async {
+        let createGate = CreationPresentationGate()
+        let pauseGate = CreationPresentationGate()
+        let creator = CreationPresenterFake(
+            result: .success(.created),
+            gate: createGate,
+            pauseGate: pauseGate
+        )
+        let continuation = CreationContinuationRecorder(
+            state: Self.lockedPanelState()
+        )
+        let owner = AtlasLocalVaultCreationPresentationOwner(
+            creator: creator,
+            continueToUnlock: {
+                await continuation.call()
+            }
+        )
+        owner.present()
+        owner.beginCreateOrResume()
+        await createGate.waitUntilEntered()
+
+        let pauseTask = Task { @MainActor in
+            await owner.pause()
+        }
+        await pauseGate.waitUntilEntered()
+        await createGate.release()
+        await owner.waitForCurrentOperationForTesting()
+
+        XCTAssertEqual(owner.presentation, .hidden)
+        XCTAssertFalse(owner.hasRetainedOperationForTesting)
+        let continuationCount = await continuation.callCount()
+        XCTAssertEqual(continuationCount, 1)
+
+        await pauseGate.release()
+        await pauseTask.value
+
+        XCTAssertEqual(owner.presentation, .hidden)
+        XCTAssertFalse(owner.hasRetainedOperationForTesting)
+    }
+
     func testTerminalStopDrainsAndPreventsRestart() async {
         let gate = CreationPresentationGate()
         let creator = CreationPresenterFake(
@@ -283,18 +323,22 @@ private actor CreationPresenterFake: AtlasLocalVaultCreating {
         AtlasLocalVaultCreationFailure
     >
     private let gate: CreationPresentationGate?
+    private let pauseGate: CreationPresentationGate?
     private var creates = 0
     private var pauses = 0
+    private var cancelledByPause = false
 
     init(
         result: Result<
             AtlasLocalVaultCreationOutcome,
             AtlasLocalVaultCreationFailure
         >,
-        gate: CreationPresentationGate? = nil
+        gate: CreationPresentationGate? = nil,
+        pauseGate: CreationPresentationGate? = nil
     ) {
         self.result = result
         self.gate = gate
+        self.pauseGate = pauseGate
     }
 
     func createOrResume()
@@ -304,13 +348,21 @@ private actor CreationPresenterFake: AtlasLocalVaultCreating {
         creates += 1
         if let gate {
             await gate.wait()
+            if cancelledByPause {
+                throw .cancelled
+            }
         }
         return try result.get()
     }
 
     func pause() async {
         pauses += 1
-        await gate?.release()
+        if let pauseGate {
+            await pauseGate.wait()
+        } else {
+            cancelledByPause = true
+            await gate?.release()
+        }
     }
 
     func createCount() -> Int {
