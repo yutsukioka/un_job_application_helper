@@ -902,12 +902,16 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         }
 
         let introduction = try phase2D56IntroductionCommit()
-        _ = try gitOutput([
+        let mergeBase = try gitOutput([
             "merge-base",
-            "--is-ancestor",
             introduction,
             "HEAD",
         ])
+        XCTAssertEqual(
+            mergeBase,
+            introduction,
+            "Phase 2D-56 introduction commit must be an ancestor of HEAD"
+        )
         let parent = try firstParent(of: introduction)
         XCTAssertEqual(
             try changedPaths(from: parent, to: introduction),
@@ -983,7 +987,13 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
                 "Historical Phase 2D-56 scope assertions require complete Git history"
             )
         )
-        XCTAssertTrue(scopeTest.contains("\"merge-base\""))
+        XCTAssertTrue(scopeTest.contains("let mergeBase = try gitOutput(["))
+        XCTAssertTrue(
+            scopeTest.contains(
+                "Phase 2D-56 introduction commit must be an ancestor of HEAD"
+            )
+        )
+        XCTAssertFalse(scopeTest.contains("\"--is-ancestor\""))
         XCTAssertTrue(discovery.contains("\"--reverse\""))
         XCTAssertTrue(discovery.contains("\"--diff-filter=A\""))
         XCTAssertTrue(discovery.contains("firstParent"))

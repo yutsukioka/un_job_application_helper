@@ -837,10 +837,10 @@ until that exact generation commits.
 The exact six-file assertion is a historical Phase 2D-56 invariant. It finds
 the first commit that added
 `AtlasVaultProductionHostTests.swift` by using an unbounded, reverse
-path-introduction log, verifies that commit is an ancestor of `HEAD`, resolves
-its first parent dynamically, and requires that parent-to-introduction diff to
-equal the reviewed six files. It pins no commit SHA, branch, current-base diff,
-or commit subject.
+path-introduction log, compares its merge base with `HEAD` to the introduction
+commit so an ancestry failure reports both values, resolves its first parent
+dynamically, and requires that parent-to-introduction diff to equal the reviewed
+six files. It pins no commit SHA, branch, current-base diff, or commit subject.
 
 Current working-tree and untracked paths are not unioned into that historical
 set. The dedicated recursive artifact test remains the current-tree safety gate
