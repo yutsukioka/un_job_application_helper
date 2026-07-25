@@ -736,6 +736,13 @@ to commit the exact superseded generation before any later generation is
 accepted, including terminal lifecycle handling and replacement of a suspended
 nonterminal owner reset.
 
+The Phase 2D-56F merge-stability follow-up captured deterministic red evidence
+that the historical six-file assertion still read current working-tree and
+untracked paths. A later reviewed phase therefore appeared as an invalid
+Phase 2D-56 file. The repaired regression discovers the squash-introduction
+commit dynamically, compares only its first-parent diff, and keeps current
+artifact scanning separate. No production source or runtime behavior changed.
+
 ## 44. Test Coverage
 
 Focused tests cover construction, concrete builders, explicit start, optional
@@ -827,16 +834,29 @@ The owner-generation follow-up adds strict-owner terminal stop,
 coverage. A structural guard requires the terminal reconciliation generation to
 be the barrier generation, while the strict fake rejects every different reset
 until that exact generation commits.
-The exact allowlist is derived from the tracked test file's path-introduction
-history plus current tracked and untracked changes, without a bounded log scan
-or commit-subject dependency. Distinct test/document introductions identify an
-active multi-commit feature branch and extend the range through `HEAD`; one
-shared introduction identifies the squash commit and terminates the range at
-that commit so later phases are excluded. A repository ownership marker
-provides the same six-file enumeration when Git reports a shallow checkout.
-The Git inspection implementation, including `Foundation.Process`, is compiled
-only on macOS. The repository-hygiene allowlist test throws `XCTSkip` on other
-Apple platforms, so the iOS test target has no compiled `Process` path.
+The exact six-file assertion is a historical Phase 2D-56 invariant. It finds
+the first commit that added
+`AtlasVaultProductionHostTests.swift` by using an unbounded, reverse
+path-introduction log, verifies that commit is an ancestor of `HEAD`, resolves
+its first parent dynamically, and requires that parent-to-introduction diff to
+equal the reviewed six files. It pins no commit SHA, branch, current-base diff,
+or commit subject.
+
+Current working-tree and untracked paths are not unioned into that historical
+set. The dedicated recursive artifact test remains the current-tree safety gate
+for `.atlasvault` files and `.venv-review` directories. A shallow repository
+cannot prove the historical first-parent scope, so the scope assertion throws
+the fixed skip reason
+`Historical Phase 2D-56 scope assertions require complete Git history`.
+Marker-based shallow enumeration, active multi-commit branch expansion, and
+phase-end expansion through `HEAD` are removed.
+
+The Git inspection implementation, including `Foundation.Process`, remains
+compiled only on macOS; unsupported Apple platforms throw a fixed `XCTSkip`
+without an empty-output fallback. This historical assertion remains valid
+after squash merge, on clean master, on Phase 2D-59 with its seven reviewed
+files present, and on later reviewed phases. Factory, host, contract, private
+state, service-access, side-effect, and redaction behavior tests are unchanged.
 
 ## 45. Go/No-Go Update
 
