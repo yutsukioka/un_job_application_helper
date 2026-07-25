@@ -211,12 +211,12 @@ public final class AtlasIOSAppProcessOwner:
             return await stopOperation.task.value
         }
         beginTerminalStop()
-        guard let stopOperation else {
-            presentation = .stopped
-            lifetime = .terminal
-            return presentation
+        if let stopOperation {
+            return await stopOperation.task.value
         }
-        return await stopOperation.task.value
+        presentation = .stopped
+        lifetime = .terminal
+        return presentation
     }
 
     public func productionRootView()

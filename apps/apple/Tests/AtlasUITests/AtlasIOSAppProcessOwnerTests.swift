@@ -320,6 +320,7 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
         let owner = makeOwner(route: .production, probe: probe)
         expectPresentation(await owner.start(), .productionReady)
 
+        owner.beginTerminalStop()
         let first = Task { await owner.stop() }
         let second = Task { await owner.stop() }
         await stopGate.waitUntilEntered()
