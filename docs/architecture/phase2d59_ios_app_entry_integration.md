@@ -164,7 +164,10 @@ production work.
 ## 23. Retained Startup
 
 The owner retains startup independently of any caller waiting for `start()`.
-Caller cancellation therefore cannot orphan the process operation.
+Caller cancellation therefore cannot orphan the process operation. The lazy
+factory is consumed exactly once and released after transferring the harness,
+so the plan's internal cache cannot remain as a second owner-held reference.
+Stop-before-start releases the unused factory without invoking it.
 
 ## 24. Startup Coalescing
 

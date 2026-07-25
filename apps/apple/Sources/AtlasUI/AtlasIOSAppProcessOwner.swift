@@ -81,8 +81,8 @@ public final class AtlasIOSAppProcessOwner:
         AtlasIOSAppProcessPresentation
 
     private let route: AtlasIOSAppEntryRoute
-    private let productionFactory:
-        @MainActor () throws -> any AtlasIOSAppProcessHarness
+    private var productionFactory:
+        (@MainActor () throws -> any AtlasIOSAppProcessHarness)?
     private var retainedHarness: (any AtlasIOSAppProcessHarness)?
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -92,11 +92,15 @@ public final class AtlasIOSAppProcessOwner:
     public init(plan: AtlasIOSAppEntryIntegrationPlan) {
         route = plan.route
         presentation = Self.initialPresentation(for: plan.route)
-        productionFactory = {
-            guard let harness = try plan.productionHarnessIfNeeded() else {
-                throw AtlasIOSAppProcessOwnerError.productionUnavailable
+        if plan.route == .production {
+            productionFactory = {
+                guard let harness = try plan.productionHarnessIfNeeded() else {
+                    throw AtlasIOSAppProcessOwnerError.productionUnavailable
+                }
+                return harness
             }
-            return harness
+        } else {
+            productionFactory = nil
         }
     }
 
@@ -108,7 +112,9 @@ public final class AtlasIOSAppProcessOwner:
     ) {
         self.route = route
         presentation = Self.initialPresentation(for: route)
-        self.productionFactory = productionFactory
+        self.productionFactory = route == .production
+            ? productionFactory
+            : nil
     }
 
     #if canImport(UIKit)
@@ -165,6 +171,7 @@ public final class AtlasIOSAppProcessOwner:
         }
 
         terminalStopRequested = true
+        productionFactory = nil
         switch presentation {
         case .productionPending,
              .productionStarting,
@@ -295,7 +302,11 @@ public final class AtlasIOSAppProcessOwner:
 
         let harness: any AtlasIOSAppProcessHarness
         do {
-            harness = try productionFactory()
+            guard let factory = productionFactory else {
+                throw AtlasIOSAppProcessOwnerError.productionUnavailable
+            }
+            productionFactory = nil
+            harness = try factory()
         } catch {
             guard !terminalStopRequested,
                   startOperation?.identifier == identifier else {

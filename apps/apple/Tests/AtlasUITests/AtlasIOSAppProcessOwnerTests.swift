@@ -135,6 +135,43 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
         XCTAssertEqual(harness.startCalls, 1)
     }
 
+    func testProductionFactoryClosureIsReleasedAfterHarnessTransfer() async {
+        let harness = ProcessHarnessFake()
+        var token: ProcessFactoryLifetimeToken? =
+            ProcessFactoryLifetimeToken()
+        weak var weakToken = token
+        let owner = AtlasIOSAppProcessOwner(
+            route: .production,
+            productionFactory: { [capturedToken = token!] in
+                _ = capturedToken
+                return harness
+            }
+        )
+        token = nil
+
+        XCTAssertNotNil(weakToken)
+        expectPresentation(await owner.start(), .productionReady)
+        XCTAssertNil(weakToken)
+    }
+
+    func testStopBeforeStartReleasesUnusedProductionFactory() async {
+        var token: ProcessFactoryLifetimeToken? =
+            ProcessFactoryLifetimeToken()
+        weak var weakToken = token
+        let owner = AtlasIOSAppProcessOwner(
+            route: .production,
+            productionFactory: { [capturedToken = token!] in
+                _ = capturedToken
+                return ProcessHarnessFake()
+            }
+        )
+        token = nil
+
+        XCTAssertNotNil(weakToken)
+        expectPresentation(await owner.stop(), .stopped)
+        XCTAssertNil(weakToken)
+    }
+
     func testFactoryFailureIsRedactedUnavailableAndIsNotRetried() async {
         let probe = ProcessFactoryProbe(
             error: ProcessOwnerTestError.production(Self.fakeErrorDetail)
@@ -427,6 +464,8 @@ final class AtlasIOSAppProcessOwnerTests: XCTestCase {
 private enum ProcessOwnerTestError: Error {
     case production(String)
 }
+
+private final class ProcessFactoryLifetimeToken {}
 
 @MainActor
 private final class ProcessFactoryProbe {
