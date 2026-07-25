@@ -1647,6 +1647,23 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         await harnessExpectEqual(await source.subscriptionCount(), 0)
     }
 
+    func testProductionCompositionProvidesOneLazySharedCreationContext()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "AtlasLocalVaultCreationCoordinator",
+            "AtlasLocalVaultCreationPresentationOwner",
+            "creationContext",
+            "creationOwner.stop",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+    }
+
     func testCompositionSourceUsesReviewedConcreteAssemblyAndNoPlatformWork()
         throws
     {

@@ -145,6 +145,25 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testCreationEnabledRootIsExplicitAndCompatibilityRemainsDisabled()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "AtlasLocalVaultCreationContext",
+            "Create Local Vault",
+            "@ObservedObject",
+            ".sheet(",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(source.contains("static let disabled"))
+        XCTAssertFalse(source.contains("AtlasLocalVaultCreationCoordinator("))
+    }
+
     func testHistoricalScopeAssertionsDoNotPinCurrentAppEntry() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),
