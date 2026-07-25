@@ -145,6 +145,67 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testCreationEnabledRootIsExplicitAndCompatibilityRemainsDisabled()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "AtlasLocalVaultCreationContext",
+            "Create Local Vault",
+            "@ObservedObject",
+            ".sheet(",
+            "creationContext = nil",
+            "flowState.mode == .lockedPublic",
+            "flowState.publicShell.vaultStatus == .noVault",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        for forbidden in [
+            "static let disabled",
+            "AtlasLocalVaultCreationCoordinator(",
+            ".task",
+            ".onAppear",
+            "Keychain",
+            "FileManager",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+    }
+
+    func testCreationSheetIsLocalAndCanTransferToAnotherRoot()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "@State private var isCreationPresented = false",
+            "AtlasLocalVaultCreationPresentationClaim()",
+            "creationActions.claimPresentation(",
+            "creationActions.releasePresentation(",
+            "creationActions.ownsPresentation(",
+            "isCreationPresented = isPresented",
+            "isCreationPresented\n"
+                + "                        && creationActions"
+                + ".ownsPresentation",
+            ".onChange(of: creationOwner.presentation)",
+            "\"Continue Local Vault Setup\"",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains(
+                "isPresented: Binding(\n"
+                    + "                get: {\n"
+                    + "                    creationOwner.presentation"
+            )
+        )
+    }
+
     func testHistoricalScopeAssertionsDoNotPinCurrentAppEntry() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath),

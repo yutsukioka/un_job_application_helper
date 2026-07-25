@@ -1715,6 +1715,47 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testNoVaultExplicitRetryInstallsSelectedVaultWithoutActivation()
+        async throws
+    {
+        let graph = try makeGraph(selection: .success(.none))
+        _ = try await graph.host.start()
+        let noVault = await graph.host.requestUnlockPanel()
+        await expectEqual(noVault.publicShell.vaultStatus, .noVault)
+        await expectFalse(noVault.publicShell.canRequestUnlock)
+
+        await graph.selector.setNextOutcome(
+            .success(.selected(try selectedVaultID()))
+        )
+        let selected = await graph.host.requestUnlockPanel()
+
+        await expectEqual(selected.publicShell.vaultStatus, .locked)
+        await expectTrue(selected.publicShell.canRequestUnlock)
+        await expectEqual(selected.mode, .unlockPanel)
+        await expectNil(selected.unlockPanelState?.selectedMethod)
+        await expectEqual(await graph.selector.selectCount(), 2)
+        await expectEqual(graph.controllerBuilder.callCount, 1)
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+    }
+
+    func testNoVaultExplicitRetryReturningNoneRemainsClosed()
+        async throws
+    {
+        let graph = try makeGraph(selection: .success(.none))
+        _ = try await graph.host.start()
+        _ = await graph.host.requestUnlockPanel()
+
+        let retried = await graph.host.requestUnlockPanel()
+
+        await expectEqual(retried.publicShell.vaultStatus, .noVault)
+        await expectFalse(retried.publicShell.canRequestUnlock)
+        await expectEqual(retried.mode, .lockedPublic)
+        await expectNil(retried.unlockPanelState)
+        await expectEqual(await graph.selector.selectCount(), 2)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        await expectEqual(await graph.runtime.activationCalls(), 0)
+    }
+
     func testNoVaultPublicationFailurePreservesNoVaultAndClosedAdmission() async throws {
         let graph = try makeGraph(selection: .success(.none))
         _ = try await graph.host.start()
@@ -4236,6 +4277,7 @@ private actor HostVaultSelectorFake: AtlasVaultIDSelecting {
 
     private let outcome: Outcome
     private let gate: HostSuspensionGate?
+    private var nextOutcome: Outcome?
     private var calls = 0
 
     init(outcome: Outcome, gate: HostSuspensionGate?) {
@@ -4250,12 +4292,18 @@ private actor HostVaultSelectorFake: AtlasVaultIDSelecting {
         if let gate {
             await gate.wait()
         }
-        switch outcome {
+        let selectedOutcome = nextOutcome ?? outcome
+        nextOutcome = nil
+        switch selectedOutcome {
         case let .success(selection):
             return selection
         case let .failure(error):
             throw error
         }
+    }
+
+    func setNextOutcome(_ outcome: Outcome) {
+        nextOutcome = outcome
     }
 
     func selectCount() -> Int {
