@@ -192,6 +192,7 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             "recoveryActions.claimPresentation(",
             "recoveryActions.releasePresentation(",
             "recoveryActions.ownsPresentation(",
+            "presentationClaim: recoveryPresentationClaim",
             ".onChange(of: recoveryOwner.presentation)",
             "recoveryExportContext = nil",
         ] {

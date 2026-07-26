@@ -16,6 +16,7 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
             "claimPresentation",
             "releasePresentation",
             "ownsPresentation",
+            ".accessibilityValue(displayedRecoveryCode)",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
@@ -139,6 +140,63 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
     }
 
     @MainActor
+    func testDurabilityAndCompletionPendingStatesPermitExplicitReset()
+        async throws
+    {
+        let durabilityFake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await durabilityFake.setFailure(
+            .durabilityVerificationRequired
+        )
+        let durabilityOwner =
+            AtlasVaultRecoveryExportPresentationOwner(
+                coordinator: durabilityFake
+            )
+        durabilityOwner.present()
+
+        let durabilityGeneration = await durabilityOwner.generate()
+        XCTAssertNil(durabilityGeneration)
+        XCTAssertEqual(
+            durabilityOwner.presentation,
+            .durabilityVerificationRequired
+        )
+        await durabilityFake.setFailure(nil)
+        await durabilityOwner.resetPendingSetup(confirmed: true)
+        XCTAssertEqual(durabilityOwner.presentation, .ready)
+        let durabilityCalls = await durabilityFake.calls()
+        XCTAssertEqual(durabilityCalls, ["prepare", "reset"])
+
+        let completionFake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        let completionOwner =
+            AtlasVaultRecoveryExportPresentationOwner(
+                coordinator: completionFake
+        )
+        completionOwner.present()
+        _ = await completionOwner.generate()
+        let completionDocument = await completionOwner.confirm(
+            secret: "FAKE_TEST_ONLY_RECOVERY"
+        )
+        XCTAssertNotNil(completionDocument)
+        await completionFake.setFailure(.completionPending)
+        await completionOwner.exportDidFinish(success: true)
+        XCTAssertEqual(
+            completionOwner.presentation,
+            .completionPending
+        )
+        await completionFake.setFailure(nil)
+        await completionOwner.resetPendingSetup(confirmed: true)
+        XCTAssertEqual(completionOwner.presentation, .ready)
+        let completionCalls = await completionFake.calls()
+        XCTAssertEqual(
+            completionCalls,
+            ["prepare", "confirm", "exportSuccess", "reset"]
+        )
+    }
+
+    @MainActor
     func testWrongInitialConfirmationRemainsExplicitlyRetryable()
         async throws
     {
@@ -225,6 +283,30 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
         XCTAssertFalse(owner.ownsPresentation(claim))
         let calls = await fake.calls()
         XCTAssertEqual(calls, ["exportCancel"])
+    }
+
+    @MainActor
+    func testGeneratedCodeCannotPublishAfterSceneClaimIsInvalidated()
+        async throws
+    {
+        let owner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: try RecoveryExportCoordinatorViewFake(
+                document: makeDocument()
+            )
+        )
+        let claim = AtlasVaultRecoveryExportPresentationClaim()
+        owner.present()
+        XCTAssertTrue(owner.claimPresentation(claim))
+        let generatedHandle = await owner.generate()
+        let handle = try XCTUnwrap(generatedHandle)
+
+        await owner.dismissForUnsafeLifecycle()
+        let invalidatedCode = await handle.take()
+        XCTAssertNotNil(invalidatedCode)
+
+        XCTAssertEqual(owner.presentation, .hidden)
+        XCTAssertFalse(owner.ownsPresentation(claim))
+        XCTAssertFalse(owner.canPublishGeneratedCode(for: claim))
     }
 
     func testViewKeepsSecretsAndEncryptedDocumentInLocalStateOnly()

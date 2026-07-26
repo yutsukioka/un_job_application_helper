@@ -243,6 +243,8 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             confirmed,
             presentation == .resumeRequired
                 || presentation == .paused
+                || presentation == .durabilityVerificationRequired
+                || presentation == .completionPending
                 || presentation == .recoveryRequired
         else {
             return
@@ -327,6 +329,18 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         _ claim: AtlasVaultRecoveryExportPresentationClaim
     ) -> Bool {
         presentationClaimIdentifier == claim.identifier
+    }
+
+    func canPublishGeneratedCode(
+        for claim: AtlasVaultRecoveryExportPresentationClaim?
+    ) -> Bool {
+        guard presentation == .awaitingConfirmation else {
+            return false
+        }
+        guard let claim else {
+            return true
+        }
+        return ownsPresentation(claim)
     }
 
     public nonisolated var description: String {
@@ -601,6 +615,8 @@ public struct AtlasVaultRecoveryExportView: View {
     @ObservedObject private var owner:
         AtlasVaultRecoveryExportPresentationOwner
     private let actions: AtlasVaultRecoveryExportActions
+    private let presentationClaim:
+        AtlasVaultRecoveryExportPresentationClaim?
 
     @State private var displayedRecoveryCode = ""
     @State private var confirmationEntry = ""
@@ -612,10 +628,13 @@ public struct AtlasVaultRecoveryExportView: View {
 
     public init(
         owner: AtlasVaultRecoveryExportPresentationOwner,
-        actions: AtlasVaultRecoveryExportActions
+        actions: AtlasVaultRecoveryExportActions,
+        presentationClaim:
+            AtlasVaultRecoveryExportPresentationClaim? = nil
     ) {
         self.owner = owner
         self.actions = actions
+        self.presentationClaim = presentationClaim
     }
 
     public var body: some View {
@@ -680,6 +699,11 @@ public struct AtlasVaultRecoveryExportView: View {
                     else {
                         return
                     }
+                    guard owner.canPublishGeneratedCode(
+                        for: presentationClaim
+                    ) else {
+                        return
+                    }
                     displayedRecoveryCode = code
                 }
             }
@@ -692,6 +716,7 @@ public struct AtlasVaultRecoveryExportView: View {
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
                 .accessibilityLabel("Recovery key")
+                .accessibilityValue(displayedRecoveryCode)
             Toggle(
                 "I saved this recovery key separately.",
                 isOn: $acknowledgedSavedCode

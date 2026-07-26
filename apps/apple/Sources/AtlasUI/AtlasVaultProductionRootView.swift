@@ -165,7 +165,8 @@ private struct AtlasVaultRecoveryEnabledRoot: View {
             ) {
                 AtlasVaultRecoveryExportView(
                     owner: recoveryOwner,
-                    actions: recoveryActions
+                    actions: recoveryActions,
+                    presentationClaim: recoveryPresentationClaim
                 )
                 .interactiveDismissDisabled(
                     recoveryOwner.presentation == .generating
