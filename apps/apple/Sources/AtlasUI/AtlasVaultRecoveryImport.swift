@@ -377,12 +377,7 @@ struct AtlasKeychainVaultRecoveryImportJournalStore<
             else {
                 throw AtlasVaultRecoveryImportFailure.recoveryRequired
             }
-            guard client.update(
-                Self.query,
-                with: AtlasKeychainUpdate(valueData: data)
-            ) == errSecSuccess else {
-                throw AtlasVaultRecoveryImportFailure.unavailable
-            }
+            return
         default:
             throw AtlasVaultRecoveryImportFailure.unavailable
         }

@@ -239,10 +239,12 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         )
     }
 
-    func testJournalDuplicateUpdateIsBoundToSameTransaction()
+    func testJournalIdenticalDuplicateIsNoOpWithoutUpdate()
         throws
     {
-        let client = RecoveryImportJournalKeychainClient()
+        let client = RecoveryImportJournalKeychainClient(
+            updateStatus: errSecNotAvailable
+        )
         let store = AtlasKeychainVaultRecoveryImportJournalStore(
             client: client
         )
@@ -251,7 +253,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         try store.saveJournal(journal)
         try store.saveJournal(journal)
         XCTAssertEqual(try store.loadJournal(), journal)
-        XCTAssertEqual(client.updateCount(), 1)
+        XCTAssertEqual(client.updateCount(), 0)
         XCTAssertEqual(
             client.storedItem()?.accessibility,
             .afterFirstUnlockThisDeviceOnly
@@ -287,7 +289,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             )
         }
         XCTAssertEqual(try store.loadJournal(), journal)
-        XCTAssertEqual(client.updateCount(), 1)
+        XCTAssertEqual(client.updateCount(), 0)
     }
 
     func testCoordinatorConstructionInvokesNoDependency() async throws {
@@ -1967,6 +1969,11 @@ private final class RecoveryImportJournalKeychainClient:
     }
 
     private let state = Mutex(State())
+    private let updateStatus: OSStatus
+
+    init(updateStatus: OSStatus = errSecSuccess) {
+        self.updateStatus = updateStatus
+    }
 
     func add(_ item: AtlasKeychainItem) -> OSStatus {
         state.withLock {
@@ -2003,13 +2010,16 @@ private final class RecoveryImportJournalKeychainClient:
             guard let item = $0.item else {
                 return errSecItemNotFound
             }
+            $0.updates += 1
+            guard updateStatus == errSecSuccess else {
+                return updateStatus
+            }
             $0.item = AtlasKeychainItem(
                 service: item.service,
                 account: item.account,
                 valueData: attributes.valueData,
                 accessibility: item.accessibility
             )
-            $0.updates += 1
             return errSecSuccess
         }
     }

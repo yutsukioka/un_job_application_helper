@@ -109,6 +109,13 @@ Its exact envelope contains:
 
 Import, export, and store IDs must be pairwise distinct.
 
+The first journal save uses Keychain add. If add reports a duplicate, the
+existing journal is decoded and compared with the requested journal. An exact
+match is an idempotent no-op; no Keychain update is attempted. A conflicting
+duplicate fails with the fixed recovery-required outcome. This avoids adding
+an unnecessary update failure surface while preserving the exact journal
+schema.
+
 ## 14. Journal Privacy
 
 The journal contains no export bytes, recovery key, recovery text, vault key,
@@ -436,9 +443,10 @@ durability pause and explicit directory re-synchronization, partial resume,
 completion pending, reset, create-only writes, pending selection and creation
 gating, non-reentrant creation/import transaction serialization,
 cancellation-aware waiter removal, dynamic capabilities, stale host
-resolution, vault-aware unlock, explicit confirmation forwarding, canonical
-test-file roots, view lifecycle, root/harness integration, and full
-source-to-restore recovery-only relaunch.
+resolution, idempotent identical-journal duplicate handling, vault-aware
+unlock, explicit confirmation forwarding, canonical test-file roots, view
+lifecycle, root/harness integration, and full source-to-restore recovery-only
+relaunch.
 The final review-fix regression runs passed 236 Python tests and 1,213 Swift
 tests.
 
