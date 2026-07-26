@@ -683,6 +683,7 @@ public actor AtlasVaultRecoveryExportCoordinator:
             try Task.checkCancellation()
             try await requireAuthorization()
             try await environment.saveJournal(preparedState.journal)
+            wipePrepared()
             let document = try await commitAndVerify(
                 journal: preparedState.journal,
                 recoveryKey: entered
@@ -1011,6 +1012,8 @@ public actor AtlasVaultRecoveryExportCoordinator:
             metadata.vaultID,
             recovered
         )
+        try Task.checkCancellation()
+        try await requireAuthorization()
         let export = try AtlasVaultEncryptedExportEnvelope(
             exportID: journal.exportID,
             createdAt: journal.createdAt,
@@ -1045,6 +1048,8 @@ public actor AtlasVaultRecoveryExportCoordinator:
             decoded.vaultMetadata.vaultID,
             decodedKey
         )
+        try Task.checkCancellation()
+        try await requireAuthorization()
         return try AtlasVaultEncryptedDocument(
             verifiedEncryptedData: canonical
         )

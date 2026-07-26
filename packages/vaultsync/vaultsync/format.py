@@ -393,6 +393,13 @@ class VaultMetadata:
         _require_vault_id(self.vault_id)
         if not isinstance(self.key_wraps, tuple):
             object.__setattr__(self, "key_wraps", tuple(self.key_wraps))
+        if any(
+            not isinstance(wrapped, (WrappedKey, RecoveryKeyWrapV2))
+            for wrapped in self.key_wraps
+        ):
+            raise VaultFormatError(
+                "key_wraps must contain supported key-wrap models"
+            )
         recovery_ids = [
             wrapped.id
             for wrapped in self.key_wraps

@@ -842,6 +842,49 @@ def test_metadata_decode_rejects_recovery_id_collision_with_v1() -> None:
         VaultMetadata.from_dict(metadata)
 
 
+@pytest.mark.parametrize("use_list", [False, True])
+def test_direct_metadata_rejects_unsupported_key_wrap_models(
+    use_list: bool,
+) -> None:
+    vector = load_vector()
+    valid = VaultMetadata.from_dict(vector["vault_metadata"])
+
+    class UnsupportedWrap:
+        id = "PRIVATE_UNSUPPORTED_WRAP_ID"
+
+        def to_dict(self) -> dict[str, Any]:
+            raise AssertionError("unsupported wrap must never serialize")
+
+    unsupported = UnsupportedWrap()
+    key_wraps: Any = [unsupported] if use_list else (unsupported,)
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^key_wraps must contain supported key-wrap models$",
+    ) as raised:
+        VaultMetadata(
+            vault_id=valid.vault_id,
+            key_wraps=key_wraps,
+            crypto=valid.crypto,
+        )
+
+    assert unsupported.id not in str(raised.value)
+
+
+def test_direct_metadata_still_normalizes_supported_key_wrap_sequences() -> None:
+    vector = load_vector()
+    valid = VaultMetadata.from_dict(vector["vault_metadata"])
+
+    metadata = VaultMetadata(
+        vault_id=valid.vault_id,
+        key_wraps=list(valid.key_wraps),
+        crypto=valid.crypto,
+    )
+
+    assert isinstance(metadata.key_wraps, tuple)
+    assert metadata.to_dict() == valid.to_dict()
+
+
 @pytest.mark.parametrize("wrap_version", [True, False, 2.0])
 def test_direct_v2_model_requires_strict_integer_wrap_version(
     wrap_version: Any,

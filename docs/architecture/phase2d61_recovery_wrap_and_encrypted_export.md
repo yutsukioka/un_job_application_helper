@@ -321,7 +321,7 @@ the focused Python vector suites passed 97 tests, the complete Python suite
 passed 162 tests, the strict Swift wrap suite passed 25 tests, and the complete
 Swift suite passed 1,129 tests. Both discovered generic iOS Simulator test
 builds passed. The existing canonical vector bytes and SHA-256 are unchanged,
-and the final reviewed repository scope is exactly 23 files.
+and the reviewed repository scope at that checkpoint was exactly 23 files.
 
 Review-fix cycle 5 adds strict Boolean/float version rejection for export and
 vault metadata, fixes recovery key-wrap validation wording without changing
@@ -393,6 +393,19 @@ unchanged. The focused recovery/export suite passes 150 tests, the combined
 v1/v2 vector suites pass 166 tests, the complete Python suite passes 231
 tests, and the unchanged complete Swift suite passes 1,139 tests. Both
 discovered generic iOS Simulator test builds pass.
+
+Review-fix cycle 12 makes direct Python vault-metadata construction reject
+unsupported key-wrap model objects before serialization. After the
+non-secret setup journal is saved, the Swift coordinator immediately wipes
+its actor-owned prepared recovery key; journal-backed retries therefore use
+the explicit resume path. Export verification rechecks task cancellation and
+authorization after each record-hydration boundary and before returning a
+document, so lifecycle cancellation or authorization loss cannot publish an
+export after decryption. The focused Python recovery/export suite passes 153
+tests, the combined v1/v2 vector suites pass 169 tests, the focused Swift
+coordinator suite passes 18 tests, and the complete Python and Swift suites
+pass 234 and 1,142 tests respectively. Both generic iOS Simulator builds pass,
+and the exact 24-file scope is unchanged.
 
 ## End-To-End Evidence
 

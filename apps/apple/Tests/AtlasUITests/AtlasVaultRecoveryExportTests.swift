@@ -160,6 +160,47 @@ final class AtlasVaultRecoveryExportTests: XCTestCase {
         XCTAssertNotNil(resumedSnapshot.journal)
     }
 
+    func testJournalSaveWipesPreparedSecretBeforeDurabilityFailure()
+        async throws
+    {
+        let fixture = try RecoveryExportFixture()
+        await fixture.fake.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        let handle = try await fixture.coordinator.prepareNewRecovery()
+        let takenCode = await handle.take()
+        let code = try XCTUnwrap(takenCode)
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndPrepareExport(
+                secret: code
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .durabilityVerificationRequired
+            )
+        }
+        await fixture.fake.setCommitState(.committed)
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndPrepareExport(
+                secret: code
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .recoveryRequired
+            )
+        }
+        let document = try await fixture.coordinator
+            .resumeAndPrepareExport(secret: code)
+        let snapshot = await fixture.fake.snapshot()
+
+        XCTAssertFalse(document.encryptedData.isEmpty)
+        XCTAssertNotNil(snapshot.journal)
+    }
+
     func testRelaunchResumeRequiresSavedKeyAndDoesNotDuplicateWrap()
         async throws
     {
@@ -376,6 +417,91 @@ final class AtlasVaultRecoveryExportTests: XCTestCase {
         XCTAssertFalse(snapshot.events.contains("saveStore"))
     }
 
+    func testAuthorizationLossDuringFirstHydrationBlocksExport()
+        async throws
+    {
+        let entered = RecoveryExportGate(open: false)
+        let release = RecoveryExportGate(open: false)
+        let fixture = try RecoveryExportFixture(
+            hydrationPauseAtCall: 1,
+            hydrationEntered: entered,
+            hydrationRelease: release
+        )
+        let handle = try await fixture.coordinator.prepareNewRecovery()
+        let takenCode = await handle.take()
+        let code = try XCTUnwrap(takenCode)
+        let operation = Task {
+            try await fixture.coordinator.confirmAndPrepareExport(
+                secret: code
+            )
+        }
+        await entered.wait()
+        await fixture.fake.setAuthorized(false)
+        await release.open()
+
+        await XCTAssertThrowsErrorAsync(
+            try await operation.value
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .unauthorized
+            )
+        }
+        let snapshot = await fixture.fake.snapshot()
+
+        XCTAssertNotNil(snapshot.journal)
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "hydrate" }.count,
+            1
+        )
+    }
+
+    func testTerminalStopDuringSecondHydrationCannotReturnDocument()
+        async throws
+    {
+        let entered = RecoveryExportGate(open: false)
+        let release = RecoveryExportGate(open: false)
+        let cancellationObserved = RecoveryExportGate(open: false)
+        let fixture = try RecoveryExportFixture(
+            hydrationPauseAtCall: 2,
+            hydrationEntered: entered,
+            hydrationRelease: release,
+            hydrationCancellationObserved: cancellationObserved
+        )
+        let handle = try await fixture.coordinator.prepareNewRecovery()
+        let takenCode = await handle.take()
+        let code = try XCTUnwrap(takenCode)
+        let operation = Task {
+            try await fixture.coordinator.confirmAndPrepareExport(
+                secret: code
+            )
+        }
+        await entered.wait()
+        let stop = Task {
+            await fixture.coordinator.stop()
+        }
+        await cancellationObserved.wait()
+        await release.open()
+        await stop.value
+
+        await XCTAssertThrowsErrorAsync(
+            try await operation.value
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .cancelled
+            )
+        }
+        let snapshot = await fixture.fake.snapshot()
+
+        XCTAssertNotNil(snapshot.journal)
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "hydrate" }.count,
+            2
+        )
+        XCTAssertFalse(snapshot.events.contains("clearJournal"))
+    }
+
     func testConcurrentPrepareCallersShareCoordinatorOwnedOperation()
         async throws
     {
@@ -467,7 +593,11 @@ private struct RecoveryExportFixture {
 
     init(
         selectionEntered: RecoveryExportGate? = nil,
-        selectionRelease: RecoveryExportGate? = nil
+        selectionRelease: RecoveryExportGate? = nil,
+        hydrationPauseAtCall: Int? = nil,
+        hydrationEntered: RecoveryExportGate? = nil,
+        hydrationRelease: RecoveryExportGate? = nil,
+        hydrationCancellationObserved: RecoveryExportGate? = nil
     ) throws {
         let vaultID = "11111111-2222-3333-4444-555555555555"
         let storeID = "22222222-3333-4444-8555-666666666666"
@@ -490,7 +620,12 @@ private struct RecoveryExportFixture {
             vaultKey: vaultKey,
             store: store,
             selectionEntered: selectionEntered,
-            selectionRelease: selectionRelease
+            selectionRelease: selectionRelease,
+            hydrationPauseAtCall: hydrationPauseAtCall,
+            hydrationEntered: hydrationEntered,
+            hydrationRelease: hydrationRelease,
+            hydrationCancellationObserved:
+                hydrationCancellationObserved
         )
         self.fake = fake
         let deterministicRecoveryKey = Data(
@@ -579,19 +714,33 @@ private actor RecoveryExportEnvironmentFake {
     private var mutatesStoredTimestamp = false
     private let selectionEntered: RecoveryExportGate?
     private let selectionRelease: RecoveryExportGate?
+    private let hydrationPauseAtCall: Int?
+    private let hydrationEntered: RecoveryExportGate?
+    private let hydrationRelease: RecoveryExportGate?
+    private let hydrationCancellationObserved: RecoveryExportGate?
+    private var hydrationCallCount = 0
 
     init(
         vaultID: String,
         vaultKey: Data,
         store: AtlasVaultLocalStoreEnvelope,
         selectionEntered: RecoveryExportGate?,
-        selectionRelease: RecoveryExportGate?
+        selectionRelease: RecoveryExportGate?,
+        hydrationPauseAtCall: Int?,
+        hydrationEntered: RecoveryExportGate?,
+        hydrationRelease: RecoveryExportGate?,
+        hydrationCancellationObserved: RecoveryExportGate?
     ) {
         self.vaultID = vaultID
         self.vaultKey = vaultKey
         self.store = store
         self.selectionEntered = selectionEntered
         self.selectionRelease = selectionRelease
+        self.hydrationPauseAtCall = hydrationPauseAtCall
+        self.hydrationEntered = hydrationEntered
+        self.hydrationRelease = hydrationRelease
+        self.hydrationCancellationObserved =
+            hydrationCancellationObserved
     }
 
     func authorize() -> Bool {
@@ -662,8 +811,24 @@ private actor RecoveryExportEnvironmentFake {
         records _: [AtlasVaultEncryptedRecordEnvelope],
         vaultID candidate: String,
         vaultKey candidateKey: Data
-    ) throws {
+    ) async throws {
         events.append("hydrate")
+        hydrationCallCount += 1
+        if hydrationCallCount == hydrationPauseAtCall {
+            await hydrationEntered?.open()
+            if let hydrationRelease {
+                await withTaskCancellationHandler {
+                    await hydrationRelease.wait()
+                } onCancel: {
+                    guard let hydrationCancellationObserved else {
+                        return
+                    }
+                    Task {
+                        await hydrationCancellationObserved.open()
+                    }
+                }
+            }
+        }
         guard
             !hydrationFailure,
             candidate == vaultID,
