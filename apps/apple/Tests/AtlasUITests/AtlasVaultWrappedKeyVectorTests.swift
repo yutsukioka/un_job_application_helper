@@ -32,6 +32,90 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: vector.path))
     }
 
+    func testVersionedMetadataDecodesRecoveryV2AndReencodesCanonically()
+        throws
+    {
+        let vector = try loadRecoveryVector()
+        let metadataObject = try dictionary(vector["vault_metadata"])
+        let data = try JSONSerialization.data(
+            withJSONObject: metadataObject,
+            options: [.sortedKeys]
+        )
+
+        let metadata = try JSONDecoder().decode(
+            AtlasVaultVersionedWrappedKeyMetadata.self,
+            from: data
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let reencoded = try encoder.encode(metadata)
+
+        XCTAssertEqual(metadata.format, "atlas-vault")
+        XCTAssertEqual(metadata.version, 1)
+        XCTAssertEqual(metadata.keyWraps.count, 1)
+        XCTAssertEqual(
+            metadata.recoveryKeyWrap?.id,
+            "primary-recovery-v2"
+        )
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: reencoded)
+                as? NSDictionary,
+            metadataObject as NSDictionary
+        )
+    }
+
+    func testVersionedMetadataAllowsV1AndV2ToCoexist() throws {
+        let v1Root = try loadVectorJSONObject()
+        let v1Vector = try dictionary(
+            try array(v1Root["vectors"]).first
+        )
+        let v1Metadata = try dictionary(v1Vector["vault_metadata"])
+        let v1 = try dictionary(
+            try array(v1Metadata["key_wraps"]).first
+        )
+        let recovery = try loadRecoveryVector()
+        var metadata = try dictionary(recovery["vault_metadata"])
+        metadata["key_wraps"] = [
+            v1,
+            try dictionary(recovery["recovery_wrap"]),
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AtlasVaultVersionedWrappedKeyMetadata.self,
+            from: data
+        )
+
+        XCTAssertEqual(decoded.keyWraps.count, 2)
+        guard case .passphrase = decoded.keyWraps[0] else {
+            return XCTFail("Expected preserved v1 passphrase wrap")
+        }
+        guard case .recoveryKey = decoded.keyWraps[1] else {
+            return XCTFail("Expected recovery v2 wrap")
+        }
+    }
+
+    func testVersionedMetadataRejectsDuplicateRecoveryWrapID() throws {
+        let vector = try loadRecoveryVector()
+        var metadata = try dictionary(vector["vault_metadata"])
+        let wrap = try dictionary(vector["recovery_wrap"])
+        metadata["key_wraps"] = [wrap, wrap]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
     func testSharedVectorDecodesThroughStrictProductionModels() throws {
         let root = try loadVectorRoot()
         let vector = try XCTUnwrap(root.vectors.first)
@@ -291,6 +375,42 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
     private func loadVectorJSONObject() throws -> [String: Any] {
         let data = try Data(contentsOf: vectorFileURL())
         return try dictionary(try JSONSerialization.jsonObject(with: data))
+    }
+
+    private func loadRecoveryVector() throws -> [String: Any] {
+        let data = try Data(
+            contentsOf: recoveryVectorFileURL()
+        )
+        let root = try dictionary(
+            try JSONSerialization.jsonObject(with: data)
+        )
+        return try dictionary(try array(root["vectors"]).first)
+    }
+
+    private func recoveryVectorFileURL() throws -> URL {
+        let currentDirectory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath
+        )
+        let sourceDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+        let fileName =
+            "atlasvault_recovery_export_vectors_v2.json"
+        let candidates = [
+            currentDirectory.appendingPathComponent(
+                "../../contracts/sync/test_vectors/\(fileName)"
+            ),
+            currentDirectory.appendingPathComponent(
+                "contracts/sync/test_vectors/\(fileName)"
+            ),
+            sourceDirectory.appendingPathComponent(
+                "../../../../contracts/sync/test_vectors/\(fileName)"
+            ),
+        ].map(\.standardizedFileURL)
+        return try XCTUnwrap(
+            candidates.first {
+                FileManager.default.fileExists(atPath: $0.path)
+            }
+        )
     }
 
     private func vectorFileURL() throws -> URL {

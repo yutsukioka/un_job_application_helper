@@ -188,6 +188,11 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             "unlockedTransition",
             "@ObservedObject",
             ".sheet(",
+            "AtlasVaultRecoveryExportPresentationClaim()",
+            "recoveryActions.claimPresentation(",
+            "recoveryActions.releasePresentation(",
+            "recoveryActions.ownsPresentation(",
+            ".onChange(of: recoveryOwner.presentation)",
             "recoveryExportContext = nil",
         ] {
             XCTAssertTrue(source.contains(required), required)

@@ -102,3 +102,32 @@ The adjacent vault ID is routing context, not authenticated provenance.
 Production passphrase and recovery unlock therefore remain unavailable until
 a separately reviewed provider and versioned vault-binding or
 key-confirmation design exist.
+
+## Recovery-Wrap And Encrypted-Export Vectors
+
+`atlasvault_recovery_export_vectors_v2.json` contains one fake, deterministic,
+test-only recovery-key-wrap v2 and `atlasvault-export` v1 fixture. It is not
+real user data, not a production vault, not a production recovery key, and not
+a backup that can recover any user data.
+
+The vector fixes the cross-language representation for:
+
+- 32 fake recovery-key bytes plus the five-byte domain-separated checksum;
+- the exact 60-symbol `AVRK1` Base32 text;
+- a 32-byte HKDF-SHA256 salt and 12-byte AES-GCM nonce;
+- vault-bound, sorted, compact recovery-wrap v2 AAD;
+- the fixed `primary-recovery-v2` wrap object;
+- top-level `atlas-vault` version 1 metadata containing the versioned wrap;
+- canonical sorted, compact `atlasvault-export` version 1 bytes;
+- the SHA-256 digest of those canonical export bytes.
+
+Python recomputes the code, AAD, wrap, unwrap, export bytes, and digest. Swift
+recomputes the same code, AAD, wrap, unwrap, metadata, and export bytes.
+Mutation tests cover vault binding, authentication failure, strict lengths,
+canonical Base64, unknown fields, and duplicate recovery-wrap identity.
+
+The adjacent v1 passphrase vector remains authoritative and unchanged.
+Recovery wrap v2 does not reinterpret v1 Argon2id wrapping or its historical
+AAD. Production generation must use secure randomness rather than the fixed
+vector values. Phase 2D-61 verifies export preparation only; import and
+production recovery unlock are deferred.
