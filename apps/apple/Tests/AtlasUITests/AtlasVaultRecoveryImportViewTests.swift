@@ -37,6 +37,23 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         XCTAssertEqual(secondPresentationPendingChecks, 2)
     }
 
+    func testPresentFailsClosedWhenPendingJournalReadFails() async {
+        let coordinator = RecoveryImportViewCoordinatorFake()
+        await coordinator.setPendingReadFailure(true)
+        let owner = AtlasVaultRecoveryImportPresentationOwner(
+            coordinator: coordinator,
+            continueToUnlock: {}
+        )
+
+        await owner.present()
+
+        XCTAssertEqual(owner.presentation, .paused)
+        let pendingChecks = await coordinator.pendingChecks()
+        XCTAssertEqual(pendingChecks, 1)
+        let calls = await coordinator.calls()
+        XCTAssertEqual(calls, [])
+    }
+
     func testExplicitFileSelectionAndRestoreOpenExistingUnlockPath()
         async throws
     {
@@ -270,10 +287,15 @@ private actor RecoveryImportViewCoordinatorFake:
 {
     private var recordedCalls: [String] = []
     private var pending = false
+    private var pendingReadFails = false
     private var recordedPendingChecks = 0
 
     func setPending(_ value: Bool) {
         pending = value
+    }
+
+    func setPendingReadFailure(_ value: Bool) {
+        pendingReadFails = value
     }
 
     func calls() -> [String] {
@@ -324,6 +346,9 @@ private actor RecoveryImportViewCoordinatorFake:
 
     func hasPendingImport() async throws -> Bool {
         recordedPendingChecks += 1
+        if pendingReadFails {
+            throw AtlasVaultRecoveryImportFailure.unavailable
+        }
         return pending
     }
 

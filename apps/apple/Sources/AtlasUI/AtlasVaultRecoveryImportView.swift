@@ -121,7 +121,7 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
                     try await coordinator.hasPendingImport()
                 )
             } catch {
-                return .failure(Self.failure(error))
+                return .pending(true)
             }
         }
         guard

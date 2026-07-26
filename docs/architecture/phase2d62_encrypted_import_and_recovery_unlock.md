@@ -319,6 +319,9 @@ URL, export bytes, secret, identifier, path, or private record.
 Explicit presentation performs a retained `hasPendingImport` check before
 publishing ready or paused. Reopening a journal-backed restore therefore shows
 resume and discard controls immediately without a redundant file selection.
+If the journal read fails, presentation fails closed to paused rather than
+publishing ready or a generic retry state. The user therefore cannot begin a
+new restore while pending-transaction ownership is unknown.
 
 ## 39. Import View
 
@@ -444,10 +447,10 @@ completion pending, reset, create-only writes, pending selection and creation
 gating, non-reentrant creation/import transaction serialization,
 cancellation-aware waiter removal, dynamic capabilities, stale host
 resolution, idempotent identical-journal duplicate handling, vault-aware
-unlock, explicit confirmation forwarding, canonical test-file roots, view
-lifecycle, root/harness integration, and full source-to-restore recovery-only
-relaunch.
-The final review-fix regression runs passed 236 Python tests and 1,213 Swift
+unlock, fail-closed import-journal presentation, explicit confirmation
+forwarding, canonical test-file roots, view lifecycle, root/harness
+integration, and full source-to-restore recovery-only relaunch.
+The final review-fix regression runs passed 236 Python tests and 1,214 Swift
 tests.
 
 ## 56. iOS Build And Smoke Evidence
