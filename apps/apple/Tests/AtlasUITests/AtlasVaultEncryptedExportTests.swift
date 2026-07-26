@@ -56,6 +56,31 @@ final class AtlasVaultEncryptedExportTests: XCTestCase {
         XCTAssertNotNil(envelope.vaultMetadata.recoveryKeyWrap)
     }
 
+    func testStrictDecoderAcceptsPassphraseOnlyV1Metadata() throws {
+        let vector = try loadVector()
+        var exportObject = try dictionary(vector["export"])
+        exportObject["vault_metadata"] = try loadPassphraseMetadata()
+        let input = try JSONSerialization.data(
+            withJSONObject: exportObject,
+            options: [.sortedKeys]
+        )
+
+        let envelope = try AtlasVaultEncryptedExportEnvelope.decodeStrict(
+            input
+        )
+        let canonical = try envelope.canonicalData()
+        let document = try AtlasVaultEncryptedDocument(
+            verifiedEncryptedData: canonical
+        )
+
+        XCTAssertNil(envelope.vaultMetadata.recoveryKeyWrap)
+        XCTAssertEqual(envelope.vaultMetadata.keyWraps.count, 1)
+        guard case .passphrase = envelope.vaultMetadata.keyWraps[0] else {
+            return XCTFail("Expected historical passphrase v1 metadata")
+        }
+        XCTAssertEqual(document.encryptedData, canonical)
+    }
+
     func testCanonicalExportUsesPythonASCIIEscapingForRecordText() throws {
         let vector = try loadVector()
         let exportObject = try dictionary(vector["export"])
@@ -259,20 +284,36 @@ final class AtlasVaultEncryptedExportTests: XCTestCase {
     }
 
     private func loadVector() throws -> [String: Any] {
-        let data = try Data(contentsOf: try vectorFileURL())
+        let data = try Data(
+            contentsOf: try vectorFileURL(
+                named: "atlasvault_recovery_export_vectors_v2.json"
+            )
+        )
         let root = try dictionary(
             try JSONSerialization.jsonObject(with: data)
         )
         return try dictionary(try array(root["vectors"]).first)
     }
 
-    private func vectorFileURL() throws -> URL {
+    private func loadPassphraseMetadata() throws -> [String: Any] {
+        let data = try Data(
+            contentsOf: try vectorFileURL(
+                named: "atlasvault_key_wrap_vectors_v1.json"
+            )
+        )
+        let root = try dictionary(
+            try JSONSerialization.jsonObject(with: data)
+        )
+        let vector = try dictionary(try array(root["vectors"]).first)
+        return try dictionary(vector["vault_metadata"])
+    }
+
+    private func vectorFileURL(named name: String) throws -> URL {
         let current = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath
         )
         let source = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-        let name = "atlasvault_recovery_export_vectors_v2.json"
         let candidates = [
             current.appendingPathComponent(
                 "../../contracts/sync/test_vectors/\(name)"

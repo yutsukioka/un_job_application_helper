@@ -108,6 +108,10 @@ decode, while the valid integer version 1 remains unchanged.
 Swift validates the raw JSON numeric tokens for the export version, nested
 vault-metadata version, and recovery-wrap version before `Codable` can
 normalize floating-point aliases such as `1.0` or `2.0` into integers.
+The generic export envelope accepts any otherwise-valid v1 vault metadata,
+including historical passphrase-only metadata. Requiring a recovery wrap is a
+recovery/export workflow rule enforced before that workflow offers a file; it
+is not an additional restriction on the reusable v1 envelope parser.
 
 Sorted compact UTF-8 JSON uses Python-compatible ASCII escaping, including
 lowercase `\u` escapes and surrogate pairs for non-ASCII encrypted-record
@@ -281,7 +285,9 @@ the same values.
 
 The existing passphrase v1 vector remains green. Tamper tests cover vault
 binding, wrong key, valid-length salt/nonce/ciphertext changes, strict fields,
-canonical Base64, and duplicate recovery-wrap IDs.
+canonical Base64, duplicate recovery-wrap IDs, and collisions between the
+fixed recovery-wrap ID and a historical passphrase-wrap ID. Unrelated
+historical passphrase identifiers retain their existing semantics.
 
 Passphrase- and recovery-wrap validation use the fixed human-facing term
 `key-wrap`. Serialized contract fields, including `key_wraps`, are unchanged.
@@ -350,6 +356,17 @@ passes 1,137 tests, and both generic iOS Simulator test builds pass. Shared
 vectors, valid wire bytes, v1 crypto/AAD, the exact 23-file scope, and all
 Phase 2D-61 product boundaries remain unchanged. CoreSimulator was unavailable,
 so no runtime smoke launch is claimed.
+
+Review-fix cycle 10 restores the generic Swift export parser's acceptance of
+strictly valid passphrase-only v1 metadata while retaining the recovery
+coordinator's requirement for a verified recovery wrap before file readiness.
+Python and Swift also reject a recovery-wrap ID that collides with a
+historical passphrase-wrap ID. The combined focused Python and Swift matrices
+each pass 133 tests, the complete Python suite passes 198 tests, the complete
+Swift suite passes 1,139 tests, and both generic iOS Simulator test builds
+pass. Shared vectors, canonical bytes/SHA-256, v1 crypto/AAD, the exact
+23-file scope, and product boundaries remain unchanged. No compatible
+simulator was booted, so no runtime smoke launch is claimed.
 
 ## End-To-End Evidence
 

@@ -98,6 +98,31 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         }
     }
 
+    func testVersionedMetadataRejectsRecoveryIDCollisionWithV1() throws {
+        let v1Metadata = try versionedV1MetadataObject()
+        var passphrase = try dictionary(
+            try array(v1Metadata["key_wraps"]).first
+        )
+        passphrase["id"] = "primary-recovery-v2"
+        let recovery = try loadRecoveryVector()
+        var metadata = try dictionary(recovery["vault_metadata"])
+        metadata["key_wraps"] = [
+            passphrase,
+            try dictionary(recovery["recovery_wrap"]),
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
     func testVersionedMetadataPreservesHistoricalV1WithoutWrapVersion()
         throws
     {

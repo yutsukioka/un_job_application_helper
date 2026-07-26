@@ -17,6 +17,7 @@ from vaultsync.export import (
     serialize_vault_export_bytes,
 )
 from vaultsync.format import (
+    RECOVERY_WRAP_ID,
     RecoveryKeyError,
     RecoveryKeyWrapV2,
     VaultFormatError,
@@ -50,6 +51,22 @@ def load_vector() -> dict[str, Any]:
 
 def decode64(value: str) -> bytes:
     return base64.b64decode(value.encode("ascii"), validate=True)
+
+
+def _passphrase_wrap(wrap_id: str) -> dict[str, Any]:
+    return {
+        "id": wrap_id,
+        "type": "passphrase",
+        "kdf": {
+            "algorithm": "Argon2id",
+            "salt": base64.b64encode(b"s" * 16).decode(),
+            "memory_kib": 65_536,
+            "iterations": 3,
+            "parallelism": 4,
+        },
+        "nonce": base64.b64encode(b"n" * 12).decode(),
+        "ciphertext": base64.b64encode(b"c" * 48).decode(),
+    }
 
 
 def test_python_recomputes_recovery_code_and_wrap_vector() -> None:
@@ -609,6 +626,38 @@ def test_v2_model_rejects_unknown_keys_and_duplicate_ids() -> None:
             vault_id=vector["vault_id"],
             key_wraps=(wrap, wrap),
         )
+
+
+def test_metadata_direct_construction_rejects_recovery_id_collision_with_v1() -> None:
+    vector = load_vector()
+    passphrase_metadata = deepcopy(vector["vault_metadata"])
+    passphrase_metadata["key_wraps"] = [_passphrase_wrap(RECOVERY_WRAP_ID)]
+    passphrase = VaultMetadata.from_dict(passphrase_metadata).key_wraps[0]
+    recovery = RecoveryKeyWrapV2.from_dict(vector["recovery_wrap"])
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^duplicate recovery key-wrap identifier$",
+    ):
+        VaultMetadata.new(
+            vault_id=vector["vault_id"],
+            key_wraps=(passphrase, recovery),
+        )
+
+
+def test_metadata_decode_rejects_recovery_id_collision_with_v1() -> None:
+    vector = load_vector()
+    metadata = deepcopy(vector["vault_metadata"])
+    metadata["key_wraps"] = [
+        _passphrase_wrap(RECOVERY_WRAP_ID),
+        deepcopy(vector["recovery_wrap"]),
+    ]
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^duplicate recovery key-wrap identifier$",
+    ):
+        VaultMetadata.from_dict(metadata)
 
 
 @pytest.mark.parametrize("wrap_version", [True, False, 2.0])

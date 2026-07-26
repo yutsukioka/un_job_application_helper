@@ -72,8 +72,7 @@ public struct AtlasVaultEncryptedExportEnvelope:
         }
         guard
             Self.isCanonicalLowercaseUUID(exportID),
-            Self.isStrictUTCTimestamp(createdAt),
-            vaultMetadata.recoveryKeyWrap != nil
+            Self.isStrictUTCTimestamp(createdAt)
         else {
             throw AtlasVaultEncryptedExportError.invalidMetadata
         }

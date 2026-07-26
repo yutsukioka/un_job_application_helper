@@ -558,13 +558,23 @@ public struct AtlasVaultVersionedWrappedKeyMetadata:
         let recoveryIDs = keyWraps.compactMap {
             $0.recoveryKeyEnvelope?.id
         }
+        let recoveryIDSet = Set(recoveryIDs)
+        let passphraseIDs = Set(
+            keyWraps.compactMap { wrapped -> String? in
+                guard case let .passphrase(envelope) = wrapped else {
+                    return nil
+                }
+                return envelope.id
+            }
+        )
         guard
             format == Self.supportedFormat,
             version == Self.supportedVersion,
             (try? AtlasInjectedRootVaultPathLocator.validatedVaultID(
                 vaultID
             )) == vaultID,
-            Set(recoveryIDs).count == recoveryIDs.count
+            recoveryIDSet.count == recoveryIDs.count,
+            recoveryIDSet.isDisjoint(with: passphraseIDs)
         else {
             throw AtlasVaultVersionedWrapModelError.invalidMetadata
         }

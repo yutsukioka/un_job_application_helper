@@ -397,7 +397,15 @@ class VaultMetadata:
             for wrapped in self.key_wraps
             if isinstance(wrapped, RecoveryKeyWrapV2)
         ]
-        if len(recovery_ids) != len(set(recovery_ids)):
+        passphrase_ids = {
+            wrapped.id
+            for wrapped in self.key_wraps
+            if isinstance(wrapped, WrappedKey)
+        }
+        if (
+            len(recovery_ids) != len(set(recovery_ids))
+            or not set(recovery_ids).isdisjoint(passphrase_ids)
+        ):
             raise VaultFormatError("duplicate recovery key-wrap identifier")
 
     @classmethod
