@@ -4,19 +4,37 @@ import XCTest
 
 @MainActor
 final class AtlasVaultRecoveryImportViewTests: XCTestCase {
-    func testOwnerConstructionAndPresentAreSideEffectFree() async {
+    func testConstructionIsSideEffectFreeAndPresentRestoresPendingState()
+        async
+    {
         let coordinator = RecoveryImportViewCoordinatorFake()
+        await coordinator.setPending(true)
         let owner = AtlasVaultRecoveryImportPresentationOwner(
             coordinator: coordinator,
             continueToUnlock: {}
         )
 
         XCTAssertEqual(owner.presentation, .hidden)
-        owner.present()
+        let constructionPendingChecks =
+            await coordinator.pendingChecks()
+        XCTAssertEqual(constructionPendingChecks, 0)
+        await owner.present()
 
-        XCTAssertEqual(owner.presentation, .ready)
+        XCTAssertEqual(owner.presentation, .paused)
+        let firstPresentationPendingChecks =
+            await coordinator.pendingChecks()
+        XCTAssertEqual(firstPresentationPendingChecks, 1)
         let constructionCalls = await coordinator.calls()
         XCTAssertEqual(constructionCalls, [])
+
+        owner.dismiss()
+        await coordinator.setPending(false)
+        await owner.present()
+
+        XCTAssertEqual(owner.presentation, .ready)
+        let secondPresentationPendingChecks =
+            await coordinator.pendingChecks()
+        XCTAssertEqual(secondPresentationPendingChecks, 2)
     }
 
     func testExplicitFileSelectionAndRestoreOpenExistingUnlockPath()
@@ -30,7 +48,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
                 await continuation.call()
             }
         )
-        owner.present()
+        await owner.present()
 
         await owner.prepareImport(
             from: URL(fileURLWithPath: "/TEST_ONLY/backup.atlasvault")
@@ -63,7 +81,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
             coordinator: coordinator,
             continueToUnlock: {}
         )
-        owner.present()
+        await owner.present()
         await owner.prepareImport(
             from: URL(fileURLWithPath: "/TEST_ONLY/backup.atlasvault")
         )
@@ -75,7 +93,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         XCTAssertEqual(pauseCalls, ["prepare", "pause"])
 
         await coordinator.setPending(true)
-        owner.present()
+        await owner.present()
         await owner.pause()
         XCTAssertEqual(owner.presentation, .paused)
     }
@@ -88,7 +106,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
             coordinator: coordinator,
             continueToUnlock: {}
         )
-        owner.present()
+        await owner.present()
         await owner.prepareImport(
             from: URL(fileURLWithPath: "/TEST_ONLY/backup.atlasvault")
         )
@@ -114,7 +132,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
             coordinator: coordinator,
             continueToUnlock: {}
         )
-        owner.present()
+        await owner.present()
 
         await owner.resume(
             from: URL(fileURLWithPath: "/TEST_ONLY/backup.atlasvault"),
@@ -122,7 +140,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         )
         XCTAssertEqual(owner.presentation, .complete)
 
-        owner.present()
+        await owner.present()
         await owner.resetPendingImport(confirmed: false)
         let callsBeforeReset = await coordinator.calls()
         XCTAssertFalse(callsBeforeReset.contains("reset"))
@@ -140,7 +158,7 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
             coordinator: coordinator,
             continueToUnlock: {}
         )
-        owner.present()
+        await owner.present()
 
         await owner.dismissForUnsafeLifecycle()
 
@@ -252,6 +270,7 @@ private actor RecoveryImportViewCoordinatorFake:
 {
     private var recordedCalls: [String] = []
     private var pending = false
+    private var recordedPendingChecks = 0
 
     func setPending(_ value: Bool) {
         pending = value
@@ -259,6 +278,10 @@ private actor RecoveryImportViewCoordinatorFake:
 
     func calls() -> [String] {
         recordedCalls
+    }
+
+    func pendingChecks() -> Int {
+        recordedPendingChecks
     }
 
     func prepareImport(from _: URL) async throws {
@@ -300,7 +323,8 @@ private actor RecoveryImportViewCoordinatorFake:
     }
 
     func hasPendingImport() async throws -> Bool {
-        pending
+        recordedPendingChecks += 1
+        return pending
     }
 
     func pause() async {

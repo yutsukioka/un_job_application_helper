@@ -88,7 +88,7 @@ final class AtlasIOSRecoveryImportEndToEndTests: XCTestCase {
         let importContext = try XCTUnwrap(
             restoreHarness.recoveryImportContextForTesting
         )
-        importContext.actions.present()
+        await importContext.actions.present()
         await importContext.actions.prepareImport(exportURL)
         XCTAssertEqual(
             importContext.owner.presentation,

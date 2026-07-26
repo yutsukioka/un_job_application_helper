@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Synchronization
 import XCTest
 @testable import AtlasUI
 
@@ -1618,6 +1619,66 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistedImportIsFailClosedBeforeExplicitSelectionRefresh()
+        async throws
+    {
+        let temporaryRoot = try AtlasVaultTestFileSystemSupport
+            .canonicalTemporaryRoot()
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: temporaryRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryRoot) }
+        let journal = try AtlasVaultRecoveryImportJournal(
+            importID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            exportID: "11111111-2222-4333-8444-555555555555",
+            vaultID: "99999999-8888-4777-8666-555555555555",
+            storeID: "12345678-1234-4234-8234-123456789abc",
+            createdAt: "2026-07-27T01:02:03Z",
+            exportSHA256: String(repeating: "a", count: 64),
+            localStoreSHA256: String(repeating: "b", count: 64),
+            vaultKeySHA256: String(repeating: "c", count: 64)
+        )
+        let keychain = PendingImportOnlyKeychainClient(
+            journalData: try journal.encodedData()
+        )
+        let source = HarnessLifecycleSource()
+        let timebase = HarnessLifecycleTimeFake()
+        let harness = try AtlasVaultProductionCompositionFactory
+            .makeUnwiredProductionLike(
+                configuration: Self.configuration(),
+                lifecycleEvents: source,
+                directoryLocator: FixedDirectoryLocator(
+                    root: temporaryRoot
+                ),
+                keychainClient: keychain,
+                atomicFileSystemClient:
+                    FailingAtomicFileSystemClient(),
+                lifecycleClock: timebase,
+                lifecycleSleeper: timebase
+            )
+        let importContext = try XCTUnwrap(
+            harness.recoveryImportContextForTesting
+        )
+
+        XCTAssertEqual(keychain.copyCount(), 0)
+        XCTAssertTrue(importContext.availability.hasPendingImport)
+
+        let state = try await harness.start()
+
+        XCTAssertEqual(state.mode, .lockedPublic)
+        XCTAssertTrue(importContext.availability.hasPendingImport)
+        XCTAssertEqual(keychain.copyCount(), 0)
+
+        await harness.publicShellActions.requestUnlock()
+
+        XCTAssertTrue(importContext.availability.hasPendingImport)
+        XCTAssertGreaterThanOrEqual(keychain.copyCount(), 1)
+        _ = await harness.stop()
+    }
+
+    @MainActor
     func testProductionLikeInjectedGraphStartsNoVaultAndStopsPrivateFree()
         async throws
     {
@@ -2366,6 +2427,63 @@ private struct ItemNotFoundKeychainClient: AtlasKeychainClient {
     func delete(_ query: AtlasKeychainQuery) -> OSStatus {
         XCTFail("selection must not delete Keychain data")
         return errSecNotAvailable
+    }
+}
+
+private final class PendingImportOnlyKeychainClient:
+    AtlasKeychainClient,
+    Sendable
+{
+    private struct State: Sendable {
+        var copyCount = 0
+    }
+
+    private let journalData: Data
+    private let state = Mutex(State())
+
+    init(journalData: Data) {
+        self.journalData = journalData
+    }
+
+    func add(_: AtlasKeychainItem) -> OSStatus {
+        XCTFail("startup must not add Keychain data")
+        return errSecNotAvailable
+    }
+
+    func copyMatching(
+        _ query: AtlasKeychainQuery
+    ) -> AtlasKeychainCopyResult {
+        state.withLock { $0.copyCount += 1 }
+        guard
+            query.service == "com.atlasvault.recovery-import",
+            query.account == "pending-v1"
+        else {
+            return AtlasKeychainCopyResult(
+                status: errSecItemNotFound,
+                valueData: nil
+            )
+        }
+        return AtlasKeychainCopyResult(
+            status: errSecSuccess,
+            valueData: journalData
+        )
+    }
+
+    func update(
+        _: AtlasKeychainQuery,
+        with _: AtlasKeychainUpdate
+    ) -> OSStatus {
+        XCTFail("startup must not update Keychain data")
+        return errSecNotAvailable
+    }
+
+    func delete(_: AtlasKeychainQuery) -> OSStatus {
+        XCTFail("startup must not delete Keychain data")
+        return errSecNotAvailable
+    }
+
+    func copyCount() -> Int {
+        state.withLock { $0.copyCount }
     }
 }
 

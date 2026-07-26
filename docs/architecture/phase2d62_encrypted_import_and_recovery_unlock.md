@@ -241,6 +241,10 @@ Import presentation availability is derived only from the recovery-import
 journal. A creation-journal read failure still hides selected-vault readiness
 but does not falsely publish a resumable import or suppress the creation
 journey; an import-journal read failure remains fail-closed as pending import.
+The production availability begins fail-closed before any dependency is read.
+Harness startup retains the Phase 2D-60 zero-Keychain-I/O contract. The first
+explicit vault-selection request refreshes the shared availability from the
+journal before no-vault creation can be exposed.
 
 ## 30. Dynamic Unlock Capabilities
 
@@ -305,6 +309,9 @@ One private-free `ObservableObject` owns fixed states for ready, reading,
 recovery entry, verification, import, pause, durability verification,
 completion pending, recovery required, failure, and completion. It stores no
 URL, export bytes, secret, identifier, path, or private record.
+Explicit presentation performs a retained `hasPendingImport` check before
+publishing ready or paused. Reopening a journal-backed restore therefore shows
+resume and discard controls immediately without a redundant file selection.
 
 ## 39. Import View
 
@@ -337,6 +344,10 @@ them. Scene-local claims prevent duplicate sheets without creating duplicate
 filesystem or Keychain authorities. Pending-import transitions update that
 authority after journal save and clear, and explicit host selection
 reconstruction refreshes it after relaunch.
+The shared production availability is initially fail-closed, while explicit
+sheet presentation independently reads the coordinator's journal state. This
+prevents stale readiness without adding Keychain I/O to construction or
+harness startup.
 The same production composition constructs exactly one pending-transaction
 authority and injects it into both the import coordinator and local-vault
 creation gate.
@@ -428,7 +439,7 @@ cancellation-aware waiter removal, dynamic capabilities, stale host
 resolution, vault-aware unlock, explicit confirmation forwarding, canonical
 test-file roots, view lifecycle, root/harness integration, and full
 source-to-restore recovery-only relaunch.
-The final review-fix regression runs passed 236 Python tests and 1,212 Swift
+The final review-fix regression runs passed 236 Python tests and 1,213 Swift
 tests.
 
 ## 56. iOS Build And Smoke Evidence

@@ -923,7 +923,9 @@ public enum AtlasVaultProductionCompositionFactory {
                 client: keychainClient
             )
         let recoveryImportAvailability =
-            AtlasVaultRecoveryImportAvailability()
+            AtlasVaultRecoveryImportAvailability(
+                initialPendingImport: true
+            )
         let pendingTransactionAuthority =
             AtlasVaultPendingTransactionAuthority()
         let hostVaultSelector =
@@ -1062,7 +1064,7 @@ public enum AtlasVaultProductionCompositionFactory {
             )
         let recoveryImportActions = AtlasVaultRecoveryImportActions(
             present: { [weak recoveryImportOwner] in
-                recoveryImportOwner?.present()
+                await recoveryImportOwner?.present()
             },
             dismiss: { [weak recoveryImportOwner] in
                 recoveryImportOwner?.dismiss()

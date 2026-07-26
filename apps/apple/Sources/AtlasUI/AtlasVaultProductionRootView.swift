@@ -258,15 +258,17 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
     }
 
     private func presentRecoveryImport() {
-        if recoveryImportOwner.presentation == .hidden {
-            recoveryImportActions.present()
+        Task { @MainActor in
+            if recoveryImportOwner.presentation == .hidden {
+                await recoveryImportActions.present()
+            }
+            guard recoveryImportActions.claimPresentation(
+                recoveryImportPresentationClaim
+            ) else {
+                return
+            }
+            isRecoveryImportPresented = true
         }
-        guard recoveryImportActions.claimPresentation(
-            recoveryImportPresentationClaim
-        ) else {
-            return
-        }
-        isRecoveryImportPresented = true
     }
 
     private var showsRecoveryImportAction: Bool {

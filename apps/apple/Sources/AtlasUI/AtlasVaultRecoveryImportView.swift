@@ -71,6 +71,7 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
     CustomDebugStringConvertible
 {
     private enum OperationKind: Equatable {
+        case inspectPending
         case prepare
         case restore
         case resume
@@ -80,6 +81,7 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
 
     private enum OperationValue: Sendable {
         case prepared
+        case pending(Bool)
         case complete
         case failure(AtlasVaultRecoveryImportFailure)
     }
@@ -108,11 +110,34 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
         self.continueToUnlock = continueToUnlock
     }
 
-    public func present() {
+    public func present() async {
         guard !terminalStopRequested, operation == nil else {
             return
         }
-        presentation = .ready
+        presentation = .reading
+        let result = await retained(.inspectPending) { [coordinator] in
+            do {
+                return .pending(
+                    try await coordinator.hasPendingImport()
+                )
+            } catch {
+                return .failure(Self.failure(error))
+            }
+        }
+        guard
+            !terminalStopRequested,
+            presentation == .reading
+        else {
+            return
+        }
+        switch result {
+        case let .pending(pending):
+            presentation = pending ? .paused : .ready
+        case let .failure(failure):
+            await publish(failure)
+        case .prepared, .complete:
+            presentation = .failed
+        }
     }
 
     public func dismiss() {
@@ -142,6 +167,8 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
         switch result {
         case .prepared:
             presentation = .awaitingRecoveryKey
+        case .pending:
+            presentation = .failed
         case let .failure(failure):
             await publish(failure)
         case .complete:
@@ -236,6 +263,8 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
         switch result {
         case .complete:
             presentation = .ready
+        case .pending:
+            presentation = .failed
         case let .failure(failure):
             await publish(failure)
         case .prepared:
@@ -255,7 +284,10 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
         guard !terminalStopRequested else {
             return
         }
-        if pausedFrom == .reading
+        if (
+            pausedFrom == .reading
+                && retainedOperation?.kind == .prepare
+        )
             || pausedFrom == .awaitingRecoveryKey
         {
             presentation = .ready
@@ -358,6 +390,8 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
         case .complete:
             presentation = .complete
             await continueToUnlock()
+        case .pending:
+            presentation = .failed
         case let .failure(failure):
             await publish(failure)
         case .prepared:
@@ -398,7 +432,8 @@ public final class AtlasVaultRecoveryImportPresentationOwner:
 
 @MainActor
 public struct AtlasVaultRecoveryImportActions {
-    private let presentAction: @MainActor @Sendable () -> Void
+    private let presentAction:
+        @MainActor @Sendable () async -> Void
     private let dismissAction: @MainActor @Sendable () -> Void
     private let prepareAction:
         @MainActor @Sendable (URL) async -> Void
@@ -425,7 +460,7 @@ public struct AtlasVaultRecoveryImportActions {
         ) -> Bool
 
     public init(
-        present: @escaping @MainActor @Sendable () -> Void,
+        present: @escaping @MainActor @Sendable () async -> Void,
         dismiss: @escaping @MainActor @Sendable () -> Void,
         prepareImport:
             @escaping @MainActor @Sendable (URL) async -> Void,
@@ -464,8 +499,8 @@ public struct AtlasVaultRecoveryImportActions {
         ownsAction = ownsPresentation
     }
 
-    public func present() {
-        presentAction()
+    public func present() async {
+        await presentAction()
     }
 
     public func dismiss() {
@@ -519,9 +554,11 @@ public struct AtlasVaultRecoveryImportActions {
 public final class AtlasVaultRecoveryImportAvailability:
     ObservableObject
 {
-    @Published public private(set) var hasPendingImport = false
+    @Published public private(set) var hasPendingImport: Bool
 
-    public init() {}
+    public init(initialPendingImport: Bool = false) {
+        hasPendingImport = initialPendingImport
+    }
 
     func setPendingImport(_ pending: Bool) {
         hasPendingImport = pending
