@@ -63,6 +63,10 @@ HISTORICAL_ROOT_EXPORTS = {
 }
 
 
+class StrictIntegerAlias(int):
+    pass
+
+
 def load_vector() -> dict[str, Any]:
     document = json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
     assert document["format"] == "atlasvault-recovery-export-vectors"
@@ -526,6 +530,33 @@ def test_integer_versions_remain_compatible() -> None:
     assert direct_metadata.version == 1
     assert direct_export.version == 1
     assert deserialize_vault_export(vector["export"]).version == 1
+
+
+def test_direct_export_construction_rejects_integer_subclass_version() -> None:
+    vector = load_vector()
+
+    with pytest.raises(
+        VaultExportError,
+        match="^version must be an integer$",
+    ):
+        AtlasVaultExport(
+            vault_metadata=VaultMetadata.from_dict(vector["vault_metadata"]),
+            records=(),
+            export_id=vector["export"]["export_id"],
+            created_at=vector["export"]["created_at"],
+            version=StrictIntegerAlias(1),
+        )
+
+
+def test_untrusted_export_decode_rejects_integer_subclass_version() -> None:
+    data = deepcopy(load_vector()["export"])
+    data["version"] = StrictIntegerAlias(1)
+
+    with pytest.raises(
+        VaultExportError,
+        match="^version must be an integer$",
+    ):
+        deserialize_vault_export(data)
 
 
 def test_recovery_wrap_unknown_field_uses_fixed_private_error() -> None:

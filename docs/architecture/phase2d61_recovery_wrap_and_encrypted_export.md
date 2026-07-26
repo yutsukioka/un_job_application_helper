@@ -418,6 +418,22 @@ Swift suites pass 234 and 1,144 tests, and both generic iOS Simulator builds
 pass. No simulator was booted, so no launch smoke is claimed. The exact
 24-file scope and all recovery-unlock/import boundaries remain unchanged.
 
+Review-fix cycle 14 requires Python export versions to be exact built-in
+integers, excluding integer subclasses as well as Boolean and floating-point
+aliases. The device-only recovery setup journal now validates its raw top-level
+`version` and nested `wrap_version` JSON tokens before `JSONDecoder`, so
+floating-point aliases cannot normalize into accepted integers. An ambiguous
+recovery-required failure queries for a pending journal before exposing reset:
+journal-backed attention retains explicit non-destructive reset, while
+journal-free attention is close-only. A failed journal query also fails closed
+without reset. The exact 24-file scope, valid wire bytes, v1 crypto/AAD, and
+recovery-unlock/import boundaries remain unchanged. The focused Python
+recovery/export and combined vector suites pass 155 and 171 tests; the focused
+Swift presentation and coordinator suites pass 19 tests each. The complete
+Python and Swift suites pass 236 and 1,147 tests, and both discovered generic
+iOS Simulator builds pass. No simulator was booted, so no runtime smoke launch
+is claimed.
+
 ## End-To-End Evidence
 
 The deterministic journey uses the Phase 2D-60 production-like factory, an

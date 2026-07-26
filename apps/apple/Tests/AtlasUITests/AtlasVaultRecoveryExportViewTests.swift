@@ -244,6 +244,95 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
     }
 
     @MainActor
+    func testRecoveryRequiredOffersResetOnlyForPendingJournal()
+        async throws
+    {
+        let journalFreeFake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await journalFreeFake.setFailure(.recoveryRequired)
+        let journalFreeOwner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: journalFreeFake
+        )
+        journalFreeOwner.present()
+
+        let journalFreeCode = await journalFreeOwner.generate()
+        XCTAssertNil(journalFreeCode)
+        XCTAssertEqual(
+            journalFreeOwner.presentation.description,
+            "recoveryRequired"
+        )
+        await journalFreeOwner.resetPendingSetup(confirmed: true)
+        var calls = await journalFreeFake.calls()
+        XCTAssertEqual(calls, ["prepare", "pending"])
+
+        let pendingFake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await pendingFake.setHasPendingSetup(true)
+        await pendingFake.setFailure(.recoveryRequired)
+        let pendingOwner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: pendingFake
+        )
+        pendingOwner.present()
+
+        let pendingCode = await pendingOwner.generate()
+        XCTAssertNil(pendingCode)
+        XCTAssertEqual(
+            pendingOwner.presentation.description,
+            "pendingSetupRecoveryRequired"
+        )
+        calls = await pendingFake.calls()
+        XCTAssertEqual(calls, ["prepare", "pending"])
+
+        await pendingFake.setFailure(nil)
+        await pendingOwner.resetPendingSetup(confirmed: true)
+        XCTAssertEqual(pendingOwner.presentation, .ready)
+        calls = await pendingFake.calls()
+        XCTAssertEqual(calls, ["prepare", "pending", "reset"])
+    }
+
+    func testJournalFreeRecoveryViewOmitsPendingResetAction() throws {
+        let source = try phaseSource("AtlasVaultRecoveryExportView.swift")
+        let content = try XCTUnwrap(
+            source.range(of: "private var content: some View")
+        )
+        let journalFree = try XCTUnwrap(
+            source.range(
+                of: "case .recoveryRequired:",
+                range: content.upperBound..<source.endIndex
+            )
+        )
+        let pending = try XCTUnwrap(
+            source.range(
+                of: "case .pendingSetupRecoveryRequired:",
+                range: journalFree.upperBound..<source.endIndex
+            )
+        )
+        let complete = try XCTUnwrap(
+            source.range(
+                of: "case .complete:",
+                range: pending.upperBound..<source.endIndex
+            )
+        )
+        let journalFreeBranch = String(
+            source[journalFree.lowerBound..<pending.lowerBound]
+        )
+        let pendingBranch = String(
+            source[pending.lowerBound..<complete.lowerBound]
+        )
+
+        XCTAssertFalse(
+            journalFreeBranch.contains("Restart Recovery Setup")
+        )
+        XCTAssertFalse(journalFreeBranch.contains("confirmedReset"))
+        XCTAssertTrue(
+            pendingBranch.contains("Restart Recovery Setup")
+        )
+        XCTAssertTrue(pendingBranch.contains("confirmedReset"))
+    }
+
+    @MainActor
     func testDurabilityAndCompletionPendingStatesPermitExplicitReset()
         async throws
     {
@@ -590,6 +679,7 @@ private actor RecoveryExportCoordinatorViewFake:
     private let document: AtlasVaultEncryptedDocument
     private var recordedCalls: [String] = []
     private var failure: AtlasVaultRecoveryExportFailure?
+    private var pendingSetup = false
     private var shouldBlockNextPrepare = false
     private var prepareStarted = false
     private var prepareStartedWaiters: [CheckedContinuation<Void, Never>] = []
@@ -657,8 +747,7 @@ private actor RecoveryExportCoordinatorViewFake:
 
     func hasPendingSetup() async throws -> Bool {
         recordedCalls.append("pending")
-        try failIfNeeded()
-        return false
+        return pendingSetup
     }
 
     func stop() async {
@@ -667,6 +756,10 @@ private actor RecoveryExportCoordinatorViewFake:
 
     func setFailure(_ value: AtlasVaultRecoveryExportFailure?) {
         failure = value
+    }
+
+    func setHasPendingSetup(_ value: Bool) {
+        pendingSetup = value
     }
 
     func blockNextPrepare() {

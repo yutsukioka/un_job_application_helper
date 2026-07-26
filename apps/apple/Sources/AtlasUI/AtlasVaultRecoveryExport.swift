@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 import Security
 
@@ -282,6 +283,10 @@ struct AtlasKeychainVaultRecoveryExportJournalStore<
                     AtlasVaultRecoveryExportJournal.CodingKeys
                         .allCases.map(\.rawValue)
                 ),
+            isStrictJSONInteger(
+                root["version"],
+                equalTo: AtlasVaultRecoveryExportJournal.currentVersion
+            ),
             let wrap = root["wrap"] as? [String: Any],
             Set(wrap.keys) == [
                 "id",
@@ -291,6 +296,11 @@ struct AtlasKeychainVaultRecoveryExportJournalStore<
                 "nonce",
                 "ciphertext",
             ],
+            isStrictJSONInteger(
+                wrap["wrap_version"],
+                equalTo:
+                    AtlasVaultRecoveryWrappedKeyEnvelope.supportedWrapVersion
+            ),
             let journal = try? JSONDecoder().decode(
                 AtlasVaultRecoveryExportJournal.self,
                 from: data
@@ -308,6 +318,20 @@ struct AtlasKeychainVaultRecoveryExportJournalStore<
             exportID: journal.exportID,
             createdAt: journal.createdAt
         )
+    }
+
+    private static func isStrictJSONInteger(
+        _ value: Any?,
+        equalTo expected: Int
+    ) -> Bool {
+        guard
+            let number = value as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID(),
+            !CFNumberIsFloatType(number)
+        else {
+            return false
+        }
+        return number.intValue == expected && number == NSNumber(value: expected)
     }
 }
 

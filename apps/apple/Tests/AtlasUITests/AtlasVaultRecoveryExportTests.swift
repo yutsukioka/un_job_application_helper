@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import XCTest
 @testable import AtlasUI
 
@@ -572,6 +573,59 @@ final class AtlasVaultRecoveryExportTests: XCTestCase {
         )
     }
 
+    func testKeychainJournalRejectsFloatingPointVersionTokens()
+        async throws
+    {
+        let fixture = try RecoveryExportFixture()
+        let handle = try await fixture.coordinator.prepareNewRecovery()
+        let takenCode = await handle.take()
+        let code = try XCTUnwrap(takenCode)
+        _ = try await fixture.coordinator.confirmAndPrepareExport(
+            secret: code
+        )
+        let snapshot = await fixture.fake.snapshot()
+        let journal = try XCTUnwrap(snapshot.journal)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let validData = try encoder.encode(journal)
+        let validStore = AtlasKeychainVaultRecoveryExportJournalStore(
+            client: RecoveryJournalReadOnlyKeychainClient(data: validData)
+        )
+
+        XCTAssertEqual(try validStore.loadJournal(), journal)
+
+        let validText = try XCTUnwrap(
+            String(data: validData, encoding: .utf8)
+        )
+        for (integerToken, floatingPointToken) in [
+            (#""version":1"#, #""version":1.0"#),
+            (#""wrap_version":2"#, #""wrap_version":2.0"#),
+        ] {
+            XCTAssertTrue(validText.contains(integerToken))
+            let malformedText = validText.replacingOccurrences(
+                of: integerToken,
+                with: floatingPointToken
+            )
+            XCTAssertNotEqual(malformedText, validText)
+            let malformedData = try XCTUnwrap(
+                malformedText.data(using: .utf8)
+            )
+            let malformedStore =
+                AtlasKeychainVaultRecoveryExportJournalStore(
+                    client: RecoveryJournalReadOnlyKeychainClient(
+                        data: malformedData
+                    )
+                )
+
+            XCTAssertThrowsError(try malformedStore.loadJournal()) { error in
+                XCTAssertEqual(
+                    error as? AtlasVaultRecoveryExportFailure,
+                    .recoveryRequired
+                )
+            }
+        }
+    }
+
     private func phaseSource(_ name: String) throws -> String {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -580,6 +634,34 @@ final class AtlasVaultRecoveryExportTests: XCTestCase {
             .appendingPathComponent("Sources/AtlasUI")
             .appendingPathComponent(name)
         return try String(contentsOf: sourceURL, encoding: .utf8)
+    }
+}
+
+private struct RecoveryJournalReadOnlyKeychainClient:
+    AtlasKeychainClient,
+    Sendable
+{
+    let data: Data
+
+    func add(_: AtlasKeychainItem) -> OSStatus {
+        errSecParam
+    }
+
+    func copyMatching(
+        _: AtlasKeychainQuery
+    ) -> AtlasKeychainCopyResult {
+        AtlasKeychainCopyResult(status: errSecSuccess, valueData: data)
+    }
+
+    func update(
+        _: AtlasKeychainQuery,
+        with _: AtlasKeychainUpdate
+    ) -> OSStatus {
+        errSecParam
+    }
+
+    func delete(_: AtlasKeychainQuery) -> OSStatus {
+        errSecParam
     }
 }
 

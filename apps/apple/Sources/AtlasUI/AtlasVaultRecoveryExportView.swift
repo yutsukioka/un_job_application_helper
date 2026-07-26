@@ -21,6 +21,7 @@ public enum AtlasVaultRecoveryExportPresentation:
     case durabilityVerificationRequired
     case completionPending
     case recoveryRequired
+    case pendingSetupRecoveryRequired
     case resetting
     case complete
 
@@ -40,6 +41,8 @@ public enum AtlasVaultRecoveryExportPresentation:
             "durabilityVerificationRequired"
         case .completionPending: "completionPending"
         case .recoveryRequired: "recoveryRequired"
+        case .pendingSetupRecoveryRequired:
+            "pendingSetupRecoveryRequired"
         case .resetting: "resetting"
         case .complete: "complete"
         }
@@ -164,7 +167,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             presentation = .awaitingConfirmation
             return handle
         case let .failure(failure):
-            publish(failure)
+            await publish(failure)
             return nil
         case .document, .complete:
             presentation = .failed
@@ -198,7 +201,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         if case .document = result {
             continuationMode = .pendingSetup
         }
-        return publishDocument(result)
+        return await publishDocument(result)
     }
 
     public func resume(
@@ -230,7 +233,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
                 return .failure(Self.failure(error))
             }
         }
-        return publishDocument(result)
+        return await publishDocument(result)
     }
 
     public func exportDidFinish(success: Bool) async {
@@ -257,7 +260,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             continuationMode = nil
             presentation = .complete
         case let .failure(failure):
-            publish(failure)
+            await publish(failure)
         case .display, .document:
             presentation = .failed
         }
@@ -270,7 +273,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
                 || presentation == .paused
                 || presentation == .durabilityVerificationRequired
                 || presentation == .completionPending
-                || presentation == .recoveryRequired
+                || presentation == .pendingSetupRecoveryRequired
         else {
             return
         }
@@ -288,7 +291,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             continuationMode = nil
             presentation = .ready
         case let .failure(failure):
-            publish(failure)
+            await publish(failure)
         case .display, .document:
             presentation = .failed
         }
@@ -317,6 +320,8 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
                     presentation = .ready
                 case .reexportRequired:
                     presentation = .reexportRequired
+                case .recoveryRequired:
+                    presentation = .recoveryRequired
                 case .hidden,
                      .ready,
                      .resumeRequired,
@@ -326,7 +331,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
                      .failed,
                      .durabilityVerificationRequired,
                      .completionPending,
-                     .recoveryRequired,
+                     .pendingSetupRecoveryRequired,
                      .resetting,
                      .complete:
                     presentation = .paused
@@ -426,6 +431,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
              .durabilityVerificationRequired,
              .completionPending,
              .recoveryRequired,
+             .pendingSetupRecoveryRequired,
              .resetting,
              .complete:
             false
@@ -461,13 +467,13 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
 
     private func publishDocument(
         _ result: OperationValue
-    ) -> AtlasVaultEncryptedDocument? {
+    ) async -> AtlasVaultEncryptedDocument? {
         switch result {
         case let .document(document):
             presentation = .exportReady
             return document
         case let .failure(failure):
-            publish(failure)
+            await publish(failure)
             return nil
         case .display, .complete:
             presentation = .failed
@@ -475,7 +481,9 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         }
     }
 
-    private func publish(_ failure: AtlasVaultRecoveryExportFailure) {
+    private func publish(
+        _ failure: AtlasVaultRecoveryExportFailure
+    ) async {
         switch failure {
         case .pendingSetupRequiresRecoveryKey:
             continuationMode = .pendingSetup
@@ -492,8 +500,22 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             continuationMode = .pendingSetup
             presentation = .completionPending
         case .recoveryRequired:
-            continuationMode = .pendingSetup
-            presentation = .recoveryRequired
+            let publicationOrigin = presentation
+            let hasPendingSetup =
+                (try? await coordinator.hasPendingSetup()) == true
+            guard
+                !terminalStopRequested,
+                presentation == publicationOrigin
+            else {
+                return
+            }
+            if hasPendingSetup {
+                continuationMode = .pendingSetup
+                presentation = .pendingSetupRecoveryRequired
+            } else {
+                continuationMode = nil
+                presentation = .recoveryRequired
+            }
         case .cancelled:
             presentation = .paused
         case .unavailable, .unauthorized:
@@ -880,6 +902,11 @@ public struct AtlasVaultRecoveryExportView: View {
             fixedStatus(
                 "Recovery setup requires non-destructive attention."
             )
+            closeButton()
+        case .pendingSetupRecoveryRequired:
+            fixedStatus(
+                "Unfinished recovery setup requires non-destructive attention."
+            )
             Toggle(
                 "I understand restart removes only this unfinished wrap.",
                 isOn: $confirmedReset
@@ -959,6 +986,7 @@ private extension AtlasVaultRecoveryExportPresentation {
              .durabilityVerificationRequired,
              .completionPending,
              .recoveryRequired,
+             .pendingSetupRecoveryRequired,
              .complete:
             true
         case .generating,

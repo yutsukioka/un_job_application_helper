@@ -33,7 +33,7 @@ def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
 
 
 def _require_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    if type(value) is not int:
         raise VaultExportError(f"{field_name} must be an integer")
     return value
 
