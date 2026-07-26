@@ -3,6 +3,47 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
+    func testRecoveryDerivationReceivesValidatedRequestVaultID()
+        async throws
+    {
+        let capture = UnlockVaultAwareRecoveryCapture()
+        let dependencies = AtlasVaultUnlockRequestDependencies(
+            derivePassphraseVaultKey: { _ in
+                throw AtlasVaultUnlockRequestError.unlockFailed
+            },
+            deriveVaultAwareRecoveryVaultKey: { vaultID, secret in
+                await capture.record(vaultID: vaultID, secret: secret)
+                return Data(
+                    repeating: 0x62,
+                    count: AtlasVaultRecordCrypto.vaultKeyByteCount
+                )
+            },
+            activate: { request in
+                await capture.recordActivation(request)
+            }
+        )
+        let coordinator = AtlasVaultUnlockRequestCoordinator(
+            dependencies: dependencies
+        )
+        let vaultID = "00000000-0000-4000-8000-000000000262"
+        let secret = Data("TEST_ONLY_RECOVERY_SECRET".utf8)
+        let buffer = AtlasVaultInMemorySecretBuffer(bytes: secret)
+        let request = AtlasVaultUnlockRequest(
+            vaultID: vaultID,
+            input: .recoveryKey(buffer)
+        )
+
+        try await coordinator.dispatch(request)
+
+        let snapshot = await capture.snapshot()
+        XCTAssertEqual(snapshot.vaultID, vaultID)
+        XCTAssertEqual(snapshot.secret, secret)
+        XCTAssertEqual(snapshot.activations, 1)
+        XCTAssertTrue(snapshot.usedSuppliedKey)
+        let bufferWasCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(bufferWasCleared)
+    }
+
     fileprivate static let fakeVaultID = "00000000-0000-4000-8000-000000000042"
     fileprivate static let fakePassphrase = Data("FAKE_PASSPHRASE_DO_NOT_LEAK".utf8)
     fileprivate static let fakeRecoveryKey = Data("FAKE_RECOVERY_KEY_DO_NOT_LEAK".utf8)
@@ -1622,5 +1663,40 @@ private actor UnlockManualSleeper {
 
     func fire() async {
         await gate.open()
+    }
+}
+
+private struct UnlockVaultAwareRecoverySnapshot: Sendable {
+    let vaultID: String?
+    let secret: Data?
+    let activations: Int
+    let usedSuppliedKey: Bool
+}
+
+private actor UnlockVaultAwareRecoveryCapture {
+    private var vaultID: String?
+    private var secret: Data?
+    private var activations = 0
+    private var usedSuppliedKey = false
+
+    func record(vaultID: String, secret: Data) {
+        self.vaultID = vaultID
+        self.secret = secret
+    }
+
+    func recordActivation(
+        _ request: AtlasVaultRuntimeActivationRequest
+    ) {
+        activations += 1
+        usedSuppliedKey = request.suppliedVaultKeyValue != nil
+    }
+
+    func snapshot() -> UnlockVaultAwareRecoverySnapshot {
+        UnlockVaultAwareRecoverySnapshot(
+            vaultID: vaultID,
+            secret: secret,
+            activations: activations,
+            usedSuppliedKey: usedSuppliedKey
+        )
     }
 }

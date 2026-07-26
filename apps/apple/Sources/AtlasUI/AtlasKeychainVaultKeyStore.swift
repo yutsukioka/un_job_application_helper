@@ -5,7 +5,12 @@ public enum AtlasKeychainVaultKeyStoreError: Error, Equatable, Sendable {
     case invalidVaultID
     case invalidVaultKeyLength
     case unexpectedItemData
+    case collision
     case keychainError(OSStatus)
+}
+
+public protocol AtlasVaultKeyCreating: Sendable {
+    func createVaultKey(_ key: Data, for vaultID: String) throws
 }
 
 public enum AtlasKeychainAccessibility: Equatable, Sendable {
@@ -115,7 +120,10 @@ public struct SecItemAtlasKeychainClient: AtlasKeychainClient {
     }
 }
 
-public struct AtlasKeychainVaultKeyStore<Client: AtlasKeychainClient>: AtlasVaultKeyStore {
+public struct AtlasKeychainVaultKeyStore<Client: AtlasKeychainClient>:
+    AtlasVaultKeyStore,
+    AtlasVaultKeyCreating
+{
     public static var defaultService: String {
         "com.atlasvault.vault-key"
     }
@@ -166,6 +174,34 @@ public struct AtlasKeychainVaultKeyStore<Client: AtlasKeychainClient>: AtlasVaul
             guard updateStatus == errSecSuccess else {
                 throw AtlasKeychainVaultKeyStoreError.keychainError(updateStatus)
             }
+        default:
+            throw AtlasKeychainVaultKeyStoreError.keychainError(status)
+        }
+    }
+
+    public func createVaultKey(_ key: Data, for vaultID: String) throws {
+        try requireValidVaultKey(key)
+        let validatedVaultID: String
+        do {
+            validatedVaultID =
+                try AtlasInjectedRootVaultPathLocator.validatedVaultID(
+                    vaultID
+                )
+        } catch {
+            throw AtlasKeychainVaultKeyStoreError.invalidVaultID
+        }
+        let item = AtlasKeychainItem(
+            service: service,
+            account: validatedVaultID,
+            valueData: key,
+            accessibility: accessibility
+        )
+        let status = client.add(item)
+        switch status {
+        case errSecSuccess:
+            return
+        case errSecDuplicateItem:
+            throw AtlasKeychainVaultKeyStoreError.collision
         default:
             throw AtlasKeychainVaultKeyStoreError.keychainError(status)
         }

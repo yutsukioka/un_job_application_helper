@@ -502,6 +502,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private let lifecycleForwarder: AtlasVaultProductionLifecycleForwarder
     private let creationContext: AtlasLocalVaultCreationContext?
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
+    private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private var lifetime: Lifetime = .inactive
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -523,7 +524,8 @@ public final class AtlasVaultProductionCompositionHarness:
             publicSearchLimit: publicSearchLimit,
             unlockTimeout: unlockTimeout,
             creationContext: nil,
-            recoveryExportContext: nil
+            recoveryExportContext: nil,
+            recoveryImportContext: nil
         )
     }
 
@@ -542,7 +544,8 @@ public final class AtlasVaultProductionCompositionHarness:
             publicSearchLimit: publicSearchLimit,
             unlockTimeout: unlockTimeout,
             creationContext: creationContext,
-            recoveryExportContext: nil
+            recoveryExportContext: nil,
+            recoveryImportContext: nil
         )
     }
 
@@ -553,13 +556,15 @@ public final class AtlasVaultProductionCompositionHarness:
         publicSearchLimit: Int,
         unlockTimeout: Duration,
         creationContext: AtlasLocalVaultCreationContext?,
-        recoveryExportContext: AtlasVaultRecoveryExportContext?
+        recoveryExportContext: AtlasVaultRecoveryExportContext?,
+        recoveryImportContext: AtlasVaultRecoveryImportContext? = nil
     ) {
         self.host = host
         self.presentationOwner = presentationOwner
         self.lifecycleForwarder = lifecycleForwarder
         self.creationContext = creationContext
         self.recoveryExportContext = recoveryExportContext
+        self.recoveryImportContext = recoveryImportContext
 
         publicShellActions = AtlasLockedPublicShellActions(
             search: { query in
@@ -695,6 +700,7 @@ public final class AtlasVaultProductionCompositionHarness:
         let lifecycleForwarder = lifecycleForwarder
         let creationOwner = creationContext?.owner
         let recoveryOwner = recoveryExportContext?.owner
+        let recoveryImportOwner = recoveryImportContext?.owner
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
@@ -703,6 +709,9 @@ public final class AtlasVaultProductionCompositionHarness:
             }
             if let recoveryOwner {
                 await recoveryOwner.stop()
+            }
+            if let recoveryImportOwner {
+                await recoveryImportOwner.stop()
             }
             let state = await hostState
             _ = await lifecycleStop
@@ -719,35 +728,13 @@ public final class AtlasVaultProductionCompositionHarness:
     }
 
     public func makeRootView() -> AtlasVaultProductionRootView {
-        if let creationContext, let recoveryExportContext {
-            return AtlasVaultProductionRootView(
-                owner: presentationOwner,
-                publicShellActions: publicShellActions,
-                unlockActions: unlockActions,
-                creationContext: creationContext,
-                recoveryExportContext: recoveryExportContext
-            )
-        }
-        if let creationContext {
-            return AtlasVaultProductionRootView(
-                owner: presentationOwner,
-                publicShellActions: publicShellActions,
-                unlockActions: unlockActions,
-                creationContext: creationContext
-            )
-        }
-        if let recoveryExportContext {
-            return AtlasVaultProductionRootView(
-                owner: presentationOwner,
-                publicShellActions: publicShellActions,
-                unlockActions: unlockActions,
-                recoveryExportContext: recoveryExportContext
-            )
-        }
         return AtlasVaultProductionRootView(
             owner: presentationOwner,
             publicShellActions: publicShellActions,
-            unlockActions: unlockActions
+            unlockActions: unlockActions,
+            creationContext: creationContext,
+            recoveryExportContext: recoveryExportContext,
+            recoveryImportContext: recoveryImportContext
         )
     }
 
@@ -771,6 +758,12 @@ public final class AtlasVaultProductionCompositionHarness:
         AtlasVaultRecoveryExportContext?
     {
         recoveryExportContext
+    }
+
+    var recoveryImportContextForTesting:
+        AtlasVaultRecoveryImportContext?
+    {
+        recoveryImportContext
     }
 
     func waitUntilStoppingForTesting() async {
@@ -925,11 +918,29 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasKeychainVaultRecoveryExportJournalStore(
                 client: keychainClient
             )
+        let recoveryImportJournalStore =
+            AtlasKeychainVaultRecoveryImportJournalStore(
+                client: keychainClient
+            )
+        let recoveryImportAvailability =
+            AtlasVaultRecoveryImportAvailability(
+                initialPendingImport: true
+            )
+        let pendingTransactionAuthority =
+            AtlasVaultPendingTransactionAuthority()
         let hostVaultSelector =
-            AtlasLocalVaultCreationSelectionGate(
+            AtlasPendingVaultTransactionSelectionGate(
                 selector: vaultSelector,
-                loadJournal: {
-                    try creationJournalStore.loadJournal()
+                hasPendingCreation: {
+                    try creationJournalStore.loadJournal() != nil
+                },
+                hasPendingImport: {
+                    try recoveryImportJournalStore.loadJournal() != nil
+                },
+                pendingImportDidChange: { pending in
+                    await recoveryImportAvailability.setPendingImport(
+                        pending
+                    )
                 }
             )
         let runtimeServices = AtlasVaultRuntimeFactory.production(
@@ -947,14 +958,24 @@ public enum AtlasVaultProductionCompositionFactory {
         )
         let presentation = AtlasVaultProductionPresentationPipeline()
         let presentationOwner = AtlasVaultProductionPresentationOwner()
+        let recoveryUnlockProvider =
+            AtlasVaultRecoveryUnlockProvider.production(
+                runtimeServices: runtimeServices
+            )
+        let unlockCapabilitiesResolver =
+            AtlasVaultProductionUnlockCapabilitiesResolver.production(
+                runtimeServices: runtimeServices
+            )
         let unlockDependencies = AtlasVaultUnlockRequestDependencies(
             derivePassphraseVaultKey: { _ in
                 throw AtlasVaultProductionCompositionError
                     .unlockMethodUnavailable
             },
-            deriveRecoveryVaultKey: { _ in
-                throw AtlasVaultProductionCompositionError
-                    .unlockMethodUnavailable
+            deriveVaultAwareRecoveryVaultKey: { vaultID, secret in
+                try await recoveryUnlockProvider.deriveVaultKey(
+                    vaultID: vaultID,
+                    recoverySecret: secret
+                )
             },
             activate: { request in
                 try await runtime.activate(request)
@@ -977,22 +998,138 @@ public enum AtlasVaultProductionCompositionFactory {
             presentation: presentation,
             presentationOwner: presentationOwner,
             unlockCoordinator: unlockCoordinator,
-            unlockControllerBuilder: unlockControllerBuilder
+            unlockControllerBuilder: unlockControllerBuilder,
+            unlockCapabilitiesResolver: unlockCapabilitiesResolver
         )
         let hostFactory = AtlasVaultProductionHostFactory(
             dependencies: hostDependencies,
             builder: AtlasVaultProductionHostBuilder()
         )
         let host = hostFactory.makeHost()
+        let vaultKeyCreator = AtlasKeychainVaultKeyStore(
+            client: keychainClient
+        )
+        let recoveryImportCoordinator =
+            AtlasVaultRecoveryImportCoordinator.production(
+                runtimeServices: runtimeServices,
+                selector: vaultSelector,
+                keyCreator: vaultKeyCreator,
+                selectionCreator: vaultSelector,
+                journalStore: recoveryImportJournalStore,
+                hasPendingCreation: {
+                    try creationJournalStore.loadJournal() != nil
+                },
+                transactionAuthority: pendingTransactionAuthority,
+                fileReader: AtlasVaultRecoveryImportFileReader(),
+                atomicFileSystem: atomicFileSystemClient,
+                authorize: {
+                    let flow = await host.currentFlowState()
+                    guard
+                        flow.mode == .lockedPublic,
+                        await runtime.status() == .locked
+                    else {
+                        return false
+                    }
+                    let lifecycleStatus = await lifecycle.status()
+                    guard
+                        !lifecycleStatus.hasPendingGraceLock,
+                        lifecycleStatus.failure == nil
+                    else {
+                        return false
+                    }
+                    switch lifecycleStatus.lastEvent {
+                    case .didBecomeActive,
+                         .protectedDataBecameAvailable:
+                        return true
+                    case .none,
+                         .willResignActive,
+                         .didEnterBackground,
+                         .willTerminate,
+                         .protectedDataBecameUnavailable:
+                        return false
+                    }
+                },
+                pendingImportDidChange: { pending in
+                    await recoveryImportAvailability.setPendingImport(
+                        pending
+                    )
+                }
+            )
+        let recoveryImportOwner =
+            AtlasVaultRecoveryImportPresentationOwner(
+                coordinator: recoveryImportCoordinator,
+                continueToUnlock: {
+                    _ = await host.requestUnlockPanel()
+                }
+            )
+        let recoveryImportActions = AtlasVaultRecoveryImportActions(
+            present: { [weak recoveryImportOwner] in
+                await recoveryImportOwner?.present()
+            },
+            dismiss: { [weak recoveryImportOwner] in
+                recoveryImportOwner?.dismiss()
+            },
+            prepareImport: { [weak recoveryImportOwner] url in
+                await recoveryImportOwner?.prepareImport(from: url)
+            },
+            restore: { [weak recoveryImportOwner] secret, confirmed in
+                await recoveryImportOwner?.restore(
+                    secret: secret,
+                    confirmed: confirmed
+                )
+            },
+            resume: { [weak recoveryImportOwner] url, secret in
+                await recoveryImportOwner?.resume(
+                    from: url,
+                    secret: secret
+                )
+            },
+            finish: { [weak recoveryImportOwner] url, secret in
+                await recoveryImportOwner?.finishCommittedImport(
+                    from: url,
+                    secret: secret
+                )
+            },
+            reset: { [weak recoveryImportOwner] confirmed in
+                await recoveryImportOwner?.resetPendingImport(
+                    confirmed: confirmed
+                )
+            },
+            pause: { [weak recoveryImportOwner] in
+                await recoveryImportOwner?.pause()
+            },
+            claimPresentation: { [weak recoveryImportOwner] claim in
+                recoveryImportOwner?.claimPresentation(claim) ?? false
+            },
+            releasePresentation: { [weak recoveryImportOwner] claim in
+                recoveryImportOwner?.releasePresentation(claim) ?? false
+            },
+            ownsPresentation: { [weak recoveryImportOwner] claim in
+                recoveryImportOwner?.ownsPresentation(claim) ?? false
+            }
+        )
+        let recoveryImportContext = AtlasVaultRecoveryImportContext(
+            owner: recoveryImportOwner,
+            actions: recoveryImportActions,
+            availability: recoveryImportAvailability
+        )
         let creationCoordinator =
             AtlasLocalVaultCreationCoordinator.production(
                 runtimeServices: runtimeServices,
                 selectionRegistry: vaultSelector,
                 journalStore: creationJournalStore
             )
+        let guardedCreationCoordinator =
+            AtlasPendingRecoveryImportCreationGate(
+                creator: creationCoordinator,
+                hasPendingImport: {
+                    try recoveryImportJournalStore.loadJournal() != nil
+                },
+                transactionAuthority: pendingTransactionAuthority
+            )
         let creationOwner =
             AtlasLocalVaultCreationPresentationOwner(
-                creator: creationCoordinator,
+                creator: guardedCreationCoordinator,
                 continueToUnlock: {
                     await host.requestUnlockPanel()
                 }
@@ -1110,10 +1247,13 @@ public enum AtlasVaultProductionCompositionFactory {
                 switch event {
                 case .willTerminate:
                     await recoveryOwner.stop()
+                    await recoveryImportOwner.stop()
                 case .willResignActive,
                      .didEnterBackground,
                      .protectedDataBecameUnavailable:
                     await recoveryOwner.dismissForUnsafeLifecycle()
+                    await recoveryImportOwner
+                        .dismissForUnsafeLifecycle()
                 case .didBecomeActive,
                      .protectedDataBecameAvailable:
                     break
@@ -1127,7 +1267,8 @@ public enum AtlasVaultProductionCompositionFactory {
             publicSearchLimit: configuration.publicSearchLimit,
             unlockTimeout: configuration.unlockTimeout,
             creationContext: creationContext,
-            recoveryExportContext: recoveryExportContext
+            recoveryExportContext: recoveryExportContext,
+            recoveryImportContext: recoveryImportContext
         )
     }
 }

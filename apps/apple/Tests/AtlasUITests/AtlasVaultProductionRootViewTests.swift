@@ -7,6 +7,39 @@ import XCTest
 final class AtlasVaultProductionRootViewTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_ROOT_QUERY_DO_NOT_LOG"
 
+    func testRootAddsExplicitNoVaultRestoreWithoutPrivateRendering()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "recoveryImportContext",
+            "recoveryImportAvailability",
+            "Restore Encrypted Backup",
+            "AtlasVaultRecoveryImportView",
+            "AtlasVaultRecoveryImportPresentationClaim",
+            "flowState.publicShell.vaultStatus == .noVault",
+            "recoveryImportAvailability.hasPendingImport"
+                + " ? nil : creationContext",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        for forbidden in [
+            "AtlasVaultPrivateState",
+            "savedSearch",
+            "savedJob",
+            "FileManager",
+            "Keychain",
+            "SecItem",
+            ".task",
+            ".onAppear",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+    }
+
     func testRootCompilesAsSwiftUIViewAndConstructionInvokesNoAction() {
         let owner = AtlasVaultProductionPresentationOwner()
         let publicActions = AtlasLockedPublicShellActions(

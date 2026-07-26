@@ -191,7 +191,8 @@ public protocol AtlasVaultUnlockRequestCoordinating: Sendable {
 
 public struct AtlasVaultUnlockRequestDependencies: Sendable {
     fileprivate let derivePassphraseVaultKey: @Sendable (Data) async throws -> Data
-    fileprivate let deriveRecoveryVaultKey: @Sendable (Data) async throws -> Data
+    fileprivate let deriveRecoveryVaultKey:
+        @Sendable (String, Data) async throws -> Data
     fileprivate let activate: @Sendable (AtlasVaultRuntimeActivationRequest) async throws -> Void
     fileprivate let sleep: @Sendable (Duration) async throws -> Void
     fileprivate let afterStorageClaimTransition: @Sendable () async -> Void
@@ -212,7 +213,36 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
     ) {
         self.init(
             derivePassphraseVaultKey: derivePassphraseVaultKey,
-            deriveRecoveryVaultKey: deriveRecoveryVaultKey,
+            deriveVaultAwareRecoveryVaultKey: { _, secret in
+                try await deriveRecoveryVaultKey(secret)
+            },
+            activate: activate,
+            sleep: sleep,
+            afterStorageClaimTransition: {},
+            beforeCancellationHandler: {},
+            beforeOperationStart: {},
+            afterActivationReturn: {},
+            beforeSuccessCommit: {}
+        )
+    }
+
+    public init(
+        derivePassphraseVaultKey:
+            @escaping @Sendable (Data) async throws -> Data,
+        deriveVaultAwareRecoveryVaultKey:
+            @escaping @Sendable (String, Data) async throws -> Data,
+        activate: @escaping @Sendable (
+            AtlasVaultRuntimeActivationRequest
+        ) async throws -> Void,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = {
+            duration in
+            try await Task.sleep(for: duration)
+        }
+    ) {
+        self.init(
+            derivePassphraseVaultKey: derivePassphraseVaultKey,
+            deriveVaultAwareRecoveryVaultKey:
+                deriveVaultAwareRecoveryVaultKey,
             activate: activate,
             sleep: sleep,
             afterStorageClaimTransition: {},
@@ -236,8 +266,37 @@ public struct AtlasVaultUnlockRequestDependencies: Sendable {
         afterActivationReturn: @escaping @Sendable () async -> Void,
         beforeSuccessCommit: @escaping @Sendable () async -> Void
     ) {
+        self.init(
+            derivePassphraseVaultKey: derivePassphraseVaultKey,
+            deriveVaultAwareRecoveryVaultKey: { _, secret in
+                try await deriveRecoveryVaultKey(secret)
+            },
+            activate: activate,
+            sleep: sleep,
+            afterStorageClaimTransition: afterStorageClaimTransition,
+            beforeCancellationHandler: beforeCancellationHandler,
+            beforeOperationStart: beforeOperationStart,
+            afterActivationReturn: afterActivationReturn,
+            beforeSuccessCommit: beforeSuccessCommit
+        )
+    }
+
+    init(
+        derivePassphraseVaultKey: @escaping @Sendable (Data) async throws -> Data,
+        deriveVaultAwareRecoveryVaultKey:
+            @escaping @Sendable (String, Data) async throws -> Data,
+        activate: @escaping @Sendable (
+            AtlasVaultRuntimeActivationRequest
+        ) async throws -> Void,
+        sleep: @escaping @Sendable (Duration) async throws -> Void,
+        afterStorageClaimTransition: @escaping @Sendable () async -> Void,
+        beforeCancellationHandler: @escaping @Sendable () async -> Void,
+        beforeOperationStart: @escaping @Sendable () async -> Void,
+        afterActivationReturn: @escaping @Sendable () async -> Void,
+        beforeSuccessCommit: @escaping @Sendable () async -> Void
+    ) {
         self.derivePassphraseVaultKey = derivePassphraseVaultKey
-        self.deriveRecoveryVaultKey = deriveRecoveryVaultKey
+        self.deriveRecoveryVaultKey = deriveVaultAwareRecoveryVaultKey
         self.activate = activate
         self.sleep = sleep
         self.afterStorageClaimTransition = afterStorageClaimTransition
@@ -513,7 +572,12 @@ public actor AtlasVaultUnlockRequestCoordinator:
             case let .recoveryKey(buffer):
                 var key = try await consumeSecret(
                     buffer,
-                    transform: dependencies.deriveRecoveryVaultKey
+                    transform: { secret in
+                        try await dependencies.deriveRecoveryVaultKey(
+                            vaultID,
+                            secret
+                        )
+                    }
                 )
                 defer { wipe(&key) }
                 try await activate(

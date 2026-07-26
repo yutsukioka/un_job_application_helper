@@ -19,6 +19,204 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
 
+    func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
+        throws
+    {
+        let source = try source(named: "AtlasVaultProductionHost.swift")
+        let selectedStart = try XCTUnwrap(
+            source.range(of: "case let .success(.selected(value)):")
+        )
+        let selectedEnd = try XCTUnwrap(
+            source.range(
+                of: "case .failure:",
+                range: selectedStart.upperBound..<source.endIndex
+            )
+        )
+        let selectedBody = String(
+            source[selectedStart.lowerBound..<selectedEnd.lowerBound]
+        )
+        XCTAssertTrue(
+            selectedBody.contains("unlockCapabilitiesResolver")
+                && selectedBody.contains(".capabilities(for: value)")
+        )
+        XCTAssertFalse(
+            selectedBody.contains("capabilities: .currentProduction")
+        )
+
+        let submitStart = try XCTUnwrap(
+            source.range(of: "public func submitUnlock(")
+        )
+        let submitEnd = try XCTUnwrap(
+            source.range(
+                of: "public func cancelUnlock()",
+                range: submitStart.upperBound..<source.endIndex
+            )
+        )
+        let submitBody = String(
+            source[submitStart.lowerBound..<submitEnd.lowerBound]
+        )
+        XCTAssertTrue(
+            submitBody.contains("capabilities: unlockState.capabilities")
+        )
+        XCTAssertFalse(
+            submitBody.contains("capabilities: .currentProduction")
+        )
+    }
+
+    func testSelectedVaultPublishesResolvedRecoveryOnlyCapabilities()
+        async throws
+    {
+        let recoveryOnly = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseAvailable: false,
+            recoveryKeyAvailable: true
+        )
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            resolvedCapabilities: recoveryOnly,
+            useResolvedCapabilitiesController: true
+        )
+        _ = try await graph.host.start()
+
+        let panel = await graph.host.requestUnlockPanel()
+
+        await expectEqual(panel.mode, .unlockPanel)
+        await expectEqual(
+            panel.unlockPanelState?.availableMethods,
+            [.recoveryKey]
+        )
+        await expectNil(panel.unlockPanelState?.selectedMethod)
+        await expectEqual(
+            graph.controllerBuilder.capturedCapabilities,
+            recoveryOnly
+        )
+        await expectEqual(
+            await graph.capabilityResolver.callCount(),
+            1
+        )
+    }
+
+    func testCapabilityFailureAndNoAvailableMethodFailClosed()
+        async throws
+    {
+        let failed = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            capabilityResolutionFails: true
+        )
+        _ = try await failed.host.start()
+
+        let failedState = await failed.host.requestUnlockPanel()
+
+        await expectEqual(
+            failedState.publicShell.vaultStatus,
+            .keyUnavailable
+        )
+        await expectNil(failedState.unlockPanelState)
+        await expectEqual(failed.controllerBuilder.callCount, 0)
+
+        let noMethods = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseAvailable: false,
+            recoveryKeyAvailable: false
+        )
+        let unavailable = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            resolvedCapabilities: noMethods
+        )
+        _ = try await unavailable.host.start()
+
+        let unavailableState = await unavailable.host
+            .requestUnlockPanel()
+
+        await expectEqual(
+            unavailableState.publicShell.vaultStatus,
+            .keyUnavailable
+        )
+        await expectNil(unavailableState.unlockPanelState)
+        await expectEqual(unavailable.controllerBuilder.callCount, 0)
+    }
+
+    func testStaleCapabilityResolutionCannotCreateController()
+        async throws
+    {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            capabilityResolutionGate: gate
+        )
+        _ = try await graph.host.start()
+        let request = Task {
+            await graph.host.requestUnlockPanel()
+        }
+        await gate.waitUntilEntered()
+
+        let locked = await graph.host.lock()
+        let abandoned = await request.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(abandoned.mode, .lockedPublic)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+
+        await gate.release()
+        await graph.capabilityResolver.waitUntilCompleted()
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+        await expectNil(
+            (await graph.host.currentFlowState()).unlockPanelState
+        )
+    }
+
+    func testLifecycleStaleCapabilityResolutionResumesSelectionAndAllowsRetry()
+        async throws
+    {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            capabilityResolutionGate: gate
+        )
+        _ = try await graph.host.start()
+        let completion = HostBoolRecorder()
+        let requestCompleted = expectation(
+            description: "stale selection request completes"
+        )
+        let request = Task {
+            let state = await graph.host.requestUnlockPanel()
+            await completion.record(true)
+            requestCompleted.fulfill()
+            return state
+        }
+        await gate.waitUntilEntered()
+
+        let inactive = await graph.host.handleLifecycleEvent(
+            .willResignActive
+        )
+        await expectFalse(inactive.publicShell.canRequestUnlock)
+        await gate.release()
+        await graph.capabilityResolver.waitUntilCompleted()
+        await fulfillment(of: [requestCompleted], timeout: 0.5)
+
+        let didComplete = await completion.value() == true
+        await expectTrue(didComplete)
+        guard didComplete else {
+            _ = await graph.host.stop()
+            _ = await request.value
+            return
+        }
+        let abandoned = await request.value
+        await expectEqual(abandoned.mode, .lockedPublic)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+
+        let active = await graph.host.handleLifecycleEvent(
+            .didBecomeActive
+        )
+        await expectTrue(active.publicShell.canRequestUnlock)
+        let retry = await graph.host.requestUnlockPanel()
+        await expectEqual(retry.mode, .unlockPanel)
+        await expectEqual(
+            await graph.capabilityResolver.callCount(),
+            2
+        )
+    }
+
     func testPhaseTypesErrorsGenerationsAndDescriptionsAreRedacted() async {
         _ = AtlasVaultProductionHost.self
         _ = AtlasVaultProductionHostBuilder.self
@@ -3716,7 +3914,12 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         cancelResult: AtlasVaultUnlockPresentationState =
             unlockState(.cancelled),
         disappearanceResult: AtlasVaultUnlockPresentationState =
-            unlockState(.locked)
+            unlockState(.locked),
+        resolvedCapabilities: AtlasVaultUnlockCapabilities =
+            .currentProduction,
+        capabilityResolutionFails: Bool = false,
+        capabilityResolutionGate: HostSuspensionGate? = nil,
+        useResolvedCapabilitiesController: Bool = false
     ) throws -> HostGraph {
         let publicJobs = HostPublicJobsFake(plans: searchPlans)
         let restorer = HostSnapshotRestorerFake(
@@ -3754,7 +3957,14 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             disappearanceResult: disappearanceResult
         )
         let controllerBuilder = HostUnlockControllerBuilderFake(
-            controller: controller
+            controller: controller,
+            usesResolvedCapabilitiesController:
+                useResolvedCapabilitiesController
+        )
+        let capabilityResolver = HostUnlockCapabilitiesResolverFake(
+            capabilities: resolvedCapabilities,
+            fails: capabilityResolutionFails,
+            gate: capabilityResolutionGate
         )
         let dependencies = AtlasVaultProductionHostDependencies(
             publicJobs: publicJobs,
@@ -3765,7 +3975,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             presentation: presentation,
             presentationOwner: owner,
             unlockCoordinator: coordinator,
-            unlockControllerBuilder: controllerBuilder
+            unlockControllerBuilder: controllerBuilder,
+            unlockCapabilitiesResolver: capabilityResolver
         )
         let host = AtlasVaultProductionHost(dependencies: dependencies)
         return HostGraph(
@@ -3779,7 +3990,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             owner: owner,
             coordinator: coordinator,
             controller: controller,
-            controllerBuilder: controllerBuilder
+            controllerBuilder: controllerBuilder,
+            capabilityResolver: capabilityResolver
         )
     }
 
@@ -3934,6 +4146,7 @@ private struct HostGraph {
     let coordinator: HostUnlockCoordinatorFake
     let controller: HostUnlockControllerFake
     let controllerBuilder: HostUnlockControllerBuilderFake
+    let capabilityResolver: HostUnlockCapabilitiesResolverFake
 }
 
 private actor HostSuspensionGate {
@@ -5011,9 +5224,15 @@ private final class HostUnlockControllerBuilderFake:
     private(set) var capturedVaultID: AtlasSelectedVaultID?
     private(set) var capturedCapabilities: AtlasVaultUnlockCapabilities?
     private let controller: HostUnlockControllerFake
+    private let usesResolvedCapabilitiesController: Bool
 
-    init(controller: HostUnlockControllerFake) {
+    init(
+        controller: HostUnlockControllerFake,
+        usesResolvedCapabilitiesController: Bool = false
+    ) {
         self.controller = controller
+        self.usesResolvedCapabilitiesController =
+            usesResolvedCapabilitiesController
     }
 
     func makeController(
@@ -5024,7 +5243,70 @@ private final class HostUnlockControllerBuilderFake:
         callCount += 1
         capturedVaultID = selectedVaultID
         capturedCapabilities = capabilities
+        if usesResolvedCapabilitiesController {
+            return AtlasVaultUnlockPresentationController(
+                vaultID: selectedVaultID.vaultID,
+                capabilities: capabilities,
+                coordinator: coordinator
+            )
+        }
         return controller
+    }
+}
+
+private actor HostUnlockCapabilitiesResolverFake:
+    AtlasVaultUnlockCapabilitiesResolving
+{
+    private let resolvedCapabilities: AtlasVaultUnlockCapabilities
+    private let fails: Bool
+    private let gate: HostSuspensionGate?
+    private var calls = 0
+    private var completions = 0
+    private var completionWaiters: [
+        CheckedContinuation<Void, Never>
+    ] = []
+
+    init(
+        capabilities: AtlasVaultUnlockCapabilities,
+        fails: Bool,
+        gate: HostSuspensionGate?
+    ) {
+        resolvedCapabilities = capabilities
+        self.fails = fails
+        self.gate = gate
+    }
+
+    func capabilities(
+        for selectedVaultID: AtlasSelectedVaultID
+    ) async throws -> AtlasVaultUnlockCapabilities {
+        _ = selectedVaultID
+        calls += 1
+        if let gate {
+            await gate.wait()
+        }
+        defer {
+            completions += 1
+            let waiters = completionWaiters
+            completionWaiters.removeAll(keepingCapacity: false)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+        if fails {
+            throw AtlasVaultRecoveryUnlockFailure.unavailable
+        }
+        return resolvedCapabilities
+    }
+
+    func callCount() -> Int {
+        calls
+    }
+
+    func waitUntilCompleted() async {
+        guard completions == 0 else { return }
+        await withCheckedContinuation { continuation in
+            completionWaiters.append(continuation)
+        }
     }
 }
 

@@ -8,6 +8,34 @@ final class AtlasExplicitUnlockViewTests: XCTestCase {
     private static let fakePassphrase = "FAKE_PHASE2D51_PASSPHRASE"
     private static let fakeRecoveryKey = "FAKE_PHASE2D51_RECOVERY_KEY"
 
+    func testRecoveryOnlyProductionSnapshotRequiresExplicitSelection()
+    {
+        let capabilities = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseAvailable: false,
+            recoveryKeyAvailable: true
+        )
+        let locked = makeViewState(
+            capabilities: capabilities,
+            selectedMethod: nil,
+            status: .locked
+        )
+
+        XCTAssertEqual(locked.availableMethods, [.recoveryKey])
+        XCTAssertNil(locked.selectedMethod)
+        XCTAssertFalse(locked.showsRecoveryKeyInput)
+        XCTAssertFalse(locked.permitsSubmission)
+
+        let selected = makeViewState(
+            capabilities: capabilities,
+            selectedMethod: .recoveryKey,
+            status: .ready
+        )
+        XCTAssertTrue(selected.showsRecoveryKeyInput)
+        XCTAssertTrue(selected.permitsSubmission)
+        XCTAssertFalse(selected.showsPassphraseInput)
+    }
+
     func testCurrentProductionProjectsLocalKeyOnly() {
         let state = makeViewState(
             capabilities: .currentProduction,

@@ -3,6 +3,44 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasKeychainVaultKeyStoreTests: XCTestCase {
+    func testCreateVaultKeyAddsOnlyAndDuplicateNeverUpdates()
+        throws
+    {
+        let client = FakeKeychainClient()
+        let store = AtlasKeychainVaultKeyStore(
+            client: client,
+            service: Self.service
+        )
+
+        try store.createVaultKey(
+            Self.testOnlyVaultKey,
+            for: Self.vaultID
+        )
+        XCTAssertEqual(client.addedItems.count, 1)
+        XCTAssertTrue(client.updatedItems.isEmpty)
+
+        XCTAssertThrowsError(
+            try store.createVaultKey(
+                Data(
+                    repeating: 7,
+                    count: AtlasVaultRecordCrypto.vaultKeyByteCount
+                ),
+                for: Self.vaultID
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasKeychainVaultKeyStoreError,
+                .collision
+            )
+        }
+        XCTAssertEqual(client.addedItems.count, 2)
+        XCTAssertTrue(client.updatedItems.isEmpty)
+        XCTAssertEqual(
+            try store.loadVaultKey(for: Self.vaultID),
+            Self.testOnlyVaultKey
+        )
+    }
+
     func testSaveAddsKeychainGenericPasswordItem() throws {
         let client = FakeKeychainClient()
         let store = AtlasKeychainVaultKeyStore(
