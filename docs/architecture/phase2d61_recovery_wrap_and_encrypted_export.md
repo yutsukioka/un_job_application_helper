@@ -8,7 +8,7 @@ encrypted export before any private-data authoring or rendering is enabled.
 
 ## Scope
 
-This phase changes only the reviewed 23-file contract, Python reference, Swift
+This phase changes only the reviewed 24-file contract, Python reference, Swift
 crypto/export/setup, production composition, production root, and test scope.
 It does not change app entry, the process owner, production host, unlock
 coordinator, local-vault creation, navigation, private models, or Xcode project
@@ -292,6 +292,20 @@ historical passphrase identifiers retain their existing semantics.
 Passphrase- and recovery-wrap validation use the fixed human-facing term
 `key-wrap`. Serialized contract fields, including `key_wraps`, are unchanged.
 
+The Python package root re-exports the Phase 2D-61 recovery models, errors,
+versioned-wrap type, recovery-key codec, HKDF derivation, AAD construction,
+and wrap/unwrap operations through the established `from vaultsync import ...`
+surface. These exports reference their defining `crypto` and `format` objects;
+they do not duplicate implementation. Historical package-root APIs remain
+available and `__all__` contains no duplicates.
+
+Argon2id memory, iteration, and parallelism parameters are strict Python
+integers in direct construction and untrusted dictionary decoding. Boolean,
+floating-point, and string aliases fail with fixed field errors before
+positivity validation. Positive integers retain their behavior, while zero
+and negative integers retain the existing non-positive failure. Historical v1
+parameters, encoding, cryptography, and AAD are unchanged.
+
 ## TDD Evidence
 
 The red checkpoint introduced missing-type and missing-integration tests before
@@ -367,6 +381,18 @@ Swift suite passes 1,139 tests, and both generic iOS Simulator test builds
 pass. Shared vectors, canonical bytes/SHA-256, v1 crypto/AAD, the exact
 23-file scope, and product boundaries remain unchanged. No compatible
 simulator was booted, so no runtime smoke launch is claimed.
+
+Review-fix cycle 11 exports the eleven reviewed recovery API objects from the
+Python package root and applies one strict integer policy to direct and decoded
+Argon2id parameters. Its deterministic red evidence captured missing
+package-root imports plus Boolean, floating-point, and string aliases. The
+sole allowlist expansion is `packages/vaultsync/vaultsync/__init__.py`; the
+overall Phase 2D-61 scope is exactly 24 files. Historical package APIs, v1
+Argon2id values and AAD, recovery v2 vectors, and canonical export bytes remain
+unchanged. The focused recovery/export suite passes 150 tests, the combined
+v1/v2 vector suites pass 166 tests, the complete Python suite passes 231
+tests, and the unchanged complete Swift suite passes 1,139 tests. Both
+discovered generic iOS Simulator test builds pass.
 
 ## End-To-End Evidence
 

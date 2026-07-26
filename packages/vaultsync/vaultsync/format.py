@@ -113,15 +113,13 @@ def _require_vault_id(value: Any) -> str:
 
 
 def _require_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int):
+    if type(value) is not int:
         raise VaultFormatError(f"{field_name} must be an integer")
     return value
 
 
 def _require_strict_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise VaultFormatError(f"{field_name} must be an integer")
-    return value
+    return _require_int(value, field_name)
 
 
 def _require_exact_keys(
@@ -143,7 +141,10 @@ class Argon2idParams:
     def __post_init__(self) -> None:
         if not isinstance(self.salt, bytes) or len(self.salt) < 16:
             raise VaultFormatError("Argon2id salt must be at least 128 bits")
-        if self.memory_kib <= 0 or self.iterations <= 0 or self.parallelism <= 0:
+        memory_kib = _require_int(self.memory_kib, "kdf.memory_kib")
+        iterations = _require_int(self.iterations, "kdf.iterations")
+        parallelism = _require_int(self.parallelism, "kdf.parallelism")
+        if memory_kib <= 0 or iterations <= 0 or parallelism <= 0:
             raise VaultFormatError("Argon2id parameters must be positive")
 
     def with_salt(self, salt: bytes) -> Argon2idParams:

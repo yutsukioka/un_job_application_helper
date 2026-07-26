@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 
+import vaultsync
+import vaultsync.format as vault_format
 from vaultsync import crypto
 from vaultsync.export import (
     AtlasVaultExport,
@@ -17,12 +19,14 @@ from vaultsync.export import (
     serialize_vault_export_bytes,
 )
 from vaultsync.format import (
+    Argon2idParams,
     RECOVERY_WRAP_ID,
     RecoveryKeyError,
     RecoveryKeyWrapV2,
     VaultFormatError,
     VaultKeyUnwrapError,
     VaultMetadata,
+    WrappedKey,
 )
 from vaultsync.records import EncryptedRecord
 
@@ -35,6 +39,28 @@ VECTOR_PATH = (
     / "test_vectors"
     / "atlasvault_recovery_export_vectors_v2.json"
 )
+RECOVERY_ROOT_EXPORTS = {
+    "RecoveryKeyError": vault_format.RecoveryKeyError,
+    "RecoveryKeyWrapHKDFParams": vault_format.RecoveryKeyWrapHKDFParams,
+    "RecoveryKeyWrapV2": vault_format.RecoveryKeyWrapV2,
+    "VersionedWrappedKey": vault_format.VersionedWrappedKey,
+    "derive_recovery_wrapping_key": crypto.derive_recovery_wrapping_key,
+    "encode_recovery_key": crypto.encode_recovery_key,
+    "generate_recovery_key": crypto.generate_recovery_key,
+    "parse_recovery_key": crypto.parse_recovery_key,
+    "recovery_wrap_v2_aad": crypto.recovery_wrap_v2_aad,
+    "unwrap_vault_key_with_recovery": crypto.unwrap_vault_key_with_recovery,
+    "wrap_vault_key_with_recovery": crypto.wrap_vault_key_with_recovery,
+}
+HISTORICAL_ROOT_EXPORTS = {
+    "AtlasVaultExport",
+    "VaultMetadata",
+    "WrappedKey",
+    "generate_vault_key",
+    "wrap_vault_key",
+    "unwrap_vault_key",
+    "serialize_vault_export_bytes",
+}
 
 
 def load_vector() -> dict[str, Any]:
@@ -67,6 +93,67 @@ def _passphrase_wrap(wrap_id: str) -> dict[str, Any]:
         "nonce": base64.b64encode(b"n" * 12).decode(),
         "ciphertext": base64.b64encode(b"c" * 48).decode(),
     }
+
+
+def test_package_root_exports_recovery_api_without_losing_historical_api() -> None:
+    namespace: dict[str, Any] = {}
+    exec(
+        """
+from vaultsync import (
+    RecoveryKeyError,
+    RecoveryKeyWrapHKDFParams,
+    RecoveryKeyWrapV2,
+    VersionedWrappedKey,
+    derive_recovery_wrapping_key,
+    encode_recovery_key,
+    generate_recovery_key,
+    parse_recovery_key,
+    recovery_wrap_v2_aad,
+    unwrap_vault_key_with_recovery,
+    wrap_vault_key_with_recovery,
+)
+""",
+        namespace,
+    )
+
+    for name, defining_object in RECOVERY_ROOT_EXPORTS.items():
+        assert namespace[name] is defining_object
+        assert getattr(vaultsync, name) is defining_object
+        assert vaultsync.__all__.count(name) == 1
+
+    assert len(vaultsync.__all__) == len(set(vaultsync.__all__))
+    assert HISTORICAL_ROOT_EXPORTS <= set(vaultsync.__all__)
+    for name in HISTORICAL_ROOT_EXPORTS:
+        assert hasattr(vaultsync, name)
+
+
+def test_package_root_recovery_api_recomputes_shared_vector() -> None:
+    vector = load_vector()
+    recovery_key = vaultsync.parse_recovery_key(
+        vector["canonical_recovery_text"]
+    )
+    vault_key = decode64(vector["test_only_vault_key_b64"])
+
+    assert vaultsync.encode_recovery_key(recovery_key) == (
+        vector["canonical_recovery_text"]
+    )
+    wrapped = vaultsync.wrap_vault_key_with_recovery(
+        vault_key,
+        recovery_key,
+        vault_id=vector["vault_id"],
+        salt=decode64(vector["salt_b64"]),
+        nonce=decode64(vector["nonce_b64"]),
+    )
+    assert wrapped.to_dict() == vector["recovery_wrap"]
+    assert vaultsync.recovery_wrap_v2_aad(
+        vector["vault_id"],
+        wrapped,
+    ) == decode64(vector["key_wrap_aad_b64"])
+    assert vaultsync.unwrap_vault_key_with_recovery(
+        wrapped,
+        recovery_key,
+        vault_id=vector["vault_id"],
+    ) == vault_key
 
 
 def test_python_recomputes_recovery_code_and_wrap_vector() -> None:
@@ -498,6 +585,101 @@ def test_passphrase_wrap_unknown_field_uses_fixed_private_error() -> None:
         vector["canonical_recovery_text"],
     ):
         assert private_value not in message
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        (field_name, invalid_value)
+        for field_name in ("memory_kib", "iterations", "parallelism")
+        for invalid_value in (True, False, 1.0, "1")
+    ],
+)
+def test_direct_argon2id_construction_rejects_non_integer_parameters(
+    field_name: str,
+    invalid_value: Any,
+) -> None:
+    values: dict[str, Any] = {
+        "memory_kib": 65_536,
+        "iterations": 3,
+        "parallelism": 4,
+    }
+    values[field_name] = invalid_value
+
+    with pytest.raises(
+        VaultFormatError,
+        match=rf"^kdf\.{field_name} must be an integer$",
+    ) as raised:
+        Argon2idParams(salt=b"s" * 16, **values)
+
+    message = str(raised.value)
+    assert repr(invalid_value) not in message
+    assert base64.b64encode(b"s" * 16).decode() not in message
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        (field_name, invalid_value)
+        for field_name in ("memory_kib", "iterations", "parallelism")
+        for invalid_value in (True, False, 1.0, "1")
+    ],
+)
+def test_untrusted_argon2id_decode_rejects_non_integer_parameters(
+    field_name: str,
+    invalid_value: Any,
+) -> None:
+    wrap = _passphrase_wrap("legacy-passphrase")
+    wrap["kdf"][field_name] = invalid_value
+
+    with pytest.raises(
+        VaultFormatError,
+        match=rf"^kdf\.{field_name} must be an integer$",
+    ) as raised:
+        WrappedKey.from_dict(wrap)
+
+    message = str(raised.value)
+    assert repr(invalid_value) not in message
+    assert wrap["kdf"]["salt"] not in message
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["memory_kib", "iterations", "parallelism"],
+)
+@pytest.mark.parametrize("invalid_value", [0, -1])
+def test_argon2id_integer_parameters_remain_positive(
+    field_name: str,
+    invalid_value: int,
+) -> None:
+    values = {
+        "memory_kib": 65_536,
+        "iterations": 3,
+        "parallelism": 4,
+    }
+    values[field_name] = invalid_value
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^Argon2id parameters must be positive$",
+    ):
+        Argon2idParams(salt=b"s" * 16, **values)
+
+
+def test_strict_argon2id_validation_preserves_valid_v1_wrap() -> None:
+    wrap_data = _passphrase_wrap("legacy-passphrase")
+    wrapped = WrappedKey.from_dict(wrap_data)
+
+    assert wrapped.kdf.memory_kib == 65_536
+    assert wrapped.kdf.iterations == 3
+    assert wrapped.kdf.parallelism == 4
+    assert wrapped.to_dict() == wrap_data
+    assert Argon2idParams(
+        salt=b"s" * 16,
+        memory_kib=65_536,
+        iterations=3,
+        parallelism=4,
+    ).to_dict() == wrap_data["kdf"]
 
 
 def test_recovery_key_generation_requests_exactly_32_random_bytes(
