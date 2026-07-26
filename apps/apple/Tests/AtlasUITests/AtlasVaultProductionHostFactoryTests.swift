@@ -8,6 +8,22 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     private static let fakeJobID = "FAKE_PUBLIC_JOB_2D54"
     private static let fakeVaultID = "00000000-0000-4000-8000-000000000254"
 
+    func testHostDependenciesProvidePrivateSessionCompatibilityBoundary()
+        throws
+    {
+        let contracts = try contractsSource()
+
+        XCTAssertTrue(
+            contracts.contains("privateSessionBoundary")
+        )
+        XCTAssertTrue(
+            contracts.contains("AtlasNoopVaultPrivateSessionBoundary")
+        )
+        XCTAssertTrue(
+            contracts.contains("AtlasVaultPrivateMutationHosting")
+        )
+    }
+
     func testHostDependenciesProvideCompatibilityCapabilityResolver()
         throws
     {

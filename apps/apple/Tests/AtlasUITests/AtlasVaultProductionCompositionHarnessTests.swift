@@ -8,6 +8,27 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_QUERY_DO_NOT_LOG"
     private static let fakeURL = URL(string: "https://example.invalid")!
 
+    func testProductionCompositionBuildsOneSavedSearchPrivateAuthority()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "savedSearchContext",
+            "AtlasVaultPrivateSessionBoundaryBridge",
+            "AtlasVaultPrivateMutationHosting",
+            "AtlasVaultSavedSearchCoordinator",
+            "AtlasVaultSavedSearchPresentationOwner",
+            "AtlasVaultSavedSearchActions",
+            "privateState()",
+            "attach",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+    }
+
     func testProductionCompositionSharesImportAndRecoveryUnlockAuthority()
         throws
     {

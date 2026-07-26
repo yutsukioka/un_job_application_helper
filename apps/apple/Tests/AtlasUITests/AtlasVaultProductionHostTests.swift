@@ -19,6 +19,21 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
 
+    func testHostOwnsPrivateSessionAndMutationBoundaries() throws {
+        let source = try source(named: "AtlasVaultProductionHost.swift")
+
+        for required in [
+            "AtlasVaultPrivateMutationHosting",
+            "activatePrivateSession",
+            "hidePrivatePresentation",
+            "stopAndDrainPrivateSession",
+            "applyPrivateMutation",
+            "privateMutationOperation",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+    }
+
     func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
         throws
     {

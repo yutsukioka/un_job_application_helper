@@ -7,6 +7,20 @@ import XCTest
 final class AtlasVaultProductionRootViewTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_ROOT_QUERY_DO_NOT_LOG"
 
+    func testUnlockedRootUsesOptionalSavedSearchContext() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "savedSearchContext",
+            "AtlasVaultSavedSearchView",
+            "flowState.mode == .unlockedTransition",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+    }
+
     func testRootAddsExplicitNoVaultRestoreWithoutPrivateRendering()
         throws
     {
