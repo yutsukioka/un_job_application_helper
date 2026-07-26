@@ -908,6 +908,20 @@ public actor AtlasVaultRecoveryExportCoordinator:
         guard matching.count <= 1 else {
             throw AtlasVaultRecoveryExportFailure.recoveryRequired
         }
+        var recovered = try AtlasVaultRecoveryWrapCrypto.unwrap(
+            journal.wrap,
+            recoveryKey: recoveryKey,
+            vaultID: metadata.vaultID
+        )
+        defer {
+            AtlasVaultRecoveryKeyCodec.bestEffortWipe(&recovered)
+        }
+        guard AtlasVaultRecoveryWrapCrypto.constantTimeEqual(
+            recovered,
+            context.vaultKey
+        ) else {
+            throw AtlasVaultRecoveryExportFailure.invalidConfirmation
+        }
         var committedStore = context.store
         if let existing = matching.first?.recoveryKeyEnvelope {
             guard existing == journal.wrap else {

@@ -165,7 +165,10 @@ plaintext record, or hydrated state.
 The journal is saved before metadata mutation. The coordinator adds exactly
 one matching recovery wrap, preserves encrypted records and unrelated wraps,
 and saves through the reviewed persistence coordinator with `overwrite: true`.
-Only confirmed atomic durability proceeds.
+On interrupted resume, the journal wrap must first unwrap with the entered
+recovery key and match the local Keychain vault key in constant time; a
+missing wrap is never committed before that authentication succeeds. Only
+confirmed atomic durability proceeds.
 
 The store is loaded back and the exact wrap is verified before export
 construction. `committedDurabilityUnconfirmed` leaves the journal and requires
@@ -182,7 +185,8 @@ resume. No destination URL is persisted.
 A journal never stores the raw recovery key, so resume asks for the separately
 saved key. The coordinator verifies selected vault, store ID, journal wrap,
 local Keychain vault key, and encrypted records. It commits a missing exact
-wrap when safe or reuses the already committed exact wrap.
+wrap only after authenticating the entered key against the local vault key, or
+reuses the already committed exact wrap.
 
 The journal's export ID and timestamp remain stable during interrupted resume.
 Wrong recovery input returns one fixed retryable failure and changes nothing.
@@ -336,6 +340,16 @@ wrapped-key, and encrypted-export suites pass 43 tests, the complete Python
 suite passes 196 tests, the complete Swift suite passes 1,136 tests, and both
 generic iOS Simulator test builds pass. CoreSimulator was unavailable during
 verification, so no runtime smoke launch is claimed.
+
+Review-fix cycle 9 authenticates the journal wrap with the entered recovery
+key and compares the recovered key with the local vault key before committing
+a missing wrap during interrupted resume. A wrong resume key therefore leaves
+the store and journal unchanged. The focused recovery/export suites pass 105
+tests, the complete Python suite passes 196 tests, the complete Swift suite
+passes 1,137 tests, and both generic iOS Simulator test builds pass. Shared
+vectors, valid wire bytes, v1 crypto/AAD, the exact 23-file scope, and all
+Phase 2D-61 product boundaries remain unchanged. CoreSimulator was unavailable,
+so no runtime smoke launch is claimed.
 
 ## End-To-End Evidence
 

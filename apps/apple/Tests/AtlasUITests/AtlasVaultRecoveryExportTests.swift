@@ -197,6 +197,60 @@ final class AtlasVaultRecoveryExportTests: XCTestCase {
         )
     }
 
+    func testWrongResumeKeyCannotCommitJournalWrapBeforeVerification()
+        async throws
+    {
+        let fixture = try RecoveryExportFixture()
+        await fixture.fake.setDiscardStoreWrites(true)
+        let handle = try await fixture.coordinator.prepareNewRecovery()
+        let takenCode = await handle.take()
+        let code = try XCTUnwrap(takenCode)
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndPrepareExport(
+                secret: code
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .recoveryRequired
+            )
+        }
+        let interrupted = await fixture.fake.snapshot()
+        XCTAssertNotNil(interrupted.journal)
+        XCTAssertNil(
+            try AtlasVaultVersionedWrappedKeyMetadata(
+                localStoreMetadata: interrupted.store.vaultMetadata
+            ).recoveryKeyWrap
+        )
+        let writesBeforeResume = interrupted.events.filter {
+            $0 == "saveStore"
+        }.count
+        await fixture.fake.setDiscardStoreWrites(false)
+        let relaunched = AtlasVaultRecoveryExportCoordinator(
+            environment: fixture.environment
+        )
+        let wrong = try AtlasVaultRecoveryKeyCodec.canonicalText(
+            for: Data(repeating: 0x44, count: 32)
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await relaunched.resumeAndPrepareExport(secret: wrong)
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryExportFailure,
+                .invalidConfirmation
+            )
+        }
+        let rejected = await fixture.fake.snapshot()
+        XCTAssertEqual(rejected.store, interrupted.store)
+        XCTAssertEqual(rejected.journal, interrupted.journal)
+        XCTAssertEqual(
+            rejected.events.filter { $0 == "saveStore" }.count,
+            writesBeforeResume
+        )
+    }
+
     func testExplicitPendingResetPreservesVaultKeyStoreAndRecords()
         async throws
     {
