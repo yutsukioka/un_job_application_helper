@@ -299,6 +299,121 @@ def test_export_metadata_errors_are_fixed_and_do_not_echo_input() -> None:
         assert value not in str(raised.value)
 
 
+@pytest.mark.parametrize("version", [True, False, 1.0])
+def test_direct_export_construction_rejects_non_integer_version(
+    version: Any,
+) -> None:
+    vector = load_vector()
+
+    with pytest.raises(
+        VaultExportError,
+        match="^version must be an integer$",
+    ) as raised:
+        AtlasVaultExport(
+            vault_metadata=VaultMetadata.from_dict(vector["vault_metadata"]),
+            records=(),
+            export_id=vector["export"]["export_id"],
+            created_at=vector["export"]["created_at"],
+            version=version,
+        )
+
+    message = str(raised.value)
+    for private_value in ("True", "False", "1.0", "atlasvault-export"):
+        assert private_value not in message
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0])
+def test_untrusted_export_decode_rejects_non_integer_version(
+    version: Any,
+) -> None:
+    data = deepcopy(load_vector()["export"])
+    data["version"] = version
+
+    with pytest.raises(
+        VaultExportError,
+        match="^version must be an integer$",
+    ):
+        deserialize_vault_export(data)
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0])
+def test_direct_vault_metadata_construction_rejects_non_integer_version(
+    version: Any,
+) -> None:
+    valid = VaultMetadata.from_dict(load_vector()["vault_metadata"])
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^version must be an integer$",
+    ):
+        VaultMetadata(
+            vault_id=valid.vault_id,
+            key_wraps=valid.key_wraps,
+            crypto=valid.crypto,
+            format=valid.format,
+            version=version,
+        )
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0])
+def test_untrusted_vault_metadata_decode_rejects_non_integer_version(
+    version: Any,
+) -> None:
+    data = deepcopy(load_vector()["vault_metadata"])
+    data["version"] = version
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^version must be an integer$",
+    ):
+        VaultMetadata.from_dict(data)
+
+
+def test_integer_versions_remain_compatible() -> None:
+    vector = load_vector()
+    metadata = VaultMetadata.from_dict(vector["vault_metadata"])
+    direct_metadata = VaultMetadata(
+        vault_id=metadata.vault_id,
+        key_wraps=metadata.key_wraps,
+        crypto=metadata.crypto,
+        format=metadata.format,
+        version=1,
+    )
+    direct_export = AtlasVaultExport(
+        vault_metadata=direct_metadata,
+        records=(),
+        export_id=vector["export"]["export_id"],
+        created_at=vector["export"]["created_at"],
+        version=1,
+    )
+
+    assert direct_metadata.version == 1
+    assert direct_export.version == 1
+    assert deserialize_vault_export(vector["export"]).version == 1
+
+
+def test_recovery_wrap_unknown_field_uses_fixed_private_error() -> None:
+    vector = load_vector()
+    malformed = deepcopy(vector["recovery_wrap"])
+    private_extra = "PRIVATE_RECOVERY_WRAP_EXTRA_SENTINEL"
+    malformed["unexpected"] = private_extra
+
+    with pytest.raises(VaultFormatError) as raised:
+        RecoveryKeyWrapV2.from_dict(malformed)
+
+    message = str(raised.value)
+    assert message == "recovery key-wrap contains invalid fields"
+    assert "recovery key_wrap" not in message
+    for private_value in (
+        private_extra,
+        vector["recovery_wrap"]["nonce"],
+        vector["recovery_wrap"]["ciphertext"],
+        vector["vault_id"],
+        vector["canonical_recovery_text"],
+    ):
+        assert private_value not in message
+
+
 def test_recovery_key_generation_requests_exactly_32_random_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

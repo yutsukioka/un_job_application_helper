@@ -33,7 +33,7 @@ def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
 
 
 def _require_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise VaultExportError(f"{field_name} must be an integer")
     return value
 
@@ -112,7 +112,8 @@ class AtlasVaultExport:
     def __post_init__(self) -> None:
         if self.format != EXPORT_FORMAT:
             raise VaultExportError("unsupported export format")
-        if self.version != SUPPORTED_EXPORT_VERSION:
+        version = _require_int(self.version, "version")
+        if version != SUPPORTED_EXPORT_VERSION:
             raise UnsupportedExportVersion("unsupported export version")
         if not isinstance(self.vault_metadata, VaultMetadata):
             raise VaultExportError("vault_metadata must be VaultMetadata")

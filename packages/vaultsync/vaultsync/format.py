@@ -294,11 +294,11 @@ class RecoveryKeyWrapV2:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> RecoveryKeyWrapV2:
-        obj = _require_mapping(data, "recovery key_wrap")
+        obj = _require_mapping(data, "recovery key-wrap")
         _require_exact_keys(
             obj,
             {"id", "type", "wrap_version", "kdf", "nonce", "ciphertext"},
-            "recovery key_wrap",
+            "recovery key-wrap",
         )
         return cls(
             id=_require_text(obj.get("id"), "key_wrap.id"),
@@ -382,7 +382,8 @@ class VaultMetadata:
     def __post_init__(self) -> None:
         if self.format != VAULT_FORMAT:
             raise VaultFormatError("unsupported vault format")
-        if self.version != SUPPORTED_VAULT_VERSION:
+        version = _require_strict_int(self.version, "version")
+        if version != SUPPORTED_VAULT_VERSION:
             raise UnsupportedVaultVersion("unsupported vault version")
         _require_vault_id(self.vault_id)
         if not isinstance(self.key_wraps, tuple):
@@ -423,7 +424,7 @@ class VaultMetadata:
         obj = _require_mapping(data, "vault metadata")
         if obj.get("format") != VAULT_FORMAT:
             raise VaultFormatError("unsupported vault format")
-        version = obj.get("version")
+        version = _require_strict_int(obj.get("version"), "version")
         if version != SUPPORTED_VAULT_VERSION:
             raise UnsupportedVaultVersion("unsupported vault version")
         key_wraps = obj.get("key_wraps")

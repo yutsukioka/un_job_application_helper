@@ -97,6 +97,9 @@ boundary: `export_id` is a canonical lowercase hyphenated UUID and
 values fail rather than selecting generated defaults. Export v1 decoding
 requires exactly `format`, `version`, `export_id`, `created_at`,
 `vault_metadata`, and `records`; missing and unknown keys are rejected.
+Export and vault-metadata versions are strict JSON integers: Boolean and
+floating-point values are rejected by direct construction and untrusted
+decode, while the valid integer version 1 remains unchanged.
 
 Sorted compact UTF-8 JSON excludes the local store ID, path, selection
 registry, Keychain state, raw vault key, raw recovery key, recovery text,
@@ -128,6 +131,10 @@ and is held only by scene-local SwiftUI state.
 
 Before correct full-code re-entry, setup writes no journal, mutates no store,
 creates no export, and changes neither selection nor the local Keychain key.
+Pausing while generation is active or while confirmation is pending drains
+coordinator cleanup, discards the ephemeral prepared material, and returns to
+ready. Because no journal or wrap exists yet, the pause is not presented as
+resumable. A fresh recovery key requires another explicit generate action.
 
 ## Setup Journal
 
@@ -198,8 +205,10 @@ Every operation requires:
 Authorization is rechecked before persistent effects. Backgrounding,
 inactivity, and protected-data loss cancel and drain setup, wipe coordinator
 secret buffers, and dismiss secret-bearing state while retaining a non-secret
-journal. Termination and harness stop make the coordinator terminal and await
-its drain.
+journal when one exists. Unsafe lifecycle dismissal during pre-confirmation
+also clears scene-local recovery text and remains hidden even if generation
+finishes late. Journal-backed pauses remain explicitly resumable. Termination
+and harness stop make the coordinator terminal and await its drain.
 
 ## Presentation
 
@@ -259,6 +268,9 @@ The existing passphrase v1 vector remains green. Tamper tests cover vault
 binding, wrong key, valid-length salt/nonce/ciphertext changes, strict fields,
 canonical Base64, and duplicate recovery-wrap IDs.
 
+Recovery-wrap validation uses the fixed human-facing term `key-wrap`.
+Serialized contract fields, including `key_wraps`, are unchanged.
+
 ## TDD Evidence
 
 The red checkpoint introduced missing-type and missing-integration tests before
@@ -275,6 +287,15 @@ passed 162 tests, the strict Swift wrap suite passed 25 tests, and the complete
 Swift suite passed 1,129 tests. Both discovered generic iOS Simulator test
 builds passed. The existing canonical vector bytes and SHA-256 are unchanged,
 and the final reviewed repository scope is exactly 23 files.
+
+Review-fix cycle 5 adds strict Boolean/float version rejection for export and
+vault metadata, fixes recovery key-wrap validation wording without changing
+serialized fields, and distinguishes ephemeral pre-confirmation pauses from
+journal-backed resumable pauses. The overall repository scope remains exactly
+23 files. Its focused Python compatibility suites pass 111 tests, the complete
+Python suite passes 176 tests, the focused recovery/export view suite passes
+15 tests, and the complete Swift suite passes 1,132 tests. Both discovered
+generic iOS Simulator test builds pass.
 
 ## End-To-End Evidence
 

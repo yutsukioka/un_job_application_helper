@@ -145,6 +145,9 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
                 return .failure(Self.failure(error))
             }
         }
+        guard presentation == .generating else {
+            return nil
+        }
         switch result {
         case let .display(handle):
             presentation = .awaitingConfirmation
@@ -269,6 +272,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
     }
 
     public func pause() async {
+        let pausedFrom = presentation
         let retainedOperation = operation
         retainedOperation?.operationTask.cancel()
         await coordinator.exportDidFailOrCancel()
@@ -277,7 +281,23 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             operation = nil
         }
         if !terminalStopRequested {
-            presentation = .paused
+            switch pausedFrom {
+            case .generating, .awaitingConfirmation:
+                presentation = .ready
+            case .hidden,
+                 .ready,
+                 .resumeRequired,
+                 .verifying,
+                 .exportReady,
+                 .paused,
+                 .failed,
+                 .durabilityVerificationRequired,
+                 .completionPending,
+                 .recoveryRequired,
+                 .resetting,
+                 .complete:
+                presentation = .paused
+            }
         }
     }
 

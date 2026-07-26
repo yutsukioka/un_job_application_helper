@@ -17,6 +17,12 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
             "releasePresentation",
             "ownsPresentation",
             ".accessibilityValue(displayedRecoveryCode)",
+            "case .ready:",
+            "Generate Recovery Key",
+            "Enter the recovery key you saved",
+            ".onChange(of: owner.presentation)",
+            "presentation.clearsLocalSecrets",
+            "clearLocalValues()",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
@@ -242,7 +248,104 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
     }
 
     @MainActor
-    func testPauseAndStopDrainCoordinatorAndHideSecretBearingUI()
+    func testAwaitingConfirmationPauseReturnsReadyAndRegeneratesExplicitly()
+        async throws
+    {
+        let fake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        let owner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: fake
+        )
+        owner.present()
+        let firstHandle = await owner.generate()
+        XCTAssertNotNil(firstHandle)
+        XCTAssertEqual(owner.presentation, .awaitingConfirmation)
+
+        await owner.pause()
+        XCTAssertEqual(owner.presentation, .ready)
+
+        let secondHandle = await owner.generate()
+        XCTAssertNotNil(secondHandle)
+        XCTAssertEqual(owner.presentation, .awaitingConfirmation)
+
+        let calls = await fake.calls()
+        XCTAssertEqual(
+            calls,
+            ["prepare", "exportCancel", "prepare"]
+        )
+        XCTAssertFalse(calls.contains("resume"))
+        XCTAssertFalse(calls.contains("reset"))
+    }
+
+    @MainActor
+    func testGeneratingPauseDrainsAndAllowsExplicitRegeneration()
+        async throws
+    {
+        let fake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await fake.blockNextPrepare()
+        let owner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: fake
+        )
+        owner.present()
+
+        let generation = Task { @MainActor in
+            await owner.generate()
+        }
+        await fake.waitUntilPrepareStarted()
+        XCTAssertEqual(owner.presentation, .generating)
+
+        await owner.pause()
+        let cancelledHandle = await generation.value
+
+        XCTAssertNil(cancelledHandle)
+        XCTAssertEqual(owner.presentation, .ready)
+        XCTAssertFalse(owner.hasRetainedOperationForTesting)
+
+        let regeneratedHandle = await owner.generate()
+        XCTAssertNotNil(regeneratedHandle)
+        XCTAssertEqual(owner.presentation, .awaitingConfirmation)
+        let calls = await fake.calls()
+        XCTAssertEqual(
+            calls,
+            ["prepare", "exportCancel", "prepare"]
+        )
+    }
+
+    @MainActor
+    func testJournalBackedPauseRemainsResumable()
+        async throws
+    {
+        let fake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await fake.setFailure(.pendingSetupRequiresRecoveryKey)
+        let owner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: fake
+        )
+        owner.present()
+
+        let pendingHandle = await owner.generate()
+        XCTAssertNil(pendingHandle)
+        XCTAssertEqual(owner.presentation, .resumeRequired)
+
+        await fake.setFailure(nil)
+        await owner.pause()
+        XCTAssertEqual(owner.presentation, .paused)
+
+        let resumed = await owner.resume(
+            secret: "FAKE_TEST_ONLY_SAVED_RECOVERY"
+        )
+        XCTAssertNotNil(resumed)
+        XCTAssertEqual(owner.presentation, .exportReady)
+        let calls = await fake.calls()
+        XCTAssertEqual(calls, ["prepare", "exportCancel", "resume"])
+    }
+
+    @MainActor
+    func testStopAfterPreConfirmationPauseHidesSecretBearingUI()
         async throws
     {
         let fake = try RecoveryExportCoordinatorViewFake(
@@ -253,11 +356,10 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
         )
         owner.present()
         _ = await owner.generate()
-
         await owner.pause()
-        XCTAssertEqual(owner.presentation, .paused)
-
+        XCTAssertEqual(owner.presentation, .ready)
         await owner.stop()
+
         XCTAssertEqual(owner.presentation, .hidden)
         let calls = await fake.calls()
         XCTAssertEqual(calls, ["prepare", "exportCancel", "stop"])
@@ -289,10 +391,11 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
     func testGeneratedCodeCannotPublishAfterSceneClaimIsInvalidated()
         async throws
     {
+        let fake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
         let owner = AtlasVaultRecoveryExportPresentationOwner(
-            coordinator: try RecoveryExportCoordinatorViewFake(
-                document: makeDocument()
-            )
+            coordinator: fake
         )
         let claim = AtlasVaultRecoveryExportPresentationClaim()
         owner.present()
@@ -307,6 +410,8 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
         XCTAssertEqual(owner.presentation, .hidden)
         XCTAssertFalse(owner.ownsPresentation(claim))
         XCTAssertFalse(owner.canPublishGeneratedCode(for: claim))
+        let calls = await fake.calls()
+        XCTAssertEqual(calls, ["prepare", "exportCancel"])
     }
 
     func testViewKeepsSecretsAndEncryptedDocumentInLocalStateOnly()
@@ -387,6 +492,10 @@ private actor RecoveryExportCoordinatorViewFake:
     private let document: AtlasVaultEncryptedDocument
     private var recordedCalls: [String] = []
     private var failure: AtlasVaultRecoveryExportFailure?
+    private var shouldBlockNextPrepare = false
+    private var prepareStarted = false
+    private var prepareStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var prepareRelease: CheckedContinuation<Void, Never>?
 
     init(document: AtlasVaultEncryptedDocument) {
         self.document = document
@@ -396,6 +505,19 @@ private actor RecoveryExportCoordinatorViewFake:
         -> AtlasVaultRecoveryDisplayCodeHandle
     {
         recordedCalls.append("prepare")
+        if shouldBlockNextPrepare {
+            shouldBlockNextPrepare = false
+            prepareStarted = true
+            let waiters = prepareStartedWaiters
+            prepareStartedWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            await withCheckedContinuation { continuation in
+                prepareRelease = continuation
+            }
+            try Task.checkCancellation()
+        }
         try failIfNeeded()
         let code = try AtlasVaultRecoveryKeyCodec.canonicalText(
             for: Data((0..<32).map(UInt8.init))
@@ -426,6 +548,8 @@ private actor RecoveryExportCoordinatorViewFake:
 
     func exportDidFailOrCancel() async {
         recordedCalls.append("exportCancel")
+        prepareRelease?.resume()
+        prepareRelease = nil
     }
 
     func resetPendingSetup() async throws {
@@ -445,6 +569,20 @@ private actor RecoveryExportCoordinatorViewFake:
 
     func setFailure(_ value: AtlasVaultRecoveryExportFailure?) {
         failure = value
+    }
+
+    func blockNextPrepare() {
+        shouldBlockNextPrepare = true
+        prepareStarted = false
+    }
+
+    func waitUntilPrepareStarted() async {
+        if prepareStarted {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            prepareStartedWaiters.append(continuation)
+        }
     }
 
     func calls() -> [String] {
