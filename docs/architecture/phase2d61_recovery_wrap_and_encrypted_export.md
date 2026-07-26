@@ -101,7 +101,10 @@ Export and vault-metadata versions are strict JSON integers: Boolean and
 floating-point values are rejected by direct construction and untrusted
 decode, while the valid integer version 1 remains unchanged.
 
-Sorted compact UTF-8 JSON excludes the local store ID, path, selection
+Sorted compact UTF-8 JSON uses Python-compatible ASCII escaping, including
+lowercase `\u` escapes and surrogate pairs for non-ASCII encrypted-record
+metadata. This preserves byte and hash identity with Python `ensure_ascii`
+serialization. The export excludes the local store ID, path, selection
 registry, Keychain state, raw vault key, raw recovery key, recovery text,
 passphrase, and plaintext payloads. The fixed filename is
 `AtlasVault-Encrypted-Backup.atlasvault`.
@@ -268,8 +271,8 @@ The existing passphrase v1 vector remains green. Tamper tests cover vault
 binding, wrong key, valid-length salt/nonce/ciphertext changes, strict fields,
 canonical Base64, and duplicate recovery-wrap IDs.
 
-Recovery-wrap validation uses the fixed human-facing term `key-wrap`.
-Serialized contract fields, including `key_wraps`, are unchanged.
+Passphrase- and recovery-wrap validation use the fixed human-facing term
+`key-wrap`. Serialized contract fields, including `key_wraps`, are unchanged.
 
 ## TDD Evidence
 
@@ -296,6 +299,16 @@ journal-backed resumable pauses. The overall repository scope remains exactly
 Python suite passes 176 tests, the focused recovery/export view suite passes
 15 tests, and the complete Swift suite passes 1,132 tests. Both discovered
 generic iOS Simulator test builds pass.
+
+Review-fix cycle 6 completes fixed `key-wrap` wording for historical
+passphrase-envelope errors and aligns Swift canonical export string escaping
+with Python `ensure_ascii` for non-ASCII encrypted-record metadata. V1 crypto,
+AAD, serialized fields, the shared vector, and the exact 23-file scope remain
+unchanged. The focused Python export suite passes 97 tests, the combined
+Python v1/v2 vector suites pass 113 tests, and the complete Python suite
+passes 178 tests. The focused Swift export suite passes 7 tests, the complete
+Swift suite passes 1,133 tests, and both discovered generic iOS Simulator test
+builds pass.
 
 ## End-To-End Evidence
 

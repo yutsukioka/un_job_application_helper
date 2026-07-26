@@ -23,6 +23,7 @@ from vaultsync.format import (
     VaultKeyUnwrapError,
     VaultMetadata,
 )
+from vaultsync.records import EncryptedRecord
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -93,6 +94,37 @@ def test_python_recomputes_canonical_export_vector() -> None:
     assert vector["test_only_recovery_key_b64"].encode() not in canonical
     assert vector["test_only_vault_key_b64"].encode() not in canonical
     assert vector["canonical_recovery_text"].encode() not in canonical
+
+
+def test_python_canonical_export_ascii_escapes_record_text() -> None:
+    vector = load_vector()
+    export = AtlasVaultExport(
+        vault_metadata=VaultMetadata.from_dict(vector["vault_metadata"]),
+        records=(
+            EncryptedRecord(
+                id="record/\u00e9",
+                schema_version=1,
+                revision="revision/\u00e9",
+                parent_revision="parent/\U0001f680",
+                deleted=False,
+                key_id="recovery/key-\u00e9",
+                nonce=b"\x01" * 12,
+                ciphertext=b"\x02" * 17,
+            ),
+        ),
+        export_id=vector["export"]["export_id"],
+        created_at=vector["export"]["created_at"],
+    )
+    canonical = serialize_vault_export_bytes(export)
+
+    assert (
+        b'"id":"record/\\u00e9","key_id":"recovery/key-\\u00e9"'
+        in canonical
+    )
+    assert b'"parent_revision":"parent/\\ud83d\\ude80"' in canonical
+    assert b'"revision":"revision/\\u00e9"' in canonical
+    assert "\u00e9".encode() not in canonical
+    assert "\U0001f680".encode() not in canonical
 
 
 def test_export_metadata_accepts_canonical_uuid_and_utc_seconds() -> None:
@@ -408,6 +440,43 @@ def test_recovery_wrap_unknown_field_uses_fixed_private_error() -> None:
         private_extra,
         vector["recovery_wrap"]["nonce"],
         vector["recovery_wrap"]["ciphertext"],
+        vector["vault_id"],
+        vector["canonical_recovery_text"],
+    ):
+        assert private_value not in message
+
+
+def test_passphrase_wrap_unknown_field_uses_fixed_private_error() -> None:
+    vector = load_vector()
+    metadata = deepcopy(vector["vault_metadata"])
+    private_extra = "PRIVATE_PASSPHRASE_WRAP_EXTRA_SENTINEL"
+    private_ciphertext = base64.b64encode(b"c" * 48).decode()
+    metadata["key_wraps"] = [
+        {
+            "id": "legacy-passphrase",
+            "type": "passphrase",
+            "kdf": {
+                "algorithm": "Argon2id",
+                "salt": base64.b64encode(b"s" * 16).decode(),
+                "memory_kib": 65_536,
+                "iterations": 3,
+                "parallelism": 4,
+            },
+            "nonce": base64.b64encode(b"n" * 12).decode(),
+            "ciphertext": private_ciphertext,
+            "unexpected": private_extra,
+        }
+    ]
+
+    with pytest.raises(VaultFormatError) as raised:
+        VaultMetadata.from_dict(metadata)
+
+    message = str(raised.value)
+    assert message == "passphrase key-wrap contains invalid fields"
+    assert "passphrase key_wrap" not in message
+    for private_value in (
+        private_extra,
+        private_ciphertext,
         vector["vault_id"],
         vector["canonical_recovery_text"],
     ):

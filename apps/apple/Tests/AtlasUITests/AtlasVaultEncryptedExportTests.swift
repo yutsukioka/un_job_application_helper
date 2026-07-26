@@ -56,6 +56,63 @@ final class AtlasVaultEncryptedExportTests: XCTestCase {
         XCTAssertNotNil(envelope.vaultMetadata.recoveryKeyWrap)
     }
 
+    func testCanonicalExportUsesPythonASCIIEscapingForRecordText() throws {
+        let vector = try loadVector()
+        let exportObject = try dictionary(vector["export"])
+        let input = try JSONSerialization.data(
+            withJSONObject: exportObject,
+            options: [.sortedKeys]
+        )
+        let base = try AtlasVaultEncryptedExportEnvelope.decodeStrict(input)
+        let nonce = Data(
+            repeating: 1,
+            count: AtlasVaultRecordCrypto.nonceByteCount
+        ).base64EncodedString()
+        let ciphertext = Data(
+            repeating: 2,
+            count: AtlasVaultRecordCrypto.gcmTagByteCount + 1
+        ).base64EncodedString()
+        let record = AtlasVaultEncryptedRecordEnvelope(
+            id: "record/\u{00E9}",
+            schemaVersion: 1,
+            revision: "revision/\u{00E9}",
+            parentRevision: "parent/\u{1F680}",
+            deleted: false,
+            keyID: "recovery/key-\u{00E9}",
+            nonce: nonce,
+            ciphertext: ciphertext
+        )
+        let envelope = try AtlasVaultEncryptedExportEnvelope(
+            exportID: base.exportID,
+            createdAt: base.createdAt,
+            vaultMetadata: base.vaultMetadata,
+            records: [record]
+        )
+        let canonical = try envelope.canonicalData()
+        let sharedCanonical = try XCTUnwrap(
+            String(
+                data: try strictBase64(
+                    try string(vector["canonical_export_json_b64"])
+                ),
+                encoding: .utf8
+            )
+        )
+        let expectedRecord =
+            #"{"ciphertext":"\#(ciphertext)","deleted":false,"id":"record/\u00e9","key_id":"recovery/key-\u00e9","nonce":"\#(nonce)","parent_revision":"parent/\ud83d\ude80","revision":"revision/\u00e9","schema_version":1}"#
+        let expected = sharedCanonical.replacingOccurrences(
+            of: "\"records\":[]",
+            with: "\"records\":[\(expectedRecord)]"
+        )
+
+        XCTAssertNotEqual(expected, sharedCanonical)
+        XCTAssertEqual(canonical, Data(expected.utf8))
+        XCTAssertFalse(canonical.contains(Data("\u{00E9}".utf8)))
+        XCTAssertFalse(canonical.contains(Data("\u{1F680}".utf8)))
+        XCTAssertNoThrow(
+            try AtlasVaultEncryptedExportEnvelope.decodeStrict(canonical)
+        )
+    }
+
     func testExportBytesContainNoLocalOrRawSecretMaterial() throws {
         let vector = try loadVector()
         let canonical = try strictBase64(

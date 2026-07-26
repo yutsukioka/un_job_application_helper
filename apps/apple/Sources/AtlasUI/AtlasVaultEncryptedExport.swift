@@ -113,7 +113,9 @@ public struct AtlasVaultEncryptedExportEnvelope:
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         do {
-            let data = try encoder.encode(self)
+            let data = try Self.pythonCompatibleASCIIJSON(
+                encoder.encode(self)
+            )
             _ = try Self.decodeStrict(data)
             return data
         } catch let error as AtlasVaultEncryptedExportError {
@@ -248,6 +250,34 @@ public struct AtlasVaultEncryptedExportEnvelope:
             return nil
         }
         return data.base64EncodedString() == value ? data : nil
+    }
+
+    private static func pythonCompatibleASCIIJSON(
+        _ data: Data
+    ) throws -> Data {
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw AtlasVaultEncryptedExportError.invalidEnvelope
+        }
+        var result = ""
+        result.reserveCapacity(text.utf8.count)
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x7E:
+                result.unicodeScalars.append(scalar)
+            case 0x7F...0xFFFF:
+                result += String(format: "\\u%04x", scalar.value)
+            default:
+                let value = scalar.value - 0x10000
+                let high = 0xD800 + (value >> 10)
+                let low = 0xDC00 + (value & 0x3FF)
+                result += String(
+                    format: "\\u%04x\\u%04x",
+                    high,
+                    low
+                )
+            }
+        }
+        return Data(result.utf8)
     }
 }
 

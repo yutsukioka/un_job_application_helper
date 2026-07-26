@@ -331,7 +331,7 @@ def _versioned_wrapped_key_from_dict(
         _require_exact_keys(
             obj,
             {"id", "type", "kdf", "nonce", "ciphertext"},
-            "passphrase key_wrap",
+            "passphrase key-wrap",
         )
         return WrappedKey.from_dict(obj)
     if (
