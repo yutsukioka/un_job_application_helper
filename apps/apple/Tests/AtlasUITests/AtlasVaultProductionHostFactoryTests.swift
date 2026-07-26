@@ -8,6 +8,24 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
     private static let fakeJobID = "FAKE_PUBLIC_JOB_2D54"
     private static let fakeVaultID = "00000000-0000-4000-8000-000000000254"
 
+    func testHostDependenciesProvideCompatibilityCapabilityResolver()
+        throws
+    {
+        let contracts = try contractsSource()
+
+        XCTAssertTrue(
+            contracts.contains("unlockCapabilitiesResolver")
+        )
+        XCTAssertTrue(
+            contracts.contains(
+                "AtlasFixedVaultUnlockCapabilitiesResolver"
+            )
+        )
+        XCTAssertTrue(
+            contracts.contains("capabilities: .currentProduction")
+        )
+    }
+
     func testPhaseContractsAndFactoryAreAvailableAndSendable() throws {
         _ = AtlasPublicJobSearching.self
         _ = AtlasPublicSnapshotRestoring.self

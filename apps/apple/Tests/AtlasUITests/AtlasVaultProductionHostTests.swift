@@ -19,6 +19,51 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
 
+    func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
+        throws
+    {
+        let source = try source(named: "AtlasVaultProductionHost.swift")
+        let selectedStart = try XCTUnwrap(
+            source.range(of: "case let .success(.selected(value)):")
+        )
+        let selectedEnd = try XCTUnwrap(
+            source.range(
+                of: "case .failure:",
+                range: selectedStart.upperBound..<source.endIndex
+            )
+        )
+        let selectedBody = String(
+            source[selectedStart.lowerBound..<selectedEnd.lowerBound]
+        )
+        XCTAssertTrue(
+            selectedBody.contains(
+                "unlockCapabilitiesResolver.capabilities"
+            )
+        )
+        XCTAssertFalse(
+            selectedBody.contains("capabilities: .currentProduction")
+        )
+
+        let submitStart = try XCTUnwrap(
+            source.range(of: "public func submitUnlock(")
+        )
+        let submitEnd = try XCTUnwrap(
+            source.range(
+                of: "public func cancelUnlock()",
+                range: submitStart.upperBound..<source.endIndex
+            )
+        )
+        let submitBody = String(
+            source[submitStart.lowerBound..<submitEnd.lowerBound]
+        )
+        XCTAssertTrue(
+            submitBody.contains("capabilities: unlockState.capabilities")
+        )
+        XCTAssertFalse(
+            submitBody.contains("capabilities: .currentProduction")
+        )
+    }
+
     func testPhaseTypesErrorsGenerationsAndDescriptionsAreRedacted() async {
         _ = AtlasVaultProductionHost.self
         _ = AtlasVaultProductionHostBuilder.self

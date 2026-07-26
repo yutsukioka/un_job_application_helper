@@ -3,6 +3,33 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultUnlockCapabilityTests: XCTestCase {
+    func testExplicitAvailabilityInitializerAndFixedResolver()
+        async throws
+    {
+        let capabilities = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseAvailable: false,
+            recoveryKeyAvailable: true
+        )
+        XCTAssertEqual(capabilities.availableMethods, [.recoveryKey])
+        XCTAssertEqual(
+            AtlasVaultUnlockCapabilities.currentProduction
+                .availableMethods,
+            [.localKey]
+        )
+
+        let resolver = AtlasFixedVaultUnlockCapabilitiesResolver(
+            capabilities: capabilities
+        )
+        let selected = try AtlasSelectedVaultID(
+            validating: "00000000-0000-4000-8000-000000000262"
+        )
+        XCTAssertEqual(
+            try await resolver.capabilities(for: selected),
+            capabilities
+        )
+    }
+
     func testCurrentProductionCapabilitiesAdvertiseOnlyLocalKey() {
         let capabilities = AtlasVaultUnlockCapabilities.currentProduction
 

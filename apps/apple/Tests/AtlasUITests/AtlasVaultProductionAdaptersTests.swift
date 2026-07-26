@@ -3129,6 +3129,38 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
 
     // MARK: - Vault-selection registry
 
+    func testRegistryCreateSelectionAddsOnlyAndRejectsDuplicate()
+        async throws
+    {
+        let selected = try AtlasSelectedVaultID(
+            validating: Self.vaultID
+        )
+        let createClient = RecordingSelectionKeychainClient()
+        let createRegistry = AtlasKeychainVaultSelectionRegistry(
+            client: createClient
+        )
+
+        try await createRegistry.createSelection(selected)
+
+        XCTAssertEqual(createClient.counts.add, 1)
+        XCTAssertEqual(createClient.counts.update, 0)
+        XCTAssertEqual(
+            createClient.addedItems.first?.accessibility,
+            .afterFirstUnlockThisDeviceOnly
+        )
+
+        let duplicateClient = RecordingSelectionKeychainClient()
+        duplicateClient.forcedAddStatuses = [errSecDuplicateItem]
+        let duplicateRegistry = AtlasKeychainVaultSelectionRegistry(
+            client: duplicateClient
+        )
+        await assertSelectionError(.existingSelection) {
+            try await duplicateRegistry.createSelection(selected)
+        }
+        XCTAssertEqual(duplicateClient.counts.add, 1)
+        XCTAssertEqual(duplicateClient.counts.update, 0)
+    }
+
     func testRegistryConstructionInvokesNothingAndUsesDistinctFixedMetadata()
         async
     {

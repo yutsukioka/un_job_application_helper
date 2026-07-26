@@ -9,6 +9,31 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
     fileprivate static let fakeVaultKey = Data(repeating: 0x55, count: 32)
     private static let privateSentinel = "FAKE_PRESENTATION_PRIVATE_SENTINEL"
 
+    func testRecoveryOnlyControllerStartsWithoutAutomaticSelection()
+        async
+    {
+        let coordinator = ControlledUnlockCoordinator(
+            mode: .immediateSuccess
+        )
+        let capabilities = AtlasVaultUnlockCapabilities(
+            localKeyAvailable: false,
+            passphraseAvailable: false,
+            recoveryKeyAvailable: true
+        )
+        let controller = AtlasVaultUnlockPresentationController(
+            vaultID: Self.vaultID,
+            capabilities: capabilities,
+            coordinator: coordinator
+        )
+
+        let state = await controller.currentState()
+
+        XCTAssertEqual(state.capabilities.availableMethods, [.recoveryKey])
+        XCTAssertNil(state.selectedMethod)
+        XCTAssertEqual(state.status, .locked)
+        XCTAssertEqual(await coordinator.dispatchCount, 0)
+    }
+
     func testConstructionIsSideEffectFreeAndProjectsExactCapabilities() async {
         let coordinator = ControlledUnlockCoordinator(mode: .immediateSuccess)
         let provider = PresentationNeverCalledUnwrapper()
