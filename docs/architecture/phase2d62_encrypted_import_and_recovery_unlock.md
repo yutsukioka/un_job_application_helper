@@ -72,6 +72,9 @@ The selected bytes are strictly decoded through
 `AtlasVaultEncryptedExportEnvelope.decodeStrict` and canonically re-encoded.
 SHA-256 identity and resume comparison use only those canonical bytes.
 Semantically valid noncanonical input therefore maps to one stable identity.
+Recovery import additionally requires every encrypted record ID to be unique.
+Duplicate IDs are rejected before recovery verification, journaling, or local
+store creation so the restored store remains valid for later mutations.
 
 ## 11. Recovery-Key Verification
 
@@ -381,13 +384,13 @@ cover review and self-review findings.
 
 ## 55. Test Coverage
 
-Focused suites cover strict file input, canonical identity, recovery
-verification, journal privacy, transaction ordering, durability pause,
-partial resume, completion pending, reset, create-only writes, pending
-selection gating, dynamic capabilities, stale host resolution, vault-aware
-unlock, view lifecycle, root/harness integration, and full source-to-restore
-recovery-only relaunch. The final regression runs passed 236 Python tests and
-1,199 Swift tests.
+Focused suites cover strict file input, canonical identity, duplicate record
+rejection, recovery verification, journal privacy, transaction ordering,
+durability pause, partial resume, completion pending, reset, create-only
+writes, pending selection gating, dynamic capabilities, stale host resolution,
+vault-aware unlock, view lifecycle, root/harness integration, and full
+source-to-restore recovery-only relaunch. The review-fix regression runs passed
+236 Python tests and 1,200 Swift tests.
 
 ## 56. iOS Build And Smoke Evidence
 

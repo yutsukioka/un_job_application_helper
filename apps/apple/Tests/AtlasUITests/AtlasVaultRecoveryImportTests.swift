@@ -446,6 +446,56 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertNil(duplicateState.journal)
     }
 
+    func testPrepareRejectsDuplicateRecordIDsBeforePersistence()
+        async throws
+    {
+        let vector = try RecoveryImportVector.load()
+        let record = AtlasVaultEncryptedRecordEnvelope(
+            id: "duplicate-record",
+            schemaVersion: 1,
+            revision: "revision-1",
+            parentRevision: nil,
+            deleted: false,
+            keyID: "primary-recovery-v2",
+            nonce: Data(
+                repeating: 1,
+                count: AtlasVaultRecordCrypto.nonceByteCount
+            ).base64EncodedString(),
+            ciphertext: Data(
+                repeating: 2,
+                count: AtlasVaultRecordCrypto.gcmTagByteCount + 1
+            ).base64EncodedString()
+        )
+        let duplicateEnvelope = try AtlasVaultEncryptedExportEnvelope(
+            exportID: vector.envelope.exportID,
+            createdAt: vector.envelope.createdAt,
+            vaultMetadata: vector.envelope.vaultMetadata,
+            records: [record, record]
+        )
+        let fixture = try RecoveryImportFixture(
+            fileData: duplicateEnvelope.canonicalData()
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.prepareImport(
+                from: Self.testOnlyFileURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .invalidExport
+            )
+        }
+
+        let snapshot = await fixture.storage.snapshot()
+        XCTAssertNil(snapshot.journal)
+        XCTAssertNil(snapshot.store)
+        XCTAssertNil(snapshot.key)
+        XCTAssertEqual(snapshot.selection, .none)
+        XCTAssertFalse(snapshot.events.contains("hydrate"))
+        XCTAssertFalse(snapshot.events.contains("saveJournal"))
+    }
+
     func testHydrationFailureAndAuthorizationLossCreateNoJournal()
         async throws
     {

@@ -1241,7 +1241,9 @@ public actor AtlasVaultRecoveryImportCoordinator:
         guard
             AtlasVaultRecoveryUnlockProvider.onlyRecoveryWrap(
                 in: envelope.vaultMetadata
-            ) != nil
+            ) != nil,
+            Set(envelope.records.map(\.id)).count
+                == envelope.records.count
         else {
             throw AtlasVaultRecoveryImportFailure.invalidExport
         }
