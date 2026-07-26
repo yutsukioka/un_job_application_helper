@@ -546,32 +546,137 @@ struct AtlasPendingVaultTransactionSelectionGate<
     }
 }
 
+actor AtlasVaultPendingTransactionAuthority {
+    private struct Lease: Sendable {
+        let identifier: UUID
+    }
+
+    private struct Waiter {
+        let identifier: UUID
+        let continuation: CheckedContinuation<Lease?, Never>
+    }
+
+    private var holderIdentifier: UUID?
+    private var waiters: [Waiter] = []
+
+    var waitingOperationCount: Int {
+        waiters.count
+    }
+
+    func perform<Value: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        guard let lease = await acquire() else {
+            throw CancellationError()
+        }
+        do {
+            try Task.checkCancellation()
+            let value = try await operation()
+            release(lease)
+            return value
+        } catch {
+            release(lease)
+            throw error
+        }
+    }
+
+    private func acquire() async -> Lease? {
+        guard !Task.isCancelled else {
+            return nil
+        }
+        let identifier = UUID()
+        guard holderIdentifier != nil else {
+            holderIdentifier = identifier
+            return Lease(identifier: identifier)
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                waiters.append(
+                    Waiter(
+                        identifier: identifier,
+                        continuation: continuation
+                    )
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(identifier)
+            }
+        }
+    }
+
+    private func cancelWaiter(_ identifier: UUID) {
+        guard let index = waiters.firstIndex(where: {
+            $0.identifier == identifier
+        }) else {
+            return
+        }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(returning: nil)
+    }
+
+    private func release(_ lease: Lease) {
+        guard holderIdentifier == lease.identifier else {
+            return
+        }
+        guard !waiters.isEmpty else {
+            holderIdentifier = nil
+            return
+        }
+        let waiter = waiters.removeFirst()
+        holderIdentifier = waiter.identifier
+        waiter.continuation.resume(
+            returning: Lease(identifier: waiter.identifier)
+        )
+    }
+}
+
 struct AtlasPendingRecoveryImportCreationGate<
     Creator: AtlasLocalVaultCreating
 >: AtlasLocalVaultCreating {
     let creator: Creator
     let hasPendingImport: @Sendable () throws -> Bool
+    let transactionAuthority: AtlasVaultPendingTransactionAuthority
+
+    init(
+        creator: Creator,
+        hasPendingImport: @escaping @Sendable () throws -> Bool,
+        transactionAuthority: AtlasVaultPendingTransactionAuthority =
+            AtlasVaultPendingTransactionAuthority()
+    ) {
+        self.creator = creator
+        self.hasPendingImport = hasPendingImport
+        self.transactionAuthority = transactionAuthority
+    }
 
     func createOrResume()
         async throws(AtlasLocalVaultCreationFailure)
         -> AtlasLocalVaultCreationOutcome
     {
-        guard !Task.isCancelled else {
-            throw .cancelled
-        }
         do {
-            guard try !hasPendingImport() else {
-                throw AtlasLocalVaultCreationFailure.recoveryRequired
+            return try await transactionAuthority.perform {
+                guard !Task.isCancelled else {
+                    throw AtlasLocalVaultCreationFailure.cancelled
+                }
+                guard try !hasPendingImport() else {
+                    throw AtlasLocalVaultCreationFailure.recoveryRequired
+                }
+                guard !Task.isCancelled else {
+                    throw AtlasLocalVaultCreationFailure.cancelled
+                }
+                return try await creator.createOrResume()
             }
         } catch let failure as AtlasLocalVaultCreationFailure {
             throw failure
+        } catch is CancellationError {
+            throw .cancelled
         } catch {
             throw .recoveryRequired
         }
-        guard !Task.isCancelled else {
-            throw .cancelled
-        }
-        return try await creator.createOrResume()
     }
 
     func pause() async {
@@ -614,12 +719,18 @@ public actor AtlasVaultRecoveryImportCoordinator:
     }
 
     private let environment: AtlasVaultRecoveryImportEnvironment
+    private let transactionAuthority: AtlasVaultPendingTransactionAuthority
     private var preparedImport: PreparedImport?
     private var activeOperation: ActiveOperation?
     private var terminal = false
 
-    init(environment: AtlasVaultRecoveryImportEnvironment) {
+    init(
+        environment: AtlasVaultRecoveryImportEnvironment,
+        transactionAuthority: AtlasVaultPendingTransactionAuthority =
+            AtlasVaultPendingTransactionAuthority()
+    ) {
         self.environment = environment
+        self.transactionAuthority = transactionAuthority
     }
 
     public func prepareImport(from url: URL) async throws {
@@ -642,7 +753,13 @@ public actor AtlasVaultRecoveryImportCoordinator:
                 await recoverySecret.clear()
             }
         ) { [self] in
-            await confirmOperation(recoverySecret: recoverySecret)
+            await runPendingTransaction(
+                discardUnusedInput: {
+                    await recoverySecret.clear()
+                }
+            ) { [self] in
+                await confirmOperation(recoverySecret: recoverySecret)
+            }
         }
         guard case let .outcome(outcome) = value else {
             throw AtlasVaultRecoveryImportFailure.unavailable
@@ -661,11 +778,17 @@ public actor AtlasVaultRecoveryImportCoordinator:
                 await recoverySecret.clear()
             }
         ) { [self] in
-            await resumeOperation(
-                from: operationURL,
-                recoverySecret: recoverySecret,
-                outcome: .resumed
-            )
+            await runPendingTransaction(
+                discardUnusedInput: {
+                    await recoverySecret.clear()
+                }
+            ) { [self] in
+                await resumeOperation(
+                    from: operationURL,
+                    recoverySecret: recoverySecret,
+                    outcome: .resumed
+                )
+            }
         }
         guard case let .outcome(outcome) = value else {
             throw AtlasVaultRecoveryImportFailure.unavailable
@@ -684,11 +807,17 @@ public actor AtlasVaultRecoveryImportCoordinator:
                 await recoverySecret.clear()
             }
         ) { [self] in
-            await resumeOperation(
-                from: operationURL,
-                recoverySecret: recoverySecret,
-                outcome: .resumed
-            )
+            await runPendingTransaction(
+                discardUnusedInput: {
+                    await recoverySecret.clear()
+                }
+            ) { [self] in
+                await resumeOperation(
+                    from: operationURL,
+                    recoverySecret: recoverySecret,
+                    outcome: .resumed
+                )
+            }
         }
         guard case let .outcome(outcome) = value else {
             throw AtlasVaultRecoveryImportFailure.unavailable
@@ -699,7 +828,9 @@ public actor AtlasVaultRecoveryImportCoordinator:
     public func resetPendingImport() async throws {
         await cancelRetainedOperation()
         let value = try await runRetained(.reset) { [self] in
-            await resetOperation()
+            await runPendingTransaction { [self] in
+                await resetOperation()
+            }
         }
         guard case .reset = value else {
             throw AtlasVaultRecoveryImportFailure.unavailable
@@ -751,6 +882,8 @@ public actor AtlasVaultRecoveryImportCoordinator:
         selectionCreator: SelectionCreator,
         journalStore: any AtlasVaultRecoveryImportJournalStoring,
         hasPendingCreation: @escaping @Sendable () throws -> Bool,
+        transactionAuthority: AtlasVaultPendingTransactionAuthority =
+            AtlasVaultPendingTransactionAuthority(),
         fileReader: any AtlasVaultRecoveryImportFileReading,
         atomicFileSystem: AtomicFileSystem,
         authorize: @escaping @Sendable () async -> Bool,
@@ -870,7 +1003,8 @@ public actor AtlasVaultRecoveryImportCoordinator:
             pendingImportDidChange: pendingImportDidChange
         )
         return AtlasVaultRecoveryImportCoordinator(
-            environment: environment
+            environment: environment,
+            transactionAuthority: transactionAuthority
         )
     }
 
@@ -914,6 +1048,22 @@ public actor AtlasVaultRecoveryImportCoordinator:
         _ = await retained?.task.value
         if activeOperation?.identifier == retained?.identifier {
             activeOperation = nil
+        }
+    }
+
+    private func runPendingTransaction(
+        discardUnusedInput: (@Sendable () async -> Void)? = nil,
+        operation: @escaping @Sendable () async
+            -> Result<OperationValue, AtlasVaultRecoveryImportFailure>
+    ) async -> Result<
+        OperationValue,
+        AtlasVaultRecoveryImportFailure
+    > {
+        do {
+            return try await transactionAuthority.perform(operation)
+        } catch {
+            await discardUnusedInput?()
+            return .failure(.cancelled)
         }
     }
 
@@ -1331,14 +1481,16 @@ public actor AtlasVaultRecoveryImportCoordinator:
         } catch {
             throw AtlasVaultRecoveryImportFailure.invalidExport
         }
-        guard
-            AtlasVaultRecoveryUnlockProvider.onlyRecoveryWrap(
-                in: envelope.vaultMetadata
-            ) != nil,
-            Set(envelope.records.map(\.id)).count
-                == envelope.records.count
-        else {
+        guard AtlasVaultRecoveryUnlockProvider.onlyRecoveryWrap(
+            in: envelope.vaultMetadata
+        ) != nil else {
             throw AtlasVaultRecoveryImportFailure.invalidExport
+        }
+        var recordIDs = Set<String>()
+        for record in envelope.records {
+            guard recordIDs.insert(record.id).inserted else {
+                throw AtlasVaultRecoveryImportFailure.invalidExport
+            }
         }
         return PreparedImport(
             envelope: envelope,

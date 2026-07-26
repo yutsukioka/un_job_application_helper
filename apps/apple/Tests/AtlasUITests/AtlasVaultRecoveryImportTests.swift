@@ -392,6 +392,97 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertEqual(allowedCalls, 1)
     }
 
+    func testPendingTransactionAuthoritySerializesCreationAndImport()
+        async throws
+    {
+        let authority = AtlasVaultPendingTransactionAuthority()
+        let importGate = RecoveryImportTestGate()
+        let recorder = RecoveryImportTransactionRecorder()
+
+        let importTask = Task {
+            try await authority.perform {
+                await recorder.enter("import")
+                await importGate.wait()
+                return "import"
+            }
+        }
+        await importGate.waitUntilEntered()
+
+        let creationTask = Task {
+            await recorder.creationAttempted()
+            return try await authority.perform {
+                await recorder.enter("creation")
+                return "creation"
+            }
+        }
+        await recorder.waitUntilCreationAttempted()
+        let creationQueued = await waitUntilPendingTransactionWaiter(
+            authority
+        )
+        XCTAssertTrue(creationQueued)
+        let entriesBeforeRelease = await recorder.entries()
+        XCTAssertEqual(entriesBeforeRelease, ["import"])
+
+        await recorder.enter("release")
+        await importGate.release()
+        let importResult = try await importTask.value
+        let creationResult = try await creationTask.value
+        XCTAssertEqual(importResult, "import")
+        XCTAssertEqual(creationResult, "creation")
+        let entriesAfterRelease = await recorder.entries()
+        XCTAssertEqual(
+            entriesAfterRelease,
+            ["import", "release", "creation"]
+        )
+    }
+
+    func testPendingTransactionAuthorityRemovesCancelledWaiter()
+        async throws
+    {
+        let authority = AtlasVaultPendingTransactionAuthority()
+        let holderGate = RecoveryImportTestGate()
+        let recorder = RecoveryImportTransactionRecorder()
+
+        let holderTask = Task {
+            try await authority.perform {
+                await holderGate.wait()
+                return "holder"
+            }
+        }
+        await holderGate.waitUntilEntered()
+
+        let waiterTask = Task {
+            await recorder.creationAttempted()
+            return try await authority.perform {
+                await recorder.enter("cancelled-waiter")
+                return "waiter"
+            }
+        }
+        await recorder.waitUntilCreationAttempted()
+        let waiterQueued = await waitUntilPendingTransactionWaiter(authority)
+        XCTAssertTrue(waiterQueued)
+        waiterTask.cancel()
+
+        do {
+            _ = try await waiterTask.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // Expected: cancellation removes the queued waiter immediately.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        let entries = await recorder.entries()
+        XCTAssertEqual(entries, [])
+
+        await holderGate.release()
+        let holderResult = try await holderTask.value
+        XCTAssertEqual(holderResult, "holder")
+        let nextResult = try await authority.perform {
+            "next"
+        }
+        XCTAssertEqual(nextResult, "next")
+    }
+
     func testExistingVaultAndCreationTransactionBlockFileRead()
         async throws
     {
@@ -1237,6 +1328,15 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         }
     }
 
+    func testDuplicateRecordValidationUsesSinglePassInsertion()
+        throws
+    {
+        let source = try phaseSource("AtlasVaultRecoveryImport.swift")
+
+        XCTAssertTrue(source.contains("recordIDs.insert(record.id).inserted"))
+        XCTAssertFalse(source.contains("records.map(\\.id)"))
+    }
+
     private func makeJournal() throws -> AtlasVaultRecoveryImportJournal {
         try AtlasVaultRecoveryImportJournal(
             importID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
@@ -1535,6 +1635,48 @@ private actor RecoveryImportCreationFake: AtlasLocalVaultCreating {
     func createCallCount() -> Int {
         createCalls
     }
+}
+
+private actor RecoveryImportTransactionRecorder {
+    private var recordedEntries: [String] = []
+    private var didAttemptCreation = false
+    private var attemptWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter(_ value: String) {
+        recordedEntries.append(value)
+    }
+
+    func creationAttempted() {
+        didAttemptCreation = true
+        let waiters = attemptWaiters
+        attemptWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    func waitUntilCreationAttempted() async {
+        guard !didAttemptCreation else { return }
+        await withCheckedContinuation { continuation in
+            attemptWaiters.append(continuation)
+        }
+    }
+
+    func entries() -> [String] {
+        recordedEntries
+    }
+}
+
+private func waitUntilPendingTransactionWaiter(
+    _ authority: AtlasVaultPendingTransactionAuthority
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if await authority.waitingOperationCount == 1 {
+            return true
+        }
+        await Task.yield()
+    }
+    return await authority.waitingOperationCount == 1
 }
 
 private struct RecoveryImportFixture {

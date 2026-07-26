@@ -203,6 +203,17 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         )
     }
 
+    func testFileImporterNeverBroadensToGenericData() throws {
+        let source = try phaseSource("AtlasVaultRecoveryImportView.swift")
+
+        XCTAssertTrue(
+            source.contains(
+                "UTType(importedAs: \"com.atlasvault.encrypted-backup\")"
+            )
+        )
+        XCTAssertFalse(source.contains("?? .data"))
+    }
+
     func testPendingImportAvailabilityIsExplicitAndReversible() {
         let availability = AtlasVaultRecoveryImportAvailability()
 

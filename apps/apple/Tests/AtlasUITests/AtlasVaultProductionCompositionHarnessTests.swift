@@ -22,6 +22,8 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "AtlasVaultProductionUnlockCapabilitiesResolver",
             "AtlasPendingVaultTransactionSelectionGate",
             "AtlasPendingRecoveryImportCreationGate",
+            "AtlasVaultPendingTransactionAuthority",
+            "transactionAuthority: pendingTransactionAuthority",
             "recoveryImportAvailability",
             "deriveVaultAwareRecoveryVaultKey",
             "recoveryImportOwner.stop",
@@ -32,6 +34,13 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             source.contains(
                 "deriveRecoveryVaultKey: { _ in\n                throw"
             )
+        )
+        XCTAssertEqual(
+            source.components(
+                separatedBy:
+                    "transactionAuthority: pendingTransactionAuthority"
+            ).count - 1,
+            2
         )
     }
 

@@ -924,6 +924,8 @@ public enum AtlasVaultProductionCompositionFactory {
             )
         let recoveryImportAvailability =
             AtlasVaultRecoveryImportAvailability()
+        let pendingTransactionAuthority =
+            AtlasVaultPendingTransactionAuthority()
         let hostVaultSelector =
             AtlasPendingVaultTransactionSelectionGate(
                 selector: vaultSelector,
@@ -1015,6 +1017,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 hasPendingCreation: {
                     try creationJournalStore.loadJournal() != nil
                 },
+                transactionAuthority: pendingTransactionAuthority,
                 fileReader: AtlasVaultRecoveryImportFileReader(),
                 atomicFileSystem: atomicFileSystemClient,
                 authorize: {
@@ -1119,7 +1122,8 @@ public enum AtlasVaultProductionCompositionFactory {
                 creator: creationCoordinator,
                 hasPendingImport: {
                     try recoveryImportJournalStore.loadJournal() != nil
-                }
+                },
+                transactionAuthority: pendingTransactionAuthority
             )
         let creationOwner =
             AtlasLocalVaultCreationPresentationOwner(

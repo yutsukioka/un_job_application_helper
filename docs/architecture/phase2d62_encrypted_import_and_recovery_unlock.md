@@ -214,6 +214,11 @@ selection preserves all resources and fails closed. Directories are retained.
 Import never overwrites a store, vault-key item, selection item, pending
 transaction owned by another import, or unrelated recovery data. Exact journal
 ownership is revalidated before every persistent transaction stage.
+Production composition also shares one non-reentrant pending-transaction
+authority between local-vault creation and recovery import. The authority
+holds the complete creation check-and-run sequence and every journal-backed
+import operation, so neither transaction can pass its opposing-journal check
+while the other is waiting to create its journal.
 
 ## 29. Pending-Transaction Selection Gate
 
@@ -226,6 +231,8 @@ selection and publishes that fixed pending state to all production roots.
 While an import journal exists, roots suppress local-vault creation and the
 production creation coordinator is independently wrapped by a fail-closed
 journal gate. Restore resume/reset remains available.
+The journal gates remain fail-closed defense in depth; the shared transaction
+authority closes the check-then-create race between the two journal writers.
 
 ## 30. Dynamic Unlock Capabilities
 
@@ -318,12 +325,17 @@ them. Scene-local claims prevent duplicate sheets without creating duplicate
 filesystem or Keychain authorities. Pending-import transitions update that
 authority after journal save and clear, and explicit host selection
 reconstruction refreshes it after relaunch.
+The same production composition constructs exactly one pending-transaction
+authority and injects it into both the import coordinator and local-vault
+creation gate.
 
 ## 43. Lifecycle Cancellation
 
 Unsafe lifecycle events dismiss the import sheet, cancel and drain retained
 work, clear prepared in-memory state, and preserve a safe journal and matching
-partial resources. No detached cleanup is used.
+partial resources. Waiting transaction-authority leases are
+cancellation-aware, so a stopped waiter is removed without disturbing the
+active transaction or blocking drain. No detached cleanup is used.
 
 ## 44. Harness Terminal Stop
 
@@ -399,10 +411,12 @@ Focused suites cover strict file input, canonical identity, duplicate record
 rejection, recovery verification, journal privacy, transaction ordering,
 durability pause and explicit directory re-synchronization, partial resume,
 completion pending, reset, create-only writes, pending selection and creation
-gating, dynamic capabilities, stale host resolution, vault-aware unlock,
-explicit confirmation forwarding, canonical test-file roots, view lifecycle,
-root/harness integration, and full source-to-restore recovery-only relaunch.
-The final review-fix regression runs passed 236 Python tests and 1,205 Swift
+gating, non-reentrant creation/import transaction serialization,
+cancellation-aware waiter removal, dynamic capabilities, stale host
+resolution, vault-aware unlock, explicit confirmation forwarding, canonical
+test-file roots, view lifecycle, root/harness integration, and full
+source-to-restore recovery-only relaunch.
+The final review-fix regression runs passed 236 Python tests and 1,209 Swift
 tests.
 
 ## 56. iOS Build And Smoke Evidence
@@ -412,12 +426,6 @@ The `AtlasApple` and `AtlasIOSHost` schemes both passed
 final review-fix changes. No compatible simulator was booted, so no tap-level
 file-import smoke result is claimed; the deterministic in-process
 end-to-end suite remains authoritative.
-
-The discovered `AtlasApple` and `AtlasIOSHost` schemes both passed
-build-for-testing for a generic iOS Simulator destination. No compatible
-simulator was booted, so no tap-level smoke result is claimed. The
-deterministic in-process end-to-end journey is the authoritative restore and
-recovery-unlock evidence.
 
 ## 57. Go/No-Go
 

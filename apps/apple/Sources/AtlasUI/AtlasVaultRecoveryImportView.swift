@@ -758,7 +758,8 @@ public struct AtlasVaultRecoveryImportView: View {
     }
 
     private static let encryptedBackupType =
-        UTType(filenameExtension: "atlasvault") ?? .data
+        UTType(filenameExtension: "atlasvault")
+        ?? UTType(importedAs: "com.atlasvault.encrypted-backup")
 }
 
 extension AtlasVaultRecoveryImportPresentation {
