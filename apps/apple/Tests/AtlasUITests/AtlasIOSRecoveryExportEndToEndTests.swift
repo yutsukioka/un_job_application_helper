@@ -115,7 +115,7 @@ final class AtlasIOSRecoveryExportEndToEndTests: XCTestCase {
         XCTAssertNil(repeatedGeneration)
         XCTAssertEqual(
             secondContext.owner.presentation,
-            .resumeRequired
+            .reexportRequired
         )
         let wrongResume = await secondContext.actions.resume(
             wrongRecoveryCode(recoveryCode)
@@ -123,7 +123,7 @@ final class AtlasIOSRecoveryExportEndToEndTests: XCTestCase {
         XCTAssertNil(wrongResume)
         XCTAssertEqual(
             secondContext.owner.presentation,
-            .resumeRequired
+            .reexportRequired
         )
 
         let resumedDocument = await secondContext.actions.resume(

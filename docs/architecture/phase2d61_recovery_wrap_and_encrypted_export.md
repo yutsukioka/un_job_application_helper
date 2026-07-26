@@ -407,6 +407,17 @@ coordinator suite passes 18 tests, and the complete Python and Swift suites
 pass 234 and 1,142 tests respectively. Both generic iOS Simulator builds pass,
 and the exact 24-file scope is unchanged.
 
+Review-fix cycle 13 distinguishes a completed, journal-free recovery wrap from
+an unfinished journal-backed setup. The private-free `reexportRequired` state
+accepts the saved recovery key for another encrypted export but never exposes
+the pending-wrap reset action. That distinction survives wrong-key retries,
+export cancellation, and operation pause, while journal-backed states retain
+their explicit non-destructive reset path. The focused presentation and
+end-to-end suites pass 17 and 3 tests respectively, the complete Python and
+Swift suites pass 234 and 1,144 tests, and both generic iOS Simulator builds
+pass. No simulator was booted, so no launch smoke is claimed. The exact
+24-file scope and all recovery-unlock/import boundaries remain unchanged.
+
 ## End-To-End Evidence
 
 The deterministic journey uses the Phase 2D-60 production-like factory, an

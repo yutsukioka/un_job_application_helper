@@ -12,6 +12,7 @@ public enum AtlasVaultRecoveryExportPresentation:
     case ready
     case generating
     case awaitingConfirmation
+    case reexportRequired
     case resumeRequired
     case verifying
     case exportReady
@@ -29,6 +30,7 @@ public enum AtlasVaultRecoveryExportPresentation:
         case .ready: "ready"
         case .generating: "generating"
         case .awaitingConfirmation: "awaitingConfirmation"
+        case .reexportRequired: "reexportRequired"
         case .resumeRequired: "resumeRequired"
         case .verifying: "verifying"
         case .exportReady: "exportReady"
@@ -84,6 +86,11 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         case cleanup
     }
 
+    private enum ContinuationMode: Equatable {
+        case pendingSetup
+        case completedReexport
+    }
+
     private enum OperationValue: Sendable {
         case display(AtlasVaultRecoveryDisplayCodeHandle)
         case document(AtlasVaultEncryptedDocument)
@@ -103,6 +110,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
 
     private let coordinator: any AtlasVaultRecoveryExportCoordinating
     private var operation: Operation?
+    private var continuationMode: ContinuationMode?
     private var terminalStopRequested = false
 
     public init(
@@ -115,6 +123,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         guard !terminalStopRequested, operation == nil else {
             return
         }
+        continuationMode = nil
         presentation = .ready
     }
 
@@ -127,6 +136,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             return
         }
         presentationClaimIdentifier = nil
+        continuationMode = nil
         presentation = .hidden
         beginCleanup()
     }
@@ -150,6 +160,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         }
         switch result {
         case let .display(handle):
+            continuationMode = nil
             presentation = .awaitingConfirmation
             return handle
         case let .failure(failure):
@@ -180,8 +191,12 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             }
         }
         if case .failure(.invalidConfirmation) = result {
+            continuationMode = nil
             presentation = .awaitingConfirmation
             return nil
+        }
+        if case .document = result {
+            continuationMode = .pendingSetup
         }
         return publishDocument(result)
     }
@@ -190,12 +205,18 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         secret: String
     ) async -> AtlasVaultEncryptedDocument? {
         guard
-            presentation == .resumeRequired
+            presentation == .reexportRequired
+                || presentation == .resumeRequired
                 || presentation == .paused
                 || presentation == .completionPending
                 || presentation == .durabilityVerificationRequired
         else {
             return nil
+        }
+        if presentation == .reexportRequired {
+            continuationMode = .completedReexport
+        } else if continuationMode == nil {
+            continuationMode = .pendingSetup
         }
         presentation = .verifying
         let result = await retained(.resume) { [coordinator] in
@@ -218,7 +239,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         }
         if !success {
             await coordinator.exportDidFailOrCancel()
-            presentation = .resumeRequired
+            presentation = continuationPresentation
             return
         }
         presentation = .verifying
@@ -233,6 +254,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         }
         switch result {
         case .complete:
+            continuationMode = nil
             presentation = .complete
         case let .failure(failure):
             publish(failure)
@@ -263,6 +285,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         }
         switch result {
         case .complete:
+            continuationMode = nil
             presentation = .ready
         case let .failure(failure):
             publish(failure)
@@ -281,22 +304,33 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
             operation = nil
         }
         if !terminalStopRequested {
-            switch pausedFrom {
-            case .generating, .awaitingConfirmation:
-                presentation = .ready
-            case .hidden,
-                 .ready,
-                 .resumeRequired,
-                 .verifying,
-                 .exportReady,
-                 .paused,
-                 .failed,
-                 .durabilityVerificationRequired,
-                 .completionPending,
-                 .recoveryRequired,
-                 .resetting,
-                 .complete:
-                presentation = .paused
+            if continuationMode == .completedReexport,
+               pausedFrom == .reexportRequired
+                   || pausedFrom == .verifying
+                   || pausedFrom == .exportReady
+            {
+                presentation = .reexportRequired
+            } else {
+                switch pausedFrom {
+                case .generating, .awaitingConfirmation:
+                    continuationMode = nil
+                    presentation = .ready
+                case .reexportRequired:
+                    presentation = .reexportRequired
+                case .hidden,
+                     .ready,
+                     .resumeRequired,
+                     .verifying,
+                     .exportReady,
+                     .paused,
+                     .failed,
+                     .durabilityVerificationRequired,
+                     .completionPending,
+                     .recoveryRequired,
+                     .resetting,
+                     .complete:
+                    presentation = .paused
+                }
             }
         }
     }
@@ -304,6 +338,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
     public func dismissForUnsafeLifecycle() async {
         await pause()
         presentationClaimIdentifier = nil
+        continuationMode = nil
         presentation = .hidden
     }
 
@@ -315,6 +350,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         _ = await retainedOperation?.operationTask.value
         operation = nil
         presentationClaimIdentifier = nil
+        continuationMode = nil
         presentation = .hidden
     }
 
@@ -382,6 +418,7 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
         case .hidden,
              .generating,
              .awaitingConfirmation,
+             .reexportRequired,
              .resumeRequired,
              .verifying,
              .exportReady,
@@ -440,21 +477,36 @@ public final class AtlasVaultRecoveryExportPresentationOwner:
 
     private func publish(_ failure: AtlasVaultRecoveryExportFailure) {
         switch failure {
-        case .pendingSetupRequiresRecoveryKey,
-             .alreadyRecoveryPrepared,
-             .invalidConfirmation:
+        case .pendingSetupRequiresRecoveryKey:
+            continuationMode = .pendingSetup
             presentation = .resumeRequired
+        case .alreadyRecoveryPrepared:
+            continuationMode = .completedReexport
+            presentation = .reexportRequired
+        case .invalidConfirmation:
+            presentation = continuationPresentation
         case .durabilityVerificationRequired:
+            continuationMode = .pendingSetup
             presentation = .durabilityVerificationRequired
         case .completionPending:
+            continuationMode = .pendingSetup
             presentation = .completionPending
         case .recoveryRequired:
+            continuationMode = .pendingSetup
             presentation = .recoveryRequired
         case .cancelled:
             presentation = .paused
         case .unavailable, .unauthorized:
             presentation = .failed
         }
+    }
+
+    private var continuationPresentation:
+        AtlasVaultRecoveryExportPresentation
+    {
+        continuationMode == .completedReexport
+            ? .reexportRequired
+            : .resumeRequired
     }
 
     private func beginCleanup() {
@@ -762,6 +814,26 @@ public struct AtlasVaultRecoveryExportView: View {
                     || confirmationEntry.isEmpty
             )
             pauseButton()
+        case .reexportRequired:
+            Text(
+                "Recovery setup is complete. Enter the recovery key you "
+                    + "saved to create another encrypted export."
+            )
+            .font(.callout)
+            SecureField("Saved recovery key", text: $resumeEntry)
+            Button("Continue Encrypted Export") {
+                let submitted = resumeEntry
+                resumeEntry = ""
+                Task { @MainActor in
+                    encryptedDocument = await actions.resume(submitted)
+                    if encryptedDocument != nil {
+                        isExporterPresented = true
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(resumeEntry.isEmpty)
+            closeButton()
         case .resumeRequired,
              .paused,
              .durabilityVerificationRequired,
@@ -880,6 +952,7 @@ private extension AtlasVaultRecoveryExportPresentation {
         switch self {
         case .hidden,
              .ready,
+             .reexportRequired,
              .resumeRequired,
              .paused,
              .failed,

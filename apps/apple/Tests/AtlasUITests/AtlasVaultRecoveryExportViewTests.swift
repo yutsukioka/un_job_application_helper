@@ -146,6 +146,104 @@ final class AtlasVaultRecoveryExportViewTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedRecoveryWrapOffersReExportWithoutPendingReset()
+        async throws
+    {
+        let fake = try RecoveryExportCoordinatorViewFake(
+            document: makeDocument()
+        )
+        await fake.setFailure(.alreadyRecoveryPrepared)
+        let owner = AtlasVaultRecoveryExportPresentationOwner(
+            coordinator: fake
+        )
+        owner.present()
+
+        let generated = await owner.generate()
+
+        XCTAssertNil(generated)
+        XCTAssertEqual(
+            owner.presentation.description,
+            "reexportRequired"
+        )
+
+        await owner.resetPendingSetup(confirmed: true)
+        XCTAssertEqual(
+            owner.presentation.description,
+            "reexportRequired"
+        )
+        var calls = await fake.calls()
+        XCTAssertEqual(calls, ["prepare"])
+
+        await fake.setFailure(nil)
+        let document = await owner.resume(
+            secret: "FAKE_TEST_ONLY_SAVED_RECOVERY"
+        )
+
+        XCTAssertNotNil(document)
+        XCTAssertEqual(owner.presentation, .exportReady)
+        calls = await fake.calls()
+        XCTAssertEqual(calls, ["prepare", "resume"])
+
+        await owner.exportDidFinish(success: false)
+        XCTAssertEqual(
+            owner.presentation.description,
+            "reexportRequired"
+        )
+        await owner.resetPendingSetup(confirmed: true)
+        calls = await fake.calls()
+        XCTAssertEqual(
+            calls,
+            ["prepare", "resume", "exportCancel"]
+        )
+
+        await fake.setFailure(.invalidConfirmation)
+        let rejected = await owner.resume(secret: "WRONG_TEST_VALUE")
+        XCTAssertNil(rejected)
+        XCTAssertEqual(
+            owner.presentation.description,
+            "reexportRequired"
+        )
+    }
+
+    func testCompletedReExportViewOmitsPendingResetAction() throws {
+        let source = try phaseSource("AtlasVaultRecoveryExportView.swift")
+        let content = try XCTUnwrap(
+            source.range(of: "private var content: some View")
+        )
+        let start = try XCTUnwrap(
+            source.range(
+                of: "case .reexportRequired:",
+                range: content.upperBound..<source.endIndex
+            )
+        )
+        let end = try XCTUnwrap(
+            source.range(
+                of: "case .resumeRequired,",
+                range: start.upperBound..<source.endIndex
+            )
+        )
+        let completedBranch = String(
+            source[start.lowerBound..<end.lowerBound]
+        )
+
+        XCTAssertTrue(
+            completedBranch.contains("Recovery setup is complete.")
+        )
+        XCTAssertTrue(
+            completedBranch.contains(
+                "saved to create another encrypted export."
+            )
+        )
+        XCTAssertTrue(
+            completedBranch.contains("Continue Encrypted Export")
+        )
+        XCTAssertFalse(
+            completedBranch.contains("Restart Recovery Setup")
+        )
+        XCTAssertFalse(completedBranch.contains("confirmedReset"))
+    }
+
+    @MainActor
     func testDurabilityAndCompletionPendingStatesPermitExplicitReset()
         async throws
     {
