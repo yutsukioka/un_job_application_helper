@@ -31,7 +31,8 @@ final class AtlasVaultUnlockPresentationControllerTests: XCTestCase {
         XCTAssertEqual(state.capabilities.availableMethods, [.recoveryKey])
         XCTAssertNil(state.selectedMethod)
         XCTAssertEqual(state.status, .locked)
-        XCTAssertEqual(await coordinator.dispatchCount, 0)
+        let dispatchCount = await coordinator.dispatchCount
+        XCTAssertEqual(dispatchCount, 0)
     }
 
     func testConstructionIsSideEffectFreeAndProjectsExactCapabilities() async {

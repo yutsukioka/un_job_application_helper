@@ -129,9 +129,21 @@ public struct AtlasVaultUnlockCapabilities:
         passphraseProvider: (any AtlasVaultKeyUnwrapping)?,
         recoveryKeyProvider: (any AtlasVaultKeyUnwrapping)?
     ) {
+        self.init(
+            localKeyAvailable: localKeyAvailable,
+            passphraseAvailable: passphraseProvider != nil,
+            recoveryKeyAvailable: recoveryKeyProvider != nil
+        )
+    }
+
+    public init(
+        localKeyAvailable: Bool,
+        passphraseAvailable: Bool,
+        recoveryKeyAvailable: Bool
+    ) {
         localKeyStatus = localKeyAvailable ? .available : .unavailable
-        passphraseStatus = passphraseProvider == nil ? .unavailable : .available
-        recoveryKeyStatus = recoveryKeyProvider == nil ? .unavailable : .available
+        passphraseStatus = passphraseAvailable ? .available : .unavailable
+        recoveryKeyStatus = recoveryKeyAvailable ? .available : .unavailable
     }
 
     public func status(for method: AtlasVaultUnlockMethod) -> AtlasVaultUnlockCapabilityStatus {
@@ -148,6 +160,40 @@ public struct AtlasVaultUnlockCapabilities:
 
     public var description: String {
         "AtlasVaultUnlockCapabilities(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public protocol AtlasVaultUnlockCapabilitiesResolving: Sendable {
+    func capabilities(
+        for selectedVaultID: AtlasSelectedVaultID
+    ) async throws -> AtlasVaultUnlockCapabilities
+}
+
+public struct AtlasFixedVaultUnlockCapabilitiesResolver:
+    AtlasVaultUnlockCapabilitiesResolving,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private let fixedCapabilities: AtlasVaultUnlockCapabilities
+
+    public init(capabilities: AtlasVaultUnlockCapabilities) {
+        fixedCapabilities = capabilities
+    }
+
+    public func capabilities(
+        for selectedVaultID: AtlasSelectedVaultID
+    ) async throws -> AtlasVaultUnlockCapabilities {
+        _ = selectedVaultID
+        return fixedCapabilities
+    }
+
+    public var description: String {
+        "AtlasFixedVaultUnlockCapabilitiesResolver(<redacted>)"
     }
 
     public var debugDescription: String {

@@ -1,4 +1,7 @@
+import CryptoKit
 import Foundation
+import Security
+import Synchronization
 import XCTest
 @testable import AtlasUI
 
@@ -30,7 +33,6 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         for forbidden in [
             "AVRK1-",
             "recovery_key",
-            "vault_key",
             "file_url",
             "store_url",
             "records",
@@ -41,6 +43,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
                 forbidden
             )
         }
+        XCTAssertNil(object["vault_key"])
         XCTAssertEqual(
             String(describing: journal),
             "AtlasVaultRecoveryImportJournal(<redacted>)"
@@ -83,6 +86,206 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
                 )
             )
         }
+
+        object.removeValue(forKey: "extra")
+        let integerJSON = try XCTUnwrap(
+            String(data: valid, encoding: .utf8)
+        )
+        let floatingVersion = Data(
+            integerJSON.replacingOccurrences(
+                of: "\"version\":1",
+                with: "\"version\":1.0"
+            ).utf8
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultRecoveryImportJournal.decode(floatingVersion)
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .recoveryRequired
+            )
+        }
+    }
+
+    func testJournalRequiresIndependentOpaqueIdentifiers() throws {
+        let journal = try makeJournal()
+
+        XCTAssertThrowsError(
+            try AtlasVaultRecoveryImportJournal(
+                importID: journal.storeID,
+                exportID: journal.exportID,
+                vaultID: journal.vaultID,
+                storeID: journal.storeID,
+                createdAt: journal.createdAt,
+                exportSHA256: journal.exportSHA256,
+                localStoreSHA256: journal.localStoreSHA256,
+                vaultKeySHA256: journal.vaultKeySHA256
+            )
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultRecoveryImportJournal(
+                importID: journal.importID,
+                exportID: journal.storeID,
+                vaultID: journal.vaultID,
+                storeID: journal.storeID,
+                createdAt: journal.createdAt,
+                exportSHA256: journal.exportSHA256,
+                localStoreSHA256: journal.localStoreSHA256,
+                vaultKeySHA256: journal.vaultKeySHA256
+            )
+        )
+    }
+
+    func testFileReaderAcceptsOneBoundedRegularFileAndRedactsFailures()
+        throws
+    {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory.appendingPathComponent(
+            "atlasvault-import-reader-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try manager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? manager.removeItem(at: directory)
+        }
+        let reader = AtlasVaultRecoveryImportFileReader()
+        let payload = Data("TEST_ONLY_ENCRYPTED_BYTES".utf8)
+        let regular = directory.appendingPathComponent(
+            "backup.atlasvault"
+        )
+        try payload.write(to: regular)
+        XCTAssertEqual(try reader.read(from: regular), payload)
+
+        let empty = directory.appendingPathComponent("empty.atlasvault")
+        XCTAssertTrue(manager.createFile(atPath: empty.path, contents: nil))
+        assertInvalidImportFile(empty, reader: reader)
+        assertInvalidImportFile(directory, reader: reader)
+        assertInvalidImportFile(
+            URL(string: "https://example.invalid/backup.atlasvault")!,
+            reader: reader
+        )
+
+        let symbolic = directory.appendingPathComponent(
+            "linked.atlasvault"
+        )
+        try manager.createSymbolicLink(
+            at: symbolic,
+            withDestinationURL: regular
+        )
+        assertInvalidImportFile(symbolic, reader: reader)
+
+        let oversized = directory.appendingPathComponent(
+            "oversized.atlasvault"
+        )
+        XCTAssertTrue(
+            manager.createFile(atPath: oversized.path, contents: Data([0]))
+        )
+        let handle = try FileHandle(forWritingTo: oversized)
+        try handle.truncate(
+            atOffset: UInt64(
+                AtlasVaultRecoveryImportFileReader.maximumByteCount + 1
+            )
+        )
+        try handle.close()
+        assertInvalidImportFile(oversized, reader: reader)
+    }
+
+    func testImportJournalUsesCanonicalExportDigestForNoncanonicalInput()
+        async throws
+    {
+        let vector = try RecoveryImportVector.load()
+        let object = try JSONSerialization.jsonObject(
+            with: vector.canonicalData
+        )
+        let noncanonical = try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.prettyPrinted]
+        )
+        XCTAssertNotEqual(noncanonical, vector.canonicalData)
+        let fixture = try RecoveryImportFixture(fileData: noncanonical)
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+
+        let snapshot = await fixture.storage.snapshot()
+        let journal = try XCTUnwrap(snapshot.journal)
+        XCTAssertEqual(
+            journal.exportSHA256,
+            SHA256.hash(data: vector.canonicalData).map {
+                String(format: "%02x", $0)
+            }.joined()
+        )
+        XCTAssertNotEqual(
+            journal.exportSHA256,
+            SHA256.hash(data: noncanonical).map {
+                String(format: "%02x", $0)
+            }.joined()
+        )
+    }
+
+    func testJournalDuplicateUpdateIsBoundToSameTransaction()
+        throws
+    {
+        let client = RecoveryImportJournalKeychainClient()
+        let store = AtlasKeychainVaultRecoveryImportJournalStore(
+            client: client
+        )
+        let journal = try makeJournal()
+
+        try store.saveJournal(journal)
+        try store.saveJournal(journal)
+        XCTAssertEqual(try store.loadJournal(), journal)
+        XCTAssertEqual(client.updateCount(), 1)
+        XCTAssertEqual(
+            client.storedItem()?.accessibility,
+            .afterFirstUnlockThisDeviceOnly
+        )
+        XCTAssertEqual(
+            client.storedItem()?.service,
+            AtlasKeychainVaultRecoveryImportJournalStore<
+                RecoveryImportJournalKeychainClient
+            >.service
+        )
+        XCTAssertEqual(
+            client.storedItem()?.account,
+            AtlasKeychainVaultRecoveryImportJournalStore<
+                RecoveryImportJournalKeychainClient
+            >.account
+        )
+
+        let conflicting = try AtlasVaultRecoveryImportJournal(
+            importID: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+            exportID: journal.exportID,
+            vaultID: journal.vaultID,
+            storeID: journal.storeID,
+            createdAt: journal.createdAt,
+            exportSHA256: journal.exportSHA256,
+            localStoreSHA256: journal.localStoreSHA256,
+            vaultKeySHA256: journal.vaultKeySHA256
+        )
+        XCTAssertThrowsError(try store.saveJournal(conflicting)) {
+            error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .recoveryRequired
+            )
+        }
+        XCTAssertEqual(try store.loadJournal(), journal)
+        XCTAssertEqual(client.updateCount(), 1)
     }
 
     func testCoordinatorConstructionInvokesNoDependency() async throws {
@@ -90,7 +293,248 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
 
         _ = fixture.coordinator
 
-        XCTAssertEqual(await fixture.storage.events(), [])
+        let events = await fixture.storage.events()
+        XCTAssertEqual(events, [])
+    }
+
+    func testCombinedSelectionGateHidesPendingTransactionsAndFailures()
+        async throws
+    {
+        let selected = try AtlasSelectedVaultID(
+            validating: "00000000-0000-4000-8000-000000000262"
+        )
+        let selector = RecoveryImportSelector(
+            selection: .selected(selected)
+        )
+        let ready = AtlasPendingVaultTransactionSelectionGate(
+            selector: selector,
+            hasPendingCreation: { false },
+            hasPendingImport: { false }
+        )
+        let readySelection = try await ready.selectVaultID()
+        XCTAssertEqual(readySelection, .selected(selected))
+
+        let pendingCreation = AtlasPendingVaultTransactionSelectionGate(
+            selector: selector,
+            hasPendingCreation: { true },
+            hasPendingImport: { false }
+        )
+        let creationSelection = try await pendingCreation.selectVaultID()
+        XCTAssertEqual(creationSelection, .none)
+
+        let pendingImport = AtlasPendingVaultTransactionSelectionGate(
+            selector: selector,
+            hasPendingCreation: { false },
+            hasPendingImport: { true }
+        )
+        let importSelection = try await pendingImport.selectVaultID()
+        XCTAssertEqual(importSelection, .none)
+
+        let unreadableJournal =
+            AtlasPendingVaultTransactionSelectionGate(
+                selector: selector,
+                hasPendingCreation: {
+                    throw AtlasVaultRecoveryImportFailure.unavailable
+                },
+                hasPendingImport: { false }
+            )
+        let unreadableSelection = try await unreadableJournal.selectVaultID()
+        XCTAssertEqual(unreadableSelection, .none)
+    }
+
+    func testExistingVaultAndCreationTransactionBlockFileRead()
+        async throws
+    {
+        let selectedFixture = try RecoveryImportFixture()
+        try await selectedFixture.storage.createSelection(
+            AtlasSelectedVaultID(
+                validating: selectedFixture.vector.envelope
+                    .vaultMetadata.vaultID
+            )
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await selectedFixture.coordinator.prepareImport(
+                from: Self.testOnlyFileURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .existingVault
+            )
+        }
+        let selectedEvents = await selectedFixture.storage.events()
+        XCTAssertFalse(selectedEvents.contains("readFile"))
+
+        let creationFixture = try RecoveryImportFixture(
+            hasPendingCreation: true
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await creationFixture.coordinator.prepareImport(
+                from: Self.testOnlyFileURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .restoreUnavailable
+            )
+        }
+        let creationEvents = await creationFixture.storage.events()
+        XCTAssertFalse(creationEvents.contains("readFile"))
+    }
+
+    func testRecoveryWorkflowRejectsMissingAndDuplicateRecoveryWraps()
+        async throws
+    {
+        let vector = try RecoveryImportVector.load()
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: vector.canonicalData
+            ) as? [String: Any]
+        )
+        let metadata = try XCTUnwrap(
+            object["vault_metadata"] as? [String: Any]
+        )
+        let wraps = try XCTUnwrap(
+            metadata["key_wraps"] as? [[String: Any]]
+        )
+        XCTAssertEqual(wraps.count, 1)
+
+        var missingObject = object
+        var missingMetadata = metadata
+        missingMetadata["key_wraps"] = []
+        missingObject["vault_metadata"] = missingMetadata
+        let missing = try JSONSerialization.data(
+            withJSONObject: missingObject
+        )
+        let missingFixture = try RecoveryImportFixture(
+            fileData: missing
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await missingFixture.coordinator.prepareImport(
+                from: Self.testOnlyFileURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .invalidExport
+            )
+        }
+
+        var duplicateObject = object
+        var duplicateMetadata = metadata
+        duplicateMetadata["key_wraps"] = [wraps[0], wraps[0]]
+        duplicateObject["vault_metadata"] = duplicateMetadata
+        let duplicate = try JSONSerialization.data(
+            withJSONObject: duplicateObject
+        )
+        let duplicateFixture = try RecoveryImportFixture(
+            fileData: duplicate
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await duplicateFixture.coordinator.prepareImport(
+                from: Self.testOnlyFileURL
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .invalidExport
+            )
+        }
+        let missingState = await missingFixture.storage.snapshot()
+        let duplicateState = await duplicateFixture.storage.snapshot()
+        XCTAssertNil(missingState.journal)
+        XCTAssertNil(duplicateState.journal)
+    }
+
+    func testHydrationFailureAndAuthorizationLossCreateNoJournal()
+        async throws
+    {
+        let corrupt = try RecoveryImportFixture(hydrationFails: true)
+        try await corrupt.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await corrupt.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(corrupt.vector.recoveryCode.utf8)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .invalidExport
+            )
+        }
+        let corruptState = await corrupt.storage.snapshot()
+        XCTAssertNil(corruptState.journal)
+
+        let gate = RecoveryImportTestGate()
+        let interrupted = try RecoveryImportFixture(hydrateGate: gate)
+        try await interrupted.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        let confirmation = Task {
+            try await interrupted.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(interrupted.vector.recoveryCode.utf8)
+                )
+            )
+        }
+        await gate.waitUntilEntered()
+        await interrupted.storage.setAuthorized(false)
+        await gate.release()
+        await XCTAssertThrowsErrorAsync(try await confirmation.value) {
+            error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .restoreUnavailable
+            )
+        }
+        let interruptedState = await interrupted.storage.snapshot()
+        XCTAssertNil(interruptedState.journal)
+        XCTAssertNil(interruptedState.store)
+        XCTAssertNil(interruptedState.key)
+        XCTAssertEqual(interruptedState.selection, .none)
+    }
+
+    func testPauseAfterHydrationCancelsBeforePersistence() async throws {
+        let gate = RecoveryImportTestGate()
+        let fixture = try RecoveryImportFixture(hydrateGate: gate)
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        let confirmation = Task {
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        }
+
+        await gate.waitUntilEntered()
+        let pause = Task {
+            await fixture.coordinator.pause()
+        }
+        await gate.waitUntilCancelled()
+        await gate.release()
+        await pause.value
+
+        await XCTAssertThrowsErrorAsync(try await confirmation.value) {
+            error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .cancelled
+            )
+        }
+        let snapshot = await fixture.storage.snapshot()
+        XCTAssertNil(snapshot.journal)
+        XCTAssertNil(snapshot.store)
+        XCTAssertNil(snapshot.key)
+        XCTAssertEqual(snapshot.selection, .none)
+        XCTAssertFalse(snapshot.events.contains("saveJournal"))
+        XCTAssertFalse(snapshot.events.contains("saveStore:false"))
+        XCTAssertFalse(snapshot.events.contains("createKey"))
+        XCTAssertFalse(snapshot.events.contains("createSelection"))
     }
 
     func testWrongRecoveryKeyCreatesNoPersistentState() async throws {
@@ -193,6 +637,113 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         )
     }
 
+    func testConcurrentConfirmationCoalescesAndClearsJoiningSecret()
+        async throws
+    {
+        let gate = RecoveryImportTestGate()
+        let fixture = try RecoveryImportFixture(hydrateGate: gate)
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        let firstSecret = AtlasVaultInMemorySecretBuffer(
+            bytes: Data(fixture.vector.recoveryCode.utf8)
+        )
+        let joiningSecret = AtlasVaultInMemorySecretBuffer(
+            bytes: Data(fixture.vector.recoveryCode.utf8)
+        )
+
+        let first = Task {
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: firstSecret
+            )
+        }
+        await gate.waitUntilEntered()
+        let joining = Task {
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: joiningSecret
+            )
+        }
+
+        let joiningSecretWasCleared = await waitUntilSecretCleared(
+            joiningSecret
+        )
+        XCTAssertTrue(
+            joiningSecretWasCleared,
+            "A coalesced caller must not retain its unused recovery secret"
+        )
+        await gate.release()
+
+        let firstOutcome = try await first.value
+        let joiningOutcome = try await joining.value
+        XCTAssertEqual(firstOutcome, .committed)
+        XCTAssertEqual(joiningOutcome, .committed)
+        let snapshot = await fixture.storage.snapshot()
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "hydrate" }.count,
+            1
+        )
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "saveJournal" }.count,
+            1
+        )
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "createKey" }.count,
+            1
+        )
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "createSelection" }.count,
+            1
+        )
+    }
+
+    func testJournalOwnershipIsRecheckedBeforeStoreCreation()
+        async throws
+    {
+        let gate = RecoveryImportTestGate()
+        let fixture = try RecoveryImportFixture(journalSaveGate: gate)
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        let confirmation = Task {
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        }
+        await gate.waitUntilEntered()
+        let pending = await fixture.storage.snapshot()
+        let original = try XCTUnwrap(pending.journal)
+        let conflicting = try AtlasVaultRecoveryImportJournal(
+            importID: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+            exportID: original.exportID,
+            vaultID: original.vaultID,
+            storeID: original.storeID,
+            createdAt: original.createdAt,
+            exportSHA256: original.exportSHA256,
+            localStoreSHA256: original.localStoreSHA256,
+            vaultKeySHA256: original.vaultKeySHA256
+        )
+        await fixture.storage.installJournal(conflicting)
+        await gate.release()
+
+        await XCTAssertThrowsErrorAsync(try await confirmation.value) {
+            error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .recoveryRequired
+            )
+        }
+        let snapshot = await fixture.storage.snapshot()
+        XCTAssertEqual(snapshot.journal, conflicting)
+        XCTAssertNil(snapshot.store)
+        XCTAssertNil(snapshot.key)
+        XCTAssertEqual(snapshot.selection, .none)
+        XCTAssertFalse(snapshot.events.contains("saveStore:false"))
+        XCTAssertFalse(snapshot.events.contains("createKey"))
+        XCTAssertFalse(snapshot.events.contains("createSelection"))
+    }
+
     func testDurabilityUnconfirmedStopsBeforeKeyAndSelection()
         async throws
     {
@@ -262,6 +813,156 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         )
     }
 
+    func testResumeFromJournalOnlyRecreatesAllResourcesInOrder()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+        await fixture.storage.deleteStore()
+        await fixture.storage.setCommitState(.committed)
+
+        let outcome = try await fixture.coordinator.resumeImport(
+            from: Self.testOnlyFileURL,
+            recoverySecret: AtlasVaultInMemorySecretBuffer(
+                bytes: Data(fixture.vector.recoveryCode.utf8)
+            )
+        )
+
+        XCTAssertEqual(outcome, .resumed)
+        let complete = await fixture.storage.snapshot()
+        XCTAssertNil(complete.journal)
+        XCTAssertNotNil(complete.store)
+        XCTAssertEqual(complete.key, fixture.vector.vaultKey)
+        guard case .selected = complete.selection else {
+            return XCTFail("Expected restored selection")
+        }
+        XCTAssertEqual(
+            complete.events.filter { $0 == "saveStore:false" }.count,
+            2
+        )
+        XCTAssertEqual(
+            complete.events.filter { $0 == "createKey" }.count,
+            1
+        )
+        XCTAssertEqual(
+            complete.events.filter { $0 == "createSelection" }.count,
+            1
+        )
+    }
+
+    func testResumeFromStoreAndMatchingKeySkipsDuplicateKeyCreation()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+        let pending = await fixture.storage.snapshot()
+        let journal = try XCTUnwrap(pending.journal)
+        await fixture.storage.installKey(
+            fixture.vector.vaultKey,
+            vaultID: journal.vaultID
+        )
+        await fixture.storage.setCommitState(.committed)
+
+        let outcome = try await fixture.coordinator.resumeImport(
+            from: Self.testOnlyFileURL,
+            recoverySecret: AtlasVaultInMemorySecretBuffer(
+                bytes: Data(fixture.vector.recoveryCode.utf8)
+            )
+        )
+
+        XCTAssertEqual(outcome, .resumed)
+        let complete = await fixture.storage.snapshot()
+        XCTAssertNil(complete.journal)
+        XCTAssertEqual(complete.key, fixture.vector.vaultKey)
+        guard case .selected = complete.selection else {
+            return XCTFail("Expected restored selection")
+        }
+        XCTAssertFalse(complete.events.contains("createKey"))
+        XCTAssertEqual(
+            complete.events.filter { $0 == "createSelection" }.count,
+            1
+        )
+    }
+
+    func testCompletionPendingFinishesCommittedSelectionWithoutRewrite()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setClearJournalFailure(true)
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .completionPending
+            )
+        }
+        let pending = await fixture.storage.snapshot()
+        XCTAssertNotNil(pending.journal)
+        XCTAssertNotNil(pending.store)
+        XCTAssertNotNil(pending.key)
+        guard case .selected = pending.selection else {
+            return XCTFail("Expected committed selection")
+        }
+
+        await fixture.storage.setClearJournalFailure(false)
+        let outcome = try await fixture.coordinator
+            .finishCommittedImport(
+                from: Self.testOnlyFileURL,
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+
+        XCTAssertEqual(outcome, .resumed)
+        let complete = await fixture.storage.snapshot()
+        XCTAssertNil(complete.journal)
+        XCTAssertEqual(
+            complete.events.filter { $0 == "saveStore:false" }.count,
+            1
+        )
+        XCTAssertEqual(
+            complete.events.filter { $0 == "createKey" }.count,
+            1
+        )
+        XCTAssertEqual(
+            complete.events.filter { $0 == "createSelection" }.count,
+            1
+        )
+    }
+
     func testExplicitResetDeletesOnlyMatchingPartialResources()
         async throws
     {
@@ -285,10 +986,12 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             fixture.vector.vaultKey,
             vaultID: journal.vaultID
         )
+        let resetEventStart = pending.events.count
 
         try await fixture.coordinator.resetPendingImport()
 
         let reset = await fixture.storage.snapshot()
+        let resetEvents = Array(reset.events.dropFirst(resetEventStart))
         XCTAssertNil(reset.store)
         XCTAssertNil(reset.key)
         XCTAssertNil(reset.journal)
@@ -303,7 +1006,57 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         )
         XCTAssertLessThan(deleteStore, clear)
         XCTAssertLessThan(deleteKey, clear)
+        XCTAssertEqual(
+            resetEvents.filter { $0 == "loadStore" }.count,
+            3
+        )
+        XCTAssertEqual(
+            resetEvents.filter { $0 == "loadKey" }.count,
+            3
+        )
         XCTAssertEqual(reset.selection, .none)
+    }
+
+    func testResetValidatesStoreAndKeyBeforeDeletingEither()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+        let pending = await fixture.storage.snapshot()
+        let journal = try XCTUnwrap(pending.journal)
+        let mismatchedKey = Data(repeating: 0x99, count: 32)
+        await fixture.storage.installKey(
+            mismatchedKey,
+            vaultID: journal.vaultID
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.resetPendingImport()
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .recoveryRequired
+            )
+        }
+
+        let unchanged = await fixture.storage.snapshot()
+        XCTAssertNotNil(unchanged.store)
+        XCTAssertEqual(unchanged.key, mismatchedKey)
+        XCTAssertNotNil(unchanged.journal)
+        XCTAssertFalse(unchanged.events.contains("deleteStore"))
+        XCTAssertFalse(unchanged.events.contains("deleteKey"))
     }
 
     func testImportSourceAvoidsAutomaticUnlockAndNetworkBoundaries()
@@ -328,7 +1081,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             "URLSession",
             "CloudKit",
             "UserDefaults",
-            "Task.detached",
+            "Task." + "detached",
             "selectUnlockMethod",
             "submitUnlock",
             "runtime.activate",
@@ -358,6 +1111,37 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             .appendingPathComponent("Sources/AtlasUI")
             .appendingPathComponent(name)
         return try String(contentsOf: sourceURL, encoding: .utf8)
+    }
+
+    private func assertInvalidImportFile(
+        _ url: URL,
+        reader: AtlasVaultRecoveryImportFileReader,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertThrowsError(
+            try reader.read(from: url),
+            file: file,
+            line: line
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .invalidFile,
+                file: file,
+                line: line
+            )
+            let description = String(describing: error)
+            XCTAssertFalse(
+                description.contains(url.path),
+                file: file,
+                line: line
+            )
+            XCTAssertFalse(
+                description.contains(url.lastPathComponent),
+                file: file,
+                line: line
+            )
+        }
     }
 
     private static let testOnlyFileURL = URL(
@@ -436,6 +1220,8 @@ private actor RecoveryImportStorage {
     private var selection: AtlasVaultIDSelection = .none
     private var recordedEvents: [String] = []
     private var commitState: AtlasVaultAtomicCommitState = .committed
+    private var clearJournalFails = false
+    private var authorized = true
 
     func events() -> [String] {
         recordedEvents
@@ -455,9 +1241,17 @@ private actor RecoveryImportStorage {
         commitState = value
     }
 
+    func setClearJournalFailure(_ value: Bool) {
+        clearJournalFails = value
+    }
+
+    func setAuthorized(_ value: Bool) {
+        authorized = value
+    }
+
     func authorize() -> Bool {
         recordedEvents.append("authorize")
-        return true
+        return authorized
     }
 
     func selected() -> AtlasVaultIDSelection {
@@ -470,8 +1264,11 @@ private actor RecoveryImportStorage {
         return data
     }
 
-    func hydrate() {
+    func hydrate(fails: Bool) throws {
         recordedEvents.append("hydrate")
+        if fails {
+            throw AtlasVaultRecoveryImportFailure.invalidExport
+        }
     }
 
     func loadJournal() -> AtlasVaultRecoveryImportJournal? {
@@ -484,8 +1281,15 @@ private actor RecoveryImportStorage {
         journal = value
     }
 
-    func clearJournal() {
+    func installJournal(_ value: AtlasVaultRecoveryImportJournal) {
+        journal = value
+    }
+
+    func clearJournal() throws {
         recordedEvents.append("clearJournal")
+        guard !clearJournalFails else {
+            throw AtlasVaultRecoveryImportFailure.completionPending
+        }
         journal = nil
     }
 
@@ -547,8 +1351,15 @@ private struct RecoveryImportFixture {
     let environment: AtlasVaultRecoveryImportEnvironment
     let coordinator: AtlasVaultRecoveryImportCoordinator
 
-    init() throws {
+    init(
+        hydrateGate: RecoveryImportTestGate? = nil,
+        journalSaveGate: RecoveryImportTestGate? = nil,
+        fileData: Data? = nil,
+        hasPendingCreation: Bool = false,
+        hydrationFails: Bool = false
+    ) throws {
         let vector = try RecoveryImportVector.load()
+        let selectedFileData = fileData ?? vector.canonicalData
         let storage = RecoveryImportStorage()
         let environment = AtlasVaultRecoveryImportEnvironment(
             authorize: {
@@ -558,19 +1369,20 @@ private struct RecoveryImportFixture {
                 await storage.selected()
             },
             hasPendingCreation: {
-                false
+                hasPendingCreation
             },
             readFile: { _ in
-                await storage.readFile(vector.canonicalData)
+                await storage.readFile(selectedFileData)
             },
             loadJournal: {
                 await storage.loadJournal()
             },
             saveJournal: { journal in
                 await storage.saveJournal(journal)
+                await journalSaveGate?.wait()
             },
             clearJournal: {
-                await storage.clearJournal()
+                try await storage.clearJournal()
             },
             loadStore: { _ in
                 await storage.loadStore()
@@ -594,7 +1406,8 @@ private struct RecoveryImportFixture {
                 try await storage.createSelection(selection)
             },
             hydrate: { _, _, _ in
-                await storage.hydrate()
+                try await storage.hydrate(fails: hydrationFails)
+                await hydrateGate?.wait()
             },
             generateImportID: {
                 "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb"
@@ -612,6 +1425,158 @@ private struct RecoveryImportFixture {
         coordinator = AtlasVaultRecoveryImportCoordinator(
             environment: environment
         )
+    }
+}
+
+private actor RecoveryImportTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var entered = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancelled = false
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters {
+            waiter.resume()
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        } onCancel: {
+            Task {
+                await self.recordCancellation()
+            }
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCancelled() async {
+        guard !cancelled else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    private func recordCancellation() {
+        cancelled = true
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+private func waitUntilSecretCleared(
+    _ secret: AtlasVaultInMemorySecretBuffer
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if await secret.isClearedForTesting {
+            return true
+        }
+        await Task.yield()
+    }
+    return await secret.isClearedForTesting
+}
+
+private final class RecoveryImportJournalKeychainClient:
+    AtlasKeychainClient,
+    Sendable
+{
+    private struct State: Sendable {
+        var item: AtlasKeychainItem?
+        var updates = 0
+    }
+
+    private let state = Mutex(State())
+
+    func add(_ item: AtlasKeychainItem) -> OSStatus {
+        state.withLock {
+            guard $0.item == nil else {
+                return errSecDuplicateItem
+            }
+            $0.item = item
+            return errSecSuccess
+        }
+    }
+
+    func copyMatching(
+        _: AtlasKeychainQuery
+    ) -> AtlasKeychainCopyResult {
+        state.withLock {
+            guard let item = $0.item else {
+                return AtlasKeychainCopyResult(
+                    status: errSecItemNotFound,
+                    valueData: nil
+                )
+            }
+            return AtlasKeychainCopyResult(
+                status: errSecSuccess,
+                valueData: item.valueData
+            )
+        }
+    }
+
+    func update(
+        _: AtlasKeychainQuery,
+        with attributes: AtlasKeychainUpdate
+    ) -> OSStatus {
+        state.withLock {
+            guard let item = $0.item else {
+                return errSecItemNotFound
+            }
+            $0.item = AtlasKeychainItem(
+                service: item.service,
+                account: item.account,
+                valueData: attributes.valueData,
+                accessibility: item.accessibility
+            )
+            $0.updates += 1
+            return errSecSuccess
+        }
+    }
+
+    func delete(_: AtlasKeychainQuery) -> OSStatus {
+        state.withLock {
+            guard $0.item != nil else {
+                return errSecItemNotFound
+            }
+            $0.item = nil
+            return errSecSuccess
+        }
+    }
+
+    func updateCount() -> Int {
+        state.withLock { $0.updates }
+    }
+
+    func storedItem() -> AtlasKeychainItem? {
+        state.withLock { $0.item }
+    }
+}
+
+private struct RecoveryImportSelector: AtlasVaultIDSelecting {
+    let selection: AtlasVaultIDSelection
+
+    func selectVaultID() async throws(AtlasVaultIDSelectionError)
+        -> AtlasVaultIDSelection
+    {
+        selection
     }
 }
 

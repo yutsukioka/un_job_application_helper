@@ -40,7 +40,8 @@ final class AtlasVaultUnlockRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.secret, secret)
         XCTAssertEqual(snapshot.activations, 1)
         XCTAssertTrue(snapshot.usedSuppliedKey)
-        XCTAssertTrue(await buffer.isClearedForTesting)
+        let bufferWasCleared = await buffer.isClearedForTesting
+        XCTAssertTrue(bufferWasCleared)
     }
 
     fileprivate static let fakeVaultID = "00000000-0000-4000-8000-000000000042"

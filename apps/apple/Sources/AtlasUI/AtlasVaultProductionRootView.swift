@@ -8,6 +8,7 @@ public struct AtlasVaultProductionRootView: View {
     private let unlockActions: AtlasExplicitUnlockViewActions
     private let creationContext: AtlasLocalVaultCreationContext?
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
+    private let recoveryImportContext: AtlasVaultRecoveryImportContext?
 
     public init(
         owner: AtlasVaultProductionPresentationOwner,
@@ -19,6 +20,7 @@ public struct AtlasVaultProductionRootView: View {
         self.unlockActions = unlockActions
         creationContext = nil
         recoveryExportContext = nil
+        recoveryImportContext = nil
     }
 
     public init(
@@ -32,6 +34,7 @@ public struct AtlasVaultProductionRootView: View {
         self.unlockActions = unlockActions
         self.creationContext = creationContext
         recoveryExportContext = nil
+        recoveryImportContext = nil
     }
 
     public init(
@@ -45,6 +48,7 @@ public struct AtlasVaultProductionRootView: View {
         self.unlockActions = unlockActions
         creationContext = nil
         self.recoveryExportContext = recoveryExportContext
+        recoveryImportContext = nil
     }
 
     public init(
@@ -59,6 +63,23 @@ public struct AtlasVaultProductionRootView: View {
         self.unlockActions = unlockActions
         self.creationContext = creationContext
         self.recoveryExportContext = recoveryExportContext
+        recoveryImportContext = nil
+    }
+
+    public init(
+        owner: AtlasVaultProductionPresentationOwner,
+        publicShellActions: AtlasLockedPublicShellActions,
+        unlockActions: AtlasExplicitUnlockViewActions,
+        creationContext: AtlasLocalVaultCreationContext?,
+        recoveryExportContext: AtlasVaultRecoveryExportContext?,
+        recoveryImportContext: AtlasVaultRecoveryImportContext?
+    ) {
+        self.owner = owner
+        self.publicShellActions = publicShellActions
+        self.unlockActions = unlockActions
+        self.creationContext = creationContext
+        self.recoveryExportContext = recoveryExportContext
+        self.recoveryImportContext = recoveryImportContext
     }
 
     public var body: some View {
@@ -67,7 +88,8 @@ public struct AtlasVaultProductionRootView: View {
             publicShellActions: publicShellActions,
             unlockActions: unlockActions,
             creationContext: creationContext,
-            recoveryExportContext: recoveryExportContext
+            recoveryExportContext: recoveryExportContext,
+            recoveryImportContext: recoveryImportContext
         )
     }
 }
@@ -79,9 +101,27 @@ private struct AtlasVaultProductionRootContent: View {
     let unlockActions: AtlasExplicitUnlockViewActions
     let creationContext: AtlasLocalVaultCreationContext?
     let recoveryExportContext: AtlasVaultRecoveryExportContext?
+    let recoveryImportContext: AtlasVaultRecoveryImportContext?
 
     @ViewBuilder
     var body: some View {
+        if let recoveryImportContext {
+            AtlasVaultRecoveryImportEnabledRoot(
+                flowState: state,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                creationContext: creationContext,
+                recoveryExportContext: recoveryExportContext,
+                recoveryImportOwner: recoveryImportContext.owner,
+                recoveryImportActions: recoveryImportContext.actions
+            )
+        } else {
+            baseFlow
+        }
+    }
+
+    @ViewBuilder
+    private var baseFlow: some View {
         if let recoveryExportContext {
             AtlasVaultRecoveryEnabledRoot(
                 flowState: state,
@@ -106,6 +146,130 @@ private struct AtlasVaultProductionRootContent: View {
                 unlockActions: unlockActions
             )
         }
+    }
+}
+
+@MainActor
+private struct AtlasVaultRecoveryImportEnabledRoot: View {
+    let flowState: AtlasLockedShellUnlockFlowState
+    let publicShellActions: AtlasLockedPublicShellActions
+    let unlockActions: AtlasExplicitUnlockViewActions
+    let creationContext: AtlasLocalVaultCreationContext?
+    let recoveryExportContext: AtlasVaultRecoveryExportContext?
+    @ObservedObject var recoveryImportOwner:
+        AtlasVaultRecoveryImportPresentationOwner
+    let recoveryImportActions: AtlasVaultRecoveryImportActions
+    @State private var isRecoveryImportPresented = false
+    @State private var recoveryImportPresentationClaim =
+        AtlasVaultRecoveryImportPresentationClaim()
+
+    var body: some View {
+        baseFlow
+            .safeAreaInset(edge: .bottom) {
+                if showsRecoveryImportAction {
+                    HStack {
+                        Spacer()
+                        Button {
+                            presentRecoveryImport()
+                        } label: {
+                            Label(
+                                "Restore Encrypted Backup",
+                                systemImage: "externaldrive.badge.plus"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(.bar)
+                }
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: {
+                        isRecoveryImportPresented
+                            && recoveryImportActions.ownsPresentation(
+                                recoveryImportPresentationClaim
+                            )
+                            && recoveryImportOwner.presentation != .hidden
+                    },
+                    set: { isPresented in
+                        isRecoveryImportPresented = isPresented
+                        if !isPresented,
+                           recoveryImportActions.releasePresentation(
+                               recoveryImportPresentationClaim
+                           ) {
+                            recoveryImportActions.dismiss()
+                        }
+                    }
+                )
+            ) {
+                AtlasVaultRecoveryImportView(
+                    owner: recoveryImportOwner,
+                    actions: recoveryImportActions
+                )
+                .interactiveDismissDisabled(
+                    recoveryImportOwner.presentation
+                        .requiresExplicitPauseBeforeDismiss
+                )
+            }
+            .onChange(of: recoveryImportOwner.presentation) {
+                _, presentation in
+                if presentation == .hidden {
+                    isRecoveryImportPresented = false
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var baseFlow: some View {
+        if let recoveryExportContext {
+            AtlasVaultRecoveryEnabledRoot(
+                flowState: flowState,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                creationContext: creationContext,
+                recoveryOwner: recoveryExportContext.owner,
+                recoveryActions: recoveryExportContext.actions
+            )
+        } else if let creationContext {
+            AtlasVaultCreationEnabledRoot(
+                flowState: flowState,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                creationOwner: creationContext.owner,
+                creationActions: creationContext.actions
+            )
+        } else {
+            AtlasLockedShellUnlockFlowView(
+                state: flowState,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions
+            )
+        }
+    }
+
+    private func presentRecoveryImport() {
+        if recoveryImportOwner.presentation == .hidden {
+            recoveryImportActions.present()
+        }
+        guard recoveryImportActions.claimPresentation(
+            recoveryImportPresentationClaim
+        ) else {
+            return
+        }
+        isRecoveryImportPresented = true
+    }
+
+    private var showsRecoveryImportAction: Bool {
+        flowState.mode == .lockedPublic
+            && flowState.publicShell.vaultStatus == .noVault
+            && (
+                !isRecoveryImportPresented
+                    || !recoveryImportActions.ownsPresentation(
+                        recoveryImportPresentationClaim
+                    )
+            )
     }
 }
 

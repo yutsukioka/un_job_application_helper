@@ -11,7 +11,7 @@ final class AtlasVaultRecoveryUnlockProviderTests: XCTestCase {
         let provider = AtlasVaultRecoveryUnlockProvider(
             environment: AtlasVaultRecoveryUnlockEnvironment(
                 loadStore: { vaultID in
-                    try await recorder.loadStore(vaultID: vaultID)
+                    await recorder.loadStore(vaultID: vaultID)
                 }
             )
         )
@@ -22,7 +22,8 @@ final class AtlasVaultRecoveryUnlockProviderTests: XCTestCase {
         )
 
         XCTAssertEqual(key, vector.vaultKey)
-        XCTAssertEqual(await recorder.calls(), ["loadStore"])
+        let calls = await recorder.calls()
+        XCTAssertEqual(calls, ["loadStore"])
         XCTAssertFalse(
             String(describing: provider).contains(vector.recoveryCode)
         )
@@ -82,10 +83,10 @@ final class AtlasVaultRecoveryUnlockProviderTests: XCTestCase {
             validating: vector.envelope.vaultMetadata.vaultID
         )
 
-        XCTAssertEqual(
-            try await both.capabilities(for: selected).availableMethods,
-            [.localKey, .recoveryKey]
-        )
+        let bothMethods = try await both.capabilities(
+            for: selected
+        ).availableMethods
+        XCTAssertEqual(bothMethods, [.localKey, .recoveryKey])
 
         let recoveryOnly =
             AtlasVaultProductionUnlockCapabilitiesResolver(
@@ -95,11 +96,10 @@ final class AtlasVaultRecoveryUnlockProviderTests: XCTestCase {
                         loadStore: { _ in vector.store }
                     )
             )
-        XCTAssertEqual(
-            try await recoveryOnly.capabilities(for: selected)
-                .availableMethods,
-            [.recoveryKey]
-        )
+        let recoveryOnlyMethods = try await recoveryOnly.capabilities(
+            for: selected
+        ).availableMethods
+        XCTAssertEqual(recoveryOnlyMethods, [.recoveryKey])
 
         let metadata = try AtlasVaultVersionedWrappedKeyMetadata(
             vaultID: selected.vaultID,
@@ -121,11 +121,74 @@ final class AtlasVaultRecoveryUnlockProviderTests: XCTestCase {
                         loadStore: { _ in localOnlyStore }
                     )
             )
-        XCTAssertEqual(
-            try await localOnly.capabilities(for: selected)
-                .availableMethods,
-            [.localKey]
+        let localOnlyMethods = try await localOnly.capabilities(
+            for: selected
+        ).availableMethods
+        XCTAssertEqual(localOnlyMethods, [.localKey])
+    }
+
+    func testLocalKeyReadFailureDoesNotHideValidRecoveryCapability()
+        async throws
+    {
+        let vector = try RecoveryUnlockVector.load()
+        let resolver = AtlasVaultProductionUnlockCapabilitiesResolver(
+            environment: AtlasVaultUnlockCapabilitiesResolverEnvironment(
+                loadLocalKey: { _ in
+                    throw AtlasVaultRecoveryUnlockFailure.unavailable
+                },
+                loadStore: { _ in vector.store }
+            )
         )
+        let selected = try AtlasSelectedVaultID(
+            validating: vector.envelope.vaultMetadata.vaultID
+        )
+
+        let capabilities = try await resolver.capabilities(for: selected)
+
+        XCTAssertEqual(capabilities.availableMethods, [.recoveryKey])
+        XCTAssertEqual(
+            capabilities.status(for: .passphrase),
+            .unavailable
+        )
+    }
+
+    func testMissingStoreProducesNoMethodsAndMalformedMetadataFailsClosed()
+        async throws
+    {
+        let vector = try RecoveryUnlockVector.load()
+        let selected = try AtlasSelectedVaultID(
+            validating: vector.envelope.vaultMetadata.vaultID
+        )
+        let missing = AtlasVaultProductionUnlockCapabilitiesResolver(
+            environment: AtlasVaultUnlockCapabilitiesResolverEnvironment(
+                loadLocalKey: { _ in nil },
+                loadStore: { _ in nil }
+            )
+        )
+        let unavailable = try await missing.capabilities(for: selected)
+        XCTAssertEqual(unavailable.availableMethods, [])
+
+        let malformed = AtlasVaultLocalStoreEnvelope(
+            storeID: vector.store.storeID,
+            createdAt: vector.store.createdAt,
+            updatedAt: vector.store.updatedAt,
+            vaultMetadata: ["format": .string("invalid")],
+            records: []
+        )
+        let invalid = AtlasVaultProductionUnlockCapabilitiesResolver(
+            environment: AtlasVaultUnlockCapabilitiesResolverEnvironment(
+                loadLocalKey: { _ in vector.vaultKey },
+                loadStore: { _ in malformed }
+            )
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await invalid.capabilities(for: selected)
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryUnlockFailure,
+                .unavailable
+            )
+        }
     }
 
     func testRecoveryUnlockSourceContainsNoPersistenceBoundary()

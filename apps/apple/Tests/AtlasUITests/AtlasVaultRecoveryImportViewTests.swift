@@ -15,7 +15,8 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         owner.present()
 
         XCTAssertEqual(owner.presentation, .ready)
-        XCTAssertEqual(await coordinator.calls(), [])
+        let constructionCalls = await coordinator.calls()
+        XCTAssertEqual(constructionCalls, [])
     }
 
     func testExplicitFileSelectionAndRestoreOpenExistingUnlockPath()
@@ -48,11 +49,10 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         )
 
         XCTAssertEqual(owner.presentation, .complete)
-        XCTAssertEqual(await continuation.count(), 1)
-        XCTAssertEqual(
-            await coordinator.calls(),
-            ["prepare", "confirm"]
-        )
+        let continuationCount = await continuation.count()
+        let restoreCalls = await coordinator.calls()
+        XCTAssertEqual(continuationCount, 1)
+        XCTAssertEqual(restoreCalls, ["prepare", "confirm"])
     }
 
     func testPauseRetainsPersistentResumeButClearsPreparedImport()
@@ -71,15 +71,38 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         await owner.pause()
 
         XCTAssertEqual(owner.presentation, .ready)
-        XCTAssertEqual(
-            await coordinator.calls(),
-            ["prepare", "pause"]
-        )
+        let pauseCalls = await coordinator.calls()
+        XCTAssertEqual(pauseCalls, ["prepare", "pause"])
 
         await coordinator.setPending(true)
         owner.present()
         await owner.pause()
         XCTAssertEqual(owner.presentation, .paused)
+    }
+
+    func testPreconfirmationDismissRequiresExplicitDrainedPause()
+        async
+    {
+        let coordinator = RecoveryImportViewCoordinatorFake()
+        let owner = AtlasVaultRecoveryImportPresentationOwner(
+            coordinator: coordinator,
+            continueToUnlock: {}
+        )
+        owner.present()
+        await owner.prepareImport(
+            from: URL(fileURLWithPath: "/TEST_ONLY/backup.atlasvault")
+        )
+        XCTAssertEqual(owner.presentation, .awaitingRecoveryKey)
+
+        owner.dismiss()
+
+        XCTAssertEqual(owner.presentation, .awaitingRecoveryKey)
+        await owner.pause()
+        XCTAssertEqual(owner.presentation, .ready)
+        owner.dismiss()
+        XCTAssertEqual(owner.presentation, .hidden)
+        let calls = await coordinator.calls()
+        XCTAssertEqual(calls, ["prepare", "pause"])
     }
 
     func testResumeRequiresFileAndRecoveryKeyAndResetIsConfirmed()
@@ -101,13 +124,11 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
 
         owner.present()
         await owner.resetPendingImport(confirmed: false)
-        XCTAssertFalse(
-            await coordinator.calls().contains("reset")
-        )
+        let callsBeforeReset = await coordinator.calls()
+        XCTAssertFalse(callsBeforeReset.contains("reset"))
         await owner.resetPendingImport(confirmed: true)
-        XCTAssertTrue(
-            await coordinator.calls().contains("reset")
-        )
+        let callsAfterReset = await coordinator.calls()
+        XCTAssertTrue(callsAfterReset.contains("reset"))
         XCTAssertEqual(owner.presentation, .ready)
     }
 
@@ -124,7 +145,8 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         await owner.dismissForUnsafeLifecycle()
 
         XCTAssertEqual(owner.presentation, .hidden)
-        XCTAssertEqual(await coordinator.calls(), ["pause"])
+        let lifecycleCalls = await coordinator.calls()
+        XCTAssertEqual(lifecycleCalls, ["pause"])
     }
 
     func testPrivateFreeImportViewSurface() throws {

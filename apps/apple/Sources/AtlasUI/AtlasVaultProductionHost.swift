@@ -445,7 +445,7 @@ public actor AtlasVaultProductionHost:
             task: task
         )
         unlockState = AtlasVaultUnlockPresentationState(
-            capabilities: .currentProduction,
+            capabilities: unlockState.capabilities,
             selectedMethod: submission.methodForHost,
             status: .activating
         )
@@ -1046,10 +1046,48 @@ public actor AtlasVaultProductionHost:
             isUnlockPanelPresented = false
             unlockAdmissionOpen = false
         case let .success(.selected(value)):
+            let resolvedCapabilities:
+                Result<AtlasVaultUnlockCapabilities, Error>
+            do {
+                resolvedCapabilities = .success(
+                    try await dependencies.unlockCapabilitiesResolver
+                        .capabilities(for: value)
+                )
+            } catch {
+                resolvedCapabilities = .failure(error)
+            }
+            guard selectionOperation?.id == operation.id,
+                  generation == operation.generation,
+                  lifetime == .started,
+                  !isTerminated else {
+                return flowState()
+            }
+            guard case let .success(capabilities) =
+                resolvedCapabilities
+            else {
+                replaceShell(
+                    vaultStatus: .keyUnavailable,
+                    canRequestUnlock: false
+                )
+                unlockState = lockedUnlockState()
+                isUnlockPanelPresented = false
+                break
+            }
+            guard
+                !capabilities.availableMethods.isEmpty
+            else {
+                replaceShell(
+                    vaultStatus: .keyUnavailable,
+                    canRequestUnlock: false
+                )
+                unlockState = lockedUnlockState()
+                isUnlockPanelPresented = false
+                break
+            }
             let controller = dependencies.unlockControllerBuilder
                 .makeController(
                     selectedVaultID: value,
-                    capabilities: .currentProduction,
+                    capabilities: capabilities,
                     coordinator: dependencies.unlockCoordinator
                 )
             let current = await controller.currentState()
@@ -1416,7 +1454,7 @@ public actor AtlasVaultProductionHost:
             reconciliationGeneration = advanceGeneration()
         }
         unlockState = AtlasVaultUnlockPresentationState(
-            capabilities: .currentProduction,
+            capabilities: unlockState.capabilities,
             selectedMethod: nil,
             status: .hostReconciliationRequired
         )
@@ -1947,7 +1985,7 @@ public actor AtlasVaultProductionHost:
         -> AtlasVaultUnlockPresentationState
     {
         AtlasVaultUnlockPresentationState(
-            capabilities: .currentProduction,
+            capabilities: unlockState.capabilities,
             selectedMethod: nil,
             status: .hostReconciliationRequired
         )

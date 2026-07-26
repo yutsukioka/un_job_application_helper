@@ -351,17 +351,51 @@ corrupt encrypted record blocks export readiness.
 An export bundle must not contain plaintext saved searches, plaintext tracker
 records, raw vault keys, passphrases, recovery keys, or decrypted payloads.
 
-Future import happens locally:
+Phase 2D-62 imports this envelope only into a clean Apple installation. Import
+requires no selected vault, no pending local-vault creation, a locked runtime,
+an active lifecycle, and protected data. It strictly decodes the envelope,
+canonically re-encodes it, requires exactly one recovery wrap v2, unwraps the
+vault key locally, and hydrates every encrypted record in temporary memory
+before any persistent side effect. A wrong recovery key or corrupt encrypted
+record creates no import journal, local store, Keychain key, or selection.
 
-1. The user provides the passphrase or recovery key.
-2. The client unwraps the vault key locally.
-3. The client decrypts and merges records locally.
-4. The client writes local plaintext only to approved local storage.
+The recovery-import transaction is bound by a non-secret, device-only Keychain
+journal. The journal records opaque import, export, vault, and independently
+generated local-store IDs; one UTC-seconds timestamp; and lowercase SHA-256
+fingerprints of the canonical export, canonical local store, and recovered
+vault key. It contains no export bytes, file URL, path, encrypted records,
+recovery key or text, vault key, or plaintext.
 
-Phase 2D-61 does not implement import, clean-install restoration, or ordinary
-production recovery-key unlock. The production Apple unlock capability remains
-local-key-only. Those recovery-consumption behaviors require a separate
-reviewed phase.
+Restore ordering is fixed:
+
+1. write the import journal;
+2. atomically create the local store with overwrite disabled;
+3. read back and verify the canonical local store;
+4. create the device-only Keychain vault key with add-only semantics;
+5. read back and constant-time verify the vault key;
+6. create the selected-vault registry item with add-only semantics;
+7. read back and verify selection;
+8. clear the import journal last.
+
+Selection is the commit point. Neither an existing store, vault key, nor
+selection may be updated by import. A durability-unconfirmed store write
+creates no key or selection and requires explicit resume. Resume requires
+reselection of an export with the same canonical digest and full recovery-key
+re-entry. Existing partial resources must match all journal fingerprints or
+restore fails closed.
+
+An explicit, separately confirmed reset may remove only a matching partial
+store and matching partial Keychain key while no selection exists. Both
+resources are verified before either is removed, and the journal is cleared
+last. A matching committed selection must be finished, not reset. Unrelated or
+mismatched resources are never deleted.
+
+Production recovery-key unlock is available only when the selected encrypted
+store strictly contains exactly one valid recovery wrap v2. It derives the
+vault key for the selected vault in memory and delegates activation to the
+existing runtime. The recovered key is session-only and is not written back to
+Keychain. Passphrase unlock remains unavailable. Import and recovery unlock do
+not render or author private state, perform cloud sync, or migrate plaintext.
 
 ## Future Device Onboarding And Removal
 

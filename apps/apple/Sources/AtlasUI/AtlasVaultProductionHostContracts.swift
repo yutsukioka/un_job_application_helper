@@ -392,6 +392,7 @@ public enum AtlasVaultIDSelectionError:
     case invalidVaultID
     case unavailable
     case invalidRegistry
+    case existingSelection
 
     public var description: String {
         switch self {
@@ -401,6 +402,8 @@ public enum AtlasVaultIDSelectionError:
             "unavailable"
         case .invalidRegistry:
             "invalidRegistry"
+        case .existingSelection:
+            "existingSelection"
         }
     }
 
@@ -608,6 +611,8 @@ public struct AtlasVaultProductionHostDependencies:
     public let unlockCoordinator: any AtlasVaultUnlockRequestCoordinating
     public let unlockControllerBuilder:
         any AtlasVaultUnlockPresentationControllerBuilding
+    public let unlockCapabilitiesResolver:
+        any AtlasVaultUnlockCapabilitiesResolving
 
     public init(
         publicJobs: any AtlasPublicJobSearching,
@@ -620,7 +625,12 @@ public struct AtlasVaultProductionHostDependencies:
             any AtlasVaultProductionPresentationOwnerResetting,
         unlockCoordinator: any AtlasVaultUnlockRequestCoordinating,
         unlockControllerBuilder:
-            any AtlasVaultUnlockPresentationControllerBuilding
+            any AtlasVaultUnlockPresentationControllerBuilding,
+        unlockCapabilitiesResolver:
+            any AtlasVaultUnlockCapabilitiesResolving =
+                AtlasFixedVaultUnlockCapabilitiesResolver(
+                    capabilities: .currentProduction
+                )
     ) {
         self.publicJobs = publicJobs
         self.publicSnapshotRestorer = publicSnapshotRestorer
@@ -631,6 +641,7 @@ public struct AtlasVaultProductionHostDependencies:
         self.presentationOwner = presentationOwner
         self.unlockCoordinator = unlockCoordinator
         self.unlockControllerBuilder = unlockControllerBuilder
+        self.unlockCapabilitiesResolver = unlockCapabilitiesResolver
     }
 
     public var description: String {

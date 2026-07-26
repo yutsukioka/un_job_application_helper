@@ -24,10 +24,8 @@ final class AtlasVaultUnlockCapabilityTests: XCTestCase {
         let selected = try AtlasSelectedVaultID(
             validating: "00000000-0000-4000-8000-000000000262"
         )
-        XCTAssertEqual(
-            try await resolver.capabilities(for: selected),
-            capabilities
-        )
+        let resolved = try await resolver.capabilities(for: selected)
+        XCTAssertEqual(resolved, capabilities)
     }
 
     func testCurrentProductionCapabilitiesAdvertiseOnlyLocalKey() {

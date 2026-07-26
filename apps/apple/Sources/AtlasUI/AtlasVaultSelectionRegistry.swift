@@ -8,6 +8,12 @@ public protocol AtlasVaultSelectionRegistering: Sendable {
     func clearSelection() async throws(AtlasVaultIDSelectionError)
 }
 
+public protocol AtlasVaultSelectionCreating: Sendable {
+    func createSelection(
+        _ selection: AtlasSelectedVaultID
+    ) async throws(AtlasVaultIDSelectionError)
+}
+
 protocol AtlasVaultSelectionEnvelopeEncoding: Sendable {
     func encode(vaultID: String) throws -> Data
 }
@@ -17,6 +23,7 @@ public struct AtlasKeychainVaultSelectionRegistry<
 >:
     AtlasVaultIDSelecting,
     AtlasVaultSelectionRegistering,
+    AtlasVaultSelectionCreating,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
@@ -119,6 +126,33 @@ public struct AtlasKeychainVaultSelectionRegistry<
             ) == errSecSuccess else {
                 throw .unavailable
             }
+        default:
+            throw .unavailable
+        }
+    }
+
+    public func createSelection(
+        _ selection: AtlasSelectedVaultID
+    ) async throws(AtlasVaultIDSelectionError) {
+        let data: Data
+        do {
+            data = try envelopeEncoder.encode(
+                vaultID: selection.vaultID
+            )
+        } catch {
+            throw .unavailable
+        }
+        let item = AtlasKeychainItem(
+            service: Self.registryService,
+            account: Self.registryAccount,
+            valueData: data,
+            accessibility: .afterFirstUnlockThisDeviceOnly
+        )
+        switch client.add(item) {
+        case errSecSuccess:
+            return
+        case errSecDuplicateItem:
+            throw .existingSelection
         default:
             throw .unavailable
         }

@@ -39,7 +39,7 @@ final class AtlasIOSRecoveryImportEndToEndTests: XCTestCase {
         for forbidden in [
             "AtlasVaultPrivateState",
             "passphraseProvider: Atlas",
-            "Task.detached",
+            "Task." + "detached",
         ] {
             XCTAssertFalse(harness.contains(forbidden), forbidden)
             XCTAssertFalse(root.contains(forbidden), forbidden)
@@ -119,13 +119,17 @@ final class AtlasIOSRecoveryImportEndToEndTests: XCTestCase {
         )
         XCTAssertEqual(
             restoreHarness.presentationOwner.flowState.unlockPanelState?
-                .capabilities.availableMethods,
+                .availableMethods,
             [.localKey, .recoveryKey]
         )
 
         await restoreHarness.unlockActions.select(.recoveryKey)
         let firstUnlock = await restoreHarness.unlockActions.submit(
-            .recoveryKey(recoveryCode)
+            .recoveryKey(
+                AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(recoveryCode.utf8)
+                )
+            )
         )
         XCTAssertEqual(firstUnlock, .unlocked)
         XCTAssertEqual(
@@ -144,17 +148,25 @@ final class AtlasIOSRecoveryImportEndToEndTests: XCTestCase {
         await recoveryOnlyHarness.publicShellActions.requestUnlock()
         let recoveryOnly = recoveryOnlyHarness.presentationOwner.flowState
         XCTAssertEqual(
-            recoveryOnly.unlockPanelState?.capabilities.availableMethods,
+            recoveryOnly.unlockPanelState?.availableMethods,
             [.recoveryKey]
         )
 
         await recoveryOnlyHarness.unlockActions.select(.recoveryKey)
         let wrong = await recoveryOnlyHarness.unlockActions.submit(
-            .recoveryKey("AVRK1-INVALID")
+            .recoveryKey(
+                AtlasVaultInMemorySecretBuffer(
+                    bytes: Data("AVRK1-INVALID".utf8)
+                )
+            )
         )
         XCTAssertEqual(wrong, .failed)
         let recovered = await recoveryOnlyHarness.unlockActions.submit(
-            .recoveryKey(recoveryCode)
+            .recoveryKey(
+                AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(recoveryCode.utf8)
+                )
+            )
         )
         XCTAssertEqual(recovered, .unlocked)
         XCTAssertNil(
@@ -175,22 +187,21 @@ final class AtlasIOSRecoveryImportEndToEndTests: XCTestCase {
         creation.actions.createOrResume()
         await creation.owner.waitForCurrentOperationForTesting()
         await harness.unlockActions.select(.localKey)
-        XCTAssertEqual(
-            await harness.unlockActions.submit(.localKey),
-            .unlocked
-        )
+        let unlock = await harness.unlockActions.submit(.localKey)
+        XCTAssertEqual(unlock, .unlocked)
 
         let recovery = try XCTUnwrap(
             harness.recoveryExportContextForTesting
         )
         recovery.actions.present()
-        let displayHandle = try XCTUnwrap(
-            await recovery.actions.generate()
+        let generatedHandle = await recovery.actions.generate()
+        let displayHandle = try XCTUnwrap(generatedHandle)
+        let generatedCode = await displayHandle.take()
+        let recoveryCode = try XCTUnwrap(generatedCode)
+        let generatedDocument = await recovery.actions.confirm(
+            recoveryCode
         )
-        let recoveryCode = try XCTUnwrap(await displayHandle.take())
-        let document = try XCTUnwrap(
-            await recovery.actions.confirm(recoveryCode)
-        )
+        let document = try XCTUnwrap(generatedDocument)
         try document.encryptedData.write(
             to: root.appendingPathComponent(
                 AtlasVaultEncryptedExportEnvelope.defaultFilename
