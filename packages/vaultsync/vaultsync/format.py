@@ -10,6 +10,19 @@ from typing import Any, Mapping, Sequence, TypeAlias
 
 VAULT_FORMAT = "atlas-vault"
 SUPPORTED_VAULT_VERSION = 1
+MAX_VAULT_ID_LENGTH = 96
+_ALLOWED_VAULT_ID_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+_RESERVED_SEMANTIC_VAULT_IDS = frozenset(
+    {
+        "application_note",
+        "draft_metadata",
+        "profile_snippet",
+        "saved_job",
+        "saved_search",
+    }
+)
 
 
 class VaultFormatError(ValueError):
@@ -82,6 +95,20 @@ def _require_mapping(value: Any, context: str, error_cls: type[Exception] = Vaul
 def _require_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise VaultFormatError(f"{field_name} must be non-empty text")
+    return value
+
+
+def _require_vault_id(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > MAX_VAULT_ID_LENGTH
+        or value in {".", ".."}
+        or any(character not in _ALLOWED_VAULT_ID_CHARACTERS for character in value)
+        or value.lower() in _RESERVED_SEMANTIC_VAULT_IDS
+    ):
+        raise VaultFormatError("vault_id must be a valid identifier")
     return value
 
 
@@ -357,7 +384,7 @@ class VaultMetadata:
             raise VaultFormatError("unsupported vault format")
         if self.version != SUPPORTED_VAULT_VERSION:
             raise UnsupportedVaultVersion("unsupported vault version")
-        _require_text(self.vault_id, "vault_id")
+        _require_vault_id(self.vault_id)
         if not isinstance(self.key_wraps, tuple):
             object.__setattr__(self, "key_wraps", tuple(self.key_wraps))
         recovery_ids = [
@@ -377,7 +404,7 @@ class VaultMetadata:
         crypto: VaultCryptoSuite | None = None,
     ) -> VaultMetadata:
         return cls(
-            vault_id=vault_id or str(uuid.uuid4()),
+            vault_id=vault_id if vault_id is not None else str(uuid.uuid4()),
             key_wraps=tuple(key_wraps),
             crypto=crypto or VaultCryptoSuite(),
         )
@@ -405,7 +432,7 @@ class VaultMetadata:
         return cls(
             format=VAULT_FORMAT,
             version=version,
-            vault_id=_require_text(obj.get("vault_id"), "vault_id"),
+            vault_id=_require_vault_id(obj.get("vault_id")),
             crypto=VaultCryptoSuite.from_dict(_require_mapping(obj.get("crypto"), "crypto")),
             key_wraps=tuple(
                 _versioned_wrapped_key_from_dict(

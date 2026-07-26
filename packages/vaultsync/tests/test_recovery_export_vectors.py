@@ -279,3 +279,49 @@ def test_v2_aad_binds_vault_id(mutated_vault_id: str) -> None:
             recovery_key,
             vault_id=mutated_vault_id,
         )
+
+
+@pytest.mark.parametrize(
+    "vault_id",
+    [
+        "",
+        " leading",
+        "trailing ",
+        "a" * 97,
+        ".",
+        "..",
+        "contains/slash",
+        "contains.dot",
+        "unicode-\u00e9",
+        "saved_search",
+        "SAVED_JOB",
+    ],
+)
+def test_v2_and_metadata_reject_vault_ids_outside_swift_path_policy(
+    vault_id: str,
+) -> None:
+    vector = load_vector()
+    wrapped = RecoveryKeyWrapV2.from_dict(vector["recovery_wrap"])
+
+    with pytest.raises(VaultFormatError, match="^vault_id must be a valid identifier$"):
+        crypto.recovery_wrap_v2_aad(vault_id, wrapped)
+
+    metadata = deepcopy(vector["vault_metadata"])
+    metadata["vault_id"] = vault_id
+    with pytest.raises(VaultFormatError, match="^vault_id must be a valid identifier$"):
+        VaultMetadata.from_dict(metadata)
+
+    with pytest.raises(VaultFormatError, match="^vault_id must be a valid identifier$"):
+        VaultMetadata.new(vault_id=vault_id)
+
+
+def test_v2_and_metadata_accept_swift_path_policy_identifier() -> None:
+    vector = load_vector()
+    wrapped = RecoveryKeyWrapV2.from_dict(vector["recovery_wrap"])
+    vault_id = "Valid_Vault-123"
+    aad = crypto.recovery_wrap_v2_aad(vault_id, wrapped)
+    metadata = deepcopy(vector["vault_metadata"])
+    metadata["vault_id"] = vault_id
+
+    assert json.loads(aad)["vault_id"] == vault_id
+    assert VaultMetadata.from_dict(metadata).vault_id == vault_id

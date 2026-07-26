@@ -29,6 +29,7 @@ from vaultsync.format import (
     VaultKeyUnwrapError,
     VaultMetadata,
     WrappedKey,
+    _require_vault_id,
     _stable_json_bytes,
 )
 from vaultsync.records import (
@@ -176,8 +177,7 @@ def recovery_wrap_v2_aad(
     vault_id: str,
     wrapped_key: RecoveryKeyWrapV2,
 ) -> bytes:
-    if not isinstance(vault_id, str) or not vault_id or not vault_id.isascii():
-        raise VaultFormatError("vault_id must be non-empty ASCII text")
+    vault_id = _require_vault_id(vault_id)
     return _stable_json_bytes(
         {
             "format": "atlas-vault-key-wrap",
