@@ -3,6 +3,290 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
+    func testRecoveryWrapV2VectorAndVersionedModelSurfaceExists() throws {
+        let source = try String(
+            contentsOf: Self.appleRoot()
+                .appendingPathComponent(
+                    "Sources/AtlasUI/AtlasVaultWrappedKeyModels.swift"
+                ),
+            encoding: .utf8
+        )
+        let vector = Self.repositoryRoot()
+            .appendingPathComponent(
+                "contracts/sync/test_vectors/"
+                    + "atlasvault_recovery_export_vectors_v2.json"
+            )
+
+        XCTAssertTrue(
+            source.contains("AtlasVaultRecoveryWrappedKeyEnvelope")
+        )
+        XCTAssertTrue(
+            source.contains("AtlasVaultVersionedWrappedKey")
+        )
+        XCTAssertTrue(
+            source.contains("wrap_version")
+        )
+        XCTAssertTrue(
+            source.contains("recovery_key")
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vector.path))
+    }
+
+    func testVersionedMetadataDecodesRecoveryV2AndReencodesCanonically()
+        throws
+    {
+        let vector = try loadRecoveryVector()
+        let metadataObject = try dictionary(vector["vault_metadata"])
+        let data = try JSONSerialization.data(
+            withJSONObject: metadataObject,
+            options: [.sortedKeys]
+        )
+
+        let metadata = try JSONDecoder().decode(
+            AtlasVaultVersionedWrappedKeyMetadata.self,
+            from: data
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let reencoded = try encoder.encode(metadata)
+
+        XCTAssertEqual(metadata.format, "atlas-vault")
+        XCTAssertEqual(metadata.version, 1)
+        XCTAssertEqual(metadata.keyWraps.count, 1)
+        XCTAssertEqual(
+            metadata.recoveryKeyWrap?.id,
+            "primary-recovery-v2"
+        )
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: reencoded)
+                as? NSDictionary,
+            metadataObject as NSDictionary
+        )
+    }
+
+    func testVersionedMetadataAllowsV1AndV2ToCoexist() throws {
+        let v1Root = try loadVectorJSONObject()
+        let v1Vector = try dictionary(
+            try array(v1Root["vectors"]).first
+        )
+        let v1Metadata = try dictionary(v1Vector["vault_metadata"])
+        let v1 = try dictionary(
+            try array(v1Metadata["key_wraps"]).first
+        )
+        let recovery = try loadRecoveryVector()
+        var metadata = try dictionary(recovery["vault_metadata"])
+        metadata["key_wraps"] = [
+            v1,
+            try dictionary(recovery["recovery_wrap"]),
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AtlasVaultVersionedWrappedKeyMetadata.self,
+            from: data
+        )
+
+        XCTAssertEqual(decoded.keyWraps.count, 2)
+        guard case .passphrase = decoded.keyWraps[0] else {
+            return XCTFail("Expected preserved v1 passphrase wrap")
+        }
+        guard case .recoveryKey = decoded.keyWraps[1] else {
+            return XCTFail("Expected recovery v2 wrap")
+        }
+    }
+
+    func testVersionedMetadataRejectsRecoveryIDCollisionWithV1() throws {
+        let v1Metadata = try versionedV1MetadataObject()
+        var passphrase = try dictionary(
+            try array(v1Metadata["key_wraps"]).first
+        )
+        passphrase["id"] = "primary-recovery-v2"
+        let recovery = try loadRecoveryVector()
+        var metadata = try dictionary(recovery["vault_metadata"])
+        metadata["key_wraps"] = [
+            passphrase,
+            try dictionary(recovery["recovery_wrap"]),
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
+    func testVersionedMetadataPreservesHistoricalV1WithoutWrapVersion()
+        throws
+    {
+        let metadataObject = try versionedV1MetadataObject()
+        let data = try JSONSerialization.data(
+            withJSONObject: metadataObject,
+            options: [.sortedKeys]
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AtlasVaultVersionedWrappedKeyMetadata.self,
+            from: data
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let reencoded = try encoder.encode(decoded)
+        let reencodedObject = try dictionary(
+            try JSONSerialization.jsonObject(with: reencoded)
+        )
+        let reencodedWrap = try dictionary(
+            try array(reencodedObject["key_wraps"]).first
+        )
+
+        guard case .passphrase = try XCTUnwrap(decoded.keyWraps.first) else {
+            return XCTFail("Expected preserved v1 passphrase wrap")
+        }
+        XCTAssertNil(reencodedWrap["wrap_version"])
+        XCTAssertEqual(
+            reencodedObject as NSDictionary,
+            metadataObject as NSDictionary
+        )
+    }
+
+    func testVersionedV1RejectsExplicitNullOrVersionAndUnknownField()
+        throws
+    {
+        for (field, value) in [
+            ("wrap_version", NSNull()),
+            ("wrap_version", 1),
+            ("unexpected", true),
+        ] as [(String, Any)] {
+            var metadata = try versionedV1MetadataObject()
+            var wrap = try dictionary(
+                try array(metadata["key_wraps"]).first
+            )
+            wrap[field] = value
+            metadata["key_wraps"] = [wrap]
+            let data = try JSONSerialization.data(
+                withJSONObject: metadata,
+                options: [.sortedKeys]
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    AtlasVaultVersionedWrappedKeyMetadata.self,
+                    from: data
+                ),
+                "Expected v1 field \(field) to be rejected"
+            )
+        }
+    }
+
+    func testVersionedV1RejectsMissingHistoricalField() throws {
+        var metadata = try versionedV1MetadataObject()
+        var wrap = try dictionary(
+            try array(metadata["key_wraps"]).first
+        )
+        wrap.removeValue(forKey: "ciphertext")
+        metadata["key_wraps"] = [wrap]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
+    func testVersionedV2RetainsStrictTopLevelKeyValidation() throws {
+        let vector = try loadRecoveryVector()
+        var metadata = try dictionary(vector["vault_metadata"])
+        var wrap = try dictionary(vector["recovery_wrap"])
+        wrap["unexpected"] = true
+        metadata["key_wraps"] = [wrap]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
+    func testFixedWrapValidationWordingUsesHyphenatedKeyWrap() throws {
+        XCTAssertEqual(
+            AtlasVaultVersionedWrapModelError.invalidRecoveryWrap.description,
+            "Recovery key-wrap is invalid."
+        )
+        let recovery = try loadRecoveryVector()
+        for (expectedContext, original) in [
+            (
+                "Passphrase key-wrap",
+                try versionedV1MetadataObject()
+            ),
+            (
+                "Recovery key-wrap",
+                try dictionary(recovery["vault_metadata"])
+            ),
+        ] {
+            var metadata = original
+            var wrap = try dictionary(
+                try array(metadata["key_wraps"]).first
+            )
+            wrap["unexpected"] = "fixed-private-error"
+            metadata["key_wraps"] = [wrap]
+            let data = try JSONSerialization.data(
+                withJSONObject: metadata,
+                options: [.sortedKeys]
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    AtlasVaultVersionedWrappedKeyMetadata.self,
+                    from: data
+                )
+            ) { error in
+                let message = String(describing: error)
+                XCTAssertTrue(
+                    message.contains(
+                        "\(expectedContext) contains invalid fields"
+                    )
+                )
+                XCTAssertFalse(message.contains("key wrap"))
+                XCTAssertFalse(message.contains("fixed-private-error"))
+            }
+        }
+    }
+
+    func testVersionedMetadataRejectsDuplicateRecoveryWrapID() throws {
+        let vector = try loadRecoveryVector()
+        var metadata = try dictionary(vector["vault_metadata"])
+        let wrap = try dictionary(vector["recovery_wrap"])
+        metadata["key_wraps"] = [wrap, wrap]
+        let data = try JSONSerialization.data(
+            withJSONObject: metadata,
+            options: [.sortedKeys]
+        )
+
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AtlasVaultVersionedWrappedKeyMetadata.self,
+                from: data
+            )
+        )
+    }
+
     func testSharedVectorDecodesThroughStrictProductionModels() throws {
         let root = try loadVectorRoot()
         let vector = try XCTUnwrap(root.vectors.first)
@@ -264,6 +548,48 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         return try dictionary(try JSONSerialization.jsonObject(with: data))
     }
 
+    private func loadRecoveryVector() throws -> [String: Any] {
+        let data = try Data(
+            contentsOf: recoveryVectorFileURL()
+        )
+        let root = try dictionary(
+            try JSONSerialization.jsonObject(with: data)
+        )
+        return try dictionary(try array(root["vectors"]).first)
+    }
+
+    private func versionedV1MetadataObject() throws -> [String: Any] {
+        let root = try loadVectorJSONObject()
+        let vector = try dictionary(try array(root["vectors"]).first)
+        return try dictionary(vector["vault_metadata"])
+    }
+
+    private func recoveryVectorFileURL() throws -> URL {
+        let currentDirectory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath
+        )
+        let sourceDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+        let fileName =
+            "atlasvault_recovery_export_vectors_v2.json"
+        let candidates = [
+            currentDirectory.appendingPathComponent(
+                "../../contracts/sync/test_vectors/\(fileName)"
+            ),
+            currentDirectory.appendingPathComponent(
+                "contracts/sync/test_vectors/\(fileName)"
+            ),
+            sourceDirectory.appendingPathComponent(
+                "../../../../contracts/sync/test_vectors/\(fileName)"
+            ),
+        ].map(\.standardizedFileURL)
+        return try XCTUnwrap(
+            candidates.first {
+                FileManager.default.fileExists(atPath: $0.path)
+            }
+        )
+    }
+
     private func vectorFileURL() throws -> URL {
         let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let sourceDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -278,6 +604,19 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
             return url
         }
         throw KeyWrapVectorTestError.vectorMissing
+    }
+
+    private static func appleRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private static func repositoryRoot() -> URL {
+        appleRoot()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     private func stableJSON(_ value: Any) throws -> String {

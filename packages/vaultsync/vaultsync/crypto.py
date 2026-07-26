@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import re
 import secrets
 import uuid
 from typing import Any
@@ -14,11 +19,17 @@ from vaultsync.format import (
     SUPPORTED_VAULT_VERSION,
     VAULT_FORMAT,
     Argon2idParams,
+    RECOVERY_WRAP_ID,
+    RECOVERY_WRAP_KDF_INFO,
+    RecoveryKeyError,
+    RecoveryKeyWrapHKDFParams,
+    RecoveryKeyWrapV2,
     VaultAuthenticationError,
     VaultFormatError,
     VaultKeyUnwrapError,
     VaultMetadata,
     WrappedKey,
+    _require_vault_id,
     _stable_json_bytes,
 )
 from vaultsync.records import (
@@ -30,12 +41,86 @@ from vaultsync.records import (
 
 VAULT_KEY_BYTES = 32
 AES_GCM_NONCE_BYTES = 12
+RECOVERY_KEY_BYTES = 32
+RECOVERY_CHECKSUM_BYTES = 5
+RECOVERY_BASE32_SYMBOLS = 60
+RECOVERY_TEXT_PREFIX = "AVRK1"
+RECOVERY_CHECKSUM_DOMAIN = b"atlasvault-recovery-key-v1:"
 
 
 def generate_vault_key() -> bytes:
     """Generate a random 256-bit AtlasVault key."""
 
     return secrets.token_bytes(VAULT_KEY_BYTES)
+
+
+def generate_recovery_key() -> bytes:
+    """Generate a random 256-bit AtlasVault recovery key."""
+
+    return secrets.token_bytes(RECOVERY_KEY_BYTES)
+
+
+def _invalid_recovery_key() -> RecoveryKeyError:
+    return RecoveryKeyError("invalid recovery key")
+
+
+def _recovery_checksum(recovery_key: bytes) -> bytes:
+    return hashlib.sha256(RECOVERY_CHECKSUM_DOMAIN + recovery_key).digest()[
+        :RECOVERY_CHECKSUM_BYTES
+    ]
+
+
+def encode_recovery_key(recovery_key: bytes) -> str:
+    if not isinstance(recovery_key, bytes) or len(recovery_key) != RECOVERY_KEY_BYTES:
+        raise _invalid_recovery_key()
+    symbols = base64.b32encode(
+        recovery_key + _recovery_checksum(recovery_key)
+    ).decode("ascii").rstrip("=")
+    if len(symbols) != RECOVERY_BASE32_SYMBOLS:
+        raise _invalid_recovery_key()
+    groups = "-".join(
+        symbols[index : index + 4]
+        for index in range(0, len(symbols), 4)
+    )
+    return f"{RECOVERY_TEXT_PREFIX}-{groups}"
+
+
+def parse_recovery_key(value: str) -> bytes:
+    try:
+        if not isinstance(value, str):
+            raise _invalid_recovery_key()
+        value.encode("ascii")
+        normalized = value.strip(" \t\r\n")
+        if "=" in normalized:
+            raise _invalid_recovery_key()
+        parts = re.split(r"[- ]+", normalized.upper())
+        if (
+            len(parts) != 16
+            or parts[0] != RECOVERY_TEXT_PREFIX
+            or any(len(group) != 4 for group in parts[1:])
+        ):
+            raise _invalid_recovery_key()
+        symbols = "".join(parts[1:])
+        if (
+            len(symbols) != RECOVERY_BASE32_SYMBOLS
+            or re.fullmatch(r"[A-Z2-7]{60}", symbols) is None
+        ):
+            raise _invalid_recovery_key()
+        decoded = base64.b32decode(symbols + "====", casefold=False)
+        if len(decoded) != RECOVERY_KEY_BYTES + RECOVERY_CHECKSUM_BYTES:
+            raise _invalid_recovery_key()
+        canonical_symbols = base64.b32encode(decoded).decode("ascii").rstrip("=")
+        if not hmac.compare_digest(canonical_symbols, symbols):
+            raise _invalid_recovery_key()
+        recovery_key = decoded[:RECOVERY_KEY_BYTES]
+        checksum = decoded[RECOVERY_KEY_BYTES:]
+        if not hmac.compare_digest(checksum, _recovery_checksum(recovery_key)):
+            raise _invalid_recovery_key()
+        return recovery_key
+    except RecoveryKeyError:
+        raise
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise _invalid_recovery_key() from exc
 
 
 def _require_vault_key(vault_key: bytes) -> None:
@@ -75,6 +160,93 @@ def _key_wrap_aad(key_id: str, key_type: str, params: Argon2idParams) -> bytes:
             "kdf": params.to_dict(),
         }
     )
+
+
+def derive_recovery_wrapping_key(
+    recovery_key: bytes,
+    params: RecoveryKeyWrapHKDFParams,
+) -> bytes:
+    if not isinstance(recovery_key, bytes) or len(recovery_key) != RECOVERY_KEY_BYTES:
+        raise VaultKeyUnwrapError("failed to unwrap vault key")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=VAULT_KEY_BYTES,
+        salt=params.salt,
+        info=RECOVERY_WRAP_KDF_INFO.encode("utf-8"),
+    ).derive(recovery_key)
+
+
+def recovery_wrap_v2_aad(
+    vault_id: str,
+    wrapped_key: RecoveryKeyWrapV2,
+) -> bytes:
+    vault_id = _require_vault_id(vault_id)
+    return _stable_json_bytes(
+        {
+            "format": "atlas-vault-key-wrap",
+            "version": wrapped_key.wrap_version,
+            "vault_id": vault_id,
+            "id": wrapped_key.id,
+            "type": wrapped_key.type,
+            "key_wrap_aead": "AES-256-GCM",
+            "kdf": wrapped_key.kdf.to_dict(),
+        }
+    )
+
+
+def wrap_vault_key_with_recovery(
+    vault_key: bytes,
+    recovery_key: bytes,
+    *,
+    vault_id: str,
+    salt: bytes | None = None,
+    nonce: bytes | None = None,
+) -> RecoveryKeyWrapV2:
+    _require_vault_key(vault_key)
+    if not isinstance(recovery_key, bytes) or len(recovery_key) != RECOVERY_KEY_BYTES:
+        raise VaultFormatError("recovery key must be 256 bits")
+    params = RecoveryKeyWrapHKDFParams(
+        salt=salt if salt is not None else secrets.token_bytes(32)
+    )
+    wrap_nonce = _nonce(nonce)
+    shell = RecoveryKeyWrapV2(
+        kdf=params,
+        nonce=wrap_nonce,
+        ciphertext=b"\0" * 48,
+    )
+    ciphertext = AESGCM(
+        derive_recovery_wrapping_key(recovery_key, params)
+    ).encrypt(
+        wrap_nonce,
+        vault_key,
+        recovery_wrap_v2_aad(vault_id, shell),
+    )
+    return RecoveryKeyWrapV2(
+        id=RECOVERY_WRAP_ID,
+        kdf=params,
+        nonce=wrap_nonce,
+        ciphertext=ciphertext,
+    )
+
+
+def unwrap_vault_key_with_recovery(
+    wrapped_key: RecoveryKeyWrapV2,
+    recovery_key: bytes,
+    *,
+    vault_id: str,
+) -> bytes:
+    try:
+        wrapping_key = derive_recovery_wrapping_key(recovery_key, wrapped_key.kdf)
+        vault_key = AESGCM(wrapping_key).decrypt(
+            wrapped_key.nonce,
+            wrapped_key.ciphertext,
+            recovery_wrap_v2_aad(vault_id, wrapped_key),
+        )
+    except (InvalidTag, VaultFormatError, ValueError) as exc:
+        raise VaultKeyUnwrapError("failed to unwrap vault key") from exc
+    if len(vault_key) != VAULT_KEY_BYTES:
+        raise VaultKeyUnwrapError("failed to unwrap vault key")
+    return vault_key
 
 
 def wrap_vault_key(

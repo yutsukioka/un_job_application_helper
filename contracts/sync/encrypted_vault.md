@@ -1,8 +1,11 @@
 # AtlasVault v1 Encrypted Vault Contract
 
-Status: Phase 0 contract. The Python reference package in `packages/vaultsync`
-implements the cryptographic format only. This contract does not define cloud
-sync behavior, authentication, platform secure storage, or data migration.
+Status: Phase 2D-61 contract. The Python reference package in
+`packages/vaultsync` implements the cross-platform cryptographic format.
+The Apple implementation generates and verifies recovery material and
+encrypted exports, but production recovery unlock and import remain deferred.
+This contract does not define cloud sync behavior, authentication, or data
+migration.
 
 ## Purpose
 
@@ -62,7 +65,9 @@ AtlasVault v1 uses a two-layer key model:
 
 1. Generate a random 256-bit vault key with secure randomness.
 2. Use the vault key to encrypt record payloads.
-3. Derive a wrapping key from a strong passphrase or recovery key.
+3. Derive a wrapping key using the profile appropriate to the input:
+   Argon2id for a passphrase-wrap v1 input, or HKDF-SHA256 for a generated
+   256-bit recovery-key-wrap v2 input.
 4. Encrypt, or wrap, the vault key with the derived wrapping key.
 5. Serialize only wrapped vault keys, encrypted record blobs, and minimal
    plaintext sync metadata.
@@ -82,11 +87,12 @@ Rules:
 
 ## Cryptographic Suite
 
-The preferred v1 suite is:
+The top-level AtlasVault v1 suite is:
 
 - record encryption: AES-256-GCM;
 - key wrapping AEAD: AES-256-GCM;
-- passphrase/recovery-key KDF: Argon2id;
+- passphrase-wrap v1 KDF: Argon2id;
+- generated recovery-key-wrap v2 KDF: HKDF-SHA256;
 - subkey derivation: HKDF-SHA256;
 - passphrase salts: random 128-bit or larger salts;
 - AES-GCM nonces: random 96-bit nonces generated securely and never reused with
@@ -97,8 +103,10 @@ Record encryption should derive a record subkey from the vault key with
 HKDF-SHA256 using the vault ID and record ID as context. This keeps record keys
 domain-separated while retaining one vault root key.
 
-XChaCha20-Poly1305 may be considered only as a future crypto suite if libsodium
-is adopted consistently across all supported clients.
+HKDF-SHA256 recovery wrapping is only for a generated 256-bit recovery key. It
+must not be reused as a password or passphrase KDF. XChaCha20-Poly1305 may be
+considered only as a future crypto suite if libsodium is adopted consistently
+across all supported clients.
 
 ## Vault Metadata
 
@@ -139,6 +147,104 @@ Example:
 `key_wraps[].ciphertext` contains only the AES-GCM encrypted vault key. It must
 not contain plaintext records, the passphrase, the recovery key, or the raw vault
 key.
+
+### Passphrase Wrap V1 Compatibility
+
+The existing passphrase wrap remains byte-compatible and is not reinterpreted:
+
+- `type` is `passphrase`;
+- no `wrap_version` field is present;
+- KDF is Argon2id;
+- AEAD is AES-256-GCM;
+- nonce is 12 bytes;
+- ciphertext is 32 encrypted vault-key bytes plus the 16-byte GCM tag;
+- its historical associated data does not bind `vault_id`.
+
+The v1 limitation is preserved for compatibility. It is not the profile used
+for newly generated recovery material.
+
+## Recovery-Key Text V1
+
+A recovery key begins as exactly 32 bytes from a cryptographically secure
+random generator. Its transcription checksum is:
+
+```text
+SHA256(
+  UTF8("atlasvault-recovery-key-v1:")
+  || raw_recovery_key_32_bytes
+)[0:5]
+```
+
+The five-byte checksum detects transcription errors; it is not an
+authentication tag. The 32-byte key and checksum are concatenated and encoded
+with RFC 4648 Base32 using uppercase `A-Z2-7` and no padding. The result is
+exactly 60 symbols, rendered as:
+
+```text
+AVRK1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+```
+
+Parsers may accept lowercase ASCII and ASCII spaces or hyphens between groups,
+with leading or trailing ASCII whitespace. They must reject unsupported
+prefixes, padding, Unicode look-alikes, ambiguous digits, malformed lengths,
+extra data, and checksum mismatches. Checksum comparison must be constant time.
+Implementations must not autocorrect `0`, `1`, or `8`.
+
+## Recovery-Key Wrap V2
+
+Recovery wrap v2 is a versioned object inside top-level `atlas-vault` version
+1 metadata:
+
+```json
+{
+  "id": "primary-recovery-v2",
+  "type": "recovery_key",
+  "wrap_version": 2,
+  "kdf": {
+    "algorithm": "HKDF-SHA256",
+    "salt": "canonical-base64-32-bytes",
+    "info": "atlas-vault-recovery-wrap-v2"
+  },
+  "nonce": "canonical-base64-12-bytes",
+  "ciphertext": "canonical-base64-48-bytes"
+}
+```
+
+All keys are required and additional keys are invalid. Base64 must be
+canonical. The wrapping key is derived as:
+
+```text
+HKDF-SHA256(
+  IKM = raw recovery key (32 bytes),
+  salt = wrap salt (32 bytes),
+  info = UTF8("atlas-vault-recovery-wrap-v2"),
+  L = 32 bytes
+)
+```
+
+The 32-byte vault key is sealed with AES-256-GCM using the wrap's random
+12-byte nonce. The canonical, sorted, compact UTF-8 JSON associated data is:
+
+```json
+{
+  "format": "atlas-vault-key-wrap",
+  "version": 2,
+  "vault_id": "<validated-vault-id>",
+  "id": "primary-recovery-v2",
+  "type": "recovery_key",
+  "key_wrap_aead": "AES-256-GCM",
+  "kdf": {
+    "algorithm": "HKDF-SHA256",
+    "salt": "<canonical-base64>",
+    "info": "atlas-vault-recovery-wrap-v2"
+  }
+}
+```
+
+This AAD binds the owning vault, wrap version, fixed wrap identity and type,
+AEAD, KDF algorithm, salt, and info. Modifying any bound value, the nonce, or
+the ciphertext must make unwrap fail. Raw recovery and vault keys are never
+serialized.
 
 ## Encrypted Records
 
@@ -216,22 +322,46 @@ decryption.
 
 ## Manual Encrypted Export And Import
 
-Manual export/import is a first-class sync path. An export bundle may contain:
+Manual encrypted export uses this exact envelope:
 
-- vault metadata;
-- encrypted record blobs;
-- tombstones;
-- opaque device or export metadata.
+```json
+{
+  "format": "atlasvault-export",
+  "version": 1,
+  "export_id": "<lowercase-uuid>",
+  "created_at": "<utc-iso-8601-seconds>",
+  "vault_metadata": {},
+  "records": []
+}
+```
+
+The envelope contains complete validated vault metadata, encrypted record
+blobs, and encrypted tombstones. It excludes local store IDs and paths,
+selected-vault registration, Keychain state, raw keys, recovery text,
+passphrases, and plaintext payloads. Encoding is UTF-8 JSON with sorted keys,
+compact separators, and stable field names. Record order is preserved.
+
+Before an Apple client offers an export for saving, it must strictly decode its
+own canonical bytes, validate metadata and vault identity, unwrap with the
+entered recovery key, compare the recovered key to the local vault key in
+constant time, and hydrate all encrypted records into temporary in-memory
+state. Hydrated private state must be discarded without publication. Any
+corrupt encrypted record blocks export readiness.
 
 An export bundle must not contain plaintext saved searches, plaintext tracker
 records, raw vault keys, passphrases, recovery keys, or decrypted payloads.
 
-Import happens locally:
+Future import happens locally:
 
 1. The user provides the passphrase or recovery key.
 2. The client unwraps the vault key locally.
 3. The client decrypts and merges records locally.
 4. The client writes local plaintext only to approved local storage.
+
+Phase 2D-61 does not implement import, clean-install restoration, or ordinary
+production recovery-key unlock. The production Apple unlock capability remains
+local-key-only. Those recovery-consumption behaviors require a separate
+reviewed phase.
 
 ## Future Device Onboarding And Removal
 

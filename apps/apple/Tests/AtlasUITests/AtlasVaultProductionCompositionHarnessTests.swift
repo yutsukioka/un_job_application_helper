@@ -1567,6 +1567,17 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         XCTAssertFalse(
             harness.presentationOwner.flowState.publicShell.canRequestUnlock
         )
+        let recoveryContext = try XCTUnwrap(
+            harness.recoveryExportContextForTesting
+        )
+        XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
+        _ = harness.makeRootView()
+        _ = harness.makeRootView()
+        XCTAssertTrue(
+            recoveryContext.owner
+                === harness.recoveryExportContextForTesting?.owner
+        )
+        XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
     }
 
     @MainActor
@@ -1612,11 +1623,17 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             harness.presentationOwner.flowState.mode,
             .lockedPublic
         )
+        let recoveryOwner = try XCTUnwrap(
+            harness.recoveryExportContextForTesting?.owner
+        )
+        recoveryOwner.present()
+        XCTAssertEqual(recoveryOwner.presentation, .ready)
 
         let stopped = await harness.stop()
         XCTAssertEqual(stopped.mode, .lockedPublic)
         XCTAssertFalse(stopped.publicShell.canRequestUnlock)
         XCTAssertEqual(harness.presentationOwner.flowState, stopped)
+        XCTAssertEqual(recoveryOwner.presentation, .hidden)
         await harnessExpectFalse(await harness.lifecycleIsRunningForTesting())
         await XCTAssertThrowsErrorAsync(try await harness.start()) { error in
             XCTAssertEqual(
@@ -1679,6 +1696,32 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             source.contains(
                 "public var creationContext"
             )
+        )
+    }
+
+    func testProductionCompositionProvidesOneLazySharedRecoveryExportContext()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "AtlasVaultRecoveryExportCoordinator",
+            "AtlasVaultRecoveryExportPresentationOwner",
+            "recoveryExportContext",
+            "recoveryOwner.stop",
+            "recoveryOwner.dismissForUnsafeLifecycle",
+            "runtime.status()",
+            "host.currentFlowState()",
+            "client: keychainClient",
+            "runtimeServices: runtimeServices",
+            "recoveryExportContext: nil",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains("recoveryKeyProvider: Atlas")
         )
     }
 

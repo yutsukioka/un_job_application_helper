@@ -6,10 +6,23 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TypeAlias
 
 VAULT_FORMAT = "atlas-vault"
 SUPPORTED_VAULT_VERSION = 1
+MAX_VAULT_ID_LENGTH = 96
+_ALLOWED_VAULT_ID_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+_RESERVED_SEMANTIC_VAULT_IDS = frozenset(
+    {
+        "application_note",
+        "draft_metadata",
+        "profile_snippet",
+        "saved_job",
+        "saved_search",
+    }
+)
 
 
 class VaultFormatError(ValueError):
@@ -32,6 +45,10 @@ class VaultAuthenticationError(VaultCryptoError):
     """Raised when authenticated encrypted data fails validation."""
 
 
+class RecoveryKeyError(VaultFormatError):
+    """Raised when textual recovery-key material is invalid."""
+
+
 def _b64encode(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
@@ -43,6 +60,13 @@ def _b64decode(value: Any, field_name: str) -> bytes:
         return base64.b64decode(value.encode("ascii"), validate=True)
     except (binascii.Error, UnicodeEncodeError) as exc:
         raise VaultFormatError(f"{field_name} must be valid base64") from exc
+
+
+def _canonical_b64decode(value: Any, field_name: str) -> bytes:
+    data = _b64decode(value, field_name)
+    if _b64encode(data) != value:
+        raise VaultFormatError(f"{field_name} must be canonical base64")
+    return data
 
 
 def _stable_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -74,10 +98,37 @@ def _require_text(value: Any, field_name: str) -> str:
     return value
 
 
+def _require_vault_id(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > MAX_VAULT_ID_LENGTH
+        or value in {".", ".."}
+        or any(character not in _ALLOWED_VAULT_ID_CHARACTERS for character in value)
+        or value.lower() in _RESERVED_SEMANTIC_VAULT_IDS
+    ):
+        raise VaultFormatError("vault_id must be a valid identifier")
+    return value
+
+
 def _require_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int):
+    if type(value) is not int:
         raise VaultFormatError(f"{field_name} must be an integer")
     return value
+
+
+def _require_strict_int(value: Any, field_name: str) -> int:
+    return _require_int(value, field_name)
+
+
+def _require_exact_keys(
+    value: Mapping[str, Any],
+    expected: set[str],
+    context: str,
+) -> None:
+    if set(value) != expected:
+        raise VaultFormatError(f"{context} contains invalid fields")
 
 
 @dataclass(frozen=True)
@@ -90,7 +141,10 @@ class Argon2idParams:
     def __post_init__(self) -> None:
         if not isinstance(self.salt, bytes) or len(self.salt) < 16:
             raise VaultFormatError("Argon2id salt must be at least 128 bits")
-        if self.memory_kib <= 0 or self.iterations <= 0 or self.parallelism <= 0:
+        memory_kib = _require_int(self.memory_kib, "kdf.memory_kib")
+        iterations = _require_int(self.iterations, "kdf.iterations")
+        parallelism = _require_int(self.parallelism, "kdf.parallelism")
+        if memory_kib <= 0 or iterations <= 0 or parallelism <= 0:
             raise VaultFormatError("Argon2id parameters must be positive")
 
     def with_salt(self, salt: bytes) -> Argon2idParams:
@@ -161,6 +215,138 @@ class WrappedKey:
         )
 
 
+RECOVERY_WRAP_ID = "primary-recovery-v2"
+RECOVERY_WRAP_TYPE = "recovery_key"
+RECOVERY_WRAP_VERSION = 2
+RECOVERY_WRAP_KDF_ALGORITHM = "HKDF-SHA256"
+RECOVERY_WRAP_KDF_INFO = "atlas-vault-recovery-wrap-v2"
+
+
+@dataclass(frozen=True)
+class RecoveryKeyWrapHKDFParams:
+    salt: bytes
+    algorithm: str = RECOVERY_WRAP_KDF_ALGORITHM
+    info: str = RECOVERY_WRAP_KDF_INFO
+
+    def __post_init__(self) -> None:
+        if self.algorithm != RECOVERY_WRAP_KDF_ALGORITHM:
+            raise VaultFormatError("unsupported recovery key-wrap KDF")
+        if not isinstance(self.salt, bytes) or len(self.salt) != 32:
+            raise VaultFormatError("recovery key-wrap salt must be 256 bits")
+        if self.info != RECOVERY_WRAP_KDF_INFO:
+            raise VaultFormatError("unsupported recovery key-wrap KDF info")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "algorithm": self.algorithm,
+            "salt": _b64encode(self.salt),
+            "info": self.info,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RecoveryKeyWrapHKDFParams:
+        obj = _require_mapping(data, "recovery key-wrap kdf")
+        _require_exact_keys(
+            obj,
+            {"algorithm", "salt", "info"},
+            "recovery key-wrap kdf",
+        )
+        return cls(
+            algorithm=_require_text(obj.get("algorithm"), "kdf.algorithm"),
+            salt=_canonical_b64decode(obj.get("salt"), "kdf.salt"),
+            info=_require_text(obj.get("info"), "kdf.info"),
+        )
+
+
+@dataclass(frozen=True)
+class RecoveryKeyWrapV2:
+    kdf: RecoveryKeyWrapHKDFParams
+    nonce: bytes
+    ciphertext: bytes
+    id: str = RECOVERY_WRAP_ID
+    type: str = RECOVERY_WRAP_TYPE
+    wrap_version: int = RECOVERY_WRAP_VERSION
+
+    def __post_init__(self) -> None:
+        if self.id != RECOVERY_WRAP_ID:
+            raise VaultFormatError("unsupported recovery key-wrap identifier")
+        if self.type != RECOVERY_WRAP_TYPE:
+            raise VaultFormatError("unsupported recovery key-wrap type")
+        wrap_version = _require_strict_int(
+            self.wrap_version,
+            "key_wrap.wrap_version",
+        )
+        if wrap_version != RECOVERY_WRAP_VERSION:
+            raise VaultFormatError("unsupported recovery key-wrap version")
+        if not isinstance(self.kdf, RecoveryKeyWrapHKDFParams):
+            raise VaultFormatError("invalid recovery key-wrap KDF")
+        if not isinstance(self.nonce, bytes) or len(self.nonce) != 12:
+            raise VaultFormatError("recovery key-wrap nonce must be 96 bits")
+        if not isinstance(self.ciphertext, bytes) or len(self.ciphertext) != 48:
+            raise VaultFormatError(
+                "recovery key-wrap ciphertext must contain a 256-bit key and GCM tag"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "wrap_version": self.wrap_version,
+            "kdf": self.kdf.to_dict(),
+            "nonce": _b64encode(self.nonce),
+            "ciphertext": _b64encode(self.ciphertext),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RecoveryKeyWrapV2:
+        obj = _require_mapping(data, "recovery key-wrap")
+        _require_exact_keys(
+            obj,
+            {"id", "type", "wrap_version", "kdf", "nonce", "ciphertext"},
+            "recovery key-wrap",
+        )
+        return cls(
+            id=_require_text(obj.get("id"), "key_wrap.id"),
+            type=_require_text(obj.get("type"), "key_wrap.type"),
+            wrap_version=_require_strict_int(
+                obj.get("wrap_version"),
+                "key_wrap.wrap_version",
+            ),
+            kdf=RecoveryKeyWrapHKDFParams.from_dict(
+                _require_mapping(obj.get("kdf"), "key_wrap.kdf")
+            ),
+            nonce=_canonical_b64decode(obj.get("nonce"), "key_wrap.nonce"),
+            ciphertext=_canonical_b64decode(
+                obj.get("ciphertext"),
+                "key_wrap.ciphertext",
+            ),
+        )
+
+
+VersionedWrappedKey: TypeAlias = WrappedKey | RecoveryKeyWrapV2
+
+
+def _versioned_wrapped_key_from_dict(
+    data: Mapping[str, Any],
+) -> VersionedWrappedKey:
+    obj = _require_mapping(data, "key_wrap")
+    key_type = obj.get("type")
+    wrap_version = obj.get("wrap_version")
+    if key_type == "passphrase" and "wrap_version" not in obj:
+        _require_exact_keys(
+            obj,
+            {"id", "type", "kdf", "nonce", "ciphertext"},
+            "passphrase key-wrap",
+        )
+        return WrappedKey.from_dict(obj)
+    if (
+        key_type == RECOVERY_WRAP_TYPE
+        and wrap_version == RECOVERY_WRAP_VERSION
+    ):
+        return RecoveryKeyWrapV2.from_dict(obj)
+    raise VaultFormatError("unsupported key-wrap type or version")
+
+
 @dataclass(frozen=True)
 class VaultCryptoSuite:
     record_aead: str = "AES-256-GCM"
@@ -193,7 +379,7 @@ class VaultCryptoSuite:
 @dataclass(frozen=True)
 class VaultMetadata:
     vault_id: str
-    key_wraps: tuple[WrappedKey, ...]
+    key_wraps: tuple[VersionedWrappedKey, ...]
     crypto: VaultCryptoSuite = field(default_factory=VaultCryptoSuite)
     format: str = VAULT_FORMAT
     version: int = SUPPORTED_VAULT_VERSION
@@ -201,22 +387,45 @@ class VaultMetadata:
     def __post_init__(self) -> None:
         if self.format != VAULT_FORMAT:
             raise VaultFormatError("unsupported vault format")
-        if self.version != SUPPORTED_VAULT_VERSION:
+        version = _require_strict_int(self.version, "version")
+        if version != SUPPORTED_VAULT_VERSION:
             raise UnsupportedVaultVersion("unsupported vault version")
-        _require_text(self.vault_id, "vault_id")
+        _require_vault_id(self.vault_id)
         if not isinstance(self.key_wraps, tuple):
             object.__setattr__(self, "key_wraps", tuple(self.key_wraps))
+        if any(
+            not isinstance(wrapped, (WrappedKey, RecoveryKeyWrapV2))
+            for wrapped in self.key_wraps
+        ):
+            raise VaultFormatError(
+                "key_wraps must contain supported key-wrap models"
+            )
+        recovery_ids = [
+            wrapped.id
+            for wrapped in self.key_wraps
+            if isinstance(wrapped, RecoveryKeyWrapV2)
+        ]
+        passphrase_ids = {
+            wrapped.id
+            for wrapped in self.key_wraps
+            if isinstance(wrapped, WrappedKey)
+        }
+        if (
+            len(recovery_ids) != len(set(recovery_ids))
+            or not set(recovery_ids).isdisjoint(passphrase_ids)
+        ):
+            raise VaultFormatError("duplicate recovery key-wrap identifier")
 
     @classmethod
     def new(
         cls,
         *,
         vault_id: str | None = None,
-        key_wraps: Sequence[WrappedKey] = (),
+        key_wraps: Sequence[VersionedWrappedKey] = (),
         crypto: VaultCryptoSuite | None = None,
     ) -> VaultMetadata:
         return cls(
-            vault_id=vault_id or str(uuid.uuid4()),
+            vault_id=vault_id if vault_id is not None else str(uuid.uuid4()),
             key_wraps=tuple(key_wraps),
             crypto=crypto or VaultCryptoSuite(),
         )
@@ -235,7 +444,7 @@ class VaultMetadata:
         obj = _require_mapping(data, "vault metadata")
         if obj.get("format") != VAULT_FORMAT:
             raise VaultFormatError("unsupported vault format")
-        version = obj.get("version")
+        version = _require_strict_int(obj.get("version"), "version")
         if version != SUPPORTED_VAULT_VERSION:
             raise UnsupportedVaultVersion("unsupported vault version")
         key_wraps = obj.get("key_wraps")
@@ -244,9 +453,14 @@ class VaultMetadata:
         return cls(
             format=VAULT_FORMAT,
             version=version,
-            vault_id=_require_text(obj.get("vault_id"), "vault_id"),
+            vault_id=_require_vault_id(obj.get("vault_id")),
             crypto=VaultCryptoSuite.from_dict(_require_mapping(obj.get("crypto"), "crypto")),
-            key_wraps=tuple(WrappedKey.from_dict(item) for item in key_wraps),
+            key_wraps=tuple(
+                _versioned_wrapped_key_from_dict(
+                    _require_mapping(item, "key_wrap")
+                )
+                for item in key_wraps
+            ),
         )
 
 

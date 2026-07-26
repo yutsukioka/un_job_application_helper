@@ -45,6 +45,8 @@ public actor AtlasVaultProductionLifecycleForwarder:
 
     private let source: any AtlasVaultPlatformLifecycleEventSourcing
     private let host: any AtlasVaultProductionHosting
+    private let eventObserver:
+        @Sendable (AtlasVaultLifecycleEvent) async -> Void
     private var state: State = .inactive
     private var forwardingTask: Task<Void, Never>?
     private var startWaiters: [CheckedContinuation<Bool, Never>] = []
@@ -53,10 +55,14 @@ public actor AtlasVaultProductionLifecycleForwarder:
 
     public init(
         source: any AtlasVaultPlatformLifecycleEventSourcing,
-        host: any AtlasVaultProductionHosting
+        host: any AtlasVaultProductionHosting,
+        eventObserver:
+            @escaping @Sendable (AtlasVaultLifecycleEvent) async -> Void =
+                { _ in }
     ) {
         self.source = source
         self.host = host
+        self.eventObserver = eventObserver
     }
 
     public func start() async -> Bool {
@@ -155,7 +161,10 @@ public actor AtlasVaultProductionLifecycleForwarder:
                     if event == .willTerminate {
                         terminalLifecycleRequested = true
                     }
-                    _ = await host.handleLifecycleEvent(event)
+                    async let observed: Void = eventObserver(event)
+                    async let forwarded = host.handleLifecycleEvent(event)
+                    _ = await observed
+                    _ = await forwarded
                     if event == .willTerminate {
                         break
                     }
@@ -241,7 +250,10 @@ public actor AtlasVaultProductionLifecycleForwarder:
         if event == .willTerminate {
             terminalLifecycleRequested = true
         }
-        _ = await host.handleLifecycleEvent(event)
+        async let observed: Void = eventObserver(event)
+        async let forwarded = host.handleLifecycleEvent(event)
+        _ = await observed
+        _ = await forwarded
         guard !Task.isCancelled,
               mayProcessBootstrap(identifier) else {
             return false
@@ -489,6 +501,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private let host: any AtlasVaultProductionHosting
     private let lifecycleForwarder: AtlasVaultProductionLifecycleForwarder
     private let creationContext: AtlasLocalVaultCreationContext?
+    private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private var lifetime: Lifetime = .inactive
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -509,7 +522,27 @@ public final class AtlasVaultProductionCompositionHarness:
             lifecycleForwarder: lifecycleForwarder,
             publicSearchLimit: publicSearchLimit,
             unlockTimeout: unlockTimeout,
-            creationContext: nil
+            creationContext: nil,
+            recoveryExportContext: nil
+        )
+    }
+
+    convenience init(
+        host: any AtlasVaultProductionHosting,
+        presentationOwner: AtlasVaultProductionPresentationOwner,
+        lifecycleForwarder: AtlasVaultProductionLifecycleForwarder,
+        publicSearchLimit: Int,
+        unlockTimeout: Duration,
+        creationContext: AtlasLocalVaultCreationContext?
+    ) {
+        self.init(
+            host: host,
+            presentationOwner: presentationOwner,
+            lifecycleForwarder: lifecycleForwarder,
+            publicSearchLimit: publicSearchLimit,
+            unlockTimeout: unlockTimeout,
+            creationContext: creationContext,
+            recoveryExportContext: nil
         )
     }
 
@@ -519,12 +552,14 @@ public final class AtlasVaultProductionCompositionHarness:
         lifecycleForwarder: AtlasVaultProductionLifecycleForwarder,
         publicSearchLimit: Int,
         unlockTimeout: Duration,
-        creationContext: AtlasLocalVaultCreationContext?
+        creationContext: AtlasLocalVaultCreationContext?,
+        recoveryExportContext: AtlasVaultRecoveryExportContext?
     ) {
         self.host = host
         self.presentationOwner = presentationOwner
         self.lifecycleForwarder = lifecycleForwarder
         self.creationContext = creationContext
+        self.recoveryExportContext = recoveryExportContext
 
         publicShellActions = AtlasLockedPublicShellActions(
             search: { query in
@@ -659,11 +694,15 @@ public final class AtlasVaultProductionCompositionHarness:
         let host = host
         let lifecycleForwarder = lifecycleForwarder
         let creationOwner = creationContext?.owner
+        let recoveryOwner = recoveryExportContext?.owner
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
             if let creationOwner {
                 await creationOwner.stop()
+            }
+            if let recoveryOwner {
+                await recoveryOwner.stop()
             }
             let state = await hostState
             _ = await lifecycleStop
@@ -680,12 +719,29 @@ public final class AtlasVaultProductionCompositionHarness:
     }
 
     public func makeRootView() -> AtlasVaultProductionRootView {
+        if let creationContext, let recoveryExportContext {
+            return AtlasVaultProductionRootView(
+                owner: presentationOwner,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                creationContext: creationContext,
+                recoveryExportContext: recoveryExportContext
+            )
+        }
         if let creationContext {
             return AtlasVaultProductionRootView(
                 owner: presentationOwner,
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
                 creationContext: creationContext
+            )
+        }
+        if let recoveryExportContext {
+            return AtlasVaultProductionRootView(
+                owner: presentationOwner,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                recoveryExportContext: recoveryExportContext
             )
         }
         return AtlasVaultProductionRootView(
@@ -709,6 +765,12 @@ public final class AtlasVaultProductionCompositionHarness:
 
     var creationContextForTesting: AtlasLocalVaultCreationContext? {
         creationContext
+    }
+
+    var recoveryExportContextForTesting:
+        AtlasVaultRecoveryExportContext?
+    {
+        recoveryExportContext
     }
 
     func waitUntilStoppingForTesting() async {
@@ -859,6 +921,10 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasKeychainLocalVaultCreationJournalStore(
                 client: keychainClient
             )
+        let recoveryJournalStore =
+            AtlasKeychainVaultRecoveryExportJournalStore(
+                client: keychainClient
+            )
         let hostVaultSelector =
             AtlasLocalVaultCreationSelectionGate(
                 selector: vaultSelector,
@@ -958,9 +1024,101 @@ public enum AtlasVaultProductionCompositionFactory {
             owner: creationOwner,
             actions: creationActions
         )
+        let recoveryCoordinator =
+            AtlasVaultRecoveryExportCoordinator.production(
+                runtimeServices: runtimeServices,
+                selector: vaultSelector,
+                journalStore: recoveryJournalStore,
+                authorize: {
+                    let flow = await host.currentFlowState()
+                    guard
+                        flow.mode == .unlockedTransition,
+                        await runtime.status() == .unlocked
+                    else {
+                        return false
+                    }
+                    let lifecycleStatus = await lifecycle.status()
+                    guard
+                        !lifecycleStatus.hasPendingGraceLock,
+                        lifecycleStatus.failure == nil
+                    else {
+                        return false
+                    }
+                    switch lifecycleStatus.lastEvent {
+                    case .didBecomeActive,
+                         .protectedDataBecameAvailable:
+                        return true
+                    case .none,
+                         .willResignActive,
+                         .didEnterBackground,
+                         .willTerminate,
+                         .protectedDataBecameUnavailable:
+                        return false
+                    }
+                }
+            )
+        let recoveryOwner =
+            AtlasVaultRecoveryExportPresentationOwner(
+                coordinator: recoveryCoordinator
+            )
+        let recoveryActions = AtlasVaultRecoveryExportActions(
+            present: { [weak recoveryOwner] in
+                recoveryOwner?.present()
+            },
+            dismiss: { [weak recoveryOwner] in
+                recoveryOwner?.dismiss()
+            },
+            generate: { [weak recoveryOwner] in
+                await recoveryOwner?.generate()
+            },
+            confirm: { [weak recoveryOwner] secret in
+                await recoveryOwner?.confirm(secret: secret)
+            },
+            resume: { [weak recoveryOwner] secret in
+                await recoveryOwner?.resume(secret: secret)
+            },
+            exportDidFinish: { [weak recoveryOwner] success in
+                await recoveryOwner?.exportDidFinish(success: success)
+            },
+            resetPendingSetup: {
+                [weak recoveryOwner] confirmed in
+                await recoveryOwner?.resetPendingSetup(
+                    confirmed: confirmed
+                )
+            },
+            pause: { [weak recoveryOwner] in
+                await recoveryOwner?.pause()
+            },
+            claimPresentation: { [weak recoveryOwner] claim in
+                recoveryOwner?.claimPresentation(claim) ?? false
+            },
+            releasePresentation: { [weak recoveryOwner] claim in
+                recoveryOwner?.releasePresentation(claim) ?? false
+            },
+            ownsPresentation: { [weak recoveryOwner] claim in
+                recoveryOwner?.ownsPresentation(claim) ?? false
+            }
+        )
+        let recoveryExportContext = AtlasVaultRecoveryExportContext(
+            owner: recoveryOwner,
+            actions: recoveryActions
+        )
         let lifecycleForwarder = AtlasVaultProductionLifecycleForwarder(
             source: lifecycleEvents,
-            host: host
+            host: host,
+            eventObserver: { event in
+                switch event {
+                case .willTerminate:
+                    await recoveryOwner.stop()
+                case .willResignActive,
+                     .didEnterBackground,
+                     .protectedDataBecameUnavailable:
+                    await recoveryOwner.dismissForUnsafeLifecycle()
+                case .didBecomeActive,
+                     .protectedDataBecameAvailable:
+                    break
+                }
+            }
         )
         return AtlasVaultProductionCompositionHarness(
             host: host,
@@ -968,7 +1126,8 @@ public enum AtlasVaultProductionCompositionFactory {
             lifecycleForwarder: lifecycleForwarder,
             publicSearchLimit: configuration.publicSearchLimit,
             unlockTimeout: configuration.unlockTimeout,
-            creationContext: creationContext
+            creationContext: creationContext,
+            recoveryExportContext: recoveryExportContext
         )
     }
 }

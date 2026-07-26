@@ -1,0 +1,106 @@
+{
+  "description": "Fake test-only recovery-wrap and encrypted-export interoperability vector.",
+  "format": "atlasvault-recovery-export-vectors",
+  "vectors": [
+    {
+      "canonical_export_json_b64": "eyJjcmVhdGVkX2F0IjoiMjAyNi0wMS0wMlQwMzowNDowNVoiLCJleHBvcnRfaWQiOiJhYWFhYWFhYS1iYmJiLTRjY2MtOGRkZC1lZWVlZWVlZWVlZWUiLCJmb3JtYXQiOiJhdGxhc3ZhdWx0LWV4cG9ydCIsInJlY29yZHMiOltdLCJ2YXVsdF9tZXRhZGF0YSI6eyJjcnlwdG8iOnsia2RmIjoiQXJnb24yaWQiLCJrZXlfd3JhcF9hZWFkIjoiQUVTLTI1Ni1HQ00iLCJyZWNvcmRfYWVhZCI6IkFFUy0yNTYtR0NNIiwic3Via2V5X2tkZiI6IkhLREYtU0hBMjU2In0sImZvcm1hdCI6ImF0bGFzLXZhdWx0Iiwia2V5X3dyYXBzIjpbeyJjaXBoZXJ0ZXh0IjoiSnlJN0xHZ3NMUmloa2tFUDh4L2hQWDh5RndIeGJ5aEpqR3BrOXpIMHdycVE3WkhsS3VnaktqOWFSM1REYmdWcyIsImlkIjoicHJpbWFyeS1yZWNvdmVyeS12MiIsImtkZiI6eyJhbGdvcml0aG0iOiJIS0RGLVNIQTI1NiIsImluZm8iOiJhdGxhcy12YXVsdC1yZWNvdmVyeS13cmFwLXYyIiwic2FsdCI6IlFFRkNRMFJGUmtkSVNVcExURTFPVDFCUlVsTlVWVlpYV0ZsYVcxeGRYbDg9In0sIm5vbmNlIjoiQUFFQ0F3UUZCZ2NJQ1FvTCIsInR5cGUiOiJyZWNvdmVyeV9rZXkiLCJ3cmFwX3ZlcnNpb24iOjJ9XSwidmF1bHRfaWQiOiIxMTExMTExMS0yMjIyLTMzMzMtNDQ0NC01NTU1NTU1NTU1NTUiLCJ2ZXJzaW9uIjoxfSwidmVyc2lvbiI6MX0=",
+      "canonical_export_sha256": "71d8170f924b8064e6f6d6fd89bf853c6589a786964f1df5a9b4837e0342fbbf",
+      "canonical_recovery_text": "AVRK1-AAAQ-EAYE-AUDA-OCAJ-BIFQ-YDIO-B4IB-CEQT-CQKR-MFYY-DENB-WHA5-DYPS-3FKD-2KZQ",
+      "encrypted_records": [],
+      "export": {
+        "created_at": "2026-01-02T03:04:05Z",
+        "export_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "format": "atlasvault-export",
+        "records": [],
+        "vault_metadata": {
+          "crypto": {
+            "kdf": "Argon2id",
+            "key_wrap_aead": "AES-256-GCM",
+            "record_aead": "AES-256-GCM",
+            "subkey_kdf": "HKDF-SHA256"
+          },
+          "format": "atlas-vault",
+          "key_wraps": [
+            {
+              "ciphertext": "JyI7LGgsLRihkkEP8x/hPX8yFwHxbyhJjGpk9zH0wrqQ7ZHlKugjKj9aR3TDbgVs",
+              "id": "primary-recovery-v2",
+              "kdf": {
+                "algorithm": "HKDF-SHA256",
+                "info": "atlas-vault-recovery-wrap-v2",
+                "salt": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+              },
+              "nonce": "AAECAwQFBgcICQoL",
+              "type": "recovery_key",
+              "wrap_version": 2
+            }
+          ],
+          "vault_id": "11111111-2222-3333-4444-555555555555",
+          "version": 1
+        },
+        "version": 1
+      },
+      "key_wrap_aad_b64": "eyJmb3JtYXQiOiJhdGxhcy12YXVsdC1rZXktd3JhcCIsImlkIjoicHJpbWFyeS1yZWNvdmVyeS12MiIsImtkZiI6eyJhbGdvcml0aG0iOiJIS0RGLVNIQTI1NiIsImluZm8iOiJhdGxhcy12YXVsdC1yZWNvdmVyeS13cmFwLXYyIiwic2FsdCI6IlFFRkNRMFJGUmtkSVNVcExURTFPVDFCUlVsTlVWVlpYV0ZsYVcxeGRYbDg9In0sImtleV93cmFwX2FlYWQiOiJBRVMtMjU2LUdDTSIsInR5cGUiOiJyZWNvdmVyeV9rZXkiLCJ2YXVsdF9pZCI6IjExMTExMTExLTIyMjItMzMzMy00NDQ0LTU1NTU1NTU1NTU1NSIsInZlcnNpb24iOjJ9",
+      "key_wrap_aad_json": {
+        "format": "atlas-vault-key-wrap",
+        "id": "primary-recovery-v2",
+        "kdf": {
+          "algorithm": "HKDF-SHA256",
+          "info": "atlas-vault-recovery-wrap-v2",
+          "salt": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+        },
+        "key_wrap_aead": "AES-256-GCM",
+        "type": "recovery_key",
+        "vault_id": "11111111-2222-3333-4444-555555555555",
+        "version": 2
+      },
+      "name": "recovery_wrap_and_empty_export_v2",
+      "nonce_b64": "AAECAwQFBgcICQoL",
+      "recovery_wrap": {
+        "ciphertext": "JyI7LGgsLRihkkEP8x/hPX8yFwHxbyhJjGpk9zH0wrqQ7ZHlKugjKj9aR3TDbgVs",
+        "id": "primary-recovery-v2",
+        "kdf": {
+          "algorithm": "HKDF-SHA256",
+          "info": "atlas-vault-recovery-wrap-v2",
+          "salt": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+        },
+        "nonce": "AAECAwQFBgcICQoL",
+        "type": "recovery_key",
+        "wrap_version": 2
+      },
+      "salt_b64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
+      "test_only": true,
+      "test_only_recovery_key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "test_only_vault_key_b64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+      "vault_id": "11111111-2222-3333-4444-555555555555",
+      "vault_metadata": {
+        "crypto": {
+          "kdf": "Argon2id",
+          "key_wrap_aead": "AES-256-GCM",
+          "record_aead": "AES-256-GCM",
+          "subkey_kdf": "HKDF-SHA256"
+        },
+        "format": "atlas-vault",
+        "key_wraps": [
+          {
+            "ciphertext": "JyI7LGgsLRihkkEP8x/hPX8yFwHxbyhJjGpk9zH0wrqQ7ZHlKugjKj9aR3TDbgVs",
+            "id": "primary-recovery-v2",
+            "kdf": {
+              "algorithm": "HKDF-SHA256",
+              "info": "atlas-vault-recovery-wrap-v2",
+              "salt": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="
+            },
+            "nonce": "AAECAwQFBgcICQoL",
+            "type": "recovery_key",
+            "wrap_version": 2
+          }
+        ],
+        "vault_id": "11111111-2222-3333-4444-555555555555",
+        "version": 1
+      },
+      "wrap_id": "primary-recovery-v2",
+      "wrong_canonical_recovery_text": "AVRK1-AEBA-GBAF-AYDQ-QCIK-BMGA-2DQP-CAIR-EEYU-CULB-OGAZ-DINR-YHI6-D4QC-5SUP-EHGQ"
+    }
+  ],
+  "version": 2,
+  "warning": "TEST ONLY. Not real user data. Not a production vault. Not a production key or recovery key."
+}

@@ -175,6 +175,41 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testRecoveryExportRootIntegrationIsExplicitAndCompatibilityDisabled()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "AtlasVaultRecoveryExportContext",
+            "Recovery & Encrypted Export",
+            "unlockedTransition",
+            "@ObservedObject",
+            ".sheet(",
+            "AtlasVaultRecoveryExportPresentationClaim()",
+            "recoveryActions.claimPresentation(",
+            "recoveryActions.releasePresentation(",
+            "recoveryActions.ownsPresentation(",
+            "presentationClaim: recoveryPresentationClaim",
+            ".onChange(of: recoveryOwner.presentation)",
+            "recoveryExportContext = nil",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        for forbidden in [
+            "AtlasVaultRecoveryExportCoordinator(",
+            ".task",
+            ".onAppear",
+            "Keychain",
+            "FileManager",
+            "AtlasVaultPrivateState",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
+    }
+
     func testCreationSheetIsLocalAndCanTransferToAnotherRoot()
         throws
     {

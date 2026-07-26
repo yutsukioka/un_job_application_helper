@@ -32,15 +32,57 @@ def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
     return value
 
 
-def _require_text(value: Any, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise VaultExportError(f"{field_name} must be non-empty text")
+def _require_int(value: Any, field_name: str) -> int:
+    if type(value) is not int:
+        raise VaultExportError(f"{field_name} must be an integer")
     return value
 
 
-def _require_int(value: Any, field_name: str) -> int:
-    if not isinstance(value, int):
-        raise VaultExportError(f"{field_name} must be an integer")
+def _require_exact_keys(
+    value: Mapping[str, Any],
+    expected: set[str],
+    context: str,
+) -> None:
+    if set(value) != expected:
+        raise VaultExportError(
+            f"{context} must contain exactly the supported fields"
+        )
+
+
+def _require_canonical_lowercase_uuid(value: Any, field_name: str) -> str:
+    error = f"{field_name} must be a canonical lowercase UUID"
+    if not isinstance(value, str):
+        raise VaultExportError(error)
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise VaultExportError(error) from exc
+    if str(parsed) != value:
+        raise VaultExportError(error)
+    return value
+
+
+def _require_strict_utc_seconds(value: Any, field_name: str) -> str:
+    error = f"{field_name} must be UTC ISO-8601 seconds"
+    digit_positions = (0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18)
+    if (
+        not isinstance(value, str)
+        or len(value) != 20
+        or value[4] != "-"
+        or value[7] != "-"
+        or value[10] != "T"
+        or value[13] != ":"
+        or value[16] != ":"
+        or value[19] != "Z"
+        or any(value[index] not in "0123456789" for index in digit_positions)
+    ):
+        raise VaultExportError(error)
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as exc:
+        raise VaultExportError(error) from exc
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise VaultExportError(error)
     return value
 
 
@@ -70,7 +112,8 @@ class AtlasVaultExport:
     def __post_init__(self) -> None:
         if self.format != EXPORT_FORMAT:
             raise VaultExportError("unsupported export format")
-        if self.version != SUPPORTED_EXPORT_VERSION:
+        version = _require_int(self.version, "version")
+        if version != SUPPORTED_EXPORT_VERSION:
             raise UnsupportedExportVersion("unsupported export version")
         if not isinstance(self.vault_metadata, VaultMetadata):
             raise VaultExportError("vault_metadata must be VaultMetadata")
@@ -79,8 +122,8 @@ class AtlasVaultExport:
         for record in self.records:
             if not isinstance(record, EncryptedRecord):
                 raise VaultExportError("records must contain EncryptedRecord objects")
-        _require_text(self.export_id, "export_id")
-        _require_text(self.created_at, "created_at")
+        _require_canonical_lowercase_uuid(self.export_id, "export_id")
+        _require_strict_utc_seconds(self.created_at, "created_at")
 
     @classmethod
     def new(
@@ -94,8 +137,8 @@ class AtlasVaultExport:
         return cls(
             vault_metadata=vault_metadata,
             records=tuple(records),
-            export_id=export_id or str(uuid.uuid4()),
-            created_at=created_at or _utc_timestamp(),
+            export_id=str(uuid.uuid4()) if export_id is None else export_id,
+            created_at=_utc_timestamp() if created_at is None else created_at,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,6 +154,18 @@ class AtlasVaultExport:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> AtlasVaultExport:
         obj = _require_mapping(data, "export")
+        _require_exact_keys(
+            obj,
+            {
+                "format",
+                "version",
+                "export_id",
+                "created_at",
+                "vault_metadata",
+                "records",
+            },
+            "export",
+        )
         if obj.get("format") != EXPORT_FORMAT:
             raise VaultExportError("unsupported export format")
         version = _require_int(obj.get("version"), "version")
@@ -129,8 +184,14 @@ class AtlasVaultExport:
         return cls(
             format=EXPORT_FORMAT,
             version=version,
-            export_id=_require_text(obj.get("export_id"), "export_id"),
-            created_at=_require_text(obj.get("created_at"), "created_at"),
+            export_id=_require_canonical_lowercase_uuid(
+                obj.get("export_id"),
+                "export_id",
+            ),
+            created_at=_require_strict_utc_seconds(
+                obj.get("created_at"),
+                "created_at",
+            ),
             vault_metadata=vault_metadata,
             records=records,
         )
