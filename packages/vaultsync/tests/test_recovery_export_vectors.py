@@ -529,6 +529,20 @@ def test_recovery_key_parser_accepts_ascii_case_and_group_spacing() -> None:
     )
 
 
+@pytest.mark.parametrize("last_symbol", list("RSTUVWXYZ234567"))
+def test_recovery_key_parser_rejects_nonzero_base32_padding_bits(
+    last_symbol: str,
+) -> None:
+    canonical = load_vector()["canonical_recovery_text"]
+    assert canonical.endswith("Q")
+    alias = canonical[:-1] + last_symbol
+
+    with pytest.raises(RecoveryKeyError, match="^invalid recovery key$") as raised:
+        crypto.parse_recovery_key(alias)
+
+    assert alias not in str(raised.value)
+
+
 @pytest.mark.parametrize("value", [None, b"not-text", 1])
 def test_recovery_key_parser_rejects_non_text_with_fixed_error(value: Any) -> None:
     with pytest.raises(RecoveryKeyError, match="^invalid recovery key$"):
@@ -595,6 +609,28 @@ def test_v2_model_rejects_unknown_keys_and_duplicate_ids() -> None:
             vault_id=vector["vault_id"],
             key_wraps=(wrap, wrap),
         )
+
+
+@pytest.mark.parametrize("wrap_version", [True, False, 2.0])
+def test_direct_v2_model_requires_strict_integer_wrap_version(
+    wrap_version: Any,
+) -> None:
+    valid = RecoveryKeyWrapV2.from_dict(load_vector()["recovery_wrap"])
+
+    with pytest.raises(
+        VaultFormatError,
+        match="^key_wrap.wrap_version must be an integer$",
+    ) as raised:
+        RecoveryKeyWrapV2(
+            id=valid.id,
+            type=valid.type,
+            wrap_version=wrap_version,
+            kdf=valid.kdf,
+            nonce=valid.nonce,
+            ciphertext=valid.ciphertext,
+        )
+
+    assert str(wrap_version) not in str(raised.value)
 
 
 @pytest.mark.parametrize(

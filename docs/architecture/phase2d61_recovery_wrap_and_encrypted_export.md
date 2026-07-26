@@ -54,8 +54,10 @@ SHA256(UTF8("atlasvault-recovery-key-v1:") || recovery_key)
 The key and checksum encode as unpadded RFC 4648 Base32. Sixty symbols are
 rendered as 15 groups under the `AVRK1` prefix. Parsing accepts ASCII case and
 ASCII group spacing, rejects Unicode look-alikes and ambiguous digits, and
-uses a constant-time checksum comparison. The checksum is an error-detection
-value, not an authentication tag.
+round-trips decoded bytes through canonical Base32 to reject nonzero padding
+bits and textual aliases. Checksum and canonical-symbol comparisons are
+constant time. The checksum is an error-detection value, not an authentication
+tag.
 
 ## Recovery Wrap V2
 
@@ -67,7 +69,9 @@ passphrase KDF.
 
 AES-256-GCM uses a random 12-byte nonce and produces 48 bytes for a wrapped
 32-byte vault key plus tag. Strict models reject missing, unknown, malformed,
-or noncanonical fields.
+or noncanonical fields. Direct and decoded recovery-wrap versions must be
+strict JSON integers; Boolean and floating-point aliases are rejected before
+supported-version comparison.
 
 ## Vault-Bound AAD
 
@@ -309,6 +313,15 @@ Python v1/v2 vector suites pass 113 tests, and the complete Python suite
 passes 178 tests. The focused Swift export suite passes 7 tests, the complete
 Swift suite passes 1,133 tests, and both discovered generic iOS Simulator test
 builds pass.
+
+Review-fix cycle 7 rejects all noncanonical aliases produced by nonzero unused
+Base32 bits and applies strict integer validation to directly constructed v2
+recovery wraps. The focused Python recovery/export suite passes 115 tests, the
+combined Python v1/v2 vector suites pass 131 tests, and the complete Python
+suite passes 196 tests. Swift recovery-key, wrapped-key, and export
+interoperability suites remain green, the complete Swift suite passes 1,133
+tests, and both generic iOS Simulator test builds pass. Shared vectors, v1
+crypto/AAD, and the exact 23-file scope remain unchanged.
 
 ## End-To-End Evidence
 

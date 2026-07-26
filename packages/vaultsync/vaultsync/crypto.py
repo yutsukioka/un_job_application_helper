@@ -109,6 +109,9 @@ def parse_recovery_key(value: str) -> bytes:
         decoded = base64.b32decode(symbols + "====", casefold=False)
         if len(decoded) != RECOVERY_KEY_BYTES + RECOVERY_CHECKSUM_BYTES:
             raise _invalid_recovery_key()
+        canonical_symbols = base64.b32encode(decoded).decode("ascii").rstrip("=")
+        if not hmac.compare_digest(canonical_symbols, symbols):
+            raise _invalid_recovery_key()
         recovery_key = decoded[:RECOVERY_KEY_BYTES]
         checksum = decoded[RECOVERY_KEY_BYTES:]
         if not hmac.compare_digest(checksum, _recovery_checksum(recovery_key)):

@@ -271,7 +271,11 @@ class RecoveryKeyWrapV2:
             raise VaultFormatError("unsupported recovery key-wrap identifier")
         if self.type != RECOVERY_WRAP_TYPE:
             raise VaultFormatError("unsupported recovery key-wrap type")
-        if self.wrap_version != RECOVERY_WRAP_VERSION:
+        wrap_version = _require_strict_int(
+            self.wrap_version,
+            "key_wrap.wrap_version",
+        )
+        if wrap_version != RECOVERY_WRAP_VERSION:
             raise VaultFormatError("unsupported recovery key-wrap version")
         if not isinstance(self.kdf, RecoveryKeyWrapHKDFParams):
             raise VaultFormatError("invalid recovery key-wrap KDF")
