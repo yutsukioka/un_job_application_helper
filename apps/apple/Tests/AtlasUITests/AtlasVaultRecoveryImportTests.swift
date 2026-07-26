@@ -364,6 +364,52 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertEqual(values, [true])
     }
 
+    func testSelectionGateSeparatesCreationAndImportReadFailures()
+        async throws
+    {
+        let creationFailureRecorder =
+            RecoveryImportPendingStateRecorder()
+        let creationFailureGate =
+            AtlasPendingVaultTransactionSelectionGate(
+                selector: RecoveryImportSelector(selection: .none),
+                hasPendingCreation: {
+                    throw AtlasVaultRecoveryImportFailure.unavailable
+                },
+                hasPendingImport: { false },
+                pendingImportDidChange: { pending in
+                    await creationFailureRecorder.record(pending)
+                }
+            )
+
+        let creationFailureSelection =
+            try await creationFailureGate.selectVaultID()
+
+        XCTAssertEqual(creationFailureSelection, .none)
+        let creationFailureValues =
+            await creationFailureRecorder.values()
+        XCTAssertEqual(creationFailureValues, [false])
+
+        let importFailureRecorder = RecoveryImportPendingStateRecorder()
+        let importFailureGate =
+            AtlasPendingVaultTransactionSelectionGate(
+                selector: RecoveryImportSelector(selection: .none),
+                hasPendingCreation: { false },
+                hasPendingImport: {
+                    throw AtlasVaultRecoveryImportFailure.unavailable
+                },
+                pendingImportDidChange: { pending in
+                    await importFailureRecorder.record(pending)
+                }
+            )
+
+        let importFailureSelection =
+            try await importFailureGate.selectVaultID()
+
+        XCTAssertEqual(importFailureSelection, .none)
+        let importFailureValues = await importFailureRecorder.values()
+        XCTAssertEqual(importFailureValues, [true])
+    }
+
     func testCreationGateBlocksPendingImportBeforeCreator() async throws {
         let creator = RecoveryImportCreationFake()
         let blocked = AtlasPendingRecoveryImportCreationGate(

@@ -233,6 +233,10 @@ production creation coordinator is independently wrapped by a fail-closed
 journal gate. Restore resume/reset remains available.
 The journal gates remain fail-closed defense in depth; the shared transaction
 authority closes the check-then-create race between the two journal writers.
+Import presentation availability is derived only from the recovery-import
+journal. A creation-journal read failure still hides selected-vault readiness
+but does not falsely publish a resumable import or suppress the creation
+journey; an import-journal read failure remains fail-closed as pending import.
 
 ## 30. Dynamic Unlock Capabilities
 
@@ -416,7 +420,7 @@ cancellation-aware waiter removal, dynamic capabilities, stale host
 resolution, vault-aware unlock, explicit confirmation forwarding, canonical
 test-file roots, view lifecycle, root/harness integration, and full
 source-to-restore recovery-only relaunch.
-The final review-fix regression runs passed 236 Python tests and 1,209 Swift
+The final review-fix regression runs passed 236 Python tests and 1,210 Swift
 tests.
 
 ## 56. iOS Build And Smoke Evidence

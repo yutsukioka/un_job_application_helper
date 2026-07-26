@@ -528,18 +528,22 @@ struct AtlasPendingVaultTransactionSelectionGate<
         -> AtlasVaultIDSelection
     {
         let selection = try await selector.selectVaultID()
+        let pendingImport: Bool
         do {
-            let pendingCreation = try hasPendingCreation()
-            let pendingImport = try hasPendingImport()
-            await pendingImportDidChange(pendingImport)
-            guard
-                !pendingCreation,
-                !pendingImport
-            else {
+            pendingImport = try hasPendingImport()
+        } catch {
+            await pendingImportDidChange(true)
+            return .none
+        }
+        await pendingImportDidChange(pendingImport)
+        guard !pendingImport else {
+            return .none
+        }
+        do {
+            guard try !hasPendingCreation() else {
                 return .none
             }
         } catch {
-            await pendingImportDidChange(true)
             return .none
         }
         return selection
