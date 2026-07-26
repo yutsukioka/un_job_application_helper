@@ -16,10 +16,13 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
 
         for required in [
             "recoveryImportContext",
+            "recoveryImportAvailability",
             "Restore Encrypted Backup",
             "AtlasVaultRecoveryImportView",
             "AtlasVaultRecoveryImportPresentationClaim",
             "flowState.publicShell.vaultStatus == .noVault",
+            "recoveryImportAvailability.hasPendingImport"
+                + " ? nil : creationContext",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }

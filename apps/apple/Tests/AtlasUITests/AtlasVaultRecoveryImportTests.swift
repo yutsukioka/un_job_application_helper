@@ -140,10 +140,12 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         throws
     {
         let manager = FileManager.default
-        let directory = manager.temporaryDirectory.appendingPathComponent(
-            "atlasvault-import-reader-\(UUID().uuidString)",
-            isDirectory: true
-        )
+        let directory = try AtlasVaultTestFileSystemSupport
+            .canonicalTemporaryRoot()
+            .appendingPathComponent(
+                "atlasvault-import-reader-\(UUID().uuidString)",
+                isDirectory: true
+            )
         try manager.createDirectory(
             at: directory,
             withIntermediateDirectories: true
@@ -340,6 +342,54 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             )
         let unreadableSelection = try await unreadableJournal.selectVaultID()
         XCTAssertEqual(unreadableSelection, .none)
+    }
+
+    func testSelectionGatePublishesPendingImportWithoutASelection()
+        async throws
+    {
+        let recorder = RecoveryImportPendingStateRecorder()
+        let gate = AtlasPendingVaultTransactionSelectionGate(
+            selector: RecoveryImportSelector(selection: .none),
+            hasPendingCreation: { false },
+            hasPendingImport: { true },
+            pendingImportDidChange: { pending in
+                await recorder.record(pending)
+            }
+        )
+
+        let selection = try await gate.selectVaultID()
+
+        XCTAssertEqual(selection, .none)
+        let values = await recorder.values()
+        XCTAssertEqual(values, [true])
+    }
+
+    func testCreationGateBlocksPendingImportBeforeCreator() async throws {
+        let creator = RecoveryImportCreationFake()
+        let blocked = AtlasPendingRecoveryImportCreationGate(
+            creator: creator,
+            hasPendingImport: { true }
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await blocked.createOrResume()
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasLocalVaultCreationFailure,
+                .recoveryRequired
+            )
+        }
+        let blockedCalls = await creator.createCallCount()
+        XCTAssertEqual(blockedCalls, 0)
+
+        let allowed = AtlasPendingRecoveryImportCreationGate(
+            creator: creator,
+            hasPendingImport: { false }
+        )
+        let outcome = try await allowed.createOrResume()
+        XCTAssertEqual(outcome, .created)
+        let allowedCalls = await creator.createCallCount()
+        XCTAssertEqual(allowedCalls, 1)
     }
 
     func testExistingVaultAndCreationTransactionBlockFileRead()
@@ -669,6 +719,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertLessThan(store, key)
         XCTAssertLessThan(key, selection)
         XCTAssertLessThan(selection, clear)
+        XCTAssertEqual(snapshot.pendingImportStates, [true, false])
 
         let imported = try XCTUnwrap(snapshot.store)
         XCTAssertEqual(
@@ -823,6 +874,50 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertNotNil(snapshot.store)
         XCTAssertNil(snapshot.key)
         XCTAssertEqual(snapshot.selection, .none)
+        XCTAssertFalse(snapshot.events.contains("createKey"))
+        XCTAssertFalse(snapshot.events.contains("createSelection"))
+    }
+
+    func testResumeReconfirmsExistingStoreDurabilityBeforeReadiness()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.resumeImport(
+                from: Self.testOnlyFileURL,
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .durabilityVerificationRequired
+            )
+        }
+
+        let snapshot = await fixture.storage.snapshot()
+        XCTAssertNotNil(snapshot.journal)
+        XCTAssertNotNil(snapshot.store)
+        XCTAssertNil(snapshot.key)
+        XCTAssertEqual(snapshot.selection, .none)
+        XCTAssertTrue(
+            snapshot.events.contains("confirmStoreDurability")
+        )
         XCTAssertFalse(snapshot.events.contains("createKey"))
         XCTAssertFalse(snapshot.events.contains("createSelection"))
     }
@@ -1122,6 +1217,8 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
             "createVaultKey",
             "createSelection",
             "committedDurabilityUnconfirmed",
+            "confirmStoreDurability",
+            "AtlasPendingRecoveryImportCreationGate",
             "AtlasVaultEncryptedExportEnvelope.decodeStrict",
             "canonicalData()",
         ] {
@@ -1261,6 +1358,7 @@ private struct RecoveryImportSnapshot: Sendable {
     let key: Data?
     let selection: AtlasVaultIDSelection
     let events: [String]
+    let pendingImportStates: [Bool]
 }
 
 private actor RecoveryImportStorage {
@@ -1269,6 +1367,7 @@ private actor RecoveryImportStorage {
     private var key: Data?
     private var selection: AtlasVaultIDSelection = .none
     private var recordedEvents: [String] = []
+    private var recordedPendingImportStates: [Bool] = []
     private var commitState: AtlasVaultAtomicCommitState = .committed
     private var clearJournalFails = false
     private var authorized = true
@@ -1283,8 +1382,13 @@ private actor RecoveryImportStorage {
             store: store,
             key: key,
             selection: selection,
-            events: recordedEvents
+            events: recordedEvents,
+            pendingImportStates: recordedPendingImportStates
         )
+    }
+
+    func setPendingImport(_ value: Bool) {
+        recordedPendingImportStates.append(value)
     }
 
     func setCommitState(_ value: AtlasVaultAtomicCommitState) {
@@ -1359,6 +1463,14 @@ private actor RecoveryImportStorage {
         return AtlasVaultAtomicWriteResult(commitState: commitState)
     }
 
+    func confirmStoreDurability() throws {
+        recordedEvents.append("confirmStoreDurability")
+        guard commitState == .committed else {
+            throw AtlasVaultRecoveryImportFailure
+                .durabilityVerificationRequired
+        }
+    }
+
     func deleteStore() {
         recordedEvents.append("deleteStore")
         store = nil
@@ -1392,6 +1504,36 @@ private actor RecoveryImportStorage {
             throw AtlasVaultRecoveryImportFailure.existingVault
         }
         selection = .selected(value)
+    }
+}
+
+private actor RecoveryImportPendingStateRecorder {
+    private var recordedValues: [Bool] = []
+
+    func record(_ value: Bool) {
+        recordedValues.append(value)
+    }
+
+    func values() -> [Bool] {
+        recordedValues
+    }
+}
+
+private actor RecoveryImportCreationFake: AtlasLocalVaultCreating {
+    private var createCalls = 0
+
+    func createOrResume()
+        async throws(AtlasLocalVaultCreationFailure)
+        -> AtlasLocalVaultCreationOutcome
+    {
+        createCalls += 1
+        return .created
+    }
+
+    func pause() async {}
+
+    func createCallCount() -> Int {
+        createCalls
     }
 }
 
@@ -1440,6 +1582,9 @@ private struct RecoveryImportFixture {
             saveStore: { store, _, _, overwrite in
                 await storage.saveStore(store, overwrite: overwrite)
             },
+            confirmStoreDurability: { _ in
+                try await storage.confirmStoreDurability()
+            },
             deleteStore: { _ in
                 await storage.deleteStore()
             },
@@ -1467,6 +1612,9 @@ private struct RecoveryImportFixture {
             },
             timestamp: {
                 "2026-07-27T01:02:03Z"
+            },
+            pendingImportDidChange: { pending in
+                await storage.setPendingImport(pending)
             }
         )
         self.vector = vector

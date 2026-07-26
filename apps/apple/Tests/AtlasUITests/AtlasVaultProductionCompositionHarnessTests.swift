@@ -21,6 +21,8 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "AtlasVaultRecoveryUnlockProvider",
             "AtlasVaultProductionUnlockCapabilitiesResolver",
             "AtlasPendingVaultTransactionSelectionGate",
+            "AtlasPendingRecoveryImportCreationGate",
+            "recoveryImportAvailability",
             "deriveVaultAwareRecoveryVaultKey",
             "recoveryImportOwner.stop",
         ] {

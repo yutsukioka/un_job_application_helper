@@ -516,16 +516,33 @@ public struct AtlasVaultRecoveryImportActions {
 }
 
 @MainActor
+public final class AtlasVaultRecoveryImportAvailability:
+    ObservableObject
+{
+    @Published public private(set) var hasPendingImport = false
+
+    public init() {}
+
+    func setPendingImport(_ pending: Bool) {
+        hasPendingImport = pending
+    }
+}
+
+@MainActor
 public struct AtlasVaultRecoveryImportContext {
     public let owner: AtlasVaultRecoveryImportPresentationOwner
     public let actions: AtlasVaultRecoveryImportActions
+    public let availability: AtlasVaultRecoveryImportAvailability
 
     public init(
         owner: AtlasVaultRecoveryImportPresentationOwner,
-        actions: AtlasVaultRecoveryImportActions
+        actions: AtlasVaultRecoveryImportActions,
+        availability: AtlasVaultRecoveryImportAvailability =
+            AtlasVaultRecoveryImportAvailability()
     ) {
         self.owner = owner
         self.actions = actions
+        self.availability = availability
     }
 }
 
@@ -657,10 +674,11 @@ public struct AtlasVaultRecoveryImportView: View {
             )
             Button("Restore Vault") {
                 let submitted = recoveryEntry
+                let submittedConfirmation = confirmedRestore
                 recoveryEntry = ""
                 confirmedRestore = false
                 Task { @MainActor in
-                    await actions.restore(submitted, true)
+                    await actions.restore(submitted, submittedConfirmation)
                 }
             }
             .buttonStyle(.borderedProminent)

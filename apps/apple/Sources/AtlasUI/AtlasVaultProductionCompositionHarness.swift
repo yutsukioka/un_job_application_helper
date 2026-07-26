@@ -922,6 +922,8 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasKeychainVaultRecoveryImportJournalStore(
                 client: keychainClient
             )
+        let recoveryImportAvailability =
+            AtlasVaultRecoveryImportAvailability()
         let hostVaultSelector =
             AtlasPendingVaultTransactionSelectionGate(
                 selector: vaultSelector,
@@ -930,6 +932,11 @@ public enum AtlasVaultProductionCompositionFactory {
                 },
                 hasPendingImport: {
                     try recoveryImportJournalStore.loadJournal() != nil
+                },
+                pendingImportDidChange: { pending in
+                    await recoveryImportAvailability.setPendingImport(
+                        pending
+                    )
                 }
             )
         let runtimeServices = AtlasVaultRuntimeFactory.production(
@@ -1036,6 +1043,11 @@ public enum AtlasVaultProductionCompositionFactory {
                          .protectedDataBecameUnavailable:
                         return false
                     }
+                },
+                pendingImportDidChange: { pending in
+                    await recoveryImportAvailability.setPendingImport(
+                        pending
+                    )
                 }
             )
         let recoveryImportOwner =
@@ -1093,7 +1105,8 @@ public enum AtlasVaultProductionCompositionFactory {
         )
         let recoveryImportContext = AtlasVaultRecoveryImportContext(
             owner: recoveryImportOwner,
-            actions: recoveryImportActions
+            actions: recoveryImportActions,
+            availability: recoveryImportAvailability
         )
         let creationCoordinator =
             AtlasLocalVaultCreationCoordinator.production(
@@ -1101,9 +1114,16 @@ public enum AtlasVaultProductionCompositionFactory {
                 selectionRegistry: vaultSelector,
                 journalStore: creationJournalStore
             )
+        let guardedCreationCoordinator =
+            AtlasPendingRecoveryImportCreationGate(
+                creator: creationCoordinator,
+                hasPendingImport: {
+                    try recoveryImportJournalStore.loadJournal() != nil
+                }
+            )
         let creationOwner =
             AtlasLocalVaultCreationPresentationOwner(
-                creator: creationCoordinator,
+                creator: guardedCreationCoordinator,
                 continueToUnlock: {
                     await host.requestUnlockPanel()
                 }

@@ -185,6 +185,34 @@ final class AtlasVaultRecoveryImportViewTests: XCTestCase {
         }
     }
 
+    func testRestoreViewForwardsTheExplicitConfirmation() throws {
+        let source = try phaseSource("AtlasVaultRecoveryImportView.swift")
+
+        XCTAssertTrue(
+            source.contains(
+                "let submittedConfirmation = confirmedRestore"
+            )
+        )
+        XCTAssertTrue(
+            source.contains(
+                "actions.restore(submitted, submittedConfirmation)"
+            )
+        )
+        XCTAssertFalse(
+            source.contains("actions.restore(submitted, true)")
+        )
+    }
+
+    func testPendingImportAvailabilityIsExplicitAndReversible() {
+        let availability = AtlasVaultRecoveryImportAvailability()
+
+        XCTAssertFalse(availability.hasPendingImport)
+        availability.setPendingImport(true)
+        XCTAssertTrue(availability.hasPendingImport)
+        availability.setPendingImport(false)
+        XCTAssertFalse(availability.hasPendingImport)
+    }
+
     private func phaseSource(_ name: String) throws -> String {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

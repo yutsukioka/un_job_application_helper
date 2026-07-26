@@ -172,7 +172,9 @@ normal transaction operation.
 `committedDurabilityUnconfirmed` stops before Keychain key creation and
 selection registration. The journal and any valid store remain. Explicit
 resume reselects the same export, re-enters the recovery key, and verifies the
-existing store before progressing.
+existing store, then explicitly synchronizes its parent directory before
+progressing. A failed retry remains durability-verification-required and
+creates neither a Keychain key nor a selection.
 
 ## 24. Interrupted Resume
 
@@ -219,6 +221,11 @@ The production selector is wrapped by one combined gate. A selected vault is
 visible only when both the local-vault creation journal and recovery-import
 journal are absent. Journal read failure returns no selection. The
 recovery-export setup journal intentionally does not hide an existing vault.
+The gate checks recovery-import state even when the underlying registry has no
+selection and publishes that fixed pending state to all production roots.
+While an import journal exists, roots suppress local-vault creation and the
+production creation coordinator is independently wrapped by a fail-closed
+journal gate. Restore resume/reset remains available.
 
 ## 30. Dynamic Unlock Capabilities
 
@@ -285,7 +292,8 @@ URL, export bytes, secret, identifier, path, or private record.
 The view presents fixed warnings, a local recovery `SecureField`, explicit
 restore confirmation, explicit pause/resume, and separately confirmed
 incomplete-restore reset. It displays no vault, export, store, record, or path
-identifier.
+identifier. The restore action captures and forwards the actual confirmation
+value before clearing local state; it never substitutes a hard-coded approval.
 
 ## 40. File Importer
 
@@ -305,8 +313,11 @@ wiped.
 ## 42. Shared Multi-Window Authority
 
 Production composition constructs one import coordinator and presentation
-owner. Multiple roots share them. Scene-local claims prevent duplicate sheets
-without creating duplicate filesystem or Keychain authorities.
+owner plus one pending-import availability authority. Multiple roots share
+them. Scene-local claims prevent duplicate sheets without creating duplicate
+filesystem or Keychain authorities. Pending-import transitions update that
+authority after journal save and clear, and explicit host selection
+reconstruction refreshes it after relaunch.
 
 ## 43. Lifecycle Cancellation
 
@@ -386,13 +397,21 @@ cover review and self-review findings.
 
 Focused suites cover strict file input, canonical identity, duplicate record
 rejection, recovery verification, journal privacy, transaction ordering,
-durability pause, partial resume, completion pending, reset, create-only
-writes, pending selection gating, dynamic capabilities, stale host resolution,
-vault-aware unlock, view lifecycle, root/harness integration, and full
-source-to-restore recovery-only relaunch. The review-fix regression runs passed
-236 Python tests and 1,200 Swift tests.
+durability pause and explicit directory re-synchronization, partial resume,
+completion pending, reset, create-only writes, pending selection and creation
+gating, dynamic capabilities, stale host resolution, vault-aware unlock,
+explicit confirmation forwarding, canonical test-file roots, view lifecycle,
+root/harness integration, and full source-to-restore recovery-only relaunch.
+The final review-fix regression runs passed 236 Python tests and 1,205 Swift
+tests.
 
 ## 56. iOS Build And Smoke Evidence
+
+The `AtlasApple` and `AtlasIOSHost` schemes both passed
+`build-for-testing` against the generic iOS Simulator destination after the
+final review-fix changes. No compatible simulator was booted, so no tap-level
+file-import smoke result is claimed; the deterministic in-process
+end-to-end suite remains authoritative.
 
 The discovered `AtlasApple` and `AtlasIOSHost` schemes both passed
 build-for-testing for a generic iOS Simulator destination. No compatible

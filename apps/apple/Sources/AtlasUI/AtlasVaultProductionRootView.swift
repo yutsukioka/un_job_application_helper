@@ -113,7 +113,9 @@ private struct AtlasVaultProductionRootContent: View {
                 creationContext: creationContext,
                 recoveryExportContext: recoveryExportContext,
                 recoveryImportOwner: recoveryImportContext.owner,
-                recoveryImportActions: recoveryImportContext.actions
+                recoveryImportActions: recoveryImportContext.actions,
+                recoveryImportAvailability:
+                    recoveryImportContext.availability
             )
         } else {
             baseFlow
@@ -159,6 +161,8 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
     @ObservedObject var recoveryImportOwner:
         AtlasVaultRecoveryImportPresentationOwner
     let recoveryImportActions: AtlasVaultRecoveryImportActions
+    @ObservedObject var recoveryImportAvailability:
+        AtlasVaultRecoveryImportAvailability
     @State private var isRecoveryImportPresented = false
     @State private var recoveryImportPresentationClaim =
         AtlasVaultRecoveryImportPresentationClaim()
@@ -228,11 +232,15 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
                 flowState: flowState,
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
-                creationContext: creationContext,
+                creationContext: recoveryImportAvailability.hasPendingImport ? nil : creationContext,
                 recoveryOwner: recoveryExportContext.owner,
                 recoveryActions: recoveryExportContext.actions
             )
-        } else if let creationContext {
+        } else if let creationContext =
+            recoveryImportAvailability.hasPendingImport
+                ? nil
+                : creationContext
+        {
             AtlasVaultCreationEnabledRoot(
                 flowState: flowState,
                 publicShellActions: publicShellActions,

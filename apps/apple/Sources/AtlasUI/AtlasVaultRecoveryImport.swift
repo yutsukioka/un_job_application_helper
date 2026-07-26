@@ -482,6 +482,8 @@ struct AtlasVaultRecoveryImportEnvironment: Sendable {
             Data,
             Bool
         ) async throws -> AtlasVaultAtomicWriteResult
+    let confirmStoreDurability:
+        @Sendable (String) async throws -> Void
     let deleteStore: @Sendable (String) async throws -> Void
     let loadVaultKey: @Sendable (String) async throws -> Data?
     let createVaultKey:
@@ -498,6 +500,7 @@ struct AtlasVaultRecoveryImportEnvironment: Sendable {
     let generateImportID: @Sendable () -> String
     let generateStoreID: @Sendable () -> String
     let timestamp: @Sendable () -> String
+    let pendingImportDidChange: @Sendable (Bool) async -> Void
 }
 
 struct AtlasPendingVaultTransactionSelectionGate<
@@ -506,25 +509,73 @@ struct AtlasPendingVaultTransactionSelectionGate<
     let selector: Selector
     let hasPendingCreation: @Sendable () throws -> Bool
     let hasPendingImport: @Sendable () throws -> Bool
+    let pendingImportDidChange: @Sendable (Bool) async -> Void
+
+    init(
+        selector: Selector,
+        hasPendingCreation: @escaping @Sendable () throws -> Bool,
+        hasPendingImport: @escaping @Sendable () throws -> Bool,
+        pendingImportDidChange:
+            @escaping @Sendable (Bool) async -> Void = { _ in }
+    ) {
+        self.selector = selector
+        self.hasPendingCreation = hasPendingCreation
+        self.hasPendingImport = hasPendingImport
+        self.pendingImportDidChange = pendingImportDidChange
+    }
 
     func selectVaultID() async throws(AtlasVaultIDSelectionError)
         -> AtlasVaultIDSelection
     {
         let selection = try await selector.selectVaultID()
-        guard case .selected = selection else {
-            return selection
-        }
         do {
+            let pendingCreation = try hasPendingCreation()
+            let pendingImport = try hasPendingImport()
+            await pendingImportDidChange(pendingImport)
             guard
-                try !hasPendingCreation(),
-                try !hasPendingImport()
+                !pendingCreation,
+                !pendingImport
             else {
                 return .none
             }
         } catch {
+            await pendingImportDidChange(true)
             return .none
         }
         return selection
+    }
+}
+
+struct AtlasPendingRecoveryImportCreationGate<
+    Creator: AtlasLocalVaultCreating
+>: AtlasLocalVaultCreating {
+    let creator: Creator
+    let hasPendingImport: @Sendable () throws -> Bool
+
+    func createOrResume()
+        async throws(AtlasLocalVaultCreationFailure)
+        -> AtlasLocalVaultCreationOutcome
+    {
+        guard !Task.isCancelled else {
+            throw .cancelled
+        }
+        do {
+            guard try !hasPendingImport() else {
+                throw AtlasLocalVaultCreationFailure.recoveryRequired
+            }
+        } catch let failure as AtlasLocalVaultCreationFailure {
+            throw failure
+        } catch {
+            throw .recoveryRequired
+        }
+        guard !Task.isCancelled else {
+            throw .cancelled
+        }
+        return try await creator.createOrResume()
+    }
+
+    func pause() async {
+        await creator.pause()
     }
 }
 
@@ -659,7 +710,9 @@ public actor AtlasVaultRecoveryImportCoordinator:
         guard !terminal else {
             throw AtlasVaultRecoveryImportFailure.cancelled
         }
-        return try await environment.loadJournal() != nil
+        let pending = try await environment.loadJournal() != nil
+        await environment.pendingImportDidChange(pending)
+        return pending
     }
 
     public func pause() async {
@@ -700,7 +753,9 @@ public actor AtlasVaultRecoveryImportCoordinator:
         hasPendingCreation: @escaping @Sendable () throws -> Bool,
         fileReader: any AtlasVaultRecoveryImportFileReading,
         atomicFileSystem: AtomicFileSystem,
-        authorize: @escaping @Sendable () async -> Bool
+        authorize: @escaping @Sendable () async -> Bool,
+        pendingImportDidChange:
+            @escaping @Sendable (Bool) async -> Void = { _ in }
     ) -> AtlasVaultRecoveryImportCoordinator {
         let environment = AtlasVaultRecoveryImportEnvironment(
             authorize: authorize,
@@ -743,6 +798,26 @@ public actor AtlasVaultRecoveryImportCoordinator:
                         for: session,
                         overwrite: overwrite
                     )
+            },
+            confirmStoreDurability: { vaultID in
+                do {
+                    let root = try runtimeServices
+                        .rootDirectoryProvider.rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(
+                            rootURL: root,
+                            vaultID: vaultID
+                        )
+                    let url = try services.pathLocator.localStoreURL(
+                        vaultID: vaultID
+                    )
+                    try atomicFileSystem.synchronizeDirectory(
+                        at: url.deletingLastPathComponent()
+                    )
+                } catch {
+                    throw AtlasVaultRecoveryImportFailure
+                        .durabilityVerificationRequired
+                }
             },
             deleteStore: { vaultID in
                 let root = try runtimeServices.rootDirectoryProvider
@@ -791,7 +866,8 @@ public actor AtlasVaultRecoveryImportCoordinator:
             },
             timestamp: {
                 currentTimestamp()
-            }
+            },
+            pendingImportDidChange: pendingImportDidChange
         )
         return AtlasVaultRecoveryImportCoordinator(
             environment: environment
@@ -906,6 +982,7 @@ public actor AtlasVaultRecoveryImportCoordinator:
             )
             try await requireCleanInstall()
             try await environment.saveJournal(journal)
+            await environment.pendingImportDidChange(true)
             let outcome = try await install(
                 journal: journal,
                 store: store,
@@ -934,6 +1011,7 @@ public actor AtlasVaultRecoveryImportCoordinator:
             guard let journal else {
                 throw AtlasVaultRecoveryImportFailure.restoreUnavailable
             }
+            await environment.pendingImportDidChange(true)
             let prepared = try await readAndValidateExport(from: url)
             guard
                 prepared.exportSHA256 == journal.exportSHA256,
@@ -999,6 +1077,18 @@ public actor AtlasVaultRecoveryImportCoordinator:
                 existingStore == store
             else {
                 throw AtlasVaultRecoveryImportFailure.recoveryRequired
+            }
+            try await requireTransactionAuthorization(
+                journal: journal,
+                allowMatchingSelection: true
+            )
+            do {
+                try await environment.confirmStoreDurability(
+                    journal.vaultID
+                )
+            } catch {
+                throw AtlasVaultRecoveryImportFailure
+                    .durabilityVerificationRequired
             }
         } else {
             try await requireTransactionAuthorization(
@@ -1113,6 +1203,7 @@ public actor AtlasVaultRecoveryImportCoordinator:
         } catch {
             throw AtlasVaultRecoveryImportFailure.completionPending
         }
+        await environment.pendingImportDidChange(false)
         return outcome
     }
 
@@ -1126,6 +1217,7 @@ public actor AtlasVaultRecoveryImportCoordinator:
             guard let journal else {
                 throw AtlasVaultRecoveryImportFailure.restoreUnavailable
             }
+            await environment.pendingImportDidChange(true)
             guard try await environment.selectVault() == .none else {
                 throw AtlasVaultRecoveryImportFailure.recoveryRequired
             }
@@ -1215,6 +1307,7 @@ public actor AtlasVaultRecoveryImportCoordinator:
                 allowMatchingSelection: false
             )
             try await environment.clearJournal()
+            await environment.pendingImportDidChange(false)
             preparedImport = nil
             return .success(.reset)
         } catch {
