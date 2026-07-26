@@ -66,6 +66,8 @@ final class AtlasVaultRecoveryKeyTests: XCTestCase {
             loadVector()["canonical_recovery_text"]
         )
         let invalid = [
+            "-" + canonical,
+            canonical + "-",
             canonical.replacingOccurrences(of: "AVRK1", with: "AVRK2"),
             canonical + "=",
             canonical.replacingOccurrences(
@@ -95,6 +97,18 @@ final class AtlasVaultRecoveryKeyTests: XCTestCase {
                 XCTAssertFalse(String(describing: error).contains(value))
             }
         }
+    }
+
+    func testRecoveryWrapFailureUsesFixedHyphenatedWording() {
+        XCTAssertEqual(
+            AtlasVaultRecoveryKeyError.invalidWrap.description,
+            "Recovery key-wrap is invalid."
+        )
+        XCTAssertFalse(
+            AtlasVaultRecoveryKeyError.invalidWrap.description.contains(
+                "key wrap"
+            )
+        )
     }
 
     func testChecksumMismatchFailsAndGeneratedKeyHasRequiredLength() throws {

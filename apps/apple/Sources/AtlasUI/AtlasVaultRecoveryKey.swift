@@ -23,7 +23,7 @@ public enum AtlasVaultRecoveryKeyError:
         case .invalidVault:
             return "Recovery setup cannot use this vault."
         case .invalidWrap:
-            return "Recovery key wrap is invalid."
+            return "Recovery key-wrap is invalid."
         case .authenticationFailed:
             return "Recovery key verification failed."
         }
@@ -70,7 +70,11 @@ public enum AtlasVaultRecoveryKeyCodec {
         let trimmed = text.trimmingCharacters(
             in: CharacterSet(charactersIn: " \t\r\n")
         )
-        guard !trimmed.contains("=") else {
+        guard
+            trimmed.first != "-",
+            trimmed.last != "-",
+            !trimmed.contains("=")
+        else {
             throw AtlasVaultRecoveryKeyError.invalidRecoveryKey
         }
         let groups = trimmed.uppercased().split(

@@ -196,7 +196,7 @@ public enum AtlasVaultVersionedWrapModelError:
     public var description: String {
         switch self {
         case .invalidRecoveryWrap:
-            return "Recovery key wrap is invalid."
+            return "Recovery key-wrap is invalid."
         case .invalidMetadata:
             return "Vault metadata is invalid."
         case .invalidCryptoSuite:
@@ -341,7 +341,7 @@ public struct AtlasVaultRecoveryWrappedKeyEnvelope:
         try atlasVaultRequireExactKeys(
             decoder,
             expected: Set(CodingKeys.allCases.map(\.rawValue)),
-            context: "Recovery key wrap"
+            context: "Recovery key-wrap"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let id = try container.decode(String.self, forKey: .id)
@@ -437,7 +437,7 @@ public enum AtlasVaultVersionedWrappedKey:
             try atlasVaultRequireExactKeys(
                 decoder,
                 expected: Set(V1Keys.allCases.map(\.rawValue)),
-                context: "Passphrase key wrap"
+                context: "Passphrase key-wrap"
             )
             self = .passphrase(
                 try AtlasVaultWrappedKeyEnvelope(from: decoder)

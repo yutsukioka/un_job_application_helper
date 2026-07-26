@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -151,6 +152,10 @@ public struct AtlasVaultEncryptedExportEnvelope:
             let object = try? JSONSerialization.jsonObject(with: data),
             let root = object as? [String: Any],
             Set(root.keys) == Set(CodingKeys.allCases.map(\.rawValue)),
+            isStrictJSONInteger(
+                root["version"],
+                equalTo: Self.supportedVersion
+            ),
             let metadata = root["vault_metadata"] as? [String: Any],
             Set(metadata.keys) == [
                 "format",
@@ -159,6 +164,11 @@ public struct AtlasVaultEncryptedExportEnvelope:
                 "crypto",
                 "key_wraps",
             ],
+            isStrictJSONInteger(
+                metadata["version"],
+                equalTo: AtlasVaultVersionedWrappedKeyMetadata
+                    .supportedVersion
+            ),
             let crypto = metadata["crypto"] as? [String: Any],
             Set(crypto.keys) == [
                 "record_aead",
@@ -172,9 +182,8 @@ public struct AtlasVaultEncryptedExportEnvelope:
         }
         for wrap in wraps {
             let type = wrap["type"] as? String
-            let version = wrap["wrap_version"] as? Int
-            switch (type, version) {
-            case ("passphrase", nil):
+            switch type {
+            case AtlasVaultWrappedKeyEnvelope.supportedType:
                 guard
                     Set(wrap.keys) == [
                         "id",
@@ -186,11 +195,13 @@ public struct AtlasVaultEncryptedExportEnvelope:
                 else {
                     throw AtlasVaultEncryptedExportError.invalidMetadata
                 }
-            case (
-                AtlasVaultRecoveryWrappedKeyEnvelope.supportedType,
-                AtlasVaultRecoveryWrappedKeyEnvelope.supportedWrapVersion
-            ):
+            case AtlasVaultRecoveryWrappedKeyEnvelope.supportedType:
                 guard
+                    isStrictJSONInteger(
+                        wrap["wrap_version"],
+                        equalTo: AtlasVaultRecoveryWrappedKeyEnvelope
+                            .supportedWrapVersion
+                    ),
                     Set(wrap.keys) == [
                         "id",
                         "type",
@@ -206,6 +217,20 @@ public struct AtlasVaultEncryptedExportEnvelope:
                 throw AtlasVaultEncryptedExportError.invalidMetadata
             }
         }
+    }
+
+    private static func isStrictJSONInteger(
+        _ value: Any?,
+        equalTo expected: Int
+    ) -> Bool {
+        guard
+            let number = value as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID(),
+            !CFNumberIsFloatType(number)
+        else {
+            return false
+        }
+        return number.intValue == expected && number == NSNumber(value: expected)
     }
 
     private static func isCanonicalLowercaseUUID(_ value: String) -> Bool {

@@ -53,11 +53,12 @@ SHA256(UTF8("atlasvault-recovery-key-v1:") || recovery_key)
 
 The key and checksum encode as unpadded RFC 4648 Base32. Sixty symbols are
 rendered as 15 groups under the `AVRK1` prefix. Parsing accepts ASCII case and
-ASCII group spacing, rejects Unicode look-alikes and ambiguous digits, and
-round-trips decoded bytes through canonical Base32 to reject nonzero padding
-bits and textual aliases. Checksum and canonical-symbol comparisons are
-constant time. The checksum is an error-detection value, not an authentication
-tag.
+ASCII group spacing, rejects leading or trailing hyphen separators, rejects
+Unicode look-alikes and ambiguous digits, and round-trips decoded bytes through
+canonical Base32 to reject nonzero padding bits and textual aliases. Leading
+and trailing permitted ASCII whitespace remain accepted. Checksum and
+canonical-symbol comparisons are constant time. The checksum is an
+error-detection value, not an authentication tag.
 
 ## Recovery Wrap V2
 
@@ -104,6 +105,9 @@ requires exactly `format`, `version`, `export_id`, `created_at`,
 Export and vault-metadata versions are strict JSON integers: Boolean and
 floating-point values are rejected by direct construction and untrusted
 decode, while the valid integer version 1 remains unchanged.
+Swift validates the raw JSON numeric tokens for the export version, nested
+vault-metadata version, and recovery-wrap version before `Codable` can
+normalize floating-point aliases such as `1.0` or `2.0` into integers.
 
 Sorted compact UTF-8 JSON uses Python-compatible ASCII escaping, including
 lowercase `\u` escapes and surrogate pairs for non-ASCII encrypted-record
@@ -322,6 +326,16 @@ suite passes 196 tests. Swift recovery-key, wrapped-key, and export
 interoperability suites remain green, the complete Swift suite passes 1,133
 tests, and both generic iOS Simulator test builds pass. Shared vectors, v1
 crypto/AAD, and the exact 23-file scope remain unchanged.
+
+Review-fix cycle 8 rejects leading and trailing recovery-key hyphen aliases,
+rejects floating-point Swift JSON version tokens at every nested export level,
+and standardizes fixed Swift validation wording on `key-wrap`. Historical v1
+crypto, AAD, serialized fields, recovery v2 semantics, canonical vector bytes,
+and the exact 23-file scope remain unchanged. The focused recovery-key,
+wrapped-key, and encrypted-export suites pass 43 tests, the complete Python
+suite passes 196 tests, the complete Swift suite passes 1,136 tests, and both
+generic iOS Simulator test builds pass. CoreSimulator was unavailable during
+verification, so no runtime smoke launch is claimed.
 
 ## End-To-End Evidence
 

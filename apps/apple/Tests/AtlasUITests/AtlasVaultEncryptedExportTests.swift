@@ -201,6 +201,46 @@ final class AtlasVaultEncryptedExportTests: XCTestCase {
         }
     }
 
+    func testStrictDecoderRejectsFloatingPointVersionTokensAtEveryLevel()
+        throws
+    {
+        let vector = try loadVector()
+        let canonical = try XCTUnwrap(
+            String(
+                data: try strictBase64(
+                    try string(vector["canonical_export_json_b64"])
+                ),
+                encoding: .utf8
+            )
+        )
+        let rootSuffix = #""version":1}"#
+        XCTAssertTrue(canonical.hasSuffix(rootSuffix))
+        let rootFloat =
+            String(canonical.dropLast(rootSuffix.count)) + #""version":1.0}"#
+        let metadataFloat = canonical.replacingOccurrences(
+            of: #""version":1},"version":1}"#,
+            with: #""version":1.0},"version":1}"#
+        )
+        let wrapFloat = canonical.replacingOccurrences(
+            of: #""wrap_version":2}"#,
+            with: #""wrap_version":2.0}"#
+        )
+
+        XCTAssertNotEqual(rootFloat, canonical)
+        XCTAssertNotEqual(metadataFloat, canonical)
+        XCTAssertNotEqual(wrapFloat, canonical)
+        for malformed in [rootFloat, metadataFloat, wrapFloat] {
+            XCTAssertThrowsError(
+                try AtlasVaultEncryptedExportEnvelope.decodeStrict(
+                    Data(malformed.utf8)
+                )
+            ) { error in
+                XCTAssertFalse(String(describing: error).contains("1.0"))
+                XCTAssertFalse(String(describing: error).contains("2.0"))
+            }
+        }
+    }
+
     func testEncryptedDocumentUsesOnlyVerifiedCanonicalBytes() throws {
         let vector = try loadVector()
         let canonical = try strictBase64(

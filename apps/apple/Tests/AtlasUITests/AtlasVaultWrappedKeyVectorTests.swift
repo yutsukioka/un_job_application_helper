@@ -199,6 +199,51 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
         )
     }
 
+    func testFixedWrapValidationWordingUsesHyphenatedKeyWrap() throws {
+        XCTAssertEqual(
+            AtlasVaultVersionedWrapModelError.invalidRecoveryWrap.description,
+            "Recovery key-wrap is invalid."
+        )
+        let recovery = try loadRecoveryVector()
+        for (expectedContext, original) in [
+            (
+                "Passphrase key-wrap",
+                try versionedV1MetadataObject()
+            ),
+            (
+                "Recovery key-wrap",
+                try dictionary(recovery["vault_metadata"])
+            ),
+        ] {
+            var metadata = original
+            var wrap = try dictionary(
+                try array(metadata["key_wraps"]).first
+            )
+            wrap["unexpected"] = "fixed-private-error"
+            metadata["key_wraps"] = [wrap]
+            let data = try JSONSerialization.data(
+                withJSONObject: metadata,
+                options: [.sortedKeys]
+            )
+
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    AtlasVaultVersionedWrappedKeyMetadata.self,
+                    from: data
+                )
+            ) { error in
+                let message = String(describing: error)
+                XCTAssertTrue(
+                    message.contains(
+                        "\(expectedContext) contains invalid fields"
+                    )
+                )
+                XCTAssertFalse(message.contains("key wrap"))
+                XCTAssertFalse(message.contains("fixed-private-error"))
+            }
+        }
+    }
+
     func testVersionedMetadataRejectsDuplicateRecoveryWrapID() throws {
         let vector = try loadRecoveryVector()
         var metadata = try dictionary(vector["vault_metadata"])
