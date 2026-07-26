@@ -1056,10 +1056,13 @@ public actor AtlasVaultProductionHost:
             } catch {
                 resolvedCapabilities = .failure(error)
             }
-            guard selectionOperation?.id == operation.id,
-                  generation == operation.generation,
+            guard selectionOperation?.id == operation.id else {
+                return flowState()
+            }
+            guard generation == operation.generation,
                   lifetime == .started,
                   !isTerminated else {
+                abandonSelectionAndResumeCallers()
                 return flowState()
             }
             guard case let .success(capabilities) =

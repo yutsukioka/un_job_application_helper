@@ -165,6 +165,58 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testLifecycleStaleCapabilityResolutionResumesSelectionAndAllowsRetry()
+        async throws
+    {
+        let gate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(try selectedVaultID())),
+            capabilityResolutionGate: gate
+        )
+        _ = try await graph.host.start()
+        let completion = HostBoolRecorder()
+        let requestCompleted = expectation(
+            description: "stale selection request completes"
+        )
+        let request = Task {
+            let state = await graph.host.requestUnlockPanel()
+            await completion.record(true)
+            requestCompleted.fulfill()
+            return state
+        }
+        await gate.waitUntilEntered()
+
+        let inactive = await graph.host.handleLifecycleEvent(
+            .willResignActive
+        )
+        await expectFalse(inactive.publicShell.canRequestUnlock)
+        await gate.release()
+        await graph.capabilityResolver.waitUntilCompleted()
+        await fulfillment(of: [requestCompleted], timeout: 0.5)
+
+        let didComplete = await completion.value() == true
+        await expectTrue(didComplete)
+        guard didComplete else {
+            _ = await graph.host.stop()
+            _ = await request.value
+            return
+        }
+        let abandoned = await request.value
+        await expectEqual(abandoned.mode, .lockedPublic)
+        await expectEqual(graph.controllerBuilder.callCount, 0)
+
+        let active = await graph.host.handleLifecycleEvent(
+            .didBecomeActive
+        )
+        await expectTrue(active.publicShell.canRequestUnlock)
+        let retry = await graph.host.requestUnlockPanel()
+        await expectEqual(retry.mode, .unlockPanel)
+        await expectEqual(
+            await graph.capabilityResolver.callCount(),
+            2
+        )
+    }
+
     func testPhaseTypesErrorsGenerationsAndDescriptionsAreRedacted() async {
         _ = AtlasVaultProductionHost.self
         _ = AtlasVaultProductionHostBuilder.self

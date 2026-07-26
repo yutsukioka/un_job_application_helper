@@ -208,6 +208,10 @@ Reset validates both the store and key fingerprints before deleting either.
 It then removes only the exact store file and exact Keychain key and clears the
 journal last. Missing partial resources are tolerated. A mismatch or any
 selection preserves all resources and fails closed. Directories are retained.
+If file removal succeeds but directory synchronization fails, the journal and
+key remain. A retry with the store already absent synchronizes the nearest
+existing ancestor of the canonical store path before deleting the key or
+clearing the journal.
 
 ## 28. No Destructive Overwrite
 
@@ -290,6 +294,10 @@ state after the await. Failure or zero methods publishes fixed
 key-unavailable with no controller. Stale resolution cannot create a
 controller. Activating and reconciliation states preserve the resolved
 capability snapshot.
+When lifecycle invalidation makes a suspended resolution stale, the host
+abandons that exact selection operation and resumes every coalesced caller
+before returning. A later foreground unlock request therefore starts fresh
+capability resolution instead of joining stranded work.
 
 ## 38. Import Presentation Owner
 
@@ -420,7 +428,7 @@ cancellation-aware waiter removal, dynamic capabilities, stale host
 resolution, vault-aware unlock, explicit confirmation forwarding, canonical
 test-file roots, view lifecycle, root/harness integration, and full
 source-to-restore recovery-only relaunch.
-The final review-fix regression runs passed 236 Python tests and 1,210 Swift
+The final review-fix regression runs passed 236 Python tests and 1,212 Swift
 tests.
 
 ## 56. iOS Build And Smoke Evidence

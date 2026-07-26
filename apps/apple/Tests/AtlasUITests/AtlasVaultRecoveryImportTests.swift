@@ -1112,7 +1112,7 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
                 )
             )
         )
-        await fixture.storage.deleteStore()
+        try await fixture.storage.deleteStore()
         await fixture.storage.setCommitState(.committed)
 
         let outcome = try await fixture.coordinator.resumeImport(
@@ -1341,6 +1341,71 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         XCTAssertFalse(unchanged.events.contains("deleteKey"))
     }
 
+    func testResetRetryConfirmsDurabilityAfterStoreWasRemoved()
+        async throws
+    {
+        let fixture = try RecoveryImportFixture()
+        await fixture.storage.setCommitState(
+            .committedDurabilityUnconfirmed
+        )
+        try await fixture.coordinator.prepareImport(
+            from: Self.testOnlyFileURL
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.confirmAndImport(
+                recoverySecret: AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(fixture.vector.recoveryCode.utf8)
+                )
+            )
+        )
+        let pending = await fixture.storage.snapshot()
+        let journal = try XCTUnwrap(pending.journal)
+        await fixture.storage.installKey(
+            fixture.vector.vaultKey,
+            vaultID: journal.vaultID
+        )
+        await fixture.storage.setDeleteStoreDurabilityFailure(true)
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.coordinator.resetPendingImport()
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasVaultRecoveryImportFailure,
+                .durabilityVerificationRequired
+            )
+        }
+
+        let interrupted = await fixture.storage.snapshot()
+        XCTAssertNil(interrupted.store)
+        XCTAssertEqual(interrupted.key, fixture.vector.vaultKey)
+        XCTAssertNotNil(interrupted.journal)
+
+        await fixture.storage.setDeleteStoreDurabilityFailure(false)
+        await fixture.storage.setCommitState(.committed)
+        let retryEventStart = interrupted.events.count
+
+        try await fixture.coordinator.resetPendingImport()
+
+        let complete = await fixture.storage.snapshot()
+        let retryEvents = Array(
+            complete.events.dropFirst(retryEventStart)
+        )
+        XCTAssertNil(complete.store)
+        XCTAssertNil(complete.key)
+        XCTAssertNil(complete.journal)
+        let durability = try XCTUnwrap(
+            retryEvents.firstIndex(of: "confirmStoreDurability")
+        )
+        let deleteKey = try XCTUnwrap(
+            retryEvents.firstIndex(of: "deleteKey")
+        )
+        let clear = try XCTUnwrap(
+            retryEvents.firstIndex(of: "clearJournal")
+        )
+        XCTAssertLessThan(durability, deleteKey)
+        XCTAssertLessThan(durability, clear)
+    }
+
     func testImportSourceAvoidsAutomaticUnlockAndNetworkBoundaries()
         throws
     {
@@ -1516,6 +1581,7 @@ private actor RecoveryImportStorage {
     private var recordedPendingImportStates: [Bool] = []
     private var commitState: AtlasVaultAtomicCommitState = .committed
     private var clearJournalFails = false
+    private var deleteStoreDurabilityFails = false
     private var authorized = true
 
     func events() -> [String] {
@@ -1543,6 +1609,10 @@ private actor RecoveryImportStorage {
 
     func setClearJournalFailure(_ value: Bool) {
         clearJournalFails = value
+    }
+
+    func setDeleteStoreDurabilityFailure(_ value: Bool) {
+        deleteStoreDurabilityFails = value
     }
 
     func setAuthorized(_ value: Bool) {
@@ -1617,9 +1687,13 @@ private actor RecoveryImportStorage {
         }
     }
 
-    func deleteStore() {
+    func deleteStore() throws {
         recordedEvents.append("deleteStore")
         store = nil
+        guard !deleteStoreDurabilityFails else {
+            throw AtlasVaultRecoveryImportFailure
+                .durabilityVerificationRequired
+        }
     }
 
     func loadKey() -> Data? {
@@ -1773,8 +1847,11 @@ private struct RecoveryImportFixture {
             confirmStoreDurability: { _ in
                 try await storage.confirmStoreDurability()
             },
+            confirmStoreDeletionDurability: { _ in
+                try await storage.confirmStoreDurability()
+            },
             deleteStore: { _ in
-                await storage.deleteStore()
+                try await storage.deleteStore()
             },
             loadVaultKey: { _ in
                 await storage.loadKey()

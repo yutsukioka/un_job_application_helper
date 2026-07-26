@@ -484,6 +484,8 @@ struct AtlasVaultRecoveryImportEnvironment: Sendable {
         ) async throws -> AtlasVaultAtomicWriteResult
     let confirmStoreDurability:
         @Sendable (String) async throws -> Void
+    let confirmStoreDeletionDurability:
+        @Sendable (String) async throws -> Void
     let deleteStore: @Sendable (String) async throws -> Void
     let loadVaultKey: @Sendable (String) async throws -> Data?
     let createVaultKey:
@@ -951,6 +953,53 @@ public actor AtlasVaultRecoveryImportCoordinator:
                     try atomicFileSystem.synchronizeDirectory(
                         at: url.deletingLastPathComponent()
                     )
+                } catch {
+                    throw AtlasVaultRecoveryImportFailure
+                        .durabilityVerificationRequired
+                }
+            },
+            confirmStoreDeletionDurability: { vaultID in
+                do {
+                    let root = try runtimeServices
+                        .rootDirectoryProvider.rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(
+                            rootURL: root,
+                            vaultID: vaultID
+                        )
+                    let url = try services.pathLocator.localStoreURL(
+                        vaultID: vaultID
+                    )
+                    let fileManager = FileManager.default
+                    let rootComponents = root.standardizedFileURL
+                        .pathComponents
+                    var directory = url.deletingLastPathComponent()
+                        .standardizedFileURL
+                    while directory.pathComponents.count
+                        >= rootComponents.count
+                    {
+                        var isDirectory = ObjCBool(false)
+                        if fileManager.fileExists(
+                            atPath: directory.path,
+                            isDirectory: &isDirectory
+                        ) {
+                            guard isDirectory.boolValue else {
+                                throw AtlasVaultRecoveryImportFailure
+                                    .recoveryRequired
+                            }
+                            try atomicFileSystem.synchronizeDirectory(
+                                at: directory
+                            )
+                            return
+                        }
+                        guard directory.pathComponents != rootComponents
+                        else {
+                            break
+                        }
+                        directory = directory.deletingLastPathComponent()
+                    }
+                    throw AtlasVaultRecoveryImportFailure
+                        .durabilityVerificationRequired
                 } catch {
                     throw AtlasVaultRecoveryImportFailure
                         .durabilityVerificationRequired
@@ -1424,6 +1473,25 @@ public actor AtlasVaultRecoveryImportCoordinator:
                     journal.vaultID
                 ) == nil else {
                     throw AtlasVaultRecoveryImportFailure.recoveryRequired
+                }
+            } else {
+                try await requireTransactionAuthorization(
+                    journal: journal,
+                    allowMatchingSelection: false
+                )
+                guard try await environment.loadStore(
+                    journal.vaultID
+                ) == nil else {
+                    throw AtlasVaultRecoveryImportFailure.recoveryRequired
+                }
+                do {
+                    try await environment
+                        .confirmStoreDeletionDurability(
+                            journal.vaultID
+                        )
+                } catch {
+                    throw AtlasVaultRecoveryImportFailure
+                        .durabilityVerificationRequired
                 }
             }
             if hasKey {
