@@ -3,6 +3,35 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
+    func testRecoveryWrapV2VectorAndVersionedModelSurfaceExists() throws {
+        let source = try String(
+            contentsOf: Self.appleRoot()
+                .appendingPathComponent(
+                    "Sources/AtlasUI/AtlasVaultWrappedKeyModels.swift"
+                ),
+            encoding: .utf8
+        )
+        let vector = Self.repositoryRoot()
+            .appendingPathComponent(
+                "contracts/sync/test_vectors/"
+                    + "atlasvault_recovery_export_vectors_v2.json"
+            )
+
+        XCTAssertTrue(
+            source.contains("AtlasVaultRecoveryWrappedKeyEnvelope")
+        )
+        XCTAssertTrue(
+            source.contains("AtlasVaultVersionedWrappedKey")
+        )
+        XCTAssertTrue(
+            source.contains("wrap_version")
+        )
+        XCTAssertTrue(
+            source.contains("recovery_key")
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: vector.path))
+    }
+
     func testSharedVectorDecodesThroughStrictProductionModels() throws {
         let root = try loadVectorRoot()
         let vector = try XCTUnwrap(root.vectors.first)
@@ -278,6 +307,19 @@ final class AtlasVaultWrappedKeyVectorTests: XCTestCase {
             return url
         }
         throw KeyWrapVectorTestError.vectorMissing
+    }
+
+    private static func appleRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private static func repositoryRoot() -> URL {
+        appleRoot()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     private func stableJSON(_ value: Any) throws -> String {

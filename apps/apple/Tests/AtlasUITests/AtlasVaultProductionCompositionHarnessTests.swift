@@ -1682,6 +1682,31 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         )
     }
 
+    func testProductionCompositionProvidesOneLazySharedRecoveryExportContext()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "AtlasVaultRecoveryExportCoordinator",
+            "AtlasVaultRecoveryExportPresentationOwner",
+            "recoveryExportContext",
+            "recoveryOwner.stop",
+            "runtime.status()",
+            "host.currentFlowState()",
+            "client: keychainClient",
+            "runtimeServices: runtimeServices",
+            "recoveryExportContext: nil",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains("recoveryKeyProvider: Atlas")
+        )
+    }
+
     func testCompositionSourceUsesReviewedConcreteAssemblyAndNoPlatformWork()
         throws
     {
