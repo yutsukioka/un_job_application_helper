@@ -413,7 +413,7 @@ public enum AtlasVaultVersionedWrappedKey:
         case wrapVersion = "wrap_version"
     }
 
-    private enum V1Keys: String, CodingKey {
+    private enum V1Keys: String, CodingKey, CaseIterable {
         case id
         case type
         case kdf
@@ -432,19 +432,30 @@ public enum AtlasVaultVersionedWrappedKey:
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: ProbeKeys.self)
         let type = try container.decode(String.self, forKey: .type)
-        let wrapVersion = try container.decodeIfPresent(
-            Int.self,
-            forKey: .wrapVersion
-        )
-        switch (type, wrapVersion) {
-        case (AtlasVaultWrappedKeyEnvelope.supportedType, nil):
+        switch type {
+        case AtlasVaultWrappedKeyEnvelope.supportedType:
+            try atlasVaultRequireExactKeys(
+                decoder,
+                expected: Set(V1Keys.allCases.map(\.rawValue)),
+                context: "Passphrase key wrap"
+            )
             self = .passphrase(
                 try AtlasVaultWrappedKeyEnvelope(from: decoder)
             )
-        case (
-            AtlasVaultRecoveryWrappedKeyEnvelope.supportedType,
-            AtlasVaultRecoveryWrappedKeyEnvelope.supportedWrapVersion
-        ):
+        case AtlasVaultRecoveryWrappedKeyEnvelope.supportedType:
+            let wrapVersion = try container.decode(
+                Int.self,
+                forKey: .wrapVersion
+            )
+            let supportedVersion =
+                AtlasVaultRecoveryWrappedKeyEnvelope.supportedWrapVersion
+            guard wrapVersion == supportedVersion else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .wrapVersion,
+                    in: container,
+                    debugDescription: "Unsupported key-wrap version"
+                )
+            }
             self = .recoveryKey(
                 try AtlasVaultRecoveryWrappedKeyEnvelope(from: decoder)
             )

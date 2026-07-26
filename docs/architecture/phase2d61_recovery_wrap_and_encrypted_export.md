@@ -8,7 +8,7 @@ encrypted export before any private-data authoring or rendering is enabled.
 
 ## Scope
 
-This phase changes only the reviewed 22-file contract, Python reference, Swift
+This phase changes only the reviewed 23-file contract, Python reference, Swift
 crypto/export/setup, production composition, production root, and test scope.
 It does not change app entry, the process owner, production host, unlock
 coordinator, local-vault creation, navigation, private models, or Xcode project
@@ -33,7 +33,11 @@ Phase 2D-61 does not reinterpret, rewrite, or enable production use of that
 decode-only Swift profile.
 
 Top-level vault metadata remains `atlas-vault` version 1. A versioned key-wrap
-union allows v1 passphrase and v2 recovery wraps to coexist.
+union allows v1 passphrase and v2 recovery wraps to coexist. Swift dispatches
+v1 only when `wrap_version` is completely absent and the top-level wrap has
+exactly `id`, `type`, `kdf`, `nonce`, and `ciphertext`. Explicit null,
+explicit versions, and unknown fields fail without changing v1 crypto,
+encoding, or AAD.
 
 ## Recovery-Key Format
 
@@ -86,6 +90,13 @@ The Swift envelope matches Python `atlasvault-export` version 1:
 - strict UTC timestamp with second precision;
 - complete validated vault metadata;
 - ordered encrypted records and tombstones.
+
+Python direct construction and untrusted decode apply the same metadata
+boundary: `export_id` is a canonical lowercase hyphenated UUID and
+`created_at` is an exact valid UTC-seconds timestamp. Explicit empty custom
+values fail rather than selecting generated defaults. Export v1 decoding
+requires exactly `format`, `version`, `export_id`, `created_at`,
+`vault_metadata`, and `records`; missing and unknown keys are rejected.
 
 Sorted compact UTF-8 JSON excludes the local store ID, path, selection
 registry, Keychain state, raw vault key, raw recovery key, recovery text,
@@ -255,6 +266,15 @@ production code. Green coverage includes codec, crypto, vectors, strict export,
 transaction ordering, durability, authorization, resume, reset read-back,
 private-free presentation, shared composition, root integration, and two real
 temporary-root end-to-end journeys.
+
+Review-fix cycle 4 added deterministic red evidence for Python accepting
+noncanonical export identifiers/timestamps and Swift accepting
+`wrap_version: null` or an unknown v1 field. After the strict-decoder repair,
+the focused Python vector suites passed 97 tests, the complete Python suite
+passed 162 tests, the strict Swift wrap suite passed 25 tests, and the complete
+Swift suite passed 1,129 tests. Both discovered generic iOS Simulator test
+builds passed. The existing canonical vector bytes and SHA-256 are unchanged,
+and the final reviewed repository scope is exactly 23 files.
 
 ## End-To-End Evidence
 
