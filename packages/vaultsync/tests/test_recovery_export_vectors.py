@@ -136,6 +136,12 @@ def test_recovery_key_parser_accepts_ascii_case_and_group_spacing() -> None:
     )
 
 
+@pytest.mark.parametrize("value", [None, b"not-text", 1])
+def test_recovery_key_parser_rejects_non_text_with_fixed_error(value: Any) -> None:
+    with pytest.raises(RecoveryKeyError, match="^invalid recovery key$"):
+        crypto.parse_recovery_key(value)
+
+
 def test_checksum_mismatch_and_wrong_recovery_key_fail_safely() -> None:
     vector = load_vector()
     canonical = vector["canonical_recovery_text"]
@@ -196,6 +202,39 @@ def test_v2_model_rejects_unknown_keys_and_duplicate_ids() -> None:
             vault_id=vector["vault_id"],
             key_wraps=(wrap, wrap),
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("wrap_version", None),
+        ("wrap_version", 1),
+        ("unexpected", True),
+    ],
+)
+def test_versioned_v1_model_rejects_ambiguous_or_unknown_fields(
+    field: str,
+    value: Any,
+) -> None:
+    metadata = deepcopy(load_vector()["vault_metadata"])
+    passphrase = {
+        "id": "legacy-passphrase",
+        "type": "passphrase",
+        "kdf": {
+            "algorithm": "Argon2id",
+            "salt": base64.b64encode(b"s" * 16).decode(),
+            "memory_kib": 65_536,
+            "iterations": 3,
+            "parallelism": 4,
+        },
+        "nonce": base64.b64encode(b"n" * 12).decode(),
+        "ciphertext": base64.b64encode(b"c" * 48).decode(),
+    }
+    passphrase[field] = value
+    metadata["key_wraps"] = [passphrase]
+
+    with pytest.raises(VaultFormatError):
+        VaultMetadata.from_dict(metadata)
 
 
 @pytest.mark.parametrize("field", ["salt", "nonce", "ciphertext"])

@@ -300,7 +300,12 @@ def _versioned_wrapped_key_from_dict(
     obj = _require_mapping(data, "key_wrap")
     key_type = obj.get("type")
     wrap_version = obj.get("wrap_version")
-    if key_type == "passphrase" and wrap_version is None:
+    if key_type == "passphrase" and "wrap_version" not in obj:
+        _require_exact_keys(
+            obj,
+            {"id", "type", "kdf", "nonce", "ciphertext"},
+            "passphrase key_wrap",
+        )
         return WrappedKey.from_dict(obj)
     if (
         key_type == RECOVERY_WRAP_TYPE

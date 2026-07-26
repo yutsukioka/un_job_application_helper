@@ -113,9 +113,9 @@ def parse_recovery_key(value: str) -> bytes:
         if not hmac.compare_digest(checksum, _recovery_checksum(recovery_key)):
             raise _invalid_recovery_key()
         return recovery_key
+    except RecoveryKeyError:
+        raise
     except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
-        if isinstance(exc, RecoveryKeyError):
-            raise
         raise _invalid_recovery_key() from exc
 
 
