@@ -169,6 +169,7 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       await store.write(
         AtlasLocalCacheSnapshot(
@@ -213,6 +214,7 @@ void main() {
       );
       final controller = AtlasAppController(
         localCacheStore: store,
+        now: () => _cacheFixtureNow,
         clientFactory: (baseURL) =>
             AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
       );
@@ -265,6 +267,7 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       final cachedJobs = [
         _facetJob(
@@ -312,6 +315,7 @@ void main() {
       );
       final controller = AtlasAppController(
         localCacheStore: store,
+        now: () => _cacheFixtureNow,
         clientFactory: (baseURL) =>
             AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
       );
@@ -423,6 +427,7 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       final cachedJobs = [
         _facetJob(

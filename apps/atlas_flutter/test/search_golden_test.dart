@@ -5,10 +5,10 @@ import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-bool get _skipAndroidGoldensOnWindows {
-  // These baselines are Android renderer parity assets; Windows text and
-  // rasterization differ enough to produce stable but irrelevant pixel diffs.
-  return Platform.isWindows;
+bool get _skipAndroidParityPixelGoldens {
+  // Android parity PNGs are supported on Linux; macOS and Windows use the
+  // host-independent semantic tests below.
+  return Platform.isMacOS || Platform.isWindows;
 }
 
 void main() {
@@ -36,7 +36,7 @@ void main() {
         matchesGoldenFile('goldens/android/search_top_compact.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -54,7 +54,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_sheet_top.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -74,7 +74,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_country_jpn.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -94,7 +94,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_city_tokyo.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -126,7 +126,7 @@ void main() {
         matchesGoldenFile('goldens/android/job_detail_top.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets('filter sheet exposes stable semantics on every host', (

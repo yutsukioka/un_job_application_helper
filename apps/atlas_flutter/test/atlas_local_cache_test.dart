@@ -23,7 +23,10 @@ void main() {
     });
 
     test('writes and reads a full local search snapshot', () async {
-      final store = AtlasLocalCacheStore(file: cacheFile);
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
       final snapshot = _snapshot(savedAt: _fixtureSavedAt);
 
       await store.write(snapshot);
