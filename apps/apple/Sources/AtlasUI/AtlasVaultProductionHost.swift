@@ -355,6 +355,9 @@ public actor AtlasVaultProductionHost:
         guard request.origin == .manual else {
             throw .invalidRequest
         }
+        guard savedSearchHandoffOperation == nil else {
+            throw .unavailable
+        }
         return try await performPublicSearch(request)
     }
 

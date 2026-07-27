@@ -712,6 +712,65 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testManualSearchIsRejectedWhileSavedHandoffOwnsHost()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let postLockStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-exclusive-result",
+            title: "Saved Exclusive Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved exclusive",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await privateDrainGate.waitUntilEntered()
+        await graph.runtime.setStatusGate(postLockStatusGate)
+        await privateDrainGate.release()
+        await postLockStatusGate.waitUntilEntered()
+
+        let manual = await captureSearch(
+            graph.host,
+            try searchRequest(query: "manual must wait")
+        )
+        let callsWhileHandoffOwned = await graph.publicJobs.totalCalls()
+
+        await postLockStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(manual, .failure(.unavailable))
+        await expectEqual(callsWhileHandoffOwned, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+    }
+
     func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
         async throws
     {

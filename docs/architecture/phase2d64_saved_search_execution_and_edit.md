@@ -135,7 +135,10 @@ behavior-compatible. It creates a text-only request with manual origin,
 facets disabled, and no additional criteria. The ordinary public-search host
 entry point accepts only manual-origin requests. A saved-origin request is
 rejected before service access so it cannot bypass the dedicated lock-first
-handoff boundary.
+handoff boundary. While the retained saved-search handoff owns the host, the
+ordinary entry point also rejects manual searches. This keeps network
+admission exclusive through the post-lock proof and saved-search request
+completion; ordinary manual behavior resumes after handoff ownership clears.
 
 ## 20. Saved-Search Validation
 
@@ -325,6 +328,15 @@ unlocked. The correction rejects saved-origin requests before service access
 while preserving the internal shared helper used after the dedicated handoff
 barrier.
 
+The second exact-head Codex review identified a cross-window admission race:
+after locked-public publication but before the handoff's post-lock proof, an
+ordinary manual search could enter and consume the host's public-search
+operation. A deterministic status gate reproduced a successful manual service
+call, a displaced saved request, and a failed handoff. The correction rejects
+manual searches while the retained saved-search handoff operation owns the
+host. The regression requires zero service calls from the manual attempt and
+then proves the saved request alone completes after the gate releases.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -346,6 +358,15 @@ both generic iOS builds, and the exact-device normal-route smoke were repeated
 successfully. The ordinary-entry regression specifically verifies zero public
 calls, zero runtime-lock calls, and an unchanged unlocked private session when
 a saved-origin request is presented outside the dedicated handoff.
+
+After the second Codex review correction, the production-host suite passed
+127 tests, the combined Checkpoint A/B matrix passed 343 tests, the explicit
+earlier-phase and supporting regression matrix passed 237 tests, and full
+Swift passed 1,283 tests. The complete Python mirror, both generic iOS builds,
+and the exact-device normal-route smoke were repeated successfully. The
+handoff-ownership regression specifically holds post-lock runtime proof,
+requires a concurrent manual attempt to make zero service calls, then proves
+the saved request alone completes after release.
 
 ## 46. Go/No-Go
 
