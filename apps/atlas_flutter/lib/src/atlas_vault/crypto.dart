@@ -131,18 +131,21 @@ Future<Uint8List> deriveAtlasVaultPassphraseWrappingKeyV1({
   if (passphrase.isEmpty) {
     throw const AtlasVaultCryptoException();
   }
-  final passphraseBytes = Uint8List.fromList(utf8.encode(passphrase));
-  final salt = parameters.salt;
-  final pointyParameters = Argon2Parameters(
-    Argon2Parameters.ARGON2_id,
-    salt,
-    desiredKeyLength: _vaultKeyByteCount,
-    iterations: parameters.iterations,
-    memory: parameters.memoryKib,
-    lanes: parameters.parallelism,
-    version: Argon2Parameters.ARGON2_VERSION_13,
-  );
+  Uint8List? passphraseBytes;
+  Uint8List? salt;
   try {
+    requireAtlasVaultWellFormedUtf16(passphrase, field: 'passphrase');
+    passphraseBytes = Uint8List.fromList(utf8.encode(passphrase));
+    salt = parameters.salt;
+    final pointyParameters = Argon2Parameters(
+      Argon2Parameters.ARGON2_id,
+      salt,
+      desiredKeyLength: _vaultKeyByteCount,
+      iterations: parameters.iterations,
+      memory: parameters.memoryKib,
+      lanes: parameters.parallelism,
+      version: Argon2Parameters.ARGON2_VERSION_13,
+    );
     final generator = Argon2BytesGenerator()..init(pointyParameters);
     return Uint8List.fromList(generator.process(passphraseBytes));
   } catch (_) {

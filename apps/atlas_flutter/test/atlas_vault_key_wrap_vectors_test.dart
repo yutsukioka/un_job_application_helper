@@ -116,6 +116,43 @@ void main() {
     }
   });
 
+  test(
+    'Argon2id rejects malformed UTF-16 passphrases before encoding',
+    () async {
+      final malformed = String.fromCharCode(0xd800);
+
+      await expectLater(
+        deriveAtlasVaultPassphraseWrappingKeyV1(
+          passphrase: malformed,
+          parameters: wrap.kdf,
+        ),
+        throwsA(isA<AtlasVaultCryptoException>()),
+      );
+      await expectLater(
+        wrapAtlasVaultKeyWithPassphraseV1(
+          vaultKey: vaultKey,
+          passphrase: malformed,
+          keyId: wrap.id,
+          parameters: wrap.kdf,
+          nonce: wrap.nonce,
+        ),
+        throwsA(isA<AtlasVaultCryptoException>()),
+      );
+      await expectLater(
+        unwrapAtlasVaultPassphraseWrapV1(wrap: wrap, passphrase: malformed),
+        throwsA(isA<AtlasVaultCryptoException>()),
+      );
+
+      final replacementCharacterKey =
+          await deriveAtlasVaultPassphraseWrappingKeyV1(
+            passphrase: '\ufffd',
+            parameters: wrap.kdf,
+          );
+      expect(replacementCharacterKey, hasLength(32));
+      replacementCharacterKey.fillRange(0, replacementCharacterKey.length, 0);
+    },
+  );
+
   test('serialized v1 metadata contains no passphrase or raw vault key', () {
     final serialized = jsonEncode(metadataJson);
 
