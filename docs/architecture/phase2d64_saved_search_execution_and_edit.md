@@ -465,6 +465,18 @@ an ordinary full-drain lock, releases the now-stale handoff, requires fixed
 cancelled outcome and zero public calls, then proves ordinary unlock admission
 reopens only from authoritatively locked state.
 
+The single final Copilot review identified a terminal ownership gap: terminal
+host stop could complete while a retained saved-search handoff remained
+suspended in cancellation-ignoring dependency work. Terminal intent now
+cancels the retained handoff synchronously. The stop operation retains that
+exact task, completes the ordinary terminal full-drain barrier, and then drains
+the handoff before returning stopped state. Search operations are still
+cancelled before any drain await, so a handoff already inside public search
+cannot create a circular wait. Ordinary nonterminal lock and committed-failure
+containment keep their established behavior. A deterministic first-event
+regression proves handoff cancellation precedes stop completion and that no
+public request occurs.
+
 ## 46. Go/No-Go
 
 - Apple saved-search create/list/delete: implemented previously.

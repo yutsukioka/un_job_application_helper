@@ -1112,7 +1112,11 @@ public actor AtlasVaultProductionHost:
 
     private func performStop() async -> AtlasLockedShellUnlockFlowState {
         await awaitStartingOperationBeforeStop()
+        let activeSavedSearchHandoff = savedSearchHandoffOperation
         guard presentationWasStarted else {
+            await cancelAndDrainSavedSearchHandoff(
+                activeSavedSearchHandoff
+            )
             lifetime = .stopped
             closeUnlockAdmission()
             return flowState()
@@ -1122,6 +1126,9 @@ public actor AtlasVaultProductionHost:
         await cancelAndDrainSearchOperations()
         replaceShell(isSearching: false)
         let state = await runPrivateFreeBarrier(terminal: true)
+        await cancelAndDrainSavedSearchHandoff(
+            activeSavedSearchHandoff
+        )
         lifetime = .stopped
         closeUnlockAdmission()
         return state
@@ -1139,6 +1146,19 @@ public actor AtlasVaultProductionHost:
         }
         for operation in operations {
             retainedSearchOperations[operation.id] = nil
+        }
+    }
+
+    private func cancelAndDrainSavedSearchHandoff(
+        _ operation: SavedSearchHandoffOperation?
+    ) async {
+        guard let operation else {
+            return
+        }
+        operation.task.cancel()
+        _ = await operation.task.value
+        if savedSearchHandoffOperation?.id == operation.id {
+            savedSearchHandoffOperation = nil
         }
     }
 
@@ -2545,6 +2565,7 @@ public actor AtlasVaultProductionHost:
     private func beginTerminalStop() {
         explicitLockRequestedDuringStart = false
         reservedSavedSearchHandoff = nil
+        savedSearchHandoffOperation?.task.cancel()
         lifetime = .stopping
         invalidateSafeLifecycleCheck()
         closeUnlockAdmission()

@@ -912,6 +912,57 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.publicJobs.totalCalls(), 0)
     }
 
+    func testTerminalStopCancelsAndDrainsRetainedSavedSearchHandoff()
+        async throws
+    {
+        let stopRace = HostSavedSearchHandoffStopRace()
+        let initialStatusGate = HostSuspensionGate(
+            onCancel: {
+                stopRace.record(.handoffCancelled)
+            }
+        )
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "terminal retained handoff",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let stop = Task {
+            let state = await graph.host.stop()
+            stopRace.record(.stopCompleted)
+            return state
+        }
+        let firstTerminalEvent = await stopRace.firstEvent()
+
+        await expectEqual(firstTerminalEvent, .handoffCancelled)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+        let stopped = await stop.value
+
+        await expectEqual(handoffResult, .stopped)
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+    }
+
     func testUnlockAdmissionStaysClosedWhileSavedHandoffSearchIsInFlight()
         async throws
     {
@@ -5286,19 +5337,28 @@ private actor HostSuspensionGate {
     private var released = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private let onCancel: (@Sendable () -> Void)?
+
+    init(onCancel: (@Sendable () -> Void)? = nil) {
+        self.onCancel = onCancel
+    }
 
     func wait() async {
-        entered = true
-        let waiters = entryWaiters
-        entryWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-        guard !released else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            releaseWaiters.append(continuation)
+        await withTaskCancellationHandler {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            guard !released else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        } onCancel: {
+            onCancel?()
         }
     }
 
@@ -5320,6 +5380,53 @@ private actor HostSuspensionGate {
         releaseWaiters.removeAll()
         for waiter in waiters {
             waiter.resume()
+        }
+    }
+}
+
+private final class HostSavedSearchHandoffStopRace: Sendable {
+    enum Event: Equatable, Sendable {
+        case handoffCancelled
+        case stopCompleted
+    }
+
+    private struct State {
+        var firstEvent: Event?
+        var waiters: [CheckedContinuation<Event, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    func record(_ event: Event) {
+        let waiters = state.withLock {
+            guard $0.firstEvent == nil else {
+                return [CheckedContinuation<Event, Never>]()
+            }
+            $0.firstEvent = event
+            let waiters = $0.waiters
+            $0.waiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume(returning: event)
+        }
+    }
+
+    func firstEvent() async -> Event {
+        if let event = state.withLock({ $0.firstEvent }) {
+            return event
+        }
+        return await withCheckedContinuation { continuation in
+            let event: Event? = state.withLock {
+                guard let event = $0.firstEvent else {
+                    $0.waiters.append(continuation)
+                    return nil
+                }
+                return event
+            }
+            if let event {
+                continuation.resume(returning: event)
+            }
         }
     }
 }
