@@ -96,6 +96,7 @@ public actor AtlasVaultProductionHost:
     private struct SearchOperation {
         let id: UUID
         let generation: UInt64
+        let owner: SearchOperationOwner
         let task: Task<
             Result<
                 AtlasPublicJobSearchResult,
@@ -103,6 +104,11 @@ public actor AtlasVaultProductionHost:
             >,
             Never
         >
+    }
+
+    private enum SearchOperationOwner {
+        case manual
+        case savedSearchHandoff(UUID)
     }
 
     private struct SelectionOperation {
@@ -370,7 +376,10 @@ public actor AtlasVaultProductionHost:
               savedSearchHandoffOperation == nil else {
             throw .unavailable
         }
-        return try await performPublicSearch(request)
+        return try await performPublicSearch(
+            request,
+            owner: .manual
+        )
     }
 
     public func reserveSavedSearchPublicHandoff() async
@@ -465,10 +474,18 @@ public actor AtlasVaultProductionHost:
     }
 
     private func performPublicSearch(
-        _ request: AtlasPublicJobSearchRequest
+        _ request: AtlasPublicJobSearchRequest,
+        owner: SearchOperationOwner
     ) async throws(AtlasPublicJobServiceError)
         -> AtlasPublicJobSearchResult
     {
+        switch (request.origin, owner) {
+        case (.manual, .manual),
+             (.savedSearchHandoff, .savedSearchHandoff):
+            break
+        default:
+            throw .invalidRequest
+        }
         guard isPublicOperationAvailable else {
             throw .unavailable
         }
@@ -506,6 +523,7 @@ public actor AtlasVaultProductionHost:
         let operation = SearchOperation(
             id: id,
             generation: operationGeneration,
+            owner: owner,
             task: task
         )
         retainedSearchOperations[id] = operation
@@ -862,6 +880,9 @@ public actor AtlasVaultProductionHost:
         }
         closeUnlockAdmission()
         reservedSavedSearchHandoff = nil
+        cancelSearchOwnedBySavedSearchHandoff(
+            savedSearchHandoffOperation?.id
+        )
         savedSearchHandoffOperation?.task.cancel()
         if let barrierOperation {
             return await barrierOperation.task.value
@@ -1166,6 +1187,37 @@ public actor AtlasVaultProductionHost:
         searchGeneration &+= 1
         searchOperation = nil
         for operation in retainedSearchOperations.values {
+            operation.task.cancel()
+        }
+    }
+
+    private func cancelSearchOwnedBySavedSearchHandoff(
+        _ handoffID: UUID?
+    ) {
+        guard let handoffID else {
+            return
+        }
+        let operations = retainedSearchOperations.values.filter {
+            guard case let .savedSearchHandoff(ownerID) = $0.owner else {
+                return false
+            }
+            return ownerID == handoffID
+        }
+        guard !operations.isEmpty else {
+            return
+        }
+        searchGeneration &+= 1
+        if let active = searchOperation,
+           operations.contains(where: { $0.id == active.id }) {
+            searchOperation = nil
+        }
+        replaceShell(
+            serviceStatus: .unavailable,
+            cacheFreshness: .unavailable,
+            publicJobs: [],
+            isSearching: false
+        )
+        for operation in operations {
             operation.task.cancel()
         }
     }
@@ -2328,7 +2380,10 @@ public actor AtlasVaultProductionHost:
         }
 
         do {
-            _ = try await performPublicSearch(request)
+            _ = try await performPublicSearch(
+                request,
+                owner: .savedSearchHandoff(operationID)
+            )
             guard savedSearchHandoffOperation?.id == operationID,
                   generation == lockedGeneration,
                   lifetime == .started else {

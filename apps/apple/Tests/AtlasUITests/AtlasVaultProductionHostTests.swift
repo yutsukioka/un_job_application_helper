@@ -969,6 +969,123 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testExplicitLockCancelsHandoffOwnedSearchBeforeCompleting()
+        async throws
+    {
+        let order = HostSavedSearchHandoffStopRace()
+        let serviceGate = HostSuspensionGate(
+            onCancel: {
+                order.record(.handoffSearchCancelled)
+            }
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "cancelled-handoff-search",
+                            title: "Cancelled Handoff Search"
+                        )
+                    ),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "cancel in-flight handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await serviceGate.waitUntilEntered()
+
+        let explicitLock = Task {
+            let state = await graph.host.lock()
+            order.record(.lockCompleted)
+            return state
+        }
+        let firstEvent = await order.firstEvent()
+
+        await expectEqual(firstEvent, .handoffSearchCancelled)
+        await serviceGate.release()
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+        await expectFalse(
+            await graph.host.currentFlowState().publicShell.isSearching
+        )
+        await expectEqual(await graph.runtime.status(), .locked)
+    }
+
+    func testExplicitLockDoesNotCancelIndependentManualSearch()
+        async throws
+    {
+        let order = HostSavedSearchHandoffStopRace()
+        let serviceGate = HostSuspensionGate(
+            onCancel: {
+                order.record(.manualSearchCancelled)
+            }
+        )
+        let result = try makeSearchResult(
+            jobID: "manual-search-survives-lock",
+            title: "Manual Search Survives Lock"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(result),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ]
+        )
+        _ = try await graph.host.start()
+        let manualRequest = try searchRequest(
+            query: "independent manual"
+        )
+
+        let manualSearch = Task {
+            await captureSearch(
+                graph.host,
+                manualRequest
+            )
+        }
+        await serviceGate.waitUntilEntered()
+        let explicitLock = Task {
+            let state = await graph.host.lock()
+            order.record(.lockCompleted)
+            return state
+        }
+
+        await expectEqual(await order.firstEvent(), .lockCompleted)
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 0)
+        await serviceGate.release()
+
+        await expectEqual(await explicitLock.value.mode, .lockedPublic)
+        await expectEqual(try await manualSearch.value.get(), result)
+    }
+
     func testTerminalStopCancelsAndDrainsRetainedSavedSearchHandoff()
         async throws
     {
@@ -5491,6 +5608,9 @@ private actor HostSuspensionGate {
 private final class HostSavedSearchHandoffStopRace: Sendable {
     enum Event: Equatable, Sendable {
         case handoffCancelled
+        case handoffSearchCancelled
+        case lockCompleted
+        case manualSearchCancelled
         case stopCompleted
     }
 

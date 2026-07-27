@@ -209,6 +209,12 @@ cancels a retained handoff before it starts or joins the full barrier. If the
 handoff already owns that barrier, explicit lock still awaits the shared full
 drain, but the cancelled handoff cannot proceed from barrier completion into
 public service access.
+Every retained public-search operation is tagged as manual or as owned by one
+specific saved-search handoff. If explicit lock arrives after the handoff has
+already started public service work, it synchronously cancels and invalidates
+only that handoff-owned search before joining or starting the full barrier.
+The late result of a cancellation-ignoring service cannot publish after lock.
+An independent manual search retains its historical cancellation behavior.
 
 ## 26. Lock-Failure Contract
 
@@ -520,6 +526,21 @@ passed, and both generic iOS builds passed. An exact-device iOS 26.5 iPhone 17
 Pro normal-route smoke kept the freshly installed AtlasIOSHost process alive
 for 57 seconds without an immediate crash. No tap-level edit or handoff
 automation was performed or claimed.
+
+A subsequent exact-head Codex review found that the explicit-lock correction
+cancelled the retained handoff task but did not cancel the separate retained
+public-search task after network work had begun. Search operations now carry
+an internal manual-or-handoff ownership tag. Explicit lock cancels and
+invalidates only the search owned by its active handoff, so a
+cancellation-ignoring late result cannot publish. Deterministic regressions
+prove cancellation precedes lock completion, the shell remains empty and
+locked, and an independent manual search remains uncancelled. The
+production-host suite passed 138 tests, the focused Phase 2D-64 matrix passed
+354 tests, and artifact-clean full Swift passed 1,294 tests. The complete
+Python CI mirror and both generic iOS builds passed. A freshly installed
+exact-device AtlasIOSHost normal-route smoke on an iOS 26.5 iPhone 17 Pro
+remained alive for 74 seconds without an immediate crash; no tap-level edit or
+handoff automation was performed or claimed.
 
 ## 46. Go/No-Go
 
