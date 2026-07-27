@@ -27,9 +27,7 @@ Future<Uint8List> deriveAtlasVaultRecordKey({
 }) async {
   _requireLength(vaultKey, _vaultKeyByteCount);
   _requireVaultId(vaultId);
-  if (recordId.isEmpty) {
-    throw const AtlasVaultCryptoException();
-  }
+  _requireRecordId(recordId);
   return atlasVaultDeriveHkdfSha256Internal(
     inputKeyMaterial: vaultKey,
     salt: utf8.encode('${AtlasVaultMetadata.format}:v1:$vaultId'),
@@ -341,6 +339,14 @@ void _requireLength(List<int> value, int expected) {
 void _requireVaultId(String vaultId) {
   try {
     requireAtlasVaultVaultId(vaultId);
+  } on AtlasVaultFormatException {
+    throw const AtlasVaultCryptoException();
+  }
+}
+
+void _requireRecordId(String recordId) {
+  try {
+    requireAtlasVaultString(recordId, field: 'record.id', allowEmpty: false);
   } on AtlasVaultFormatException {
     throw const AtlasVaultCryptoException();
   }

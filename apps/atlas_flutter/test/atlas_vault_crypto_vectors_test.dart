@@ -58,6 +58,33 @@ void main() {
     expect(sealed.toJson(), recordJson);
   });
 
+  test('record HKDF rejects malformed UTF-16 IDs before encoding', () async {
+    final malformed = String.fromCharCode(0xd800);
+
+    await expectLater(
+      deriveAtlasVaultRecordKey(
+        vaultKey: vaultKey,
+        vaultId: vaultId,
+        recordId: malformed,
+      ),
+      throwsA(isA<AtlasVaultCryptoException>()),
+    );
+    expect(
+      () => AtlasVaultEncryptedRecord.fromJson(
+        _clone(recordJson)..['id'] = malformed,
+      ),
+      throwsA(isA<AtlasVaultFormatException>()),
+    );
+
+    final replacementCharacterKey = await deriveAtlasVaultRecordKey(
+      vaultKey: vaultKey,
+      vaultId: vaultId,
+      recordId: '\ufffd',
+    );
+    expect(replacementCharacterKey, hasLength(32));
+    replacementCharacterKey.fillRange(0, replacementCharacterKey.length, 0);
+  });
+
   test('wrong keys, AAD changes, nonce changes, and ciphertext fail', () async {
     final wrongKey = Uint8List.fromList(vaultKey)..[0] ^= 0xff;
     final wrongRecordId = _clone(recordJson)..['id'] = 'different-record';
