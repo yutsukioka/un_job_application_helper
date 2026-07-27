@@ -1518,9 +1518,6 @@ public actor AtlasVaultProductionHost:
             || stopOperation != nil
         if let barrierOperation {
             if terminalBarrierRequested && !barrierOperation.terminal {
-                let preservedSkip =
-                    skipsPrivateSessionDrain
-                    || barrierOperation.skipsPrivateSessionDrain
                 barrierOperation.task.cancel()
                 self.barrierOperation = nil
                 lifetime = .stopping
@@ -1528,8 +1525,16 @@ public actor AtlasVaultProductionHost:
                 _ = advanceGeneration()
                 return await runPrivateFreeBarrier(
                     terminal: true,
-                    skipsPrivateSessionDrain: preservedSkip
+                    skipsPrivateSessionDrain: false
                 )
+            }
+            if skipsPrivateSessionDrain
+                && !barrierOperation.skipsPrivateSessionDrain
+            {
+                await dependencies.privateSessionBoundary
+                    .hidePrivatePresentation()
+                privateSessionIsActive = false
+                return flowState()
             }
             return await barrierOperation.task.value
         }

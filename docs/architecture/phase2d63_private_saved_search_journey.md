@@ -114,8 +114,14 @@ closed. The coordinator invokes the dedicated containment protocol instead
 of ordinary host lock. Its barrier synchronously hides private presentation
 and locks the runtime with `skipsPrivateSessionDrain` enabled, preventing the
 host from awaiting the currently executing feature task that is awaiting the
-host. The coordinator invalidates its mapping and unwinds. Ordinary explicit,
-lifecycle, and terminal locks retain full feature-task drain behavior.
+host. If an ordinary draining barrier is already active, containment hides
+private presentation and returns without awaiting that barrier, allowing the
+feature task to unwind so the existing barrier can finish its drain and
+runtime lock. If terminal stop supersedes a nonterminal containment barrier,
+the skip is not inherited: terminal stop restores the full mutation and
+private-session drain. The coordinator invalidates its mapping and unwinds.
+Ordinary explicit and lifecycle locks retain full feature-task drain
+behavior.
 
 ## 14. Presentation Generation
 
@@ -392,6 +398,13 @@ non-draining host path and that reactivation could publish while a cancelled
 mutation remained retained. Deterministic gated regressions were added before
 each correction.
 
+Fresh exact-head Codex review identified two additional barrier-overlap
+defects. A valid red source regression proved containment would await an
+already-draining ordinary barrier and that terminal supersession inherited
+the non-draining skip. Deterministic gates now prove containment returns while
+the ordinary drain remains suspended and terminal stop restores full drain
+when it supersedes containment.
+
 ## 55. Test Coverage
 
 Deterministic suites cover construction, bridge attachment, activation and
@@ -400,9 +413,11 @@ drafts and timestamps, exact create payload, internal delete metadata,
 tombstones, all save outcomes, no optimistic mutation, mutation
 serialization, fatal containment, immediate explicit/lifecycle/terminal
 hide, non-draining post-commit runtime lock, preserved ordinary lock/stop
-drains, stale-mutation drain before reactivation, stop during that drain,
-late-completion fencing, root and harness compatibility, encrypted storage,
-local-key relaunch, deletion relaunch, and recovery-only mutation.
+drains, containment overlap with an existing ordinary drain, terminal
+supersession of non-draining containment, stale-mutation drain before
+reactivation, stop during that drain, late-completion fencing, root and
+harness compatibility, encrypted storage, local-key relaunch, deletion
+relaunch, and recovery-only mutation.
 
 ## 56. iOS Build And Smoke Evidence
 
