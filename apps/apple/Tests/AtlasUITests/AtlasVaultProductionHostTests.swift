@@ -912,6 +912,63 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.publicJobs.totalCalls(), 0)
     }
 
+    func testExplicitLockCancelsSavedHandoffAlreadyDrainingPrivateSession()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "explicit-lock-must-not-run",
+                            title: "Explicit Lock Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "explicit lock supersedes",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await privateDrainGate.waitUntilEntered()
+
+        let explicitLock = Task {
+            await graph.host.lock()
+        }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        await privateDrainGate.release()
+
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+        await expectEqual(await graph.runtime.status(), .locked)
+        await expectEqual(
+            await graph.host.currentFlowState().mode,
+            .lockedPublic
+        )
+    }
+
     func testTerminalStopCancelsAndDrainsRetainedSavedSearchHandoff()
         async throws
     {

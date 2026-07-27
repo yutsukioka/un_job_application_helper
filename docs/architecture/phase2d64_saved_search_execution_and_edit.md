@@ -204,6 +204,11 @@ containment path is not used. Barrier completion does not reopen unlock
 admission while the retained saved-search handoff remains active. Successful
 or public-search-failed completion clears handoff ownership before using the
 ordinary acknowledged publication path to reopen unlock admission.
+An explicit lock invalidates any unconsumed reservation and synchronously
+cancels a retained handoff before it starts or joins the full barrier. If the
+handoff already owns that barrier, explicit lock still awaits the shared full
+drain, but the cancelled handoff cannot proceed from barrier completion into
+public service access.
 
 ## 26. Lock-Failure Contract
 
@@ -498,6 +503,22 @@ Phase 2D-64 matrix passed 351 tests, and full Swift passed 1,291 tests. The
 complete Python CI mirror, both generic iOS builds, and an exact-device iOS
 26.5 iPhone 17 Pro normal-route smoke also passed. The installed app remained
 alive for 29 seconds without an immediate crash; no tap-level edit or handoff
+automation was performed or claimed.
+
+The next exact-head Codex review identified an explicit-lock supersession edge:
+when the handoff already owned the full barrier and private-session drain was
+suspended, `lock()` joined that barrier without cancelling the handoff. The
+handoff could therefore continue to public service access after the explicit
+lock completed. Explicit lock now invalidates any reservation and synchronously
+cancels the retained handoff before joining or starting the barrier. The
+deterministic regression suspends private-session drain, requests explicit
+lock, releases the barrier, and requires a cancelled handoff, authoritative
+locked runtime, and zero public-service calls. The complete production-host
+suite passed 136 tests after this correction. The focused Phase 2D-64 matrix
+passed 352 tests, full Swift passed 1,292 tests, the complete Python CI mirror
+passed, and both generic iOS builds passed. An exact-device iOS 26.5 iPhone 17
+Pro normal-route smoke kept the freshly installed AtlasIOSHost process alive
+for 57 seconds without an immediate crash. No tap-level edit or handoff
 automation was performed or claimed.
 
 ## 46. Go/No-Go

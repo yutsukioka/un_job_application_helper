@@ -860,10 +860,12 @@ public actor AtlasVaultProductionHost:
         case .started, .reconciling:
             break
         }
+        closeUnlockAdmission()
+        reservedSavedSearchHandoff = nil
+        savedSearchHandoffOperation?.task.cancel()
         if let barrierOperation {
             return await barrierOperation.task.value
         }
-        closeUnlockAdmission()
         _ = advanceGeneration()
         return await runPrivateFreeBarrier(terminal: false)
     }
