@@ -128,6 +128,84 @@ void main() {
     },
     skip: _skipAndroidGoldensOnWindows,
   );
+
+  testWidgets('filter sheet exposes stable semantics on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController();
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    expect(find.text('Filters'), findsOneWidget);
+    expect(find.text('Open only'), findsWidgets);
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Scope'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('country cascade remains semantically selected on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(countryISO3: 'JPN'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    expect(controller.filters.countryISO3, 'JPN');
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('city cascade remains semantically selected on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(city: 'Tokyo'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    expect(controller.filters.city, 'Tokyo');
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('job detail exposes stable semantics on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final transport = _GoldenDetailTransport();
+    final controller = AtlasAppController(
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AtlasJobDetailScreen(
+          job: _detailGoldenJob(),
+          controller: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Job Detail'), findsOneWidget);
+    expect(find.text('Emergency Specialist'), findsOneWidget);
+    expect(find.text('Full Description'), findsOneWidget);
+    expect(
+      find.textContaining('Coordinate emergency response'),
+      findsOneWidget,
+    );
+  });
 }
 
 void _configurePhoneViewport(WidgetTester tester) {
