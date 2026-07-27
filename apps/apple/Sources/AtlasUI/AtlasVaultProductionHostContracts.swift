@@ -625,6 +625,10 @@ public protocol AtlasVaultPrivateMutationHosting: Sendable {
     ) async -> AtlasVaultPrivateMutationResult
 }
 
+public protocol AtlasVaultPrivateMutationContainmentHosting: Sendable {
+    func containCommittedPrivateMutationFailure() async
+}
+
 public protocol AtlasVaultPrivateSessionBoundary: Sendable {
     func activatePrivateSession(selectedVault: String) async -> Bool
 

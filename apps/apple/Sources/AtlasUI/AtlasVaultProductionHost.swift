@@ -56,6 +56,7 @@ public struct AtlasVaultProductionUnlockPresentationControllerBuilder:
 public actor AtlasVaultProductionHost:
     AtlasVaultProductionHosting,
     AtlasVaultPrivateMutationHosting,
+    AtlasVaultPrivateMutationContainmentHosting,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
@@ -326,6 +327,13 @@ public actor AtlasVaultProductionHost:
         case .failed:
             return await containFatalPrivateMutation()
         }
+    }
+
+    public func containCommittedPrivateMutationFailure() async {
+        _ = await runPrivateFreeBarrier(
+            terminal: false,
+            skipsPrivateSessionDrain: true
+        )
     }
 
     public func searchPublicJobs(

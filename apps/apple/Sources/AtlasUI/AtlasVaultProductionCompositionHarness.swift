@@ -1029,8 +1029,12 @@ public enum AtlasVaultProductionCompositionFactory {
             builder: AtlasVaultProductionHostBuilder()
         )
         let host = hostFactory.makeHost()
-        guard let privateMutationHost =
-            host as? any AtlasVaultPrivateMutationHosting else {
+        guard
+            let privateMutationHost =
+                host as? any AtlasVaultPrivateMutationHosting,
+            let privateMutationContainmentHost =
+                host as? any AtlasVaultPrivateMutationContainmentHosting
+        else {
             throw AtlasVaultProductionCompositionError
                 .privateFeatureUnavailable
         }
@@ -1042,8 +1046,9 @@ public enum AtlasVaultProductionCompositionFactory {
                 applyPrivateMutation: { request in
                     await privateMutationHost.applyPrivateMutation(request)
                 },
-                containPrivateSession: {
-                    _ = await host.lock()
+                containCommittedPrivateMutationFailure: {
+                    await privateMutationContainmentHost
+                        .containCommittedPrivateMutationFailure()
                 },
                 timestamp: {
                     let formatter = ISO8601DateFormatter()

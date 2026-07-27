@@ -40,11 +40,13 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
             "AtlasNoopVaultPrivateSessionBoundary",
             "AtlasVaultPrivateSessionBoundaryBridge",
             "AtlasVaultPrivateMutationHosting",
+            "AtlasVaultPrivateMutationContainmentHosting",
             "AtlasVaultPrivateMutationResult",
             "activatePrivateSession",
             "hidePrivatePresentation",
             "stopAndDrainPrivateSession",
             "applyPrivateMutation",
+            "containCommittedPrivateMutationFailure",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
@@ -683,6 +685,47 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
         }
     }
 
+    func testCommittedVerificationMismatchContainsAndInvalidatesSession()
+        async throws
+    {
+        let environment = SavedSearchEnvironmentFake(
+            reads: [
+                .state(AtlasVaultHydratedState()),
+                .state(AtlasVaultHydratedState()),
+            ],
+            mutationResults: [.committed]
+        )
+        let coordinator = makeCoordinator(environment)
+        _ = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+
+        let result = try await coordinator.create(
+            AtlasVaultSavedSearchDraft(
+                name: "Missing committed record",
+                searchText: ""
+            )
+        )
+
+        XCTAssertEqual(result, .locked)
+        let containmentCount = await environment.containmentCount()
+        XCTAssertEqual(containmentCount, 1)
+        do {
+            _ = try await coordinator.create(
+                AtlasVaultSavedSearchDraft(
+                    name: "No session",
+                    searchText: ""
+                )
+            )
+            XCTFail("Invalidated session accepted another mutation")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultSavedSearchFailure,
+                .locked
+            )
+        }
+    }
+
     func testConcurrentCreateDoesNotDuplicateMutation() async throws {
         let created = makeSavedSearch(
             id: "single",
@@ -743,7 +786,7 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
                 applyPrivateMutation: { request in
                     await environment.apply(request)
                 },
-                containPrivateSession: {
+                containCommittedPrivateMutationFailure: {
                     await environment.contain()
                 },
                 timestamp: { timestamp }

@@ -135,7 +135,8 @@ public struct AtlasVaultSavedSearchEnvironment:
         @Sendable (
             AtlasVaultRuntimeMutationRequest
         ) async -> AtlasVaultPrivateMutationResult
-    public let containPrivateSession: @Sendable () async -> Void
+    public let containCommittedPrivateMutationFailure:
+        @Sendable () async -> Void
     public let timestamp: @Sendable () -> String
 
     public init(
@@ -146,13 +147,14 @@ public struct AtlasVaultSavedSearchEnvironment:
             @escaping @Sendable (
                 AtlasVaultRuntimeMutationRequest
             ) async -> AtlasVaultPrivateMutationResult,
-        containPrivateSession:
+        containCommittedPrivateMutationFailure:
             @escaping @Sendable () async -> Void,
         timestamp: @escaping @Sendable () -> String
     ) {
         self.readPrivateState = readPrivateState
         self.applyPrivateMutation = applyPrivateMutation
-        self.containPrivateSession = containPrivateSession
+        self.containCommittedPrivateMutationFailure =
+            containCommittedPrivateMutationFailure
         self.timestamp = timestamp
     }
 
@@ -447,7 +449,7 @@ public actor AtlasVaultSavedSearchCoordinator:
 
     private func containCommittedStateFailure() async {
         invalidateSession()
-        await environment.containPrivateSession()
+        await environment.containCommittedPrivateMutationFailure()
     }
 
     private func stopMutation() async {

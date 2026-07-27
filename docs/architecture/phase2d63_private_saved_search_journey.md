@@ -19,6 +19,11 @@ facade, record saver, record hydrator, private payload models, persistence
 coordinator, public cache, recovery import, recovery export, or local-vault
 creation.
 
+An independent one-file JobAgg test-stability follow-up froze the UNFPA
+fallback fixture clock at its closing-date boundary. That merged Python-only
+change is outside Phase 2D-63; this phase remains exactly its original 14
+files.
+
 ## 3. Reconstructed Phase 2D-62 Baseline
 
 Git and GitHub reconstruction identified Phase 2D-62 as merged through PR #83
@@ -80,6 +85,11 @@ Admission requires a started, authoritatively unlocked, lifecycle-safe host;
 the selected vault must match the request; selection, submit, barrier, stop,
 safe-lifecycle checks, and another mutation must all be absent.
 
+The concrete host also conforms to the narrow
+`AtlasVaultPrivateMutationContainmentHosting` protocol. This protocol exists
+only for fail-closed containment after a mutation has committed but refreshed
+private state cannot be read, projected, or verified.
+
 ## 11. Unlock Ordering
 
 After runtime unlock, the host rechecks runtime status, generation, lifetime,
@@ -98,12 +108,14 @@ stop, reconciliation, activation supersession, and lock during mutation.
 
 ## 13. Fatal Save Containment
 
-Committed-state-unavailable and integrity-unknown mutation failures hide the
-presentation and lock fail closed. The host skips externally draining the
-currently executing feature task during that exact barrier, preventing the
-host from awaiting a task that is awaiting the host. The coordinator
-invalidates its mapping and unwinds; harness terminal stop still drains the
-owner.
+Committed-state-unavailable, integrity-unknown, and post-commit
+refresh/projection/verification failures hide the presentation and lock fail
+closed. The coordinator invokes the dedicated containment protocol instead
+of ordinary host lock. Its barrier synchronously hides private presentation
+and locks the runtime with `skipsPrivateSessionDrain` enabled, preventing the
+host from awaiting the currently executing feature task that is awaiting the
+host. The coordinator invalidates its mapping and unwinds. Ordinary explicit,
+lifecycle, and terminal locks retain full feature-task drain behavior.
 
 ## 14. Presentation Generation
 
@@ -197,10 +209,11 @@ remains available.
 
 ## 28. Cancellation
 
-Cancellation publishes no optimistic change. Lock and stop cancel retained
-feature and host operations, drain them structurally, and fence late
-completions by operation identity, host generation, owner revision, and
-session revision.
+Cancellation publishes no optimistic change. Immediate hide cancels retained
+feature work without awaiting it. A later activation first drains any prior
+activation and cancellation-ignoring mutation before it may publish loading
+or ready; stop performs the same drain. Lock and stop fence late completions
+by operation identity, host generation, owner revision, and session revision.
 
 ## 29. Stale ID Behavior
 
@@ -214,10 +227,12 @@ Construction creates no task and invokes no coordinator dependency.
 
 ## 31. Owner Activation
 
-Activation clears prior items, publishes loading, retains one operation, and
-awaits coordinator activation. Only a completion matching the current owner
-revision may publish ready. Failure publishes no private list and returns
-false to the host.
+Activation first cancels and drains prior activation and mutation operations.
+Only after both drains complete does it advance the owner generation, clear
+prior items, publish loading, retain one operation, and await coordinator
+activation. A hide or stop during the drain invalidates the activation
+request. Only a completion matching the current owner revision may publish
+ready. Failure publishes no private list and returns false to the host.
 
 ## 32. Owner Mutation Serialization
 
@@ -229,8 +244,9 @@ calling view task.
 
 Immediate hide synchronously increments the owner revision, cancels retained
 UI operations, replaces items with an empty array, and publishes hidden or
-locking. Stop then awaits retained work, stops the coordinator, and leaves the
-owner hidden.
+locking. It does not await. Reactivation or stop later drains retained work,
+wipes the coordinator mapping, and prevents cancellation-ignoring or late
+mutation completion from blocking or republishing into a new session.
 
 ## 34. SwiftUI Saved-Search List
 
@@ -267,9 +283,11 @@ its own sheet fields and delete confirmation.
 ## 39. Production Harness Assembly
 
 Composition builds the bridge before the host, injects it, constructs the
-host, requires the separate mutation conformance, creates the coordinator and
-owner, attaches exactly once, and retains one context. Construction performs
-no private-state read, mutation, store write, Keychain operation, filesystem
+host, requires both the mutation and post-commit containment conformances,
+creates the coordinator and owner, attaches exactly once, and retains one
+context. The coordinator maps post-commit containment to the non-draining
+host operation, never ordinary `lock()`. Construction performs no
+private-state read, mutation, store write, Keychain operation, filesystem
 operation, network request, task creation, or owner activation.
 
 ## 40. Production Root Integration
@@ -368,6 +386,12 @@ production implementation. It proved the private-session boundary,
 host-owned mutation boundary, coordinator, owner, view, production context,
 unlocked root route, and end-to-end journey were absent.
 
+Exact-head Codex and Copilot review then identified two in-scope defects.
+Review-fix red evidence proved that post-commit containment lacked a dedicated
+non-draining host path and that reactivation could publish while a cancelled
+mutation remained retained. Deterministic gated regressions were added before
+each correction.
+
 ## 55. Test Coverage
 
 Deterministic suites cover construction, bridge attachment, activation and
@@ -375,7 +399,9 @@ supersession, narrow mixed-family projection, opaque generations, strict
 drafts and timestamps, exact create payload, internal delete metadata,
 tombstones, all save outcomes, no optimistic mutation, mutation
 serialization, fatal containment, immediate explicit/lifecycle/terminal
-hide, stale completions, root and harness compatibility, encrypted storage,
+hide, non-draining post-commit runtime lock, preserved ordinary lock/stop
+drains, stale-mutation drain before reactivation, stop during that drain,
+late-completion fencing, root and harness compatibility, encrypted storage,
 local-key relaunch, deletion relaunch, and recovery-only mutation.
 
 ## 56. iOS Build And Smoke Evidence

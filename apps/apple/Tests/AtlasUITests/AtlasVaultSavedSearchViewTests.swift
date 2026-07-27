@@ -89,6 +89,50 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
         XCTAssertEqual(calls, ["activate"])
     }
 
+    func testActivationDrainsCancelledMutationBeforePublishingReady()
+        async throws
+    {
+        let source = try requiredSource(
+            named: "AtlasVaultSavedSearchView.swift"
+        )
+        let activationStart = try XCTUnwrap(
+            source.range(
+                of: "public func activatePrivateSession("
+            )
+        )
+        let activationEnd = try XCTUnwrap(
+            source.range(
+                of: "    public func create(",
+                range: activationStart.upperBound..<source.endIndex
+            )
+        )
+        let activationBody = String(
+            source[
+                activationStart.lowerBound..<activationEnd.lowerBound
+            ]
+        )
+        let activationDrain = try XCTUnwrap(
+            activationBody.range(of: "cancelAndDrainActivation")
+        )
+        let mutationDrain = try XCTUnwrap(
+            activationBody.range(of: "cancelAndDrainMutation")
+        )
+        let loading = try XCTUnwrap(
+            activationBody.range(of: "status = .loading")
+        )
+
+        XCTAssertLessThan(
+            activationDrain.lowerBound,
+            mutationDrain.lowerBound
+        )
+        XCTAssertLessThan(mutationDrain.lowerBound, loading.lowerBound)
+        XCTAssertTrue(
+            source.contains(
+                "private func cancelAndDrainMutation() async"
+            )
+        )
+    }
+
     func testImmediateHideFencesLateActivation() async {
         let gate = SavedSearchViewSuspensionGate()
         let coordinator = SavedSearchViewCoordinatorFake(
@@ -218,6 +262,150 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
         XCTAssertTrue(owner.items.isEmpty)
         let calls = await coordinator.calls()
         XCTAssertTrue(calls.contains("stop"))
+    }
+
+    func testReactivationDrainsCancellationIgnoringMutationBeforeReady()
+        async
+    {
+        let initial = Self.snapshot(name: "Initial Session")
+        let stale = Self.snapshot(name: "Stale Mutation")
+        let refreshed = Self.snapshot(name: "New Mutation")
+        let mutationGate = SavedSearchViewSuspensionGate()
+        let activationStartGate = SavedSearchViewSuspensionGate()
+        let coordinator = SavedSearchViewCoordinatorFake(
+            activationSnapshot: initial,
+            createResults: [
+                .committed(stale),
+                .committed(refreshed),
+            ],
+            mutationGate: mutationGate
+        )
+        let owner = AtlasVaultSavedSearchPresentationOwner(
+            coordinator: coordinator
+        )
+        let initialActivation = await owner.activatePrivateSession(
+            selectedVault: Self.selectedVault
+        )
+        XCTAssertTrue(initialActivation)
+
+        let oldMutation = Task { @MainActor in
+            await owner.create(
+                AtlasVaultSavedSearchDraft(
+                    name: "Old mutation",
+                    searchText: ""
+                )
+            )
+        }
+        await mutationGate.waitUntilEntered()
+        owner.hidePrivatePresentation()
+        XCTAssertEqual(owner.status, .hidden)
+        XCTAssertTrue(owner.items.isEmpty)
+        await mutationGate.waitUntilCancelled()
+
+        let reactivation = Task { @MainActor in
+            await activationStartGate.wait()
+            return await owner.activatePrivateSession(
+                selectedVault: Self.selectedVault
+            )
+        }
+        await activationStartGate.waitUntilEntered()
+        await activationStartGate.release()
+        await Task.yield()
+
+        XCTAssertEqual(
+            owner.status,
+            .hidden,
+            "A new session must not become ready before stale mutation drain"
+        )
+        XCTAssertTrue(owner.items.isEmpty)
+
+        await mutationGate.release()
+        let reactivated = await reactivation.value
+        XCTAssertTrue(reactivated)
+        await oldMutation.value
+        XCTAssertEqual(owner.status, .ready)
+        XCTAssertEqual(owner.items, initial.searches)
+
+        await owner.create(
+            AtlasVaultSavedSearchDraft(
+                name: "New mutation",
+                searchText: ""
+            )
+        )
+        XCTAssertEqual(owner.status, .ready)
+        XCTAssertEqual(owner.items, refreshed.searches)
+        let calls = await coordinator.calls()
+        XCTAssertEqual(
+            calls.filter { $0 == "create" }.count,
+            2
+        )
+        XCTAssertEqual(
+            calls.filter { $0 == "activate" }.count,
+            2
+        )
+    }
+
+    func testStopDuringCancelledMutationDrainPreventsReactivation()
+        async
+    {
+        let initial = Self.snapshot(name: "Initial Session")
+        let stale = Self.snapshot(name: "Stale Mutation")
+        let mutationGate = SavedSearchViewSuspensionGate()
+        let activationStartGate = SavedSearchViewSuspensionGate()
+        let coordinator = SavedSearchViewCoordinatorFake(
+            activationSnapshot: initial,
+            createResults: [.committed(stale)],
+            mutationGate: mutationGate
+        )
+        let owner = AtlasVaultSavedSearchPresentationOwner(
+            coordinator: coordinator
+        )
+        let initialActivation = await owner.activatePrivateSession(
+            selectedVault: Self.selectedVault
+        )
+        XCTAssertTrue(initialActivation)
+
+        let oldMutation = Task { @MainActor in
+            await owner.create(
+                AtlasVaultSavedSearchDraft(
+                    name: "Old mutation",
+                    searchText: ""
+                )
+            )
+        }
+        await mutationGate.waitUntilEntered()
+        owner.hidePrivatePresentation()
+        await mutationGate.waitUntilCancelled()
+
+        let reactivation = Task { @MainActor in
+            await activationStartGate.wait()
+            return await owner.activatePrivateSession(
+                selectedVault: Self.selectedVault
+            )
+        }
+        await activationStartGate.waitUntilEntered()
+        await activationStartGate.release()
+        await Task.yield()
+        XCTAssertEqual(owner.status, .hidden)
+
+        let stop = Task { @MainActor in
+            await owner.stopAndDrainPrivateSession()
+        }
+        await Task.yield()
+        await mutationGate.release()
+
+        let reactivated = await reactivation.value
+        XCTAssertFalse(reactivated)
+        await oldMutation.value
+        await stop.value
+        XCTAssertEqual(owner.status, .hidden)
+        XCTAssertTrue(owner.items.isEmpty)
+        let calls = await coordinator.calls()
+        XCTAssertEqual(
+            calls.filter { $0 == "activate" }.count,
+            1
+        )
+        XCTAssertEqual(calls.filter { $0 == "stop" }.count, 1)
     }
 
     func testActionsCarryOnlyDraftOpaqueIDAndLockCommands() async {
@@ -383,10 +571,23 @@ private actor SavedSearchViewCoordinatorFake:
 private actor SavedSearchViewSuspensionGate {
     private var entered = false
     private var released = false
+    private var cancelled = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters:
+        [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
+        await withTaskCancellationHandler {
+            await waitForRelease()
+        } onCancel: {
+            Task {
+                await self.recordCancellation()
+            }
+        }
+    }
+
+    private func waitForRelease() async {
         entered = true
         let entryWaiters = entryWaiters
         self.entryWaiters.removeAll()
@@ -410,11 +611,32 @@ private actor SavedSearchViewSuspensionGate {
         }
     }
 
+    func waitUntilCancelled() async {
+        guard !cancelled else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
     func release() {
         released = true
         let releaseWaiters = releaseWaiters
         self.releaseWaiters.removeAll()
         for waiter in releaseWaiters {
+            waiter.resume()
+        }
+    }
+
+    private func recordCancellation() {
+        guard !cancelled else {
+            return
+        }
+        cancelled = true
+        let cancellationWaiters = cancellationWaiters
+        self.cancellationWaiters.removeAll()
+        for waiter in cancellationWaiters {
             waiter.resume()
         }
     }

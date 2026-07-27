@@ -91,7 +91,15 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     public func activatePrivateSession(
         selectedVault: String
     ) async -> Bool {
+        let drainGeneration = ownerGeneration
         await cancelAndDrainActivation()
+        guard ownerGeneration == drainGeneration else {
+            return false
+        }
+        await cancelAndDrainMutation()
+        guard ownerGeneration == drainGeneration else {
+            return false
+        }
         ownerGeneration &+= 1
         let activationGeneration = ownerGeneration
         items = []
@@ -185,18 +193,8 @@ public final class AtlasVaultSavedSearchPresentationOwner:
 
     public func stopAndDrainPrivateSession() async {
         hidePrivatePresentation()
-        let activation = activationOperation
-        let mutation = mutationOperation
-        activation?.work.cancel()
-        mutation?.work.cancel()
-        _ = await activation?.work.value
-        _ = await mutation?.work.value
-        if activationOperation?.identifier == activation?.identifier {
-            activationOperation = nil
-        }
-        if mutationOperation?.identifier == mutation?.identifier {
-            mutationOperation = nil
-        }
+        await cancelAndDrainActivation()
+        await cancelAndDrainMutation()
         await coordinator.stop()
         items = []
         status = .hidden
@@ -284,6 +282,17 @@ public final class AtlasVaultSavedSearchPresentationOwner:
         _ = await operation.work.value
         if activationOperation?.identifier == operation.identifier {
             activationOperation = nil
+        }
+    }
+
+    private func cancelAndDrainMutation() async {
+        guard let operation = mutationOperation else {
+            return
+        }
+        operation.work.cancel()
+        _ = await operation.work.value
+        if mutationOperation?.identifier == operation.identifier {
+            mutationOperation = nil
         }
     }
 }

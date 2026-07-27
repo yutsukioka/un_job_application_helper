@@ -19,14 +19,39 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "savedSearchContext",
             "AtlasVaultPrivateSessionBoundaryBridge",
             "AtlasVaultPrivateMutationHosting",
+            "AtlasVaultPrivateMutationContainmentHosting",
             "AtlasVaultSavedSearchCoordinator",
             "AtlasVaultSavedSearchPresentationOwner",
             "AtlasVaultSavedSearchActions",
+            "containCommittedPrivateMutationFailure",
             "privateState()",
             "attach",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
+        let savedSearchStart = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchCoordinator = "
+                    + "AtlasVaultSavedSearchCoordinator("
+            )
+        )
+        let savedSearchEnd = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchOwner =",
+                range: savedSearchStart.upperBound..<source.endIndex
+            )
+        )
+        let savedSearchAssembly = String(
+            source[
+                savedSearchStart.lowerBound..<savedSearchEnd.lowerBound
+            ]
+        )
+        XCTAssertTrue(
+            savedSearchAssembly.contains(
+                "containCommittedPrivateMutationFailure"
+            )
+        )
+        XCTAssertFalse(savedSearchAssembly.contains("host.lock()"))
     }
 
     func testProductionCompositionSharesImportAndRecoveryUnlockAuthority()

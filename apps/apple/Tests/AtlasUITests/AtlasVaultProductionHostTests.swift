@@ -25,10 +25,12 @@ final class AtlasVaultProductionHostTests: XCTestCase {
 
         for required in [
             "AtlasVaultPrivateMutationHosting",
+            "AtlasVaultPrivateMutationContainmentHosting",
             "activatePrivateSession",
             "hidePrivatePresentation",
             "stopAndDrainPrivateSession",
             "applyPrivateMutation",
+            "containCommittedPrivateMutationFailure",
             "privateMutationOperation",
         ] {
             XCTAssertTrue(source.contains(required), required)
@@ -99,19 +101,21 @@ final class AtlasVaultProductionHostTests: XCTestCase {
     }
 
     func testExplicitLockHidesAndDrainsBeforeRuntimeLock() async throws {
+        let privateDrainGate = HostSuspensionGate()
         let runtimeLockGate = HostSuspensionGate()
         let graph = try makeGraph(
             selection: .success(.selected(selectedVaultID())),
             runtimeStatus: .locked,
             runtimeLockGate: runtimeLockGate,
-            submitResult: unlockState(.unlocked)
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
         )
         try await unlockPrivateSession(graph)
 
         let lock = Task {
             await graph.host.lock()
         }
-        await runtimeLockGate.waitUntilEntered()
+        await privateDrainGate.waitUntilEntered()
 
         XCTAssertGreaterThanOrEqual(
             graph.privateSessionBoundary.hideCalls(),
@@ -121,6 +125,10 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             graph.privateSessionBoundary.stopCalls(),
             1
         )
+        let lockCallsBeforePrivateDrain = await graph.runtime.lockCalls()
+        XCTAssertEqual(lockCallsBeforePrivateDrain, 0)
+        await privateDrainGate.release()
+        await runtimeLockGate.waitUntilEntered()
         await runtimeLockGate.release()
         let locked = await lock.value
         XCTAssertEqual(locked.mode, .lockedPublic)
@@ -313,6 +321,81 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
         let state = await graph.host.currentFlowState()
         XCTAssertNotEqual(state.mode, .unlockedTransition)
+    }
+
+    func testPostCommitRefreshContainmentSkipsFeatureDrainAndLocksRuntime()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let runtimeLockGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            runtimeLockGate: runtimeLockGate,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let containmentHost:
+            any AtlasVaultPrivateMutationContainmentHosting = graph.host
+
+        let containment = Task {
+            await containmentHost
+                .containCommittedPrivateMutationFailure()
+        }
+        await runtimeLockGate.waitUntilEntered()
+
+        XCTAssertGreaterThanOrEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        XCTAssertEqual(
+            graph.privateSessionBoundary.stopCalls(),
+            0,
+            "Post-commit containment must not drain its feature task"
+        )
+        await runtimeLockGate.release()
+        await containment.value
+
+        let runtimeStatus = await graph.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
+        let state = await graph.host.currentFlowState()
+        XCTAssertNotEqual(state.mode, .unlockedTransition)
+    }
+
+    func testTerminalStopRetainsFullPrivateSessionDrain() async throws {
+        let privateDrainGate = HostSuspensionGate()
+        let runtimeLockGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            runtimeLockGate: runtimeLockGate,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+
+        let stop = Task {
+            await graph.host.stop()
+        }
+        await privateDrainGate.waitUntilEntered()
+        XCTAssertGreaterThanOrEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        XCTAssertGreaterThanOrEqual(
+            graph.privateSessionBoundary.stopCalls(),
+            1
+        )
+        let lockCallsBeforeDrain = await graph.runtime.lockCalls()
+        XCTAssertEqual(lockCallsBeforeDrain, 0)
+
+        await privateDrainGate.release()
+        await runtimeLockGate.waitUntilEntered()
+        await runtimeLockGate.release()
+        _ = await stop.value
+        let runtimeStatus = await graph.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
     }
 
     func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
@@ -4215,6 +4298,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         useResolvedCapabilitiesController: Bool = false,
         privateActivationGate: HostSuspensionGate? = nil,
         privateActivationSucceeds: Bool = true,
+        privateStopGate: HostSuspensionGate? = nil,
         runtimeMutationGate: HostSuspensionGate? = nil,
         runtimeMutationResult: HostRuntimeMutationResult =
             .outcome(.committed)
@@ -4268,7 +4352,8 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
         let privateSessionBoundary = HostPrivateSessionBoundaryFake(
             activationGate: privateActivationGate,
-            activationSucceeds: privateActivationSucceeds
+            activationSucceeds: privateActivationSucceeds,
+            stopGate: privateStopGate
         )
         let dependencies = AtlasVaultProductionHostDependencies(
             publicJobs: publicJobs,
@@ -4551,14 +4636,17 @@ private final class HostPrivateSessionBoundaryFake:
 
     private let activationGate: HostSuspensionGate?
     private let activationSucceeds: Bool
+    private let stopGate: HostSuspensionGate?
     private let state = Mutex(State())
 
     init(
         activationGate: HostSuspensionGate?,
-        activationSucceeds: Bool
+        activationSucceeds: Bool,
+        stopGate: HostSuspensionGate?
     ) {
         self.activationGate = activationGate
         self.activationSucceeds = activationSucceeds
+        self.stopGate = stopGate
     }
 
     func activatePrivateSession(selectedVault: String) async -> Bool {
@@ -4588,6 +4676,9 @@ private final class HostPrivateSessionBoundaryFake:
     func stopAndDrainPrivateSession() async {
         state.withLock {
             $0.stopCalls += 1
+        }
+        if let stopGate {
+            await stopGate.wait()
         }
     }
 
