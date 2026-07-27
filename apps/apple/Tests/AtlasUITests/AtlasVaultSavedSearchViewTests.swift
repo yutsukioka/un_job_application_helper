@@ -20,6 +20,8 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
             "AtlasVaultSavedSearchView",
             "Saved Searches",
             "Add Saved Search",
+            "Edit Saved Search",
+            "Label(\"Edit\"",
             "Lock Vault",
             "confirmationDialog",
             "TextField",
@@ -222,6 +224,45 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
         XCTAssertEqual(owner.items, durability.searches)
     }
 
+    func testOwnerUpdateIsExplicitAndDoesNotOptimisticallyMutate()
+        async
+    {
+        let initial = Self.snapshot(name: "Original")
+        let refreshed = Self.snapshot(name: "Renamed")
+        let gate = SavedSearchViewSuspensionGate()
+        let coordinator = SavedSearchViewCoordinatorFake(
+            activationSnapshot: initial,
+            updateResults: [.committed(refreshed)],
+            mutationGate: gate
+        )
+        let owner = AtlasVaultSavedSearchPresentationOwner(
+            coordinator: coordinator
+        )
+        _ = await owner.activatePrivateSession(
+            selectedVault: Self.selectedVault
+        )
+
+        let update = Task { @MainActor in
+            await owner.update(
+                presentationID: initial.searches[0].id,
+                draft: AtlasVaultSavedSearchDraft(
+                    name: "Renamed",
+                    searchText: "updated terms"
+                )
+            )
+        }
+        await gate.waitUntilEntered()
+        XCTAssertEqual(owner.status, .saving)
+        XCTAssertEqual(owner.items, initial.searches)
+        await gate.release()
+        await update.value
+
+        XCTAssertEqual(owner.status, .ready)
+        XCTAssertEqual(owner.items, refreshed.searches)
+        let calls = await coordinator.calls()
+        XCTAssertEqual(calls.filter { $0 == "update" }.count, 1)
+    }
+
     func testHideDuringMutationClearsBeforeCompletionAndStopDrains()
         async
     {
@@ -414,6 +455,9 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
             create: { draft in
                 await recorder.recordCreate(draft)
             },
+            update: { identifier, draft in
+                await recorder.recordUpdate(identifier, draft)
+            },
             delete: { identifier in
                 await recorder.recordDelete(identifier)
             },
@@ -429,11 +473,19 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
                 searchText: "terms"
             )
         )
+        await actions.update(
+            presentation.id,
+            draft: AtlasVaultSavedSearchDraft(
+                name: "Renamed",
+                searchText: "new terms"
+            )
+        )
         await actions.delete(presentation.id)
         await actions.lock()
 
         let counts = await recorder.counts()
         XCTAssertEqual(counts.creates, 1)
+        XCTAssertEqual(counts.updates, 1)
         XCTAssertEqual(counts.deletes, 1)
         XCTAssertEqual(counts.locks, 1)
     }
@@ -514,6 +566,7 @@ private actor SavedSearchViewCoordinatorFake:
     private let activationSnapshot: AtlasVaultSavedSearchSnapshot
     private let activationGate: SavedSearchViewSuspensionGate?
     private var createResults: [AtlasVaultSavedSearchMutationResult]
+    private var updateResults: [AtlasVaultSavedSearchMutationResult]
     private let mutationGate: SavedSearchViewSuspensionGate?
     private var recordedCalls: [String] = []
 
@@ -521,11 +574,13 @@ private actor SavedSearchViewCoordinatorFake:
         activationSnapshot: AtlasVaultSavedSearchSnapshot,
         activationGate: SavedSearchViewSuspensionGate? = nil,
         createResults: [AtlasVaultSavedSearchMutationResult] = [],
+        updateResults: [AtlasVaultSavedSearchMutationResult] = [],
         mutationGate: SavedSearchViewSuspensionGate? = nil
     ) {
         self.activationSnapshot = activationSnapshot
         self.activationGate = activationGate
         self.createResults = createResults
+        self.updateResults = updateResults
         self.mutationGate = mutationGate
     }
 
@@ -557,6 +612,20 @@ private actor SavedSearchViewCoordinatorFake:
     ) async throws -> AtlasVaultSavedSearchMutationResult {
         recordedCalls.append("delete")
         return .failed(activationSnapshot)
+    }
+
+    func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async throws -> AtlasVaultSavedSearchMutationResult {
+        recordedCalls.append("update")
+        if let mutationGate {
+            await mutationGate.wait()
+        }
+        guard !updateResults.isEmpty else {
+            return .failed(activationSnapshot)
+        }
+        return updateResults.removeFirst()
     }
 
     func stop() {
@@ -644,6 +713,7 @@ private actor SavedSearchViewSuspensionGate {
 
 private actor SavedSearchViewActionRecorder {
     private var creates = 0
+    private var updates = 0
     private var deletes = 0
     private var locks = 0
 
@@ -655,11 +725,23 @@ private actor SavedSearchViewActionRecorder {
         deletes += 1
     }
 
+    func recordUpdate(
+        _ identifier: AtlasVaultPresentationID,
+        _ draft: AtlasVaultSavedSearchDraft
+    ) {
+        updates += 1
+    }
+
     func recordLock() {
         locks += 1
     }
 
-    func counts() -> (creates: Int, deletes: Int, locks: Int) {
-        (creates, deletes, locks)
+    func counts() -> (
+        creates: Int,
+        updates: Int,
+        deletes: Int,
+        locks: Int
+    ) {
+        (creates, updates, deletes, locks)
     }
 }

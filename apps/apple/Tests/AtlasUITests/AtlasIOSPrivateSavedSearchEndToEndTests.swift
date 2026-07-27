@@ -13,10 +13,13 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let keychain = PrivateSearchE2EKeychainClient()
         let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let savedSearchTimestamps =
+            PrivateSearchE2ETimestampProvider()
 
         let first = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         XCTAssertEqual(keychain.operationCount(), 0)
         XCTAssertEqual(directory.callCount(), 0)
@@ -37,6 +40,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let privateName = "PRIVATE_SAVED_SEARCH_NAME_2D63"
         let privateQuery = "PRIVATE_SAVED_SEARCH_QUERY_2D63"
+        let editedPrivateName = "PRIVATE_EDITED_NAME_2D64"
+        let editedPrivateQuery = "PRIVATE_EDITED_QUERY_2D64"
         await firstContext.actions.create(
             AtlasVaultSavedSearchDraft(
                 name: privateName,
@@ -84,6 +89,116 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         XCTAssertEqual(createdStore.records.count, 1)
         XCTAssertFalse(createdStore.records[0].deleted)
         XCTAssertFalse(createdStore.records[0].ciphertext.isEmpty)
+        let localVaultKey = try XCTUnwrap(
+            AtlasKeychainVaultKeyStore(client: keychain)
+                .loadVaultKey(for: selected.vaultID)
+        )
+        let localSession = try AtlasVaultUnlockedSession(
+            vaultID: selected.vaultID,
+            vaultKey: localVaultKey
+        )
+        let createdHydrated = try XCTUnwrap(
+            AtlasVaultRecordHydrator()
+                .hydrate(
+                    records: createdStore.records,
+                    session: localSession
+                )
+                .savedSearches
+                .first
+        )
+
+        await firstContext.actions.update(
+            firstPresentationIdentifier,
+            draft: AtlasVaultSavedSearchDraft(
+                name: editedPrivateName,
+                searchText: editedPrivateQuery
+            )
+        )
+        XCTAssertEqual(firstContext.owner.status, .ready)
+        XCTAssertEqual(firstContext.owner.items.count, 1)
+        XCTAssertEqual(
+            firstContext.owner.items[0].id,
+            firstPresentationIdentifier
+        )
+        XCTAssertEqual(
+            firstContext.owner.items[0].name,
+            editedPrivateName
+        )
+        XCTAssertEqual(
+            firstContext.owner.items[0].request.text,
+            editedPrivateQuery
+        )
+
+        let editedStoreBytes = try storeBytes(
+            root: root,
+            selected: selected
+        )
+        let editedStoreText = String(
+            decoding: editedStoreBytes,
+            as: UTF8.self
+        )
+        for plaintext in [
+            privateName,
+            privateQuery,
+            editedPrivateName,
+            editedPrivateQuery,
+        ] {
+            XCTAssertFalse(editedStoreText.contains(plaintext), plaintext)
+        }
+        let editedStore = try AtlasVaultLocalStoreIO.decode(
+            editedStoreBytes
+        )
+        XCTAssertEqual(editedStore.records.count, 1)
+        XCTAssertEqual(
+            editedStore.records[0].id,
+            createdStore.records[0].id
+        )
+        XCTAssertEqual(
+            editedStore.records[0].keyID,
+            createdStore.records[0].keyID
+        )
+        XCTAssertNotEqual(
+            editedStore.records[0].revision,
+            createdStore.records[0].revision
+        )
+        XCTAssertEqual(
+            editedStore.records[0].parentRevision,
+            createdStore.records[0].revision
+        )
+        let editedHydrated = try XCTUnwrap(
+            AtlasVaultRecordHydrator()
+                .hydrate(
+                    records: editedStore.records,
+                    session: localSession
+                )
+                .savedSearches
+                .first
+        )
+        XCTAssertEqual(editedHydrated.payload.name, editedPrivateName)
+        XCTAssertEqual(
+            editedHydrated.payload.request.text,
+            editedPrivateQuery
+        )
+        XCTAssertEqual(
+            editedHydrated.payload.createdAt,
+            createdHydrated.payload.createdAt
+        )
+        XCTAssertEqual(
+            editedHydrated.clientCreatedAt,
+            createdHydrated.clientCreatedAt
+        )
+        XCTAssertNotEqual(
+            editedHydrated.payload.updatedAt,
+            createdHydrated.payload.updatedAt
+        )
+        XCTAssertNotEqual(
+            editedHydrated.clientUpdatedAt,
+            createdHydrated.clientUpdatedAt
+        )
+        XCTAssertEqual(
+            first.presentationOwner.flowState.publicShell,
+            publicShellBeforeCreate
+        )
 
         let recoveryCode = try await configureRecovery(
             with: first
@@ -95,13 +210,22 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let second = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         try await unlockExistingLocally(with: second)
         let secondContext = try XCTUnwrap(
             second.savedSearchContextForTesting
         )
         XCTAssertEqual(secondContext.owner.items.count, 1)
+        XCTAssertEqual(
+            secondContext.owner.items[0].name,
+            editedPrivateName
+        )
+        XCTAssertEqual(
+            secondContext.owner.items[0].request.text,
+            editedPrivateQuery
+        )
         XCTAssertNotEqual(
             secondContext.owner.items[0].id,
             firstPresentationIdentifier
@@ -118,6 +242,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         let deletedText = String(decoding: deletedBytes, as: UTF8.self)
         XCTAssertFalse(deletedText.contains(privateName))
         XCTAssertFalse(deletedText.contains(privateQuery))
+        XCTAssertFalse(deletedText.contains(editedPrivateName))
+        XCTAssertFalse(deletedText.contains(editedPrivateQuery))
         XCTAssertFalse(deletedText.contains("saved_search"))
         let deletedStore = try AtlasVaultLocalStoreIO.decode(
             deletedBytes
@@ -147,7 +273,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let third = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         try await unlockExistingLocally(with: third)
         let thirdContext = try XCTUnwrap(
@@ -171,7 +298,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let recoveryOnly = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         _ = try await recoveryOnly.start()
         await recoveryOnly.publicShellActions.requestUnlock()
@@ -368,7 +496,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
     private func makeHarness(
         keychain: PrivateSearchE2EKeychainClient,
-        directory: PrivateSearchE2EDirectoryLocator
+        directory: PrivateSearchE2EDirectoryLocator,
+        savedSearchTimestamps: PrivateSearchE2ETimestampProvider
     ) throws -> AtlasVaultProductionCompositionHarness {
         let time = PrivateSearchE2ELifecycleTime()
         return try AtlasVaultProductionCompositionFactory
@@ -384,6 +513,9 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
                 publicJobs: PrivateSearchE2EPublicJobs(),
                 publicSnapshotRestorer:
                     PrivateSearchE2EPublicSnapshotRestorer(),
+                savedSearchTimestamp: {
+                    savedSearchTimestamps.next()
+                },
                 unlockRequestSleep: { _ in
                     throw CancellationError()
                 }
@@ -453,6 +585,28 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+}
+
+private final class PrivateSearchE2ETimestampProvider: Sendable {
+    private struct State: Sendable {
+        var index = 0
+    }
+
+    private let values = [
+        "2026-07-27T00:00:00Z",
+        "2026-07-27T01:00:00Z",
+        "2026-07-27T02:00:00Z",
+        "2026-07-27T03:00:00Z",
+    ]
+    private let state = Mutex(State())
+
+    func next() -> String {
+        state.withLock { state in
+            let value = values[min(state.index, values.count - 1)]
+            state.index += 1
+            return value
+        }
     }
 }
 
