@@ -105,8 +105,8 @@ non-BMP scalars, and no trailing newline.
 Validators reject missing and unknown fields, Boolean or floating integer
 aliases, explicit null where omission is required, malformed UUIDs,
 timestamps, dates, Base64, unsupported versions, and isolated UTF-16
-surrogates. Canonicalization also rejects malformed UTF-16 keys and values
-rather than silently replacing them.
+surrogates, including string-list elements. Canonicalization also rejects
+malformed UTF-16 keys and values rather than silently replacing them.
 
 ## 19. Payload-Envelope Models
 
@@ -258,7 +258,8 @@ Checkpoint B began.
 The named crypto red commit failed only for absent operations. The
 implementation then made exact-byte, wrong-key, and tamper tests green. The
 first exact-head review added deterministic regressions for malformed UTF-16,
-bounded Argon2 work factors, and destroyed recovery-key use.
+bounded Argon2 work factors, and destroyed recovery-key use. The follow-up
+review verified malformed string-list elements are rejected during parsing.
 
 ## 46. Flutter Analysis And Tests
 

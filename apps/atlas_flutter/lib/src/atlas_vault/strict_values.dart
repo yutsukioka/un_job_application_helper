@@ -131,10 +131,7 @@ List<String> requireAtlasVaultStringList(
   final source = requireAtlasVaultList(value, field: field);
   final output = <String>[];
   for (final item in source) {
-    if (item is! String) {
-      throw AtlasVaultFormatException('$field must be a string list.');
-    }
-    output.add(item);
+    output.add(requireAtlasVaultString(item, field: '$field item'));
   }
   return List<String>.unmodifiable(output);
 }

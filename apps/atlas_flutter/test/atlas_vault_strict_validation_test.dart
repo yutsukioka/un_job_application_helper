@@ -148,9 +148,19 @@ void main() {
       atlasVaultObject(malformed['payload'])['name'] = String.fromCharCode(
         0xd800,
       );
+      final malformedList = _clone(savedSearch);
+      atlasVaultObject(
+        atlasVaultObject(malformedList['payload'])['request'],
+      )['status'] = <Object?>[
+        String.fromCharCode(0xdc00),
+      ];
 
       expect(
         () => AtlasVaultPayloadEnvelope.fromJson(malformed),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+      expect(
+        () => AtlasVaultPayloadEnvelope.fromJson(malformedList),
         throwsA(isA<AtlasVaultFormatException>()),
       );
     });
