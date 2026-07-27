@@ -55,6 +55,7 @@ public struct AtlasVaultProductionUnlockPresentationControllerBuilder:
 
 public actor AtlasVaultProductionHost:
     AtlasVaultProductionHosting,
+    AtlasVaultPrivateMutationHosting,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
@@ -116,9 +117,22 @@ public actor AtlasVaultProductionHost:
         let task: Task<AtlasVaultUnlockPresentationState, Never>
     }
 
+    private enum PrivateMutationExecutionResult {
+        case saved(AtlasVaultSaveOutcome)
+        case rejected(AtlasVaultRuntimeFacadeError)
+        case failed
+    }
+
+    private struct PrivateMutationOperation {
+        let id: UUID
+        let generation: AtlasVaultProductionHostGeneration
+        let task: Task<PrivateMutationExecutionResult, Never>
+    }
+
     private struct BarrierOperation {
         let id: UUID
         let terminal: Bool
+        let skipsPrivateSessionDrain: Bool
         let task: Task<AtlasLockedShellUnlockFlowState, Never>
     }
 
@@ -171,6 +185,8 @@ public actor AtlasVaultProductionHost:
     private var publicationPermitID: UUID?
     private var publicationWaiters: [PublicationPermitContinuation] = []
     private var submitOperation: SubmitOperation?
+    private var privateMutationOperation: PrivateMutationOperation?
+    private var privateSessionIsActive = false
     private var barrierOperation: BarrierOperation?
     private var stopOperation: StopOperation?
 
@@ -238,6 +254,78 @@ public actor AtlasVaultProductionHost:
         -> AtlasLockedShellUnlockFlowState
     {
         flowState()
+    }
+
+    public func applyPrivateMutation(
+        _ request: AtlasVaultRuntimeMutationRequest
+    ) async -> AtlasVaultPrivateMutationResult {
+        guard privateMutationAdmissionPermitted(for: request) else {
+            return privateSessionIsActive ? .failed : .locked
+        }
+        let operationGeneration = generation
+        guard await dependencies.runtime.status() == .unlocked,
+              generation == operationGeneration,
+              privateMutationAdmissionPermitted(for: request) else {
+            return privateSessionIsActive ? .failed : .locked
+        }
+
+        let id = UUID()
+        let runtime = dependencies.runtime
+        let task = Task<PrivateMutationExecutionResult, Never> {
+            do {
+                return .saved(try await runtime.apply(request))
+            } catch let error as AtlasVaultRuntimeFacadeError {
+                return .rejected(error)
+            } catch {
+                return .failed
+            }
+        }
+        privateMutationOperation = PrivateMutationOperation(
+            id: id,
+            generation: operationGeneration,
+            task: task
+        )
+        let result = await task.value
+        guard privateMutationOperation?.id == id else {
+            return privateSessionIsActive ? .cancelled : .locked
+        }
+        privateMutationOperation = nil
+        guard generation == operationGeneration,
+              privateMutationAdmissionPermitted(for: request) else {
+            return privateSessionIsActive ? .cancelled : .locked
+        }
+
+        switch result {
+        case let .saved(outcome):
+            guard await dependencies.runtime.status() == .unlocked,
+                  generation == operationGeneration,
+                  privateMutationAdmissionPermitted(for: request) else {
+                return await containFatalPrivateMutation()
+            }
+            switch outcome {
+            case .committed:
+                return .committed
+            case .committedDurabilityUnconfirmed:
+                return .committedDurabilityUnconfirmed
+            }
+        case let .rejected(error):
+            switch error {
+            case .cancelled:
+                return privateSessionIsActive ? .cancelled : .locked
+            case .saveFailed, .operationInProgress:
+                return .failed
+            case .locked,
+                 .sessionMismatch,
+                 .saveIntegrityUnknown,
+                 .privateStateUnavailable,
+                 .committedStateUnavailable,
+                 .alreadyUnlocked,
+                 .activationFailed:
+                return await containFatalPrivateMutation()
+            }
+        case .failed:
+            return await containFatalPrivateMutation()
+        }
     }
 
     public func searchPublicJobs(
@@ -468,7 +556,9 @@ public actor AtlasVaultProductionHost:
               lifetime == .started else {
             return await runPrivateFreeBarrier(terminal: false)
         }
-        unlockState = result
+        if result.status != .unlocked {
+            unlockState = result
+        }
         return await finishSubmit(result)
     }
 
@@ -680,6 +770,12 @@ public actor AtlasVaultProductionHost:
             }
             if submitOperation != nil {
                 return await cancelUnlock()
+            }
+            if privateSessionIsActive
+                || unlockState.status == .unlocked
+                || privateMutationOperation != nil
+            {
+                return await runPrivateFreeBarrier(terminal: false)
             }
             let publication = await publishCurrentFlow(
                 status: presentationStatus
@@ -989,12 +1085,34 @@ public actor AtlasVaultProductionHost:
         switch result.status {
         case .unlocked:
             let successGeneration = generation
+            guard let selectedVaultID else {
+                return await runPrivateFreeBarrier(terminal: false)
+            }
             let runtimeStatus = await dependencies.runtime.status()
             guard generation == successGeneration,
                   lifetime == .started,
                   runtimeStatus == .unlocked else {
                 return await runPrivateFreeBarrier(terminal: false)
             }
+            privateSessionIsActive = false
+            let privateSessionReady = await dependencies
+                .privateSessionBoundary
+                .activatePrivateSession(
+                    selectedVault: selectedVaultID.vaultID
+                )
+            let confirmedRuntimeStatus = await dependencies.runtime.status()
+            guard privateSessionReady,
+                  generation == successGeneration,
+                  lifetime == .started,
+                  confirmedRuntimeStatus == .unlocked,
+                  privateSessionActivationPermitted(
+                    selectedVaultID,
+                    expectedGeneration: successGeneration
+                  ) else {
+                return await runPrivateFreeBarrier(terminal: false)
+            }
+            privateSessionIsActive = true
+            unlockState = result
             replaceShell(canRequestUnlock: false)
             isUnlockPanelPresented = false
             let publication = await publishAndReset(
@@ -1365,10 +1483,7 @@ public actor AtlasVaultProductionHost:
         case .locked:
             break
         case .failed:
-            await dependencies.runtime.lock()
-            guard await dependencies.runtime.status() == .locked else {
-                return await runPrivateFreeBarrier(terminal: false)
-            }
+            return await runPrivateFreeBarrier(terminal: false)
         case .activating, .locking, .unlocked, .saving:
             return await runPrivateFreeBarrier(terminal: false)
         }
@@ -1386,7 +1501,8 @@ public actor AtlasVaultProductionHost:
     }
 
     private func runPrivateFreeBarrier(
-        terminal: Bool
+        terminal: Bool,
+        skipsPrivateSessionDrain: Bool = false
     ) async -> AtlasLockedShellUnlockFlowState {
         let terminalBarrierRequested = terminal
             || lifetime == .stopping
@@ -1394,12 +1510,18 @@ public actor AtlasVaultProductionHost:
             || stopOperation != nil
         if let barrierOperation {
             if terminalBarrierRequested && !barrierOperation.terminal {
+                let preservedSkip =
+                    skipsPrivateSessionDrain
+                    || barrierOperation.skipsPrivateSessionDrain
                 barrierOperation.task.cancel()
                 self.barrierOperation = nil
                 lifetime = .stopping
                 closeUnlockAdmission()
                 _ = advanceGeneration()
-                return await runPrivateFreeBarrier(terminal: true)
+                return await runPrivateFreeBarrier(
+                    terminal: true,
+                    skipsPrivateSessionDrain: preservedSkip
+                )
             }
             return await barrierOperation.task.value
         }
@@ -1412,12 +1534,14 @@ public actor AtlasVaultProductionHost:
             await performPrivateFreeBarrier(
                 operationID: id,
                 operationGeneration: operationGeneration,
-                terminal: terminalBarrierRequested
+                terminal: terminalBarrierRequested,
+                skipsPrivateSessionDrain: skipsPrivateSessionDrain
             )
         }
         barrierOperation = BarrierOperation(
             id: id,
             terminal: terminalBarrierRequested,
+            skipsPrivateSessionDrain: skipsPrivateSessionDrain,
             task: task
         )
         let result = await task.value
@@ -1430,10 +1554,37 @@ public actor AtlasVaultProductionHost:
     private func performPrivateFreeBarrier(
         operationID: UUID,
         operationGeneration: AtlasVaultProductionHostGeneration,
-        terminal: Bool
+        terminal: Bool,
+        skipsPrivateSessionDrain: Bool
     ) async -> AtlasLockedShellUnlockFlowState {
         guard barrierOperation?.id == operationID else {
             return flowState()
+        }
+        await dependencies.privateSessionBoundary
+            .hidePrivatePresentation()
+        guard barrierOperation?.id == operationID else {
+            return flowState()
+        }
+        privateSessionIsActive = false
+        if !skipsPrivateSessionDrain {
+            let activePrivateMutation = privateMutationOperation
+            activePrivateMutation?.task.cancel()
+            if let activePrivateMutation {
+                _ = await activePrivateMutation.task.value
+                guard barrierOperation?.id == operationID else {
+                    return flowState()
+                }
+                if privateMutationOperation?.id
+                    == activePrivateMutation.id
+                {
+                    privateMutationOperation = nil
+                }
+            }
+            await dependencies.privateSessionBoundary
+                .stopAndDrainPrivateSession()
+            guard barrierOperation?.id == operationID else {
+                return flowState()
+            }
         }
         if terminal {
             await dependencies.presentationOwner
@@ -1809,6 +1960,58 @@ public actor AtlasVaultProductionHost:
             && stopOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
+    }
+
+    private func privateMutationAdmissionPermitted(
+        for request: AtlasVaultRuntimeMutationRequest
+    ) -> Bool {
+        guard let selectedVaultID else {
+            return false
+        }
+        return lifetime == .started
+            && privateSessionIsActive
+            && unlockState.status == .unlocked
+            && flowState().mode == .unlockedTransition
+            && selectedVaultID.vaultID == request.expectedVaultID
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && privateMutationOperation == nil
+            && barrierOperation == nil
+            && stopOperation == nil
+    }
+
+    private func privateSessionActivationPermitted(
+        _ selectedVaultID: AtlasSelectedVaultID,
+        expectedGeneration: AtlasVaultProductionHostGeneration
+    ) -> Bool {
+        lifetime == .started
+            && generation == expectedGeneration
+            && self.selectedVaultID == selectedVaultID
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && privateMutationOperation == nil
+            && barrierOperation == nil
+            && stopOperation == nil
+    }
+
+    private func containFatalPrivateMutation() async
+        -> AtlasVaultPrivateMutationResult
+    {
+        _ = await runPrivateFreeBarrier(
+            terminal: false,
+            skipsPrivateSessionDrain: true
+        )
+        return .locked
     }
 
     private var barrierCompletionAdmissionPermitted: Bool {

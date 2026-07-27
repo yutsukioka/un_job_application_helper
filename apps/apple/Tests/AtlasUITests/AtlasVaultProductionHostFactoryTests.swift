@@ -557,7 +557,7 @@ final class AtlasVaultProductionHostFactoryTests: XCTestCase {
         let section = try sourceSection(
             source,
             from: "public protocol AtlasVaultProductionHosting",
-            to: "public protocol AtlasVaultUnlockPresentationControllerBuilding"
+            to: "public enum AtlasVaultPrivateMutationResult"
         )
 
         for required in [

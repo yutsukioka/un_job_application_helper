@@ -1629,7 +1629,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         let recoveryContext = try XCTUnwrap(
             harness.recoveryExportContextForTesting
         )
+        let savedSearchContext = try XCTUnwrap(
+            harness.savedSearchContextForTesting
+        )
         XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
+        XCTAssertEqual(savedSearchContext.owner.status, .hidden)
+        XCTAssertTrue(savedSearchContext.owner.items.isEmpty)
         _ = harness.makeRootView()
         _ = harness.makeRootView()
         XCTAssertTrue(
@@ -1637,6 +1642,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 === harness.recoveryExportContextForTesting?.owner
         )
         XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
+        XCTAssertTrue(
+            savedSearchContext.owner
+                === harness.savedSearchContextForTesting?.owner
+        )
+        XCTAssertEqual(savedSearchContext.owner.status, .hidden)
+        XCTAssertTrue(savedSearchContext.owner.items.isEmpty)
     }
 
     @MainActor

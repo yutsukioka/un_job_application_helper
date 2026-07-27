@@ -42,7 +42,9 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
         for forbidden in [
             "AtlasVaultPrivateState",
-            "savedSearch",
+            "AtlasVaultHydratedState",
+            "AtlasHydratedSavedSearch",
+            "AtlasVaultSavedSearchPresentation",
             "savedJob",
             "FileManager",
             "Keychain",
@@ -181,7 +183,8 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
             "AtlasVaultPrivateState",
             "AtlasVaultHydratedState",
             "AtlasVaultPrivatePresentationState",
-            "savedSearch",
+            "AtlasHydratedSavedSearch",
+            "AtlasVaultSavedSearchPresentation",
             "savedJob",
             "applicationNote",
             "profileSnippet",

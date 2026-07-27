@@ -9,6 +9,7 @@ public struct AtlasVaultProductionRootView: View {
     private let creationContext: AtlasLocalVaultCreationContext?
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
+    private let savedSearchContext: AtlasVaultSavedSearchContext?
 
     public init(
         owner: AtlasVaultProductionPresentationOwner,
@@ -21,6 +22,7 @@ public struct AtlasVaultProductionRootView: View {
         creationContext = nil
         recoveryExportContext = nil
         recoveryImportContext = nil
+        savedSearchContext = nil
     }
 
     public init(
@@ -35,6 +37,7 @@ public struct AtlasVaultProductionRootView: View {
         self.creationContext = creationContext
         recoveryExportContext = nil
         recoveryImportContext = nil
+        savedSearchContext = nil
     }
 
     public init(
@@ -49,6 +52,7 @@ public struct AtlasVaultProductionRootView: View {
         creationContext = nil
         self.recoveryExportContext = recoveryExportContext
         recoveryImportContext = nil
+        savedSearchContext = nil
     }
 
     public init(
@@ -64,6 +68,7 @@ public struct AtlasVaultProductionRootView: View {
         self.creationContext = creationContext
         self.recoveryExportContext = recoveryExportContext
         recoveryImportContext = nil
+        savedSearchContext = nil
     }
 
     public init(
@@ -72,7 +77,8 @@ public struct AtlasVaultProductionRootView: View {
         unlockActions: AtlasExplicitUnlockViewActions,
         creationContext: AtlasLocalVaultCreationContext?,
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
-        recoveryImportContext: AtlasVaultRecoveryImportContext?
+        recoveryImportContext: AtlasVaultRecoveryImportContext?,
+        savedSearchContext: AtlasVaultSavedSearchContext? = nil
     ) {
         self.owner = owner
         self.publicShellActions = publicShellActions
@@ -80,6 +86,7 @@ public struct AtlasVaultProductionRootView: View {
         self.creationContext = creationContext
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
+        self.savedSearchContext = savedSearchContext
     }
 
     public var body: some View {
@@ -89,7 +96,8 @@ public struct AtlasVaultProductionRootView: View {
             unlockActions: unlockActions,
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
-            recoveryImportContext: recoveryImportContext
+            recoveryImportContext: recoveryImportContext,
+            savedSearchContext: savedSearchContext
         )
     }
 }
@@ -102,6 +110,7 @@ private struct AtlasVaultProductionRootContent: View {
     let creationContext: AtlasLocalVaultCreationContext?
     let recoveryExportContext: AtlasVaultRecoveryExportContext?
     let recoveryImportContext: AtlasVaultRecoveryImportContext?
+    let savedSearchContext: AtlasVaultSavedSearchContext?
 
     @ViewBuilder
     var body: some View {
@@ -112,6 +121,7 @@ private struct AtlasVaultProductionRootContent: View {
                 unlockActions: unlockActions,
                 creationContext: creationContext,
                 recoveryExportContext: recoveryExportContext,
+                savedSearchContext: savedSearchContext,
                 recoveryImportOwner: recoveryImportContext.owner,
                 recoveryImportActions: recoveryImportContext.actions,
                 recoveryImportAvailability:
@@ -130,6 +140,7 @@ private struct AtlasVaultProductionRootContent: View {
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
                 creationContext: creationContext,
+                savedSearchContext: savedSearchContext,
                 recoveryOwner: recoveryExportContext.owner,
                 recoveryActions: recoveryExportContext.actions
             )
@@ -138,8 +149,35 @@ private struct AtlasVaultProductionRootContent: View {
                 flowState: state,
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext,
                 creationOwner: creationContext.owner,
                 creationActions: creationContext.actions
+            )
+        } else {
+            AtlasVaultProductionBaseFlow(
+                state: state,
+                publicShellActions: publicShellActions,
+                unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext
+            )
+        }
+    }
+}
+
+@MainActor
+private struct AtlasVaultProductionBaseFlow: View {
+    let state: AtlasLockedShellUnlockFlowState
+    let publicShellActions: AtlasLockedPublicShellActions
+    let unlockActions: AtlasExplicitUnlockViewActions
+    let savedSearchContext: AtlasVaultSavedSearchContext?
+
+    @ViewBuilder
+    var body: some View {
+        if state.mode == .unlockedTransition,
+           let savedSearchContext {
+            AtlasVaultSavedSearchView(
+                owner: savedSearchContext.owner,
+                actions: savedSearchContext.actions
             )
         } else {
             AtlasLockedShellUnlockFlowView(
@@ -158,6 +196,7 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
     let unlockActions: AtlasExplicitUnlockViewActions
     let creationContext: AtlasLocalVaultCreationContext?
     let recoveryExportContext: AtlasVaultRecoveryExportContext?
+    let savedSearchContext: AtlasVaultSavedSearchContext?
     @ObservedObject var recoveryImportOwner:
         AtlasVaultRecoveryImportPresentationOwner
     let recoveryImportActions: AtlasVaultRecoveryImportActions
@@ -233,6 +272,7 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
                 creationContext: recoveryImportAvailability.hasPendingImport ? nil : creationContext,
+                savedSearchContext: savedSearchContext,
                 recoveryOwner: recoveryExportContext.owner,
                 recoveryActions: recoveryExportContext.actions
             )
@@ -245,14 +285,16 @@ private struct AtlasVaultRecoveryImportEnabledRoot: View {
                 flowState: flowState,
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext,
                 creationOwner: creationContext.owner,
                 creationActions: creationContext.actions
             )
         } else {
-            AtlasLockedShellUnlockFlowView(
+            AtlasVaultProductionBaseFlow(
                 state: flowState,
                 publicShellActions: publicShellActions,
-                unlockActions: unlockActions
+                unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext
             )
         }
     }
@@ -289,6 +331,7 @@ private struct AtlasVaultRecoveryEnabledRoot: View {
     let publicShellActions: AtlasLockedPublicShellActions
     let unlockActions: AtlasExplicitUnlockViewActions
     let creationContext: AtlasLocalVaultCreationContext?
+    let savedSearchContext: AtlasVaultSavedSearchContext?
     @ObservedObject var recoveryOwner:
         AtlasVaultRecoveryExportPresentationOwner
     let recoveryActions: AtlasVaultRecoveryExportActions
@@ -363,14 +406,16 @@ private struct AtlasVaultRecoveryEnabledRoot: View {
                 flowState: flowState,
                 publicShellActions: publicShellActions,
                 unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext,
                 creationOwner: creationContext.owner,
                 creationActions: creationContext.actions
             )
         } else {
-            AtlasLockedShellUnlockFlowView(
+            AtlasVaultProductionBaseFlow(
                 state: flowState,
                 publicShellActions: publicShellActions,
-                unlockActions: unlockActions
+                unlockActions: unlockActions,
+                savedSearchContext: savedSearchContext
             )
         }
     }
@@ -403,6 +448,7 @@ private struct AtlasVaultCreationEnabledRoot: View {
     let flowState: AtlasLockedShellUnlockFlowState
     let publicShellActions: AtlasLockedPublicShellActions
     let unlockActions: AtlasExplicitUnlockViewActions
+    let savedSearchContext: AtlasVaultSavedSearchContext?
     @ObservedObject var creationOwner:
         AtlasLocalVaultCreationPresentationOwner
     let creationActions: AtlasLocalVaultCreationActions
@@ -411,10 +457,11 @@ private struct AtlasVaultCreationEnabledRoot: View {
         AtlasLocalVaultCreationPresentationClaim()
 
     var body: some View {
-        AtlasLockedShellUnlockFlowView(
+        AtlasVaultProductionBaseFlow(
             state: flowState,
             publicShellActions: publicShellActions,
-            unlockActions: unlockActions
+            unlockActions: unlockActions,
+            savedSearchContext: savedSearchContext
         )
         .safeAreaInset(edge: .bottom) {
             if showsCreateAction {
