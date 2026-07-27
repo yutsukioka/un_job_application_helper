@@ -41,6 +41,17 @@ Swift tests load the same vector file, decode each envelope into the
 corresponding `AtlasVaultPayloads.swift` Codable type, re-encode it, and compare
 JSON objects semantically.
 
+Dart tests consume all four existing vector files directly from the repository.
+They validate strict envelope models, canonical ASCII JSON, encrypted-record
+crypto, historical passphrase wrapping, recovery wrapping, and encrypted
+export bytes. The vector JSON remains unchanged, fake, and test-only. Where a
+vector defines exact bytes, Dart matches the Python and Swift result.
+PointyCastle is used only to reproduce historical Argon2id v1 behavior; Dart
+AES-GCM, HKDF-SHA256, and SHA-256 use `cryptography`. Runtime key storage,
+Flutter app integration, plaintext-cache migration, and production
+import/export file I/O remain deferred. Future vector changes require Python,
+Swift, and Dart agreement.
+
 ## Crypto Vectors
 
 `atlasvault_crypto_vectors_v1.json` contains fake, test-only deterministic
