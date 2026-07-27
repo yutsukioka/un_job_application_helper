@@ -138,12 +138,18 @@ rejected before service access so it cannot bypass the dedicated lock-first
 handoff boundary. While the retained saved-search handoff owns the host, the
 ordinary entry point also rejects manual searches. This keeps network
 admission exclusive through the post-lock proof and saved-search request
-completion. The host stores that handoff reservation synchronously before its
-first runtime-status await, closing actor-reentrancy admission from initial
-proof through completion. The retained operation also keeps the public unlock
-affordance false and rejects direct unlock-panel or submission requests while
-the saved-origin service request is in flight. Ordinary manual and unlock
-behavior resume only after handoff ownership clears.
+completion. Before private request preparation crosses its actor boundary, the
+harness-owned coordinator obtains an opaque host reservation. The host stores
+that reservation synchronously, so manual and private-mutation admission remain
+closed throughout private criteria resolution. Preparation or owner-claim
+failure cancels the exact reservation without hiding the committed private
+list. After owner completion clears the list, the same reservation is consumed
+to create the retained handoff operation before its first runtime-status await,
+closing actor-reentrancy admission from preparation through completion. The
+retained operation also keeps the public unlock affordance false and rejects
+direct unlock-panel or submission requests while the saved-origin service
+request is in flight. Ordinary manual and unlock behavior resume only after
+reservation cancellation or handoff ownership clears.
 
 ## 20. Saved-Search Validation
 
@@ -179,10 +185,13 @@ Lock, stop, hide, reactivation, or a stale completion invalidates the claim.
 
 ## 24. Separate Harness-Owned Handoff Operation
 
-The retained handoff operation belongs to the harness-owned handoff
-coordinator, not to the private presentation owner or private-session
-coordinator. Caller cancellation cannot orphan it, duplicate handoffs are
-rejected, and harness stop cancels and drains it.
+The host reservation and retained handoff operation belong to the
+harness-owned handoff coordinator, not to the private presentation owner or
+private-session coordinator. The coordinator reserves host admission before
+private request preparation, cancels the exact reservation on preparation or
+claim failure, and consumes it only after synchronous owner hide. Caller
+cancellation cannot orphan either stage, duplicate handoffs are rejected, and
+harness stop cancels and drains reservation and execution work.
 
 ## 25. Full-Drain Barrier Contract
 
@@ -366,6 +375,19 @@ completion or a post-lock public-service failure. The regression requires
 locked-public mode and closed direct unlock admission while the service is
 gated, then requires saved completion and reopened admission after release.
 
+The fifth exact-head Codex review identified the remaining harness preparation
+window: the owner claim was established before the private coordinator actor
+resolved the saved request, but the production host was not reserved until
+after that suspension. A manual search from another window could therefore
+start while the vault remained unlocked and displace the later handoff after
+the owner cleared. The correction adds an opaque host reservation acquired
+before request preparation, blocks manual and private admission while held,
+cancels it on preparation or claim failure, and atomically consumes it into
+the retained handoff after owner hide. Deterministic regressions require a
+manual attempt during reservation to make zero service calls, prove the saved
+request alone completes, and prove cancellation reopens ordinary manual
+search without locking.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -416,6 +438,14 @@ tap-level edit or handoff automation was claimed. The unlock-admission
 regression holds the saved-origin service request, requires locked-public mode
 and closed direct unlock admission, then proves normal unlock admission
 reopens only after the saved request completes.
+
+The fifth Codex review correction reserves the production host before private
+request preparation. Its focused regressions prove manual service access is
+blocked while the reservation is held, the reserved saved request remains the
+only request admitted after owner hide, and cancellation of an unconsumed
+reservation restores ordinary manual admission without a lock or saved-origin
+request. Final suite, build, simulator, and GitHub evidence is recorded in the
+persistent Phase 2D-64 archive.
 
 ## 46. Go/No-Go
 

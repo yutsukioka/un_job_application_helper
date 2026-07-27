@@ -878,6 +878,91 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testHandoffReservationBlocksManualSearchDuringPrivatePreparation()
+        async throws
+    {
+        let savedResult = try makeSearchResult(
+            jobID: "reserved-preparation-result",
+            title: "Reserved Preparation Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let reservationHost:
+            any AtlasSavedSearchPublicHandoffReservationHosting = graph.host
+        let reserved =
+            await reservationHost.reserveSavedSearchPublicHandoff()
+        let reservation = try XCTUnwrap(reserved)
+        let manual = try searchRequest(query: "manual during preparation")
+
+        do {
+            _ = try await graph.host.searchPublicJobs(manual)
+            XCTFail("manual search must not enter a reserved handoff")
+        } catch {
+            XCTAssertEqual(error, .unavailable)
+        }
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "reserved preparation",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+        let handoffResult =
+            await reservationHost.performReservedSavedSearchPublicHandoff(
+                saved,
+                reservation: reservation
+            )
+
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testCancelledHandoffReservationReopensManualSearch()
+        async throws
+    {
+        let manualResult = try makeSearchResult(
+            jobID: "manual-after-cancelled-reservation",
+            title: "Manual After Cancelled Reservation"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(manualResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let reservationHost:
+            any AtlasSavedSearchPublicHandoffReservationHosting = graph.host
+        let reserved =
+            await reservationHost.reserveSavedSearchPublicHandoff()
+        let reservation = try XCTUnwrap(reserved)
+
+        await reservationHost.cancelSavedSearchPublicHandoff(reservation)
+        let manual = try searchRequest(query: "manual after cancellation")
+        let result = try await graph.host.searchPublicJobs(manual)
+
+        XCTAssertEqual(result, manualResult)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [manual]
+        )
+    }
+
     func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
         async throws
     {

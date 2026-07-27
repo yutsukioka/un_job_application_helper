@@ -135,8 +135,16 @@ public protocol AtlasVaultSavedSearchCoordinating: Sendable {
 }
 
 public protocol AtlasVaultSavedSearchPublicHandoffCoordinating: Sendable {
+    func reserveHostAdmission() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+
+    func cancelHostAdmission(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async
+
     func perform(
-        _ request: AtlasPublicJobSearchRequest
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
     ) async -> AtlasSavedSearchPublicHandoffResult
 
     func stop() async
@@ -741,6 +749,14 @@ public actor AtlasVaultSavedSearchPublicHandoffCoordinator:
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
+    private struct ReservationOperation {
+        let identifier: UUID
+        let work: Task<
+            AtlasSavedSearchPublicHandoffReservation?,
+            Never
+        >
+    }
+
     private struct Operation {
         let identifier: UUID
         let work: Task<
@@ -749,26 +765,75 @@ public actor AtlasVaultSavedSearchPublicHandoffCoordinator:
         >
     }
 
-    private let host: any AtlasSavedSearchPublicHandoffHosting
+    private let host:
+        any AtlasSavedSearchPublicHandoffReservationHosting
+    private var reservationOperation: ReservationOperation?
+    private var reservation:
+        AtlasSavedSearchPublicHandoffReservation?
     private var operation: Operation?
 
     public init(
-        host: any AtlasSavedSearchPublicHandoffHosting
+        host: any AtlasSavedSearchPublicHandoffReservationHosting
     ) {
         self.host = host
     }
 
-    public func perform(
-        _ request: AtlasPublicJobSearchRequest
-    ) async -> AtlasSavedSearchPublicHandoffResult {
-        guard request.origin == .savedSearchHandoff,
+    public func reserveHostAdmission() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        guard reservationOperation == nil,
+              reservation == nil,
               operation == nil else {
-            return .cancelled
+            return nil
         }
         let identifier = UUID()
         let host = host
         let work = Task {
-            await host.performSavedSearchPublicHandoff(request)
+            await host.reserveSavedSearchPublicHandoff()
+        }
+        reservationOperation = ReservationOperation(
+            identifier: identifier,
+            work: work
+        )
+        let reserved = await work.value
+        guard reservationOperation?.identifier == identifier else {
+            return nil
+        }
+        reservationOperation = nil
+        guard let reserved else {
+            return nil
+        }
+        reservation = reserved
+        return reserved
+    }
+
+    public func cancelHostAdmission(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async {
+        guard self.reservation == reservation else {
+            return
+        }
+        self.reservation = nil
+        await host.cancelSavedSearchPublicHandoff(reservation)
+    }
+
+    public func perform(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard request.origin == .savedSearchHandoff,
+              self.reservation == reservation,
+              operation == nil else {
+            return .cancelled
+        }
+        self.reservation = nil
+        let identifier = UUID()
+        let host = host
+        let work = Task {
+            await host.performReservedSavedSearchPublicHandoff(
+                request,
+                reservation: reservation
+            )
         }
         operation = Operation(
             identifier: identifier,
@@ -783,6 +848,17 @@ public actor AtlasVaultSavedSearchPublicHandoffCoordinator:
     }
 
     public func stop() async {
+        if let reservationOperation {
+            reservationOperation.work.cancel()
+            self.reservationOperation = nil
+            if let pending = await reservationOperation.work.value {
+                await host.cancelSavedSearchPublicHandoff(pending)
+            }
+        }
+        if let reservation {
+            self.reservation = nil
+            await host.cancelSavedSearchPublicHandoff(reservation)
+        }
         guard let operation else {
             return
         }

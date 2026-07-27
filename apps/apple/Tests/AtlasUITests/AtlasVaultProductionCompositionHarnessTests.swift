@@ -89,6 +89,9 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             orchestration.contains("beginPublicSearchHandoff")
         )
         XCTAssertTrue(
+            orchestration.contains("reserveHostAdmission")
+        )
+        XCTAssertTrue(
             orchestration.contains("publicSearchRequest")
         )
         XCTAssertTrue(
@@ -107,6 +110,21 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             orchestration[
                 executeStart.lowerBound..<lockStart.lowerBound
             ]
+        )
+        let reservation = try XCTUnwrap(
+            executeOrchestration.range(of: "reserveHostAdmission")
+        )
+        let preparation = try XCTUnwrap(
+            executeOrchestration.range(of: "publicSearchRequest")
+        )
+        XCTAssertLessThan(
+            reservation.lowerBound,
+            preparation.lowerBound
+        )
+        XCTAssertTrue(
+            executeOrchestration.contains(
+                "cancelHostAdmission"
+            )
         )
         XCTAssertFalse(executeOrchestration.contains("host.lock()"))
         XCTAssertTrue(

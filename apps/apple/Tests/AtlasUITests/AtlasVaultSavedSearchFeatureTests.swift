@@ -1078,14 +1078,25 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
             validatingSavedSearch: AtlasSearchRequest(text: "policy"),
             maximumLimit: 25
         )
+        let reserved = await coordinator.reserveHostAdmission()
+        let reservation = try XCTUnwrap(reserved)
 
         let first = Task {
-            await coordinator.perform(request)
+            await coordinator.perform(
+                request,
+                reservation: reservation
+            )
         }
         await gate.waitUntilEntered()
         first.cancel()
-        let duplicate = await coordinator.perform(request)
+        let duplicate = await coordinator.perform(
+            request,
+            reservation: reservation
+        )
         XCTAssertEqual(duplicate, .cancelled)
+        let reservationsWhileSuspended =
+            await host.reservationCallCount()
+        XCTAssertEqual(reservationsWhileSuspended, 1)
         let callsWhileSuspended = await host.callCount()
         XCTAssertEqual(callsWhileSuspended, 1)
 
@@ -1364,10 +1375,14 @@ private actor SavedSearchSuspensionGate {
 }
 
 private actor SavedSearchPublicHandoffHostFake:
-    AtlasSavedSearchPublicHandoffHosting
+    AtlasSavedSearchPublicHandoffHosting,
+    AtlasSavedSearchPublicHandoffReservationHosting
 {
     private let gate: SavedSearchSuspensionGate
     private var calls = 0
+    private var reservationCalls = 0
+    private var activeReservation:
+        AtlasSavedSearchPublicHandoffReservation?
     private var request: AtlasPublicJobSearchRequest?
 
     init(gate: SavedSearchSuspensionGate) {
@@ -1377,6 +1392,43 @@ private actor SavedSearchPublicHandoffHostFake:
     func performSavedSearchPublicHandoff(
         _ request: AtlasPublicJobSearchRequest
     ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard let reservation = reserveSavedSearchPublicHandoff() else {
+            return .cancelled
+        }
+        return await performReservedSavedSearchPublicHandoff(
+            request,
+            reservation: reservation
+        )
+    }
+
+    func reserveSavedSearchPublicHandoff()
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        guard activeReservation == nil else {
+            return nil
+        }
+        reservationCalls += 1
+        let reservation = AtlasSavedSearchPublicHandoffReservation()
+        activeReservation = reservation
+        return reservation
+    }
+
+    func cancelSavedSearchPublicHandoff(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) {
+        if activeReservation == reservation {
+            activeReservation = nil
+        }
+    }
+
+    func performReservedSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard activeReservation == reservation else {
+            return .cancelled
+        }
+        activeReservation = nil
         calls += 1
         self.request = request
         await gate.wait()
@@ -1385,6 +1437,10 @@ private actor SavedSearchPublicHandoffHostFake:
 
     func callCount() -> Int {
         calls
+    }
+
+    func reservationCallCount() -> Int {
+        reservationCalls
     }
 
     func lastRequest() -> AtlasPublicJobSearchRequest? {

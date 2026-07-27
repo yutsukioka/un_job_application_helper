@@ -1067,8 +1067,10 @@ public enum AtlasVaultProductionCompositionFactory {
                 host as? any AtlasVaultPrivateMutationHosting,
             let privateMutationContainmentHost =
                 host as? any AtlasVaultPrivateMutationContainmentHosting,
-            let savedSearchHandoffHost =
-                host as? any AtlasSavedSearchPublicHandoffHosting
+            host is any AtlasSavedSearchPublicHandoffHosting,
+            let savedSearchHandoffReservationHost =
+                host as?
+                    any AtlasSavedSearchPublicHandoffReservationHosting
         else {
             throw AtlasVaultProductionCompositionError
                 .privateFeatureUnavailable
@@ -1094,7 +1096,7 @@ public enum AtlasVaultProductionCompositionFactory {
             )
         let savedSearchHandoffCoordinator =
             AtlasVaultSavedSearchPublicHandoffCoordinator(
-                host: savedSearchHandoffHost
+                host: savedSearchHandoffReservationHost
             )
         guard privateSessionBridge.attach(savedSearchOwner) else {
             throw AtlasVaultProductionCompositionError
@@ -1122,6 +1124,13 @@ public enum AtlasVaultProductionCompositionFactory {
                           .beginPublicSearchHandoff() else {
                     return
                 }
+                guard let reservation =
+                    await savedSearchHandoffCoordinator
+                        .reserveHostAdmission() else {
+                    await savedSearchOwner
+                        .failPublicSearchHandoff(claim)
+                    return
+                }
                 let request: AtlasPublicJobSearchRequest
                 do {
                     request = try await savedSearchCoordinator
@@ -1130,14 +1139,21 @@ public enum AtlasVaultProductionCompositionFactory {
                             maximumLimit: configuration.publicSearchLimit
                         )
                 } catch {
+                    await savedSearchHandoffCoordinator
+                        .cancelHostAdmission(reservation)
                     await savedSearchOwner.failPublicSearchHandoff(claim)
                     return
                 }
                 guard await savedSearchOwner
                     .completePublicSearchHandoff(claim) else {
+                    await savedSearchHandoffCoordinator
+                        .cancelHostAdmission(reservation)
                     return
                 }
-                _ = await savedSearchHandoffCoordinator.perform(request)
+                _ = await savedSearchHandoffCoordinator.perform(
+                    request,
+                    reservation: reservation
+                )
             },
             lock: { [weak savedSearchOwner] in
                 await savedSearchOwner?.beginLocking()

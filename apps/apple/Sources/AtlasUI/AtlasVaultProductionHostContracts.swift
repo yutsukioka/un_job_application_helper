@@ -847,9 +847,44 @@ public enum AtlasSavedSearchPublicHandoffResult:
     }
 }
 
+public struct AtlasSavedSearchPublicHandoffReservation:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    let identifier: UUID
+
+    init(identifier: UUID = UUID()) {
+        self.identifier = identifier
+    }
+
+    public var description: String {
+        "AtlasSavedSearchPublicHandoffReservation(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 public protocol AtlasSavedSearchPublicHandoffHosting: Sendable {
     func performSavedSearchPublicHandoff(
         _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult
+}
+
+public protocol AtlasSavedSearchPublicHandoffReservationHosting: Sendable {
+    func reserveSavedSearchPublicHandoff() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+
+    func cancelSavedSearchPublicHandoff(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async
+
+    func performReservedSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
     ) async -> AtlasSavedSearchPublicHandoffResult
 }
 
