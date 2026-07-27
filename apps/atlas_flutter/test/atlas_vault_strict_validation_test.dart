@@ -45,6 +45,89 @@ void main() {
     });
   });
 
+  group('strict payload validation', () {
+    late Map<String, Object?> savedSearch;
+
+    setUp(() {
+      final vectors = loadAtlasVaultVector(
+        'atlasvault_payload_vectors_v1.json',
+      );
+      savedSearch = _clone(
+        atlasVaultObject(atlasVaultObject(vectors['payloads'])['saved_search']),
+      );
+    });
+
+    test(
+      'rejects malformed JSON, fields, schema aliases, and null optionals',
+      () {
+        expect(
+          () => AtlasVaultPayloadEnvelope.decodeJson('{'),
+          throwsA(isA<AtlasVaultFormatException>()),
+        );
+
+        final missing = _clone(savedSearch)..remove('client_created_at');
+        final unknown = _clone(savedSearch)..['unexpected'] = true;
+        final booleanSchema = _clone(savedSearch)..['payload_schema'] = true;
+        final floatingSchema = _clone(savedSearch)..['payload_schema'] = 1.0;
+        final unsupportedSchema = _clone(savedSearch)..['payload_schema'] = 2;
+        final unsupportedType = _clone(savedSearch)..['type'] = 'saved_text';
+        final nullOptional = _clone(savedSearch);
+        atlasVaultObject(nullOptional['payload'])['description'] = null;
+
+        for (final invalid in <Map<String, Object?>>[
+          missing,
+          unknown,
+          booleanSchema,
+          floatingSchema,
+          unsupportedSchema,
+          unsupportedType,
+          nullOptional,
+        ]) {
+          expect(
+            () => AtlasVaultPayloadEnvelope.fromJson(invalid),
+            throwsA(isA<AtlasVaultFormatException>()),
+          );
+        }
+      },
+    );
+
+    test('rejects malformed date-only and timestamp values', () {
+      final invalidDate = _clone(savedSearch);
+      final request = atlasVaultObject(
+        atlasVaultObject(invalidDate['payload'])['request'],
+      );
+      request['closing_date_to'] = '2026-02-30';
+
+      final yearZero = _clone(savedSearch)
+        ..['client_created_at'] = '0000-01-01T00:00:00Z';
+
+      expect(
+        () => AtlasVaultPayloadEnvelope.fromJson(invalidDate),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+      expect(
+        () => AtlasVaultPayloadEnvelope.fromJson(yearZero),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+    });
+
+    test('fixed validation errors do not echo private input', () {
+      const sentinel = 'TOP_SECRET_VALIDATION_SENTINEL';
+      final invalid = _clone(savedSearch)..[sentinel] = true;
+
+      expect(
+        () => AtlasVaultPayloadEnvelope.fromJson(invalid),
+        throwsA(
+          isA<AtlasVaultFormatException>().having(
+            (error) => error.toString(),
+            'redacted error',
+            isNot(contains(sentinel)),
+          ),
+        ),
+      );
+    });
+  });
+
   group('strict export validation', () {
     late Map<String, Object?> source;
 
@@ -73,6 +156,34 @@ void main() {
       );
 
       expect(decoded.toJson(), source);
+    });
+
+    test('preserves established opaque vault and record identifiers', () {
+      final compatible = _clone(source);
+      final metadata = atlasVaultObject(compatible['vault_metadata']);
+      metadata['vault_id'] = 'vault_ABC-123';
+      final cryptoVectors = loadAtlasVaultVector(
+        'atlasvault_crypto_vectors_v1.json',
+      );
+      final cryptoVector = atlasVaultObject(
+        atlasVaultList(cryptoVectors['vectors']).single,
+      );
+      compatible['records'] = <Object?>[
+        _clone(atlasVaultObject(cryptoVector['record'])),
+      ];
+      final record = atlasVaultObject(
+        atlasVaultList(compatible['records']).single,
+      );
+      record['id'] = 'record-one';
+      record['revision'] = 'revision_one';
+      record['parent_revision'] = 'revision-zero';
+
+      final decoded = AtlasVaultEncryptedExport.fromJson(compatible);
+
+      expect(decoded.vaultMetadata.vaultId, 'vault_ABC-123');
+      expect(decoded.records.single.id, 'record-one');
+      expect(decoded.records.single.revision, 'revision_one');
+      expect(decoded.records.single.parentRevision, 'revision-zero');
     });
 
     test('rejects missing, unknown, null, Boolean, and floating fields', () {
@@ -133,6 +244,9 @@ void main() {
         'AAECAwQFBgcICQoL====',
         'AAECAwQFBgcICQoL ',
         'AAECAwQFBgcICQo_',
+        'AAECAwQFBgcICQo',
+        'AAECAwQFBgcICQoL=',
+        'AA==',
       ]) {
         final invalid = _clone(source);
         final invalidMetadata = atlasVaultObject(invalid['vault_metadata']);
@@ -151,6 +265,52 @@ void main() {
       duplicateMetadata['key_wraps'] = <Object?>[_clone(wrap), _clone(wrap)];
       expect(
         () => AtlasVaultEncryptedExport.fromJson(duplicate),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+    });
+
+    test('dispatches passphrase v1 and recovery v2 wraps strictly', () {
+      final keyWrapVectors = loadAtlasVaultVector(
+        'atlasvault_key_wrap_vectors_v1.json',
+      );
+      final keyWrapVector = atlasVaultObject(
+        atlasVaultList(keyWrapVectors['vectors']).single,
+      );
+      final passphraseMetadata = AtlasVaultMetadata.fromJson(
+        atlasVaultObject(keyWrapVector['vault_metadata']),
+      );
+      final recoveryMetadata = AtlasVaultMetadata.fromJson(
+        atlasVaultObject(source['vault_metadata']),
+      );
+
+      expect(
+        passphraseMetadata.keyWraps.single,
+        isA<AtlasVaultPassphraseKeyWrapV1>(),
+      );
+      expect(
+        recoveryMetadata.keyWraps.single,
+        isA<AtlasVaultRecoveryKeyWrapV2>(),
+      );
+
+      final invalidV1 = _clone(
+        atlasVaultObject(keyWrapVector['vault_metadata']),
+      );
+      atlasVaultObject(
+        atlasVaultList(invalidV1['key_wraps']).single,
+      )['wrap_version'] = 1;
+      final invalidV2 = _clone(source);
+      atlasVaultObject(
+        atlasVaultList(
+          atlasVaultObject(invalidV2['vault_metadata'])['key_wraps'],
+        ).single,
+      )['wrap_version'] = true;
+
+      expect(
+        () => AtlasVaultMetadata.fromJson(invalidV1),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+      expect(
+        () => AtlasVaultEncryptedExport.fromJson(invalidV2),
         throwsA(isA<AtlasVaultFormatException>()),
       );
     });

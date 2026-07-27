@@ -45,6 +45,14 @@ void main() {
     expect(store.records, hasLength(1));
   });
 
+  test('local store identifier remains an opaque nonempty value', () {
+    localStore['store_id'] = 'local-store-one';
+
+    final store = AtlasVaultLocalStore.fromJson(localStore);
+
+    expect(store.storeId, 'local-store-one');
+  });
+
   test('local store preserves encrypted record order', () {
     final second =
         _clone(atlasVaultObject(atlasVaultList(localStore['records']).single))
