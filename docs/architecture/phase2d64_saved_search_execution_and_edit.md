@@ -542,6 +542,27 @@ exact-device AtlasIOSHost normal-route smoke on an iOS 26.5 iPhone 17 Pro
 remained alive for 74 seconds without an immediate crash; no tap-level edit or
 handoff automation was performed or claimed.
 
+The following exact-head Codex review identified the publication-stage variant
+of that ownership edge. The service task could finish and the host could remove
+the owner-tagged search operation before the result-bearing presentation
+publication completed. An explicit lock arriving while that publication was
+suspended could not identify or invalidate the handoff result, allowing it to
+survive in the locked shell. The owner-tagged operation now remains retained
+through the final publication await. Explicit lock can therefore invalidate
+the search generation and clear the public shell before beginning its full
+barrier, while the resumed stale publication fails its post-await ownership
+fence. Operation cleanup is deferred until the search method unwinds. A
+deterministic regression suspends only the result-bearing owner publication,
+requires the operation to remain retained, begins explicit lock, waits for the
+next private hide, and proves the public result is already absent before the
+publication or barrier may continue. After this correction, the
+production-host suite passed 139 tests, the focused Phase 2D-64 matrix passed
+355 tests, and full Swift passed 1,295 tests. The complete Python CI mirror and
+both generic iOS builds passed. A freshly installed exact-device AtlasIOSHost
+normal-route smoke on an iOS 26.5 iPhone 17 Pro remained alive for 31 seconds
+without an immediate crash. No tap-level edit or handoff automation was
+performed or claimed.
+
 ## 46. Go/No-Go
 
 - Apple saved-search create/list/delete: implemented previously.

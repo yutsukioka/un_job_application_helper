@@ -528,17 +528,21 @@ public actor AtlasVaultProductionHost:
         )
         retainedSearchOperations[id] = operation
         searchOperation = operation
+        defer {
+            retainedSearchOperations[id] = nil
+            if searchOperation?.id == id {
+                searchOperation = nil
+            }
+        }
         _ = await publishCurrentFlow(status: presentationStatus)
 
         let result = await task.value
-        retainedSearchOperations[id] = nil
         guard searchOperation?.id == id,
               searchOperation?.generation == operationGeneration,
               searchGeneration == operationGeneration,
               isPublicOperationAvailable else {
             throw .unavailable
         }
-        searchOperation = nil
 
         switch result {
         case let .success(value):
@@ -557,6 +561,12 @@ public actor AtlasVaultProductionHost:
             if case .failed = publication {
                 throw .unavailable
             }
+            guard searchOperation?.id == id,
+                  searchOperation?.generation == operationGeneration,
+                  searchGeneration == operationGeneration,
+                  isPublicOperationAvailable else {
+                throw .unavailable
+            }
             return value
         case let .failure(error):
             replaceShell(
@@ -569,6 +579,12 @@ public actor AtlasVaultProductionHost:
                 hasAdditionalCriteria: request.hasAdditionalCriteria
             )
             _ = await publishCurrentFlow(status: presentationStatus)
+            guard searchOperation?.id == id,
+                  searchOperation?.generation == operationGeneration,
+                  searchGeneration == operationGeneration,
+                  isPublicOperationAvailable else {
+                throw .unavailable
+            }
             throw error
         }
     }

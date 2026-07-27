@@ -1037,6 +1037,75 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.runtime.status(), .locked)
     }
 
+    func testExplicitLockInvalidatesHandoffDuringResultPublication()
+        async throws
+    {
+        let resultPublicationGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "publication-stage-handoff-result",
+            title: "Publication Stage Handoff Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.owner.setGateWhenPublicJobsAreNonempty(
+            resultPublicationGate
+        )
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "publication-stage handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await resultPublicationGate.waitUntilEntered()
+
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+        let hideCallsBeforeLock = graph.privateSessionBoundary.hideCalls()
+        let explicitLock = Task {
+            await graph.host.lock()
+        }
+        await graph.privateSessionBoundary.waitForHideCalls(
+            hideCallsBeforeLock + 1
+        )
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+
+        await resultPublicationGate.release()
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(locked.publicShell.publicJobs, [])
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            0
+        )
+        await expectEqual(await graph.runtime.status(), .locked)
+    }
+
     func testExplicitLockDoesNotCancelIndependentManualSearch()
         async throws
     {
@@ -5671,12 +5740,18 @@ private final class HostPrivateSessionBoundaryFake:
     AtlasVaultPrivateSessionBoundary,
     Sendable
 {
+    private struct HideWaiter {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private struct State {
         var activationCalls = 0
         var activatedSelections: [String] = []
         var hideCalls = 0
         var stopCalls = 0
         var hiddenWaiters: [CheckedContinuation<Void, Never>] = []
+        var hideWaiters: [HideWaiter] = []
     }
 
     private let activationGate: HostSuspensionGate?
@@ -5707,13 +5782,26 @@ private final class HostPrivateSessionBoundaryFake:
 
     @MainActor
     func hidePrivatePresentation() {
-        let waiters = state.withLock {
+        let (hiddenWaiters, hideWaiters) = state.withLock {
             $0.hideCalls += 1
-            let waiters = $0.hiddenWaiters
+            let hiddenWaiters = $0.hiddenWaiters
             $0.hiddenWaiters.removeAll()
-            return waiters
+            var pending: [HideWaiter] = []
+            var ready: [CheckedContinuation<Void, Never>] = []
+            for waiter in $0.hideWaiters {
+                if $0.hideCalls >= waiter.expectedCount {
+                    ready.append(waiter.continuation)
+                } else {
+                    pending.append(waiter)
+                }
+            }
+            $0.hideWaiters = pending
+            return (hiddenWaiters, ready)
         }
-        for waiter in waiters {
+        for waiter in hiddenWaiters {
+            waiter.resume()
+        }
+        for waiter in hideWaiters {
             waiter.resume()
         }
     }
@@ -5737,6 +5825,29 @@ private final class HostPrivateSessionBoundaryFake:
                     return true
                 }
                 $0.hiddenWaiters.append(continuation)
+                return false
+            }
+            if resumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func waitForHideCalls(_ expectedCount: Int) async {
+        if hideCalls() >= expectedCount {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = state.withLock {
+                guard $0.hideCalls < expectedCount else {
+                    return true
+                }
+                $0.hideWaiters.append(
+                    HideWaiter(
+                        expectedCount: expectedCount,
+                        continuation: continuation
+                    )
+                )
                 return false
             }
             if resumeImmediately {
@@ -6369,6 +6480,7 @@ private actor HostPresentationOwnerRecorder {
         canRequestUnlock: Bool,
         gate: HostSuspensionGate
     )?
+    private var publicJobsGate: HostSuspensionGate?
     private var currentGeneration: AtlasVaultProductionHostGeneration?
     private let requiresExactSupersededGeneration: Bool
     private var requiredSupersededGeneration:
@@ -6405,6 +6517,10 @@ private actor HostPresentationOwnerRecorder {
             == admissionGate.canRequestUnlock {
             gate = admissionGate.gate
             self.admissionGate = nil
+        } else if !state.publicShell.publicJobs.isEmpty,
+                  let publicJobsGate {
+            gate = publicJobsGate
+            self.publicJobsGate = nil
         } else {
             gate = nextGate
             nextGate = nil
@@ -6459,6 +6575,12 @@ private actor HostPresentationOwnerRecorder {
         whenCanRequestUnlock value: Bool
     ) {
         admissionGate = (value, gate)
+    }
+
+    func setGateWhenPublicJobsAreNonempty(
+        _ gate: HostSuspensionGate
+    ) {
+        publicJobsGate = gate
     }
 
     func totalCalls() -> Int {
@@ -6607,6 +6729,12 @@ private final class HostPresentationOwnerFake:
             gate,
             whenCanRequestUnlock: value
         )
+    }
+
+    func setGateWhenPublicJobsAreNonempty(
+        _ gate: HostSuspensionGate
+    ) async {
+        await recorder.setGateWhenPublicJobsAreNonempty(gate)
     }
 
     func totalCalls() async -> Int {
