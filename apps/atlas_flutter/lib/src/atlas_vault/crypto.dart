@@ -145,7 +145,8 @@ Future<Uint8List> deriveAtlasVaultPassphraseWrappingKeyV1({
       version: Argon2Parameters.ARGON2_VERSION_13,
     );
     final generator = Argon2BytesGenerator()..init(pointyParameters);
-    return Uint8List.fromList(generator.process(passphraseBytes));
+    final derivedBytes = generator.process(passphraseBytes);
+    return atlasVaultCopyAndWipeBytesInternal(derivedBytes);
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
@@ -256,7 +257,8 @@ Future<Uint8List> atlasVaultDeriveHkdfSha256Internal({
       hmac: Hmac.sha256(),
       outputLength: _vaultKeyByteCount,
     ).deriveKey(secretKey: inputKey, nonce: salt, info: info);
-    return Uint8List.fromList(await derivedKey.extractBytes());
+    final extractedBytes = await derivedKey.extractBytes();
+    return atlasVaultCopyAndWipeBytesInternal(extractedBytes);
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
@@ -358,5 +360,13 @@ void atlasVaultWipeBytesInternal(List<int>? value) {
     value.fillRange(0, value.length, 0);
   } catch (_) {
     // Dart collection implementations do not all guarantee mutability.
+  }
+}
+
+Uint8List atlasVaultCopyAndWipeBytesInternal(List<int> value) {
+  try {
+    return Uint8List.fromList(value);
+  } finally {
+    atlasVaultWipeBytesInternal(value);
   }
 }

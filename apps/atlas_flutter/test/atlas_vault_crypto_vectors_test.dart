@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/src/atlas_vault/crypto.dart'
-    show atlasVaultWipeBytesInternal;
+    show atlasVaultCopyAndWipeBytesInternal, atlasVaultWipeBytesInternal;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_vector_loader.dart';
@@ -89,10 +89,14 @@ void main() {
 
   test('best-effort secret wiping clears generic mutable byte lists', () {
     final genericBytes = <int>[0x11, 0x22, 0x33];
+    final immutableBytes = List<int>.unmodifiable(<int>[0x44, 0x55]);
 
-    atlasVaultWipeBytesInternal(genericBytes);
+    final copied = atlasVaultCopyAndWipeBytesInternal(genericBytes);
+    final immutableCopy = atlasVaultCopyAndWipeBytesInternal(immutableBytes);
 
+    expect(copied, <int>[0x11, 0x22, 0x33]);
     expect(genericBytes, everyElement(0));
+    expect(immutableCopy, <int>[0x44, 0x55]);
     expect(
       () => atlasVaultWipeBytesInternal(List<int>.unmodifiable(<int>[1])),
       returnsNormally,
