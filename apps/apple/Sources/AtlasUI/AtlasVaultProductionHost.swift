@@ -352,7 +352,10 @@ public actor AtlasVaultProductionHost:
     ) async throws(AtlasPublicJobServiceError)
         -> AtlasPublicJobSearchResult
     {
-        try await performPublicSearch(request)
+        guard request.origin == .manual else {
+            throw .invalidRequest
+        }
+        return try await performPublicSearch(request)
     }
 
     public func performSavedSearchPublicHandoff(

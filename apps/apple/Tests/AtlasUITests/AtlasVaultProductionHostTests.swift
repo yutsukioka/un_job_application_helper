@@ -675,6 +675,43 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         XCTAssertEqual(terminalCalls, 0)
     }
 
+    func testOrdinarySearchRejectsSavedOriginWithoutLockOrNetwork()
+        async throws
+    {
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "private criteria",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let result = await captureSearch(graph.host, request)
+
+        await expectEqual(result, .failure(.invalidRequest))
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+        await expectEqual(
+            await graph.host.currentFlowState().mode,
+            .unlockedTransition
+        )
+        await expectEqual(await graph.runtime.status(), .unlocked)
+        await expectEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            0
+        )
+        await expectEqual(
+            graph.privateSessionBoundary.stopCalls(),
+            0
+        )
+    }
+
     func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
         async throws
     {

@@ -132,7 +132,10 @@ public snapshot, and errors.
 
 The historical query, limit, and offset initializer remains source- and
 behavior-compatible. It creates a text-only request with manual origin,
-facets disabled, and no additional criteria.
+facets disabled, and no additional criteria. The ordinary public-search host
+entry point accepts only manual-origin requests. A saved-origin request is
+rejected before service access so it cannot bypass the dedicated lock-first
+handoff boundary.
 
 ## 20. Saved-Search Validation
 
@@ -315,6 +318,13 @@ semantics, Run and Lock UI, origin indication, and manual reset were absent.
 Deterministic tests gate private drain and runtime lock and require a zero
 public-service call count until both complete.
 
+The first exact-head Codex review identified that the ordinary public-search
+entry point also needed an explicit manual-origin gate. Its deterministic red
+test observed one public-service call while the private session remained
+unlocked. The correction rejects saved-origin requests before service access
+while preserving the internal shared helper used after the dedicated handoff
+barrier.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -329,6 +339,13 @@ skipped. The runtime JSON schema and 71 YAML files also validated. Source
 guards were clean, and the transient Python environment was removed. GitHub
 checks, exact-head reviews, thread resolution, final scope, protected-path
 cleanliness, and artifact scans remain merge-time gates.
+
+After the first Codex review correction, the focused Phase 2D-64 matrix passed
+342 tests and full Swift passed 1,282 tests. The complete Python mirror,
+both generic iOS builds, and the exact-device normal-route smoke were repeated
+successfully. The ordinary-entry regression specifically verifies zero public
+calls, zero runtime-lock calls, and an unchanged unlocked private session when
+a saved-origin request is presented outside the dedicated handoff.
 
 ## 46. Go/No-Go
 
