@@ -138,7 +138,10 @@ rejected before service access so it cannot bypass the dedicated lock-first
 handoff boundary. While the retained saved-search handoff owns the host, the
 ordinary entry point also rejects manual searches. This keeps network
 admission exclusive through the post-lock proof and saved-search request
-completion; ordinary manual behavior resumes after handoff ownership clears.
+completion. The host stores that handoff reservation synchronously before its
+first runtime-status await, closing actor-reentrancy admission from initial
+proof through completion. Ordinary manual behavior resumes after handoff
+ownership clears.
 
 ## 20. Saved-Search Validation
 
@@ -337,6 +340,16 @@ manual searches while the retained saved-search handoff operation owns the
 host. The regression requires zero service calls from the manual attempt and
 then proves the saved request alone completes after the gate releases.
 
+The third exact-head Codex review identified the remaining initial-admission
+window: the host awaited runtime status before storing the handoff operation,
+allowing actor reentrancy to admit a manual search. A deterministic initial
+runtime-status gate reproduced the premature manual call and displaced saved
+request. The correction creates and stores the retained handoff task before
+the first await, then revalidates operation identity, generation, lifecycle
+admission, and unlocked runtime status inside that task. The regression
+requires zero service calls during the initial proof and permits only the
+saved request after release.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -367,6 +380,15 @@ and the exact-device normal-route smoke were repeated successfully. The
 handoff-ownership regression specifically holds post-lock runtime proof,
 requires a concurrent manual attempt to make zero service calls, then proves
 the saved request alone completes after release.
+
+After the third Codex review correction, the production-host suite passed
+128 tests, the combined Checkpoint A/B matrix passed 344 tests, the explicit
+earlier-phase and supporting regression matrix passed 237 tests, and full
+Swift passed 1,284 tests. The complete Python mirror, both generic iOS builds,
+and the exact-device normal-route smoke were repeated successfully. The
+initial-admission regression specifically holds the first runtime-status
+proof, requires a concurrent manual attempt to make zero service calls, then
+proves the reserved saved request alone completes after release.
 
 ## 46. Go/No-Go
 

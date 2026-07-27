@@ -771,6 +771,57 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testHandoffReservesOwnershipBeforeInitialRuntimeStatusAwait()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-reserved-result",
+            title: "Saved Reserved Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved reserved",
+                organizations: ["UNICEF"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let manual = await captureSearch(
+            graph.host,
+            try searchRequest(query: "manual before reservation")
+        )
+        let callsDuringInitialProof = await graph.publicJobs.totalCalls()
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(manual, .failure(.unavailable))
+        await expectEqual(callsDuringInitialProof, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
     func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
         async throws
     {

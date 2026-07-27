@@ -370,12 +370,6 @@ public actor AtlasVaultProductionHost:
             return unavailableSavedSearchHandoffResult
         }
         let admissionGeneration = generation
-        guard await dependencies.runtime.status() == .unlocked,
-              generation == admissionGeneration,
-              savedSearchHandoffAdmissionPermitted else {
-            return unavailableSavedSearchHandoffResult
-        }
-
         let id = UUID()
         let task = Task { [self] in
             await executeSavedSearchPublicHandoff(
@@ -2132,6 +2126,16 @@ public actor AtlasVaultProductionHost:
               savedSearchHandoffBaseAdmissionPermitted,
               !Task.isCancelled else {
             return unavailableSavedSearchHandoffResult
+        }
+        let admissionRuntimeStatus = await dependencies.runtime.status()
+        guard savedSearchHandoffOperation?.id == operationID,
+              generation == admissionGeneration,
+              savedSearchHandoffBaseAdmissionPermitted,
+              !Task.isCancelled else {
+            return unavailableSavedSearchHandoffResult
+        }
+        guard admissionRuntimeStatus == .unlocked else {
+            return .lockFailed
         }
 
         _ = await runPrivateFreeBarrier(
