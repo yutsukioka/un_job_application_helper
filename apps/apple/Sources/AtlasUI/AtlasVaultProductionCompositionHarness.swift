@@ -905,6 +905,8 @@ public enum AtlasVaultProductionCompositionFactory {
             (any AtlasPublicJobSearching)? = nil,
         publicSnapshotRestorer injectedPublicSnapshotRestorer:
             (any AtlasPublicSnapshotRestoring)? = nil,
+        savedSearchTimestamp:
+            (@Sendable () -> String)? = nil,
         unlockRequestSleep:
             (@Sendable (Duration) async throws -> Void)? = nil
     ) throws -> AtlasVaultProductionCompositionHarness {
@@ -927,6 +929,12 @@ public enum AtlasVaultProductionCompositionFactory {
                 ?? AtlasApplicationSupportPublicSnapshotRestorer(
                     rootProvider: rootProvider
                 )
+        let savedSearchTimestampProvider =
+            savedSearchTimestamp ?? {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                return formatter.string(from: Date())
+            }
         let vaultSelector = AtlasKeychainVaultSelectionRegistry(
             client: keychainClient
         )
@@ -1050,11 +1058,7 @@ public enum AtlasVaultProductionCompositionFactory {
                     await privateMutationContainmentHost
                         .containCommittedPrivateMutationFailure()
                 },
-                timestamp: {
-                    let formatter = ISO8601DateFormatter()
-                    formatter.formatOptions = [.withInternetDateTime]
-                    return formatter.string(from: Date())
-                }
+                timestamp: savedSearchTimestampProvider
             )
         )
         let savedSearchOwner =
@@ -1068,6 +1072,13 @@ public enum AtlasVaultProductionCompositionFactory {
         let savedSearchActions = AtlasVaultSavedSearchActions(
             create: { [weak savedSearchOwner] draft in
                 await savedSearchOwner?.create(draft)
+            },
+            update: {
+                [weak savedSearchOwner] identifier, draft in
+                await savedSearchOwner?.update(
+                    presentationID: identifier,
+                    draft: draft
+                )
             },
             delete: { [weak savedSearchOwner] identifier in
                 await savedSearchOwner?.delete(

@@ -117,6 +117,11 @@ public protocol AtlasVaultSavedSearchCoordinating: Sendable {
         _ draft: AtlasVaultSavedSearchDraft
     ) async throws -> AtlasVaultSavedSearchMutationResult
 
+    func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async throws -> AtlasVaultSavedSearchMutationResult
+
     func delete(
         presentationID: AtlasVaultPresentationID
     ) async throws -> AtlasVaultSavedSearchMutationResult
@@ -176,6 +181,8 @@ public actor AtlasVaultSavedSearchCoordinator:
         let recordIdentifier: String
         let currentRevision: String
         let encryptionKeyIdentifier: String
+        let payload: AtlasSavedSearchVaultPayload
+        let clientCreatedAt: String
     }
 
     private struct Projection {
@@ -347,6 +354,83 @@ public actor AtlasVaultSavedSearchCoordinator:
                     && $0.metadata.deleted
             }
             return activeItemIsAbsent && matchingTombstone
+        }
+    }
+
+    public func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async throws -> AtlasVaultSavedSearchMutationResult {
+        guard let vaultIdentifier = activeVaultIdentifier,
+              presentationGeneration != nil else {
+            throw AtlasVaultSavedSearchFailure.locked
+        }
+        guard !mutationsDisabled, mutationOperation == nil else {
+            return .failed(committedSnapshot)
+        }
+        guard let metadata = metadataByPresentationID[presentationID] else {
+            return .staleItem(committedSnapshot)
+        }
+
+        let normalized = try Self.normalizedDraft(draft)
+        guard metadata.payload.name != normalized.name
+                || metadata.payload.request.text != normalized.searchText
+        else {
+            return .committed(committedSnapshot)
+        }
+
+        let timestamp = environment.timestamp()
+        guard Self.isStrictUTCTimestamp(timestamp) else {
+            throw AtlasVaultSavedSearchFailure.unavailable
+        }
+        var updatedRequest = metadata.payload.request
+        updatedRequest.text = normalized.searchText
+        updatedRequest.offset = 0
+        let updatedPayload = AtlasSavedSearchVaultPayload(
+            name: normalized.name,
+            summary: normalized.searchText ?? "All open jobs",
+            description: metadata.payload.description,
+            request: updatedRequest,
+            createdAt: metadata.payload.createdAt,
+            updatedAt: timestamp
+        )
+        let envelope = AtlasSavedSearchVaultRecordPayload(
+            type: .savedSearch,
+            payload: updatedPayload,
+            clientCreatedAt: metadata.clientCreatedAt,
+            clientUpdatedAt: timestamp
+        )
+        let mutation = AtlasVaultUpdateMutation(
+            recordID: metadata.recordIdentifier,
+            currentRevision: metadata.currentRevision,
+            payload: .savedSearch(envelope),
+            keyID: metadata.encryptionKeyIdentifier
+        )
+        let runtimeRequest = AtlasVaultRuntimeMutationRequest(
+            expectedVaultID: vaultIdentifier,
+            mutations: AtlasVaultMutationSet(updates: [mutation])
+        )
+
+        return await performMutation(runtimeRequest) { state, projection in
+            guard
+                projection.mapping[presentationID]?.recordIdentifier
+                    == metadata.recordIdentifier,
+                let updatedRecord = state.savedSearches.first(where: {
+                    $0.metadata.id == metadata.recordIdentifier
+                })
+            else {
+                return false
+            }
+            return updatedRecord.metadata.revision
+                    != metadata.currentRevision
+                && updatedRecord.metadata.parentRevision
+                    == metadata.currentRevision
+                && updatedRecord.metadata.keyID
+                    == metadata.encryptionKeyIdentifier
+                && updatedRecord.payload == updatedPayload
+                && updatedRecord.clientCreatedAt
+                    == metadata.clientCreatedAt
+                && updatedRecord.clientUpdatedAt == timestamp
         }
     }
 
@@ -532,7 +616,9 @@ public actor AtlasVaultSavedSearchCoordinator:
             mapping[presentationIdentifier] = RecordMetadata(
                 recordIdentifier: record.metadata.id,
                 currentRevision: record.metadata.revision,
-                encryptionKeyIdentifier: record.metadata.keyID
+                encryptionKeyIdentifier: record.metadata.keyID,
+                payload: record.payload,
+                clientCreatedAt: record.clientCreatedAt
             )
             searches.append(
                 AtlasVaultSavedSearchPresentation(

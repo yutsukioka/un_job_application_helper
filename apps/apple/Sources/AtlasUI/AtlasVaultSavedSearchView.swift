@@ -178,6 +178,22 @@ public final class AtlasVaultSavedSearchPresentationOwner:
         }
     }
 
+    public func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async {
+        guard mayBeginMutation else {
+            return
+        }
+        let coordinator = coordinator
+        await performMutation {
+            try await coordinator.update(
+                presentationID: presentationID,
+                draft: draft
+            )
+        }
+    }
+
     public func hidePrivatePresentation() {
         ownerGeneration &+= 1
         activationOperation?.work.cancel()
@@ -300,6 +316,11 @@ public final class AtlasVaultSavedSearchPresentationOwner:
 public struct AtlasVaultSavedSearchActions: Sendable {
     private let createAction:
         @Sendable (AtlasVaultSavedSearchDraft) async -> Void
+    private let updateAction:
+        @Sendable (
+            AtlasVaultPresentationID,
+            AtlasVaultSavedSearchDraft
+        ) async -> Void
     private let deleteAction:
         @Sendable (AtlasVaultPresentationID) async -> Void
     private let lockAction: @Sendable () async -> Void
@@ -309,6 +330,11 @@ public struct AtlasVaultSavedSearchActions: Sendable {
             @escaping @Sendable (
                 AtlasVaultSavedSearchDraft
             ) async -> Void,
+        update:
+            @escaping @Sendable (
+                AtlasVaultPresentationID,
+                AtlasVaultSavedSearchDraft
+            ) async -> Void,
         delete:
             @escaping @Sendable (
                 AtlasVaultPresentationID
@@ -316,6 +342,7 @@ public struct AtlasVaultSavedSearchActions: Sendable {
         lock: @escaping @Sendable () async -> Void
     ) {
         createAction = create
+        updateAction = update
         deleteAction = delete
         lockAction = lock
     }
@@ -326,6 +353,13 @@ public struct AtlasVaultSavedSearchActions: Sendable {
 
     public func delete(_ id: AtlasVaultPresentationID) async {
         await deleteAction(id)
+    }
+
+    public func update(
+        _ id: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async {
+        await updateAction(id, draft)
     }
 
     public func lock() async {
@@ -349,6 +383,10 @@ public struct AtlasVaultSavedSearchContext {
 
 @MainActor
 public struct AtlasVaultSavedSearchView: View {
+    private struct EditCandidate {
+        let id: AtlasVaultPresentationID
+    }
+
     private struct DeleteCandidate {
         let id: AtlasVaultPresentationID
         let name: String
@@ -360,6 +398,10 @@ public struct AtlasVaultSavedSearchView: View {
     @State private var isCreatePresented = false
     @State private var name = ""
     @State private var searchText = ""
+    @State private var editCandidate: EditCandidate?
+    @State private var editName = ""
+    @State private var editSearchText = ""
+    @State private var isEditPresented = false
     @State private var deleteCandidate: DeleteCandidate?
     @State private var isDeletePresented = false
 
@@ -411,7 +453,8 @@ public struct AtlasVaultSavedSearchView: View {
                     .disabled(!allowsMutation)
 
                     Button {
-                        clearDraft()
+                        clearCreateDraft()
+                        clearEditDraft()
                         owner.beginLocking()
                         Task {
                             await actions.lock()
@@ -425,7 +468,10 @@ public struct AtlasVaultSavedSearchView: View {
                 statusBanner
             }
         }
-        .sheet(isPresented: $isCreatePresented, onDismiss: clearDraft) {
+        .sheet(
+            isPresented: $isCreatePresented,
+            onDismiss: clearCreateDraft
+        ) {
             NavigationStack {
                 Form {
                     TextField("Name", text: $name)
@@ -435,7 +481,7 @@ public struct AtlasVaultSavedSearchView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
-                            clearDraft()
+                            clearCreateDraft()
                             isCreatePresented = false
                         }
                     }
@@ -445,10 +491,53 @@ public struct AtlasVaultSavedSearchView: View {
                                 name: name,
                                 searchText: searchText
                             )
-                            clearDraft()
+                            clearCreateDraft()
                             isCreatePresented = false
                             Task {
                                 await actions.create(draft)
+                            }
+                        }
+                        .disabled(!allowsMutation)
+                    }
+                }
+            }
+        }
+        .sheet(
+            isPresented: $isEditPresented,
+            onDismiss: clearEditDraft
+        ) {
+            NavigationStack {
+                Form {
+                    TextField("Name", text: $editName)
+                    TextField(
+                        "Search terms",
+                        text: $editSearchText
+                    )
+                }
+                .navigationTitle("Edit Saved Search")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            clearEditDraft()
+                            isEditPresented = false
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            guard let candidate = editCandidate else {
+                                return
+                            }
+                            let draft = AtlasVaultSavedSearchDraft(
+                                name: editName,
+                                searchText: editSearchText
+                            )
+                            clearEditDraft()
+                            isEditPresented = false
+                            Task {
+                                await actions.update(
+                                    candidate.id,
+                                    draft: draft
+                                )
                             }
                         }
                         .disabled(!allowsMutation)
@@ -480,14 +569,17 @@ public struct AtlasVaultSavedSearchView: View {
         }
         .onChange(of: owner.status) { _, status in
             if status == .hidden || status == .locking {
-                clearDraft()
+                clearCreateDraft()
+                clearEditDraft()
                 isCreatePresented = false
+                isEditPresented = false
                 deleteCandidate = nil
                 isDeletePresented = false
             }
         }
         .onDisappear {
-            clearDraft()
+            clearCreateDraft()
+            clearEditDraft()
             deleteCandidate = nil
         }
     }
@@ -510,6 +602,17 @@ public struct AtlasVaultSavedSearchView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                editCandidate = EditCandidate(id: item.id)
+                editName = item.name
+                editSearchText = item.request.text ?? ""
+                isEditPresented = true
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .disabled(!allowsMutation)
         }
         .swipeActions {
             Button(role: .destructive) {
@@ -559,8 +662,14 @@ public struct AtlasVaultSavedSearchView: View {
         owner.status == .ready || owner.status == .saveFailed
     }
 
-    private func clearDraft() {
+    private func clearCreateDraft() {
         name = ""
         searchText = ""
+    }
+
+    private func clearEditDraft() {
+        editCandidate = nil
+        editName = ""
+        editSearchText = ""
     }
 }
