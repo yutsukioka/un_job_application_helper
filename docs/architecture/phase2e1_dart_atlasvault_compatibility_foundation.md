@@ -104,7 +104,9 @@ non-BMP scalars, and no trailing newline.
 
 Validators reject missing and unknown fields, Boolean or floating integer
 aliases, explicit null where omission is required, malformed UUIDs,
-timestamps, dates, Base64, and unsupported versions.
+timestamps, dates, Base64, unsupported versions, and isolated UTF-16
+surrogates. Canonicalization also rejects malformed UTF-16 keys and values
+rather than silently replacing them.
 
 ## 19. Payload-Envelope Models
 
@@ -156,6 +158,8 @@ shared vector exactly.
 
 PointyCastle Argon2id uses the vector memory, iterations, parallelism, salt,
 version 1.3, and 32-byte output. AES-256-GCM reproduces the exact v1 wrap.
+Untrusted values are bounded by the documented v1 production profile:
+65,536 KiB memory, three iterations, and four lanes.
 
 ## 28. Historical V1 Vault-Binding Limitation
 
@@ -209,9 +213,10 @@ parameters, salt, nonce, ciphertext, or tag fail closed.
 
 Mutable temporary passphrase bytes, key copies, derived keys, decrypted vault
 keys, and plaintext copies are zero-filled where practical, and
-`SecretKeyData.destroy()` is used. Dart copies and dependency internals prevent
-a universal zeroization guarantee. Secrets are never logged or included in
-errors or descriptions.
+`SecretKeyData.destroy()` is used. A retained recovery-key object has an
+idempotent `destroy()` operation that zero-fills its buffer and rejects later
+use. Dart copies and dependency internals prevent a universal zeroization
+guarantee. Secrets are never logged or included in errors or descriptions.
 
 ## 38. Public Dart API
 
@@ -251,7 +256,9 @@ Checkpoint B began.
 ## 45. TDD Checkpoint B Evidence
 
 The named crypto red commit failed only for absent operations. The
-implementation then made exact-byte, wrong-key, and tamper tests green.
+implementation then made exact-byte, wrong-key, and tamper tests green. The
+first exact-head review added deterministic regressions for malformed UTF-16,
+bounded Argon2 work factors, and destroyed recovery-key use.
 
 ## 46. Flutter Analysis And Tests
 

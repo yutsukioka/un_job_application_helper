@@ -98,6 +98,24 @@ void main() {
     }
   });
 
+  test('Argon2id work factors are bounded before derivation', () {
+    final excessiveValues = <String, int>{
+      'memory_kib': AtlasVaultArgon2idParameters.maximumMemoryKib + 1,
+      'iterations': AtlasVaultArgon2idParameters.maximumIterations + 1,
+      'parallelism': AtlasVaultArgon2idParameters.maximumParallelism + 1,
+    };
+
+    for (final entry in excessiveValues.entries) {
+      final invalid = _clone(wrap.toJson());
+      atlasVaultObject(invalid['kdf'])[entry.key] = entry.value;
+
+      expect(
+        () => AtlasVaultPassphraseKeyWrapV1.fromJson(invalid),
+        throwsA(isA<AtlasVaultFormatException>()),
+      );
+    }
+  });
+
   test('serialized v1 metadata contains no passphrase or raw vault key', () {
     final serialized = jsonEncode(metadataJson);
 

@@ -62,7 +62,29 @@ String requireAtlasVaultString(
   if (value is! String || (!allowEmpty && value.isEmpty)) {
     throw AtlasVaultFormatException('$field must be text.');
   }
+  requireAtlasVaultWellFormedUtf16(value, field: field);
   return value;
+}
+
+void requireAtlasVaultWellFormedUtf16(String value, {required String field}) {
+  final codeUnits = value.codeUnits;
+  for (var index = 0; index < codeUnits.length; index++) {
+    final current = codeUnits[index];
+    if (current >= 0xd800 && current <= 0xdbff) {
+      if (index + 1 >= codeUnits.length) {
+        throw AtlasVaultFormatException('$field must contain valid Unicode.');
+      }
+      final next = codeUnits[index + 1];
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw AtlasVaultFormatException('$field must contain valid Unicode.');
+      }
+      index += 1;
+      continue;
+    }
+    if (current >= 0xdc00 && current <= 0xdfff) {
+      throw AtlasVaultFormatException('$field must contain valid Unicode.');
+    }
+  }
 }
 
 String? requireAtlasVaultOptionalString(

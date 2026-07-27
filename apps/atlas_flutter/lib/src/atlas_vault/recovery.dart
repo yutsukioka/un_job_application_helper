@@ -22,6 +22,7 @@ final class AtlasVaultRecoveryKey {
   );
 
   final Uint8List _bytes;
+  bool _destroyed = false;
 
   factory AtlasVaultRecoveryKey.fromBytes(Uint8List bytes) {
     if (bytes.length != rawByteCount) {
@@ -92,6 +93,7 @@ final class AtlasVaultRecoveryKey {
   }
 
   String get canonicalText {
+    _requireActive();
     final checksum = _checksum(_bytes);
     final combined = Uint8List(rawByteCount + checksumByteCount)
       ..setAll(0, _bytes)
@@ -109,10 +111,27 @@ final class AtlasVaultRecoveryKey {
     }
   }
 
-  Uint8List copyBytes() => Uint8List.fromList(_bytes);
+  Uint8List copyBytes() {
+    _requireActive();
+    return Uint8List.fromList(_bytes);
+  }
+
+  void destroy() {
+    if (_destroyed) {
+      return;
+    }
+    _wipe(_bytes);
+    _destroyed = true;
+  }
 
   @override
   String toString() => 'AtlasVaultRecoveryKey(<redacted>)';
+
+  void _requireActive() {
+    if (_destroyed) {
+      throw const AtlasVaultCryptoException();
+    }
+  }
 
   static Uint8List _checksum(Uint8List bytes) {
     final input = Uint8List(_checksumDomain.length + bytes.length)

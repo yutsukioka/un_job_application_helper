@@ -78,6 +78,31 @@ void main() {
     },
   );
 
+  test('destroy invalidates retained recovery-key material', () async {
+    final disposable = AtlasVaultRecoveryKey.fromBytes(recoveryKey.copyBytes());
+
+    disposable.destroy();
+    disposable.destroy();
+
+    expect(
+      () => disposable.copyBytes(),
+      throwsA(isA<AtlasVaultCryptoException>()),
+    );
+    expect(
+      () => disposable.canonicalText,
+      throwsA(isA<AtlasVaultCryptoException>()),
+    );
+    await expectLater(
+      wrapAtlasVaultKeyWithRecoveryV2(
+        vaultKey: vaultKey,
+        recoveryKey: disposable,
+        vaultId: vaultId,
+      ),
+      throwsA(isA<AtlasVaultCryptoException>()),
+    );
+    expect(disposable.toString(), 'AtlasVaultRecoveryKey(<redacted>)');
+  });
+
   test('recovery v2 AAD, wrap, and unwrap match exactly', () async {
     final aad = atlasVaultRecoveryWrapV2Aad(vaultId: vaultId, wrap: wrap);
     final sealed = await wrapAtlasVaultKeyWithRecoveryV2(

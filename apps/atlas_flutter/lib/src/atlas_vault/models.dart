@@ -186,6 +186,9 @@ final class AtlasVaultArgon2idParameters {
   }) : _salt = Uint8List.fromList(salt);
 
   static const algorithm = 'Argon2id';
+  static const maximumMemoryKib = 65536;
+  static const maximumIterations = 3;
+  static const maximumParallelism = 4;
 
   final Uint8List _salt;
   final int memoryKib;
@@ -224,9 +227,14 @@ final class AtlasVaultArgon2idParameters {
       value['parallelism'],
       field: 'kdf.parallelism',
     );
-    if (memoryKib <= 0 || iterations <= 0 || parallelism <= 0) {
+    if (memoryKib <= 0 ||
+        memoryKib > maximumMemoryKib ||
+        iterations <= 0 ||
+        iterations > maximumIterations ||
+        parallelism <= 0 ||
+        parallelism > maximumParallelism) {
       throw const AtlasVaultFormatException(
-        'Argon2id parameters must be positive.',
+        'Argon2id parameters are outside the supported profile.',
       );
     }
     return AtlasVaultArgon2idParameters._(

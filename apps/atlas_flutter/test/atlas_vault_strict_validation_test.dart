@@ -43,6 +43,22 @@ void main() {
         throwsA(isA<AtlasVaultFormatException>()),
       );
     });
+
+    test('rejects isolated UTF-16 surrogates without normalization', () {
+      final isolatedHigh = String.fromCharCode(0xd800);
+      final isolatedLow = String.fromCharCode(0xdc00);
+
+      for (final malformed in <String>[isolatedHigh, isolatedLow]) {
+        expect(
+          () => encodeCanonicalJson(malformed),
+          throwsA(isA<AtlasVaultFormatException>()),
+        );
+        expect(
+          () => encodeCanonicalJson(<String, Object?>{malformed: true}),
+          throwsA(isA<AtlasVaultFormatException>()),
+        );
+      }
+    });
   });
 
   group('strict payload validation', () {
@@ -124,6 +140,18 @@ void main() {
             isNot(contains(sentinel)),
           ),
         ),
+      );
+    });
+
+    test('strict payload parsing rejects isolated UTF-16 surrogates', () {
+      final malformed = _clone(savedSearch);
+      atlasVaultObject(malformed['payload'])['name'] = String.fromCharCode(
+        0xd800,
+      );
+
+      expect(
+        () => AtlasVaultPayloadEnvelope.fromJson(malformed),
+        throwsA(isA<AtlasVaultFormatException>()),
       );
     });
   });

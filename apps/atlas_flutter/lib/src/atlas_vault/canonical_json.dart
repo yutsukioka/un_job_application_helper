@@ -49,7 +49,9 @@ void _writeCanonicalJson(StringBuffer output, Object? value) {
           'Canonical JSON object keys must be strings.',
         );
       }
-      entries.add(MapEntry(entry.key! as String, entry.value));
+      final key = entry.key! as String;
+      requireAtlasVaultWellFormedUtf16(key, field: 'Canonical JSON object key');
+      entries.add(MapEntry(key, entry.value));
     }
     entries.sort((left, right) => _compareUnicodeScalars(left.key, right.key));
     output.write('{');
@@ -70,6 +72,7 @@ void _writeCanonicalJson(StringBuffer output, Object? value) {
 }
 
 void _writeCanonicalString(StringBuffer output, String value) {
+  requireAtlasVaultWellFormedUtf16(value, field: 'Canonical JSON string');
   output.write('"');
   for (final scalar in value.runes) {
     switch (scalar) {
