@@ -388,6 +388,17 @@ manual attempt during reservation to make zero service calls, prove the saved
 request alone completes, and prove cancellation reopens ordinary manual
 search without locking.
 
+The sixth exact-head Codex review identified two retained-operation edges.
+First, reservation consumption removed the reservation fence before the
+retained handoff completed, so private-mutation admission also requires no
+retained handoff. Second, an ordinary successful lock could supersede the
+handoff while its initial runtime proof was suspended; the resulting cancelled
+handoff cleared ownership after the barrier had published unlock admission
+closed. Cancellation now reopens ordinary admission only after revalidating
+that the host is started, the private session is inactive, locked-public state
+is current, and the runtime authoritatively reports locked. Lock failure,
+reconciliation, unsafe lifecycle, and terminal state do not reopen admission.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -446,6 +457,13 @@ only request admitted after owner hide, and cancellation of an unconsumed
 reservation restores ordinary manual admission without a lock or saved-origin
 request. Final suite, build, simulator, and GitHub evidence is recorded in the
 persistent Phase 2D-64 archive.
+
+The sixth Codex review regressions hold the retained handoff on its initial
+runtime proof. One requires a concurrent private mutation to fail with zero
+runtime mutation calls while the saved handoff completes. The other completes
+an ordinary full-drain lock, releases the now-stale handoff, requires fixed
+cancelled outcome and zero public calls, then proves ordinary unlock admission
+reopens only from authoritatively locked state.
 
 ## 46. Go/No-Go
 

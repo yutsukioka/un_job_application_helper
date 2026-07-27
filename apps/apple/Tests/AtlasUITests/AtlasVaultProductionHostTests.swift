@@ -822,6 +822,96 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testRetainedHandoffRejectsPrivateMutationDuringInitialRuntimeProof()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-mutation-fence-result",
+            title: "Saved Mutation Fence Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved mutation fence",
+                organizations: ["UNESCO"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let mutation = await graph.host.applyPrivateMutation(
+            privateMutationRequest(expectedVault: Self.fakeVaultID)
+        )
+        let mutationCalls = await graph.runtime.mutationCalls()
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(mutation, .failed)
+        await expectEqual(mutationCalls, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testCancelledHandoffReopensUnlockAfterSupersedingLock()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "superseded handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let locked = await graph.host.lock()
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectFalse(locked.publicShell.canRequestUnlock)
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+        let completed = await graph.host.currentFlowState()
+
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(completed.mode, .lockedPublic)
+        await expectTrue(completed.publicShell.canRequestUnlock)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+    }
+
     func testUnlockAdmissionStaysClosedWhileSavedHandoffSearchIsInFlight()
         async throws
     {

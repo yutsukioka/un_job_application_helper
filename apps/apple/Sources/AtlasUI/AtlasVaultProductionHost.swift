@@ -438,7 +438,9 @@ public actor AtlasVaultProductionHost:
                 if case .failed = publication {
                     _ = await runPrivateFreeBarrier(terminal: false)
                 }
-            case .lockFailed, .cancelled, .stopped:
+            case .cancelled:
+                await reopenAdmissionAfterCancelledSavedSearchHandoff()
+            case .lockFailed, .stopped:
                 break
             }
         }
@@ -2110,6 +2112,35 @@ public actor AtlasVaultProductionHost:
             && unlockStatePermitsAdmission
     }
 
+    private func reopenAdmissionAfterCancelledSavedSearchHandoff() async {
+        guard cancelledSavedSearchHandoffReopenPermitted else {
+            return
+        }
+        let expectedGeneration = generation
+        let runtimeStatus = await dependencies.runtime.status()
+        guard generation == expectedGeneration,
+              runtimeStatus == .locked,
+              cancelledSavedSearchHandoffReopenPermitted else {
+            return
+        }
+        let publication = await publishCurrentFlowAndReopenAdmission(
+            status: presentationStatus
+        )
+        if case .failed = publication {
+            _ = await runPrivateFreeBarrier(terminal: false)
+        }
+    }
+
+    private var cancelledSavedSearchHandoffReopenPermitted: Bool {
+        lifetime == .started
+            && !privateSessionIsActive
+            && flowState().mode == .lockedPublic
+            && unlockState.status == .locked
+            && !isUnlockPanelPresented
+            && privateMutationOperation == nil
+            && transientAdmissionPermitted
+    }
+
     private func privateMutationAdmissionPermitted(
         for request: AtlasVaultRuntimeMutationRequest
     ) -> Bool {
@@ -2129,6 +2160,7 @@ public actor AtlasVaultProductionHost:
             && selectionOperation == nil
             && submitOperation == nil
             && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && privateMutationOperation == nil
             && barrierOperation == nil
             && stopOperation == nil
