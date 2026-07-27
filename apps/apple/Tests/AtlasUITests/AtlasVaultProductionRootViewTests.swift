@@ -21,6 +21,30 @@ final class AtlasVaultProductionRootViewTests: XCTestCase {
         }
     }
 
+    func testRootKeepsRunAndLockInsideSharedSavedSearchContext()
+        throws
+    {
+        let root = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+        let savedSearchView = try Self.source(
+            named: "AtlasVaultSavedSearchView.swift"
+        )
+
+        XCTAssertTrue(root.contains("savedSearchContext"))
+        XCTAssertTrue(root.contains("AtlasVaultSavedSearchView"))
+        XCTAssertTrue(savedSearchView.contains("Run Search"))
+        XCTAssertTrue(savedSearchView.contains("Run & Lock"))
+        for forbidden in [
+            "performSavedSearchPublicHandoff",
+            "AtlasPublicJobSearching",
+            "AtlasSearchRequest",
+            "URLSession",
+        ] {
+            XCTAssertFalse(root.contains(forbidden), forbidden)
+        }
+    }
+
     func testRootAddsExplicitNoVaultRestoreWithoutPrivateRendering()
         throws
     {

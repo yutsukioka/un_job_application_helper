@@ -57,6 +57,8 @@ public actor AtlasVaultProductionHost:
     AtlasVaultProductionHosting,
     AtlasVaultPrivateMutationHosting,
     AtlasVaultPrivateMutationContainmentHosting,
+    AtlasSavedSearchPublicHandoffHosting,
+    AtlasSavedSearchPublicHandoffReservationHosting,
     CustomStringConvertible,
     CustomDebugStringConvertible
 {
@@ -94,6 +96,7 @@ public actor AtlasVaultProductionHost:
     private struct SearchOperation {
         let id: UUID
         let generation: UInt64
+        let owner: SearchOperationOwner
         let task: Task<
             Result<
                 AtlasPublicJobSearchResult,
@@ -101,6 +104,11 @@ public actor AtlasVaultProductionHost:
             >,
             Never
         >
+    }
+
+    private enum SearchOperationOwner {
+        case manual
+        case savedSearchHandoff(UUID)
     }
 
     private struct SelectionOperation {
@@ -128,6 +136,19 @@ public actor AtlasVaultProductionHost:
         let id: UUID
         let generation: AtlasVaultProductionHostGeneration
         let task: Task<PrivateMutationExecutionResult, Never>
+    }
+
+    private struct SavedSearchHandoffOperation {
+        let id: UUID
+        let task: Task<
+            AtlasSavedSearchPublicHandoffResult,
+            Never
+        >
+    }
+
+    private struct ReservedSavedSearchHandoff {
+        let reservation: AtlasSavedSearchPublicHandoffReservation
+        let generation: AtlasVaultProductionHostGeneration
     }
 
     private struct BarrierOperation {
@@ -188,6 +209,10 @@ public actor AtlasVaultProductionHost:
     private var submitOperation: SubmitOperation?
     private var privateMutationOperation: PrivateMutationOperation?
     private var privateSessionIsActive = false
+    private var reservedSavedSearchHandoff:
+        ReservedSavedSearchHandoff?
+    private var savedSearchHandoffOperation:
+        SavedSearchHandoffOperation?
     private var barrierOperation: BarrierOperation?
     private var stopOperation: StopOperation?
 
@@ -237,8 +262,11 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
 
-        beginTerminalStop()
-        abandonSelectionAndResumeCallers()
+        if lifetime != .stopping {
+            beginTerminalStop()
+            abandonSelectionAndResumeCallers()
+            cancelRetainedSearchOperations()
+        }
         let id = UUID()
         let task = Task { [self] in
             await performStop()
@@ -341,10 +369,126 @@ public actor AtlasVaultProductionHost:
     ) async throws(AtlasPublicJobServiceError)
         -> AtlasPublicJobSearchResult
     {
+        guard request.origin == .manual else {
+            throw .invalidRequest
+        }
+        guard reservedSavedSearchHandoff == nil,
+              savedSearchHandoffOperation == nil else {
+            throw .unavailable
+        }
+        return try await performPublicSearch(
+            request,
+            owner: .manual
+        )
+    }
+
+    public func reserveSavedSearchPublicHandoff() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        makeSavedSearchPublicHandoffReservation()
+    }
+
+    public func cancelSavedSearchPublicHandoff(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async {
+        if reservedSavedSearchHandoff?.reservation == reservation {
+            reservedSavedSearchHandoff = nil
+        }
+    }
+
+    public func performSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard let reservation =
+            makeSavedSearchPublicHandoffReservation() else {
+            return unavailableSavedSearchHandoffResult
+        }
+        return await performReservedSavedSearchPublicHandoff(
+            request,
+            reservation: reservation
+        )
+    }
+
+    public func performReservedSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard request.origin == .savedSearchHandoff,
+              let reserved = reservedSavedSearchHandoff,
+              reserved.reservation == reservation,
+              reserved.generation == generation,
+              savedSearchHandoffOperation == nil,
+              savedSearchHandoffBaseAdmissionPermitted else {
+            if reservedSavedSearchHandoff?.reservation == reservation {
+                reservedSavedSearchHandoff = nil
+            }
+            return unavailableSavedSearchHandoffResult
+        }
+        reservedSavedSearchHandoff = nil
+        let admissionGeneration = reserved.generation
+        let id = reservation.identifier
+        let task = Task { [self] in
+            await executeSavedSearchPublicHandoff(
+                request,
+                operationID: id,
+                admissionGeneration: admissionGeneration
+            )
+        }
+        savedSearchHandoffOperation = SavedSearchHandoffOperation(
+            id: id,
+            task: task
+        )
+        let result = await task.value
+        if savedSearchHandoffOperation?.id == id {
+            savedSearchHandoffOperation = nil
+            switch result {
+            case .completed, .publicSearchFailed:
+                let publication =
+                    await publishCurrentFlowAndReopenAdmission(
+                        status: presentationStatus
+                    )
+                if case .failed = publication {
+                    _ = await runPrivateFreeBarrier(terminal: false)
+                }
+            case .cancelled:
+                await reopenAdmissionAfterCancelledSavedSearchHandoff()
+            case .lockFailed, .stopped:
+                break
+            }
+        }
+        return result
+    }
+
+    private func makeSavedSearchPublicHandoffReservation()
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        guard savedSearchHandoffAdmissionPermitted else {
+            return nil
+        }
+        let reservation = AtlasSavedSearchPublicHandoffReservation()
+        reservedSavedSearchHandoff = ReservedSavedSearchHandoff(
+            reservation: reservation,
+            generation: generation
+        )
+        return reservation
+    }
+
+    private func performPublicSearch(
+        _ request: AtlasPublicJobSearchRequest,
+        owner: SearchOperationOwner
+    ) async throws(AtlasPublicJobServiceError)
+        -> AtlasPublicJobSearchResult
+    {
+        switch (request.origin, owner) {
+        case (.manual, .manual),
+             (.savedSearchHandoff, .savedSearchHandoff):
+            break
+        default:
+            throw .invalidRequest
+        }
         guard isPublicOperationAvailable else {
             throw .unavailable
         }
-
         searchGeneration &+= 1
         let operationGeneration = searchGeneration
         searchOperation?.task.cancel()
@@ -354,7 +498,9 @@ public actor AtlasVaultProductionHost:
             cacheFreshness: .unavailable,
             searchQuery: request.query,
             publicJobs: [],
-            isSearching: true
+            isSearching: true,
+            searchOrigin: request.origin,
+            hasAdditionalCriteria: request.hasAdditionalCriteria
         )
 
         let id = UUID()
@@ -377,21 +523,26 @@ public actor AtlasVaultProductionHost:
         let operation = SearchOperation(
             id: id,
             generation: operationGeneration,
+            owner: owner,
             task: task
         )
         retainedSearchOperations[id] = operation
         searchOperation = operation
+        defer {
+            retainedSearchOperations[id] = nil
+            if searchOperation?.id == id {
+                searchOperation = nil
+            }
+        }
         _ = await publishCurrentFlow(status: presentationStatus)
 
         let result = await task.value
-        retainedSearchOperations[id] = nil
         guard searchOperation?.id == id,
               searchOperation?.generation == operationGeneration,
               searchGeneration == operationGeneration,
               isPublicOperationAvailable else {
             throw .unavailable
         }
-        searchOperation = nil
 
         switch result {
         case let .success(value):
@@ -400,12 +551,20 @@ public actor AtlasVaultProductionHost:
                 cacheFreshness: .current,
                 searchQuery: request.query,
                 publicJobs: value.jobs,
-                isSearching: false
+                isSearching: false,
+                searchOrigin: request.origin,
+                hasAdditionalCriteria: request.hasAdditionalCriteria
             )
             let publication = await publishCurrentFlow(
                 status: presentationStatus
             )
             if case .failed = publication {
+                throw .unavailable
+            }
+            guard searchOperation?.id == id,
+                  searchOperation?.generation == operationGeneration,
+                  searchGeneration == operationGeneration,
+                  isPublicOperationAvailable else {
                 throw .unavailable
             }
             return value
@@ -415,9 +574,17 @@ public actor AtlasVaultProductionHost:
                 cacheFreshness: .unavailable,
                 searchQuery: request.query,
                 publicJobs: [],
-                isSearching: false
+                isSearching: false,
+                searchOrigin: request.origin,
+                hasAdditionalCriteria: request.hasAdditionalCriteria
             )
             _ = await publishCurrentFlow(status: presentationStatus)
+            guard searchOperation?.id == id,
+                  searchOperation?.generation == operationGeneration,
+                  searchGeneration == operationGeneration,
+                  isPublicOperationAvailable else {
+                throw .unavailable
+            }
             throw error
         }
     }
@@ -727,10 +894,15 @@ public actor AtlasVaultProductionHost:
         case .started, .reconciling:
             break
         }
+        closeUnlockAdmission()
+        reservedSavedSearchHandoff = nil
+        cancelSearchOwnedBySavedSearchHandoff(
+            savedSearchHandoffOperation?.id
+        )
+        savedSearchHandoffOperation?.task.cancel()
         if let barrierOperation {
             return await barrierOperation.task.value
         }
-        closeUnlockAdmission()
         _ = advanceGeneration()
         return await runPrivateFreeBarrier(terminal: false)
     }
@@ -757,6 +929,14 @@ public actor AtlasVaultProductionHost:
             lifecycleAdmissionPermitted = false
             closeUnlockAdmission()
             _ = advanceGeneration()
+        }
+        switch event {
+        case .willTerminate:
+            beginTerminalStop()
+            abandonSelectionAndResumeCallers()
+            cancelRetainedSearchOperations()
+        default:
+            break
         }
 
         await dependencies.lifecycle.handle(event)
@@ -839,6 +1019,8 @@ public actor AtlasVaultProductionHost:
     private var isUnlockOperationAvailable: Bool {
         lifetime == .started
             && unlockAdmissionOpen
+            && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && !isTerminated
     }
 
@@ -980,7 +1162,11 @@ public actor AtlasVaultProductionHost:
 
     private func performStop() async -> AtlasLockedShellUnlockFlowState {
         await awaitStartingOperationBeforeStop()
+        let activeSavedSearchHandoff = savedSearchHandoffOperation
         guard presentationWasStarted else {
+            await cancelAndDrainSavedSearchHandoff(
+                activeSavedSearchHandoff
+            )
             lifetime = .stopped
             closeUnlockAdmission()
             return flowState()
@@ -990,6 +1176,9 @@ public actor AtlasVaultProductionHost:
         await cancelAndDrainSearchOperations()
         replaceShell(isSearching: false)
         let state = await runPrivateFreeBarrier(terminal: true)
+        await cancelAndDrainSavedSearchHandoff(
+            activeSavedSearchHandoff
+        )
         lifetime = .stopped
         closeUnlockAdmission()
         return state
@@ -1007,6 +1196,58 @@ public actor AtlasVaultProductionHost:
         }
         for operation in operations {
             retainedSearchOperations[operation.id] = nil
+        }
+    }
+
+    private func cancelRetainedSearchOperations() {
+        searchGeneration &+= 1
+        searchOperation = nil
+        for operation in retainedSearchOperations.values {
+            operation.task.cancel()
+        }
+    }
+
+    private func cancelSearchOwnedBySavedSearchHandoff(
+        _ handoffID: UUID?
+    ) {
+        guard let handoffID else {
+            return
+        }
+        let operations = retainedSearchOperations.values.filter {
+            guard case let .savedSearchHandoff(ownerID) = $0.owner else {
+                return false
+            }
+            return ownerID == handoffID
+        }
+        guard !operations.isEmpty else {
+            return
+        }
+        searchGeneration &+= 1
+        if let active = searchOperation,
+           operations.contains(where: { $0.id == active.id }) {
+            searchOperation = nil
+        }
+        replaceShell(
+            serviceStatus: .unavailable,
+            cacheFreshness: .unavailable,
+            publicJobs: [],
+            isSearching: false
+        )
+        for operation in operations {
+            operation.task.cancel()
+        }
+    }
+
+    private func cancelAndDrainSavedSearchHandoff(
+        _ operation: SavedSearchHandoffOperation?
+    ) async {
+        guard let operation else {
+            return
+        }
+        operation.task.cancel()
+        _ = await operation.task.value
+        if savedSearchHandoffOperation?.id == operation.id {
+            savedSearchHandoffOperation = nil
         }
     }
 
@@ -1422,6 +1663,8 @@ public actor AtlasVaultProductionHost:
             && runtimeStatus == .locked
             && selectionOperation == nil
             && submitOperation == nil
+            && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
     }
@@ -1512,6 +1755,7 @@ public actor AtlasVaultProductionHost:
         terminal: Bool,
         skipsPrivateSessionDrain: Bool = false
     ) async -> AtlasLockedShellUnlockFlowState {
+        reservedSavedSearchHandoff = nil
         let terminalBarrierRequested = terminal
             || lifetime == .stopping
             || lifetime == .stopped
@@ -1969,10 +2213,41 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && barrierOperation == nil
             && stopOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
+    }
+
+    private func reopenAdmissionAfterCancelledSavedSearchHandoff() async {
+        guard cancelledSavedSearchHandoffReopenPermitted else {
+            return
+        }
+        let expectedGeneration = generation
+        let runtimeStatus = await dependencies.runtime.status()
+        guard generation == expectedGeneration,
+              runtimeStatus == .locked,
+              cancelledSavedSearchHandoffReopenPermitted else {
+            return
+        }
+        let publication = await publishCurrentFlowAndReopenAdmission(
+            status: presentationStatus
+        )
+        if case .failed = publication {
+            _ = await runPrivateFreeBarrier(terminal: false)
+        }
+    }
+
+    private var cancelledSavedSearchHandoffReopenPermitted: Bool {
+        lifetime == .started
+            && !privateSessionIsActive
+            && flowState().mode == .lockedPublic
+            && unlockState.status == .locked
+            && !isUnlockPanelPresented
+            && privateMutationOperation == nil
+            && transientAdmissionPermitted
     }
 
     private func privateMutationAdmissionPermitted(
@@ -1993,6 +2268,8 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && privateMutationOperation == nil
             && barrierOperation == nil
             && stopOperation == nil
@@ -2012,9 +2289,160 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && reservedSavedSearchHandoff == nil
             && privateMutationOperation == nil
             && barrierOperation == nil
             && stopOperation == nil
+    }
+
+    private var savedSearchHandoffAdmissionPermitted: Bool {
+        reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
+            && savedSearchHandoffBaseAdmissionPermitted
+    }
+
+    private var savedSearchHandoffBaseAdmissionPermitted: Bool {
+        lifetime == .started
+            && privateSessionIsActive
+            && unlockState.status == .unlocked
+            && flowState().mode == .unlockedTransition
+            && selectedVaultID != nil
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && privateMutationOperation == nil
+            && searchOperation == nil
+            && retainedSearchOperations.isEmpty
+            && barrierOperation == nil
+            && stopOperation == nil
+    }
+
+    private var unavailableSavedSearchHandoffResult:
+        AtlasSavedSearchPublicHandoffResult
+    {
+        if lifetime == .stopping
+            || lifetime == .stopped
+            || stopOperation != nil
+            || isTerminated
+        {
+            return .stopped
+        }
+        if Task.isCancelled
+            || reservedSavedSearchHandoff != nil
+            || savedSearchHandoffOperation != nil
+        {
+            return .cancelled
+        }
+        return .lockFailed
+    }
+
+    private func executeSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        operationID: UUID,
+        admissionGeneration: AtlasVaultProductionHostGeneration
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard savedSearchHandoffOperation?.id == operationID,
+              generation == admissionGeneration,
+              savedSearchHandoffBaseAdmissionPermitted,
+              !Task.isCancelled else {
+            return unavailableSavedSearchHandoffResult
+        }
+        let admissionRuntimeStatus = await dependencies.runtime.status()
+        guard savedSearchHandoffOperation?.id == operationID,
+              generation == admissionGeneration,
+              savedSearchHandoffBaseAdmissionPermitted,
+              !Task.isCancelled else {
+            return unavailableSavedSearchHandoffResult
+        }
+        guard admissionRuntimeStatus == .unlocked else {
+            return .lockFailed
+        }
+
+        _ = await runPrivateFreeBarrier(
+            terminal: false,
+            skipsPrivateSessionDrain: false
+        )
+        guard savedSearchHandoffOperation?.id == operationID else {
+            return unavailableSavedSearchHandoffResult
+        }
+        if lifetime == .stopping
+            || lifetime == .stopped
+            || stopOperation != nil
+            || isTerminated
+        {
+            return .stopped
+        }
+        guard !Task.isCancelled else {
+            return .cancelled
+        }
+
+        let lockedGeneration = generation
+        guard savedSearchLockedPublicAdmissionPermitted(
+            operationID: operationID
+        ) else {
+            return .lockFailed
+        }
+        let runtimeStatus = await dependencies.runtime.status()
+        guard generation == lockedGeneration,
+              runtimeStatus == .locked,
+              savedSearchLockedPublicAdmissionPermitted(
+                  operationID: operationID
+              ) else {
+            return unavailableSavedSearchHandoffResult
+        }
+
+        do {
+            _ = try await performPublicSearch(
+                request,
+                owner: .savedSearchHandoff(operationID)
+            )
+            guard savedSearchHandoffOperation?.id == operationID,
+                  generation == lockedGeneration,
+                  lifetime == .started else {
+                return unavailableSavedSearchHandoffResult
+            }
+            return .completed
+        } catch {
+            if lifetime == .stopping
+                || lifetime == .stopped
+                || stopOperation != nil
+                || isTerminated
+            {
+                return .stopped
+            }
+            if Task.isCancelled {
+                return .cancelled
+            }
+            return .publicSearchFailed
+        }
+    }
+
+    private func savedSearchLockedPublicAdmissionPermitted(
+        operationID: UUID
+    ) -> Bool {
+        lifetime == .started
+            && savedSearchHandoffOperation?.id == operationID
+            && !privateSessionIsActive
+            && flowState().mode == .lockedPublic
+            && unlockState.status == .locked
+            && !isUnlockPanelPresented
+            && lifecycleIsActive
+            && protectedDataIsAvailable
+            && lifecycleAdmissionPermitted
+            && safeLifecycleCheckRevision == nil
+            && !isTerminated
+            && selectionOperation == nil
+            && submitOperation == nil
+            && privateMutationOperation == nil
+            && searchOperation == nil
+            && retainedSearchOperations.isEmpty
+            && barrierOperation == nil
+            && stopOperation == nil
+            && isPublicOperationAvailable
     }
 
     private func containFatalPrivateMutation() async
@@ -2035,6 +2463,8 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && reservedSavedSearchHandoff == nil
+            && savedSearchHandoffOperation == nil
             && stopOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
@@ -2137,7 +2567,9 @@ public actor AtlasVaultProductionHost:
                 searchQuery: "",
                 publicJobs: [],
                 isSearching: false,
-                canRequestUnlock: false
+                canRequestUnlock: false,
+                searchOrigin: .manual,
+                hasAdditionalCriteria: false
             )
             return
         }
@@ -2149,7 +2581,9 @@ public actor AtlasVaultProductionHost:
             searchQuery: "",
             publicJobs: snapshot.jobs,
             isSearching: false,
-            canRequestUnlock: false
+            canRequestUnlock: false,
+            searchOrigin: .manual,
+            hasAdditionalCriteria: false
         )
     }
 
@@ -2186,7 +2620,9 @@ public actor AtlasVaultProductionHost:
             searchQuery: shell.searchQuery,
             publicJobs: shell.publicJobs,
             isSearching: shell.isSearching,
-            canRequestUnlock: canRequestUnlock
+            canRequestUnlock: canRequestUnlock,
+            searchOrigin: shell.searchOrigin,
+            hasAdditionalCriteria: shell.hasAdditionalCriteria
         )
     }
 
@@ -2220,6 +2656,8 @@ public actor AtlasVaultProductionHost:
 
     private func beginTerminalStop() {
         explicitLockRequestedDuringStart = false
+        reservedSavedSearchHandoff = nil
+        savedSearchHandoffOperation?.task.cancel()
         lifetime = .stopping
         invalidateSafeLifecycleCheck()
         closeUnlockAdmission()
@@ -2292,7 +2730,9 @@ public actor AtlasVaultProductionHost:
         searchQuery: String? = nil,
         publicJobs: [AtlasLockedPublicJob]? = nil,
         isSearching: Bool? = nil,
-        canRequestUnlock: Bool? = nil
+        canRequestUnlock: Bool? = nil,
+        searchOrigin: AtlasPublicJobSearchOrigin? = nil,
+        hasAdditionalCriteria: Bool? = nil
     ) {
         shell = AtlasLockedPublicShellModel(
             vaultStatus: vaultStatus ?? shell.vaultStatus,
@@ -2302,7 +2742,10 @@ public actor AtlasVaultProductionHost:
             publicJobs: publicJobs ?? shell.publicJobs,
             isSearching: isSearching ?? shell.isSearching,
             canRequestUnlock:
-                canRequestUnlock ?? shell.canRequestUnlock
+                canRequestUnlock ?? shell.canRequestUnlock,
+            searchOrigin: searchOrigin ?? shell.searchOrigin,
+            hasAdditionalCriteria:
+                hasAdditionalCriteria ?? shell.hasAdditionalCriteria
         )
     }
 

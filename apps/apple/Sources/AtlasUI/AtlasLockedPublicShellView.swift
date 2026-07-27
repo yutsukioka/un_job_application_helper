@@ -91,6 +91,15 @@ public struct AtlasLockedPublicShellView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            if model.searchOrigin == .savedSearchHandoff {
+                Label(
+                    "Saved search criteria applied",
+                    systemImage: "line.3.horizontal.decrease.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
     }

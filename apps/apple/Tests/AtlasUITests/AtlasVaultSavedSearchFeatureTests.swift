@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import XCTest
 @testable import AtlasUI
 
@@ -6,6 +7,7 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
     private static let selectedVault =
         "00000000-0000-4000-8000-000000000263"
     private static let timestamp = "2026-07-27T00:00:00Z"
+    private static let updatedTimestamp = "2026-07-27T01:00:00Z"
 
     func testSavedSearchFeatureSurfaceExists() throws {
         let source = try requiredSource(
@@ -23,6 +25,7 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
             "AtlasVaultSavedSearchPresentation",
             "primary-local-key-v1",
             "AtlasVaultCreateMutation",
+            "AtlasVaultUpdateMutation",
             "AtlasVaultDeleteMutation",
             "applyPrivateMutation",
         ] {
@@ -503,6 +506,179 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
         XCTAssertEqual(mutationCount, 0)
     }
 
+    func testUpdatePreservesIdentityLineageCreationMetadataAndFilters()
+        async throws
+    {
+        let originalRequest = AtlasSearchRequest(
+            text: "old terms",
+            status: ["open"],
+            organizations: ["UNDP"],
+            sourceIDs: ["undp"],
+            cities: ["Tokyo"],
+            countriesISO3: ["JPN"],
+            nationalInternational: ["international"],
+            gradeCodes: ["P3"],
+            ccogFamilies: ["Information Systems"],
+            capabilityTags: ["data"],
+            contractGroups: ["staff"],
+            seniorityGroups: ["professional"],
+            workModalities: ["hybrid"],
+            volunteerKinds: ["specialist"],
+            unvCategories: ["international"],
+            unvVolunteerTypes: ["expert"],
+            closingDateTo: "2026-12-31",
+            includeLowConfidence: false,
+            includeFacets: true,
+            limit: 75,
+            offset: 25,
+            sort: "closing_date_asc"
+        )
+        let original = makeSavedSearch(
+            id: "edit-me",
+            name: "Original name",
+            text: "old terms",
+            summary: "old terms",
+            revision: "revision-7",
+            key: "existing-key",
+            request: originalRequest,
+            description: "Preserved private description"
+        )
+        var refreshedRequest = originalRequest
+        refreshedRequest.text = "new terms"
+        refreshedRequest.offset = 0
+        let refreshed = makeSavedSearch(
+            id: "edit-me",
+            name: "Renamed search",
+            text: "new terms",
+            summary: "new terms",
+            revision: "revision-8",
+            parentRevision: "revision-7",
+            key: "existing-key",
+            request: refreshedRequest,
+            description: "Preserved private description",
+            updatedAt: Self.updatedTimestamp,
+            clientUpdatedAt: Self.updatedTimestamp
+        )
+        let environment = SavedSearchEnvironmentFake(
+            reads: [
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [original])
+                ),
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [refreshed])
+                ),
+            ],
+            mutationResults: [.committed]
+        )
+        let coordinator = makeCoordinator(
+            environment,
+            timestamp: Self.updatedTimestamp
+        )
+        let activated = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        let originalPresentationID = try XCTUnwrap(
+            activated.searches.first?.id
+        )
+
+        let result = try await coordinator.update(
+            presentationID: originalPresentationID,
+            draft: AtlasVaultSavedSearchDraft(
+                name: "  Renamed search  ",
+                searchText: "  new terms  "
+            )
+        )
+
+        guard case let .committed(snapshot) = result else {
+            return XCTFail("Expected committed update")
+        }
+        XCTAssertEqual(snapshot.searches.first?.id, originalPresentationID)
+        XCTAssertEqual(snapshot.searches.first?.name, "Renamed search")
+        XCTAssertEqual(snapshot.searches.first?.request.text, "new terms")
+
+        let requests = await environment.requests()
+        XCTAssertEqual(requests.count, 1)
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertTrue(request.mutations.creates.isEmpty)
+        XCTAssertTrue(request.mutations.deletes.isEmpty)
+        let update = try XCTUnwrap(request.mutations.updates.first)
+        XCTAssertEqual(update.recordID, "edit-me")
+        XCTAssertEqual(update.currentRevision, "revision-7")
+        XCTAssertEqual(update.keyID, "existing-key")
+        guard case let .savedSearch(envelope) = update.payload else {
+            return XCTFail("Expected saved-search update payload")
+        }
+        XCTAssertEqual(envelope.payload.name, "Renamed search")
+        XCTAssertEqual(envelope.payload.summary, "new terms")
+        XCTAssertEqual(
+            envelope.payload.description,
+            "Preserved private description"
+        )
+        XCTAssertEqual(envelope.payload.createdAt, Self.timestamp)
+        XCTAssertEqual(
+            envelope.payload.updatedAt,
+            Self.updatedTimestamp
+        )
+        XCTAssertEqual(envelope.clientCreatedAt, Self.timestamp)
+        XCTAssertEqual(
+            envelope.clientUpdatedAt,
+            Self.updatedTimestamp
+        )
+        XCTAssertEqual(envelope.payload.request, refreshedRequest)
+    }
+
+    func testNormalizedNoOpUpdateCreatesNoMutationOrTimestamp()
+        async throws
+    {
+        let existing = makeSavedSearch(
+            id: "no-op",
+            name: "Existing",
+            text: "terms"
+        )
+        let environment = SavedSearchEnvironmentFake(
+            reads: [
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [existing])
+                ),
+            ]
+        )
+        let timestampCalls = Mutex(0)
+        let coordinator = AtlasVaultSavedSearchCoordinator(
+            environment: AtlasVaultSavedSearchEnvironment(
+                readPrivateState: {
+                    try await environment.read()
+                },
+                applyPrivateMutation: { request in
+                    await environment.apply(request)
+                },
+                containCommittedPrivateMutationFailure: {
+                    await environment.contain()
+                },
+                timestamp: {
+                    timestampCalls.withLock { $0 += 1 }
+                    return Self.updatedTimestamp
+                }
+            )
+        )
+        let activated = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        let identifier = try XCTUnwrap(activated.searches.first?.id)
+
+        let result = try await coordinator.update(
+            presentationID: identifier,
+            draft: AtlasVaultSavedSearchDraft(
+                name: "  Existing  ",
+                searchText: "  terms  "
+            )
+        )
+
+        XCTAssertEqual(result, .committed(activated))
+        let mutationCount = await environment.mutationCount()
+        XCTAssertEqual(mutationCount, 0)
+        XCTAssertEqual(timestampCalls.withLock { $0 }, 0)
+    }
+
     func testDeleteUsesInternalMetadataAndRequiresCommittedTombstone()
         async throws
     {
@@ -726,6 +902,214 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
         }
     }
 
+    func testPublicSearchRequestPreservesValidatedCriteriaAndRedactsMetadata()
+        async throws
+    {
+        let savedRequest = AtlasSearchRequest(
+            text: "climate policy",
+            status: ["open"],
+            organizations: ["UNDP"],
+            sourceIDs: ["undp"],
+            cities: ["Tokyo"],
+            countriesISO3: ["JPN"],
+            nationalInternational: ["international"],
+            gradeCodes: ["P3"],
+            ccogFamilies: ["Programme Management"],
+            capabilityTags: ["policy"],
+            contractGroups: ["staff"],
+            seniorityGroups: ["professional"],
+            workModalities: ["hybrid"],
+            volunteerKinds: ["specialist"],
+            unvCategories: ["international"],
+            unvVolunteerTypes: ["expert"],
+            closingDateTo: "2026-12-31",
+            includeLowConfidence: false,
+            includeFacets: true,
+            limit: 75,
+            offset: 25,
+            sort: "closing_date_asc"
+        )
+        let record = makeSavedSearch(
+            id: "PRIVATE_RECORD_ID_MUST_NOT_CROSS",
+            name: "PRIVATE_NAME_MUST_NOT_CROSS",
+            text: "climate policy",
+            request: savedRequest
+        )
+        let environment = SavedSearchEnvironmentFake(
+            reads: [
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [record])
+                ),
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [record])
+                ),
+            ]
+        )
+        let coordinator = makeCoordinator(environment)
+        let snapshot = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        let identifier = try XCTUnwrap(snapshot.searches.first?.id)
+
+        let request = try await coordinator.publicSearchRequest(
+            presentationID: identifier,
+            maximumLimit: 60
+        )
+
+        XCTAssertEqual(request.origin, .savedSearchHandoff)
+        XCTAssertTrue(request.hasAdditionalCriteria)
+        XCTAssertEqual(request.query, "climate policy")
+        XCTAssertEqual(request.limit, 60)
+        XCTAssertEqual(request.offset, 0)
+        var expected = savedRequest
+        expected.includeFacets = false
+        expected.limit = 60
+        expected.offset = 0
+        XCTAssertEqual(request.apiRequest, expected)
+        let rendered = [
+            request.description,
+            request.debugDescription,
+        ].joined(separator: "\n")
+        XCTAssertFalse(rendered.contains("PRIVATE_NAME_MUST_NOT_CROSS"))
+        XCTAssertFalse(rendered.contains("PRIVATE_RECORD_ID_MUST_NOT_CROSS"))
+        XCTAssertFalse(rendered.contains(Self.selectedVault))
+
+        _ = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        do {
+            _ = try await coordinator.publicSearchRequest(
+                presentationID: identifier,
+                maximumLimit: 60
+            )
+            XCTFail("A prior unlock generation ID was accepted")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultSavedSearchFailure,
+                .unavailable
+            )
+        }
+        let mutationCount = await environment.mutationCount()
+        XCTAssertEqual(mutationCount, 0)
+    }
+
+    func testSavedSearchPublicRequestRejectsUnsupportedCriteriaBeforeHandoff()
+        throws
+    {
+        let valid = AtlasSearchRequest(
+            text: "policy",
+            organizations: ["UNDP"],
+            closingDateTo: "2026-12-31",
+            limit: 50,
+            offset: 4
+        )
+        XCTAssertNoThrow(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 25
+            )
+        )
+
+        var invalidRequests: [AtlasSearchRequest] = []
+        var invalid = valid
+        invalid.status = ["closed"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.includeLowConfidence = true
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.sort = "relevance"
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.limit = 0
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.offset = -1
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.text = "line\nbreak"
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.organizations = [" UNDP"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.organizations = ["UNDP", "UNDP"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.closingDateTo = "2026-02-30"
+        invalidRequests.append(invalid)
+
+        for request in invalidRequests {
+            XCTAssertThrowsError(
+                try AtlasPublicJobSearchRequest(
+                    validatingSavedSearch: request,
+                    maximumLimit: 25
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? AtlasPublicJobServiceError,
+                    .invalidRequest
+                )
+            }
+        }
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 0
+            )
+        )
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 201
+            )
+        )
+    }
+
+    func testPublicHandoffCoordinatorRetainsOneCallerIndependentOperation()
+        async throws
+    {
+        let gate = SavedSearchSuspensionGate()
+        let host = SavedSearchPublicHandoffHostFake(gate: gate)
+        let coordinator = AtlasVaultSavedSearchPublicHandoffCoordinator(
+            host: host
+        )
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(text: "policy"),
+            maximumLimit: 25
+        )
+        let reserved = await coordinator.reserveHostAdmission()
+        let reservation = try XCTUnwrap(reserved)
+
+        let first = Task {
+            await coordinator.perform(
+                request,
+                reservation: reservation
+            )
+        }
+        await gate.waitUntilEntered()
+        first.cancel()
+        let duplicate = await coordinator.perform(
+            request,
+            reservation: reservation
+        )
+        XCTAssertEqual(duplicate, .cancelled)
+        let reservationsWhileSuspended =
+            await host.reservationCallCount()
+        XCTAssertEqual(reservationsWhileSuspended, 1)
+        let callsWhileSuspended = await host.callCount()
+        XCTAssertEqual(callsWhileSuspended, 1)
+
+        await gate.release()
+        let completed = await first.value
+        XCTAssertEqual(completed, .completed)
+        let recordedRequest = await host.lastRequest()
+        XCTAssertEqual(recordedRequest, request)
+        await coordinator.stop()
+        let finalCalls = await host.callCount()
+        XCTAssertEqual(finalCalls, 1)
+    }
+
     func testConcurrentCreateDoesNotDuplicateMutation() async throws {
         let created = makeSavedSearch(
             id: "single",
@@ -800,26 +1184,35 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
         text: String?,
         summary: String? = nil,
         revision: String = "revision-1",
-        key: String = "key-1"
+        parentRevision: String? = nil,
+        key: String = "key-1",
+        request: AtlasSearchRequest? = nil,
+        description: String? = nil,
+        createdAt: String = AtlasVaultSavedSearchFeatureTests.timestamp,
+        updatedAt: String = AtlasVaultSavedSearchFeatureTests.timestamp,
+        clientCreatedAt: String =
+            AtlasVaultSavedSearchFeatureTests.timestamp,
+        clientUpdatedAt: String =
+            AtlasVaultSavedSearchFeatureTests.timestamp
     ) -> AtlasHydratedSavedSearch {
         AtlasHydratedSavedSearch(
             metadata: AtlasHydratedRecordMetadata(
                 id: id,
                 revision: revision,
-                parentRevision: nil,
+                parentRevision: parentRevision,
                 deleted: false,
                 keyID: key
             ),
             payload: AtlasSavedSearchVaultPayload(
                 name: name,
                 summary: summary ?? text ?? "All open jobs",
-                description: nil,
-                request: AtlasSearchRequest(text: text),
-                createdAt: Self.timestamp,
-                updatedAt: Self.timestamp
+                description: description,
+                request: request ?? AtlasSearchRequest(text: text),
+                createdAt: createdAt,
+                updatedAt: updatedAt
             ),
-            clientCreatedAt: Self.timestamp,
-            clientUpdatedAt: Self.timestamp
+            clientCreatedAt: clientCreatedAt,
+            clientUpdatedAt: clientUpdatedAt
         )
     }
 
@@ -978,6 +1371,80 @@ private actor SavedSearchSuspensionGate {
         for waiter in releaseWaiters {
             waiter.resume()
         }
+    }
+}
+
+private actor SavedSearchPublicHandoffHostFake:
+    AtlasSavedSearchPublicHandoffHosting,
+    AtlasSavedSearchPublicHandoffReservationHosting
+{
+    private let gate: SavedSearchSuspensionGate
+    private var calls = 0
+    private var reservationCalls = 0
+    private var activeReservation:
+        AtlasSavedSearchPublicHandoffReservation?
+    private var request: AtlasPublicJobSearchRequest?
+
+    init(gate: SavedSearchSuspensionGate) {
+        self.gate = gate
+    }
+
+    func performSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard let reservation = reserveSavedSearchPublicHandoff() else {
+            return .cancelled
+        }
+        return await performReservedSavedSearchPublicHandoff(
+            request,
+            reservation: reservation
+        )
+    }
+
+    func reserveSavedSearchPublicHandoff()
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        guard activeReservation == nil else {
+            return nil
+        }
+        reservationCalls += 1
+        let reservation = AtlasSavedSearchPublicHandoffReservation()
+        activeReservation = reservation
+        return reservation
+    }
+
+    func cancelSavedSearchPublicHandoff(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) {
+        if activeReservation == reservation {
+            activeReservation = nil
+        }
+    }
+
+    func performReservedSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard activeReservation == reservation else {
+            return .cancelled
+        }
+        activeReservation = nil
+        calls += 1
+        self.request = request
+        await gate.wait()
+        return .completed
+    }
+
+    func callCount() -> Int {
+        calls
+    }
+
+    func reservationCallCount() -> Int {
+        reservationCalls
+    }
+
+    func lastRequest() -> AtlasPublicJobSearchRequest? {
+        request
     }
 }
 

@@ -117,9 +117,35 @@ public protocol AtlasVaultSavedSearchCoordinating: Sendable {
         _ draft: AtlasVaultSavedSearchDraft
     ) async throws -> AtlasVaultSavedSearchMutationResult
 
+    func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async throws -> AtlasVaultSavedSearchMutationResult
+
     func delete(
         presentationID: AtlasVaultPresentationID
     ) async throws -> AtlasVaultSavedSearchMutationResult
+
+    func publicSearchRequest(
+        presentationID: AtlasVaultPresentationID,
+        maximumLimit: Int
+    ) async throws -> AtlasPublicJobSearchRequest
+
+    func stop() async
+}
+
+public protocol AtlasVaultSavedSearchPublicHandoffCoordinating: Sendable {
+    func reserveHostAdmission() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+
+    func cancelHostAdmission(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async
+
+    func perform(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult
 
     func stop() async
 }
@@ -176,6 +202,8 @@ public actor AtlasVaultSavedSearchCoordinator:
         let recordIdentifier: String
         let currentRevision: String
         let encryptionKeyIdentifier: String
+        let payload: AtlasSavedSearchVaultPayload
+        let clientCreatedAt: String
     }
 
     private struct Projection {
@@ -347,6 +375,104 @@ public actor AtlasVaultSavedSearchCoordinator:
                     && $0.metadata.deleted
             }
             return activeItemIsAbsent && matchingTombstone
+        }
+    }
+
+    public func update(
+        presentationID: AtlasVaultPresentationID,
+        draft: AtlasVaultSavedSearchDraft
+    ) async throws -> AtlasVaultSavedSearchMutationResult {
+        guard let vaultIdentifier = activeVaultIdentifier,
+              presentationGeneration != nil else {
+            throw AtlasVaultSavedSearchFailure.locked
+        }
+        guard !mutationsDisabled, mutationOperation == nil else {
+            return .failed(committedSnapshot)
+        }
+        guard let metadata = metadataByPresentationID[presentationID] else {
+            return .staleItem(committedSnapshot)
+        }
+
+        let normalized = try Self.normalizedDraft(draft)
+        guard metadata.payload.name != normalized.name
+                || metadata.payload.request.text != normalized.searchText
+        else {
+            return .committed(committedSnapshot)
+        }
+
+        let timestamp = environment.timestamp()
+        guard Self.isStrictUTCTimestamp(timestamp) else {
+            throw AtlasVaultSavedSearchFailure.unavailable
+        }
+        var updatedRequest = metadata.payload.request
+        updatedRequest.text = normalized.searchText
+        updatedRequest.offset = 0
+        let updatedPayload = AtlasSavedSearchVaultPayload(
+            name: normalized.name,
+            summary: normalized.searchText ?? "All open jobs",
+            description: metadata.payload.description,
+            request: updatedRequest,
+            createdAt: metadata.payload.createdAt,
+            updatedAt: timestamp
+        )
+        let envelope = AtlasSavedSearchVaultRecordPayload(
+            type: .savedSearch,
+            payload: updatedPayload,
+            clientCreatedAt: metadata.clientCreatedAt,
+            clientUpdatedAt: timestamp
+        )
+        let mutation = AtlasVaultUpdateMutation(
+            recordID: metadata.recordIdentifier,
+            currentRevision: metadata.currentRevision,
+            payload: .savedSearch(envelope),
+            keyID: metadata.encryptionKeyIdentifier
+        )
+        let runtimeRequest = AtlasVaultRuntimeMutationRequest(
+            expectedVaultID: vaultIdentifier,
+            mutations: AtlasVaultMutationSet(updates: [mutation])
+        )
+
+        return await performMutation(runtimeRequest) { state, projection in
+            guard
+                projection.mapping[presentationID]?.recordIdentifier
+                    == metadata.recordIdentifier,
+                let updatedRecord = state.savedSearches.first(where: {
+                    $0.metadata.id == metadata.recordIdentifier
+                })
+            else {
+                return false
+            }
+            return updatedRecord.metadata.revision
+                    != metadata.currentRevision
+                && updatedRecord.metadata.parentRevision
+                    == metadata.currentRevision
+                && updatedRecord.metadata.keyID
+                    == metadata.encryptionKeyIdentifier
+                && updatedRecord.payload == updatedPayload
+                && updatedRecord.clientCreatedAt
+                    == metadata.clientCreatedAt
+                && updatedRecord.clientUpdatedAt == timestamp
+        }
+    }
+
+    public func publicSearchRequest(
+        presentationID: AtlasVaultPresentationID,
+        maximumLimit: Int
+    ) async throws -> AtlasPublicJobSearchRequest {
+        guard activeVaultIdentifier != nil,
+              presentationGeneration != nil,
+              mutationOperation == nil,
+              let metadata = metadataByPresentationID[presentationID]
+        else {
+            throw AtlasVaultSavedSearchFailure.unavailable
+        }
+        do {
+            return try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: metadata.payload.request,
+                maximumLimit: maximumLimit
+            )
+        } catch {
+            throw AtlasVaultSavedSearchFailure.unavailable
         }
     }
 
@@ -532,7 +658,9 @@ public actor AtlasVaultSavedSearchCoordinator:
             mapping[presentationIdentifier] = RecordMetadata(
                 recordIdentifier: record.metadata.id,
                 currentRevision: record.metadata.revision,
-                encryptionKeyIdentifier: record.metadata.keyID
+                encryptionKeyIdentifier: record.metadata.keyID,
+                payload: record.payload,
+                clientCreatedAt: record.clientCreatedAt
             )
             searches.append(
                 AtlasVaultSavedSearchPresentation(
@@ -613,5 +741,139 @@ public actor AtlasVaultSavedSearchCoordinator:
             return false
         }
         return formatter.string(from: date) == value
+    }
+}
+
+public actor AtlasVaultSavedSearchPublicHandoffCoordinator:
+    AtlasVaultSavedSearchPublicHandoffCoordinating,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private struct ReservationOperation {
+        let identifier: UUID
+        let work: Task<
+            AtlasSavedSearchPublicHandoffReservation?,
+            Never
+        >
+    }
+
+    private struct Operation {
+        let identifier: UUID
+        let work: Task<
+            AtlasSavedSearchPublicHandoffResult,
+            Never
+        >
+    }
+
+    private let host:
+        any AtlasSavedSearchPublicHandoffReservationHosting
+    private var reservationOperation: ReservationOperation?
+    private var reservation:
+        AtlasSavedSearchPublicHandoffReservation?
+    private var operation: Operation?
+
+    public init(
+        host: any AtlasSavedSearchPublicHandoffReservationHosting
+    ) {
+        self.host = host
+    }
+
+    public func reserveHostAdmission() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+    {
+        guard reservationOperation == nil,
+              reservation == nil,
+              operation == nil else {
+            return nil
+        }
+        let identifier = UUID()
+        let host = host
+        let work = Task {
+            await host.reserveSavedSearchPublicHandoff()
+        }
+        reservationOperation = ReservationOperation(
+            identifier: identifier,
+            work: work
+        )
+        let reserved = await work.value
+        guard reservationOperation?.identifier == identifier else {
+            return nil
+        }
+        reservationOperation = nil
+        guard let reserved else {
+            return nil
+        }
+        reservation = reserved
+        return reserved
+    }
+
+    public func cancelHostAdmission(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async {
+        guard self.reservation == reservation else {
+            return
+        }
+        self.reservation = nil
+        await host.cancelSavedSearchPublicHandoff(reservation)
+    }
+
+    public func perform(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard request.origin == .savedSearchHandoff,
+              self.reservation == reservation,
+              operation == nil else {
+            return .cancelled
+        }
+        self.reservation = nil
+        let identifier = UUID()
+        let host = host
+        let work = Task {
+            await host.performReservedSavedSearchPublicHandoff(
+                request,
+                reservation: reservation
+            )
+        }
+        operation = Operation(
+            identifier: identifier,
+            work: work
+        )
+        let result = await work.value
+        guard operation?.identifier == identifier else {
+            return .cancelled
+        }
+        operation = nil
+        return result
+    }
+
+    public func stop() async {
+        if let reservationOperation {
+            reservationOperation.work.cancel()
+            self.reservationOperation = nil
+            if let pending = await reservationOperation.work.value {
+                await host.cancelSavedSearchPublicHandoff(pending)
+            }
+        }
+        if let reservation {
+            self.reservation = nil
+            await host.cancelSavedSearchPublicHandoff(reservation)
+        }
+        guard let operation else {
+            return
+        }
+        operation.work.cancel()
+        _ = await operation.work.value
+        if self.operation?.identifier == operation.identifier {
+            self.operation = nil
+        }
+    }
+
+    public nonisolated var description: String {
+        "AtlasVaultSavedSearchPublicHandoffCoordinator(<redacted>)"
+    }
+
+    public nonisolated var debugDescription: String {
+        description
     }
 }

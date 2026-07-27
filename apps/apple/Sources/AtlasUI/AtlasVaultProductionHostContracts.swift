@@ -49,6 +49,29 @@ public enum AtlasPublicJobServiceError:
     }
 }
 
+public enum AtlasPublicJobSearchOrigin:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case manual
+    case savedSearchHandoff
+
+    public var description: String {
+        switch self {
+        case .manual:
+            "manual"
+        case .savedSearchHandoff:
+            "savedSearchHandoff"
+        }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 public struct AtlasPublicJobSearchRequest:
     Equatable,
     Sendable,
@@ -60,6 +83,9 @@ public struct AtlasPublicJobSearchRequest:
     public let query: String
     public let limit: Int
     public let offset: Int
+    public let origin: AtlasPublicJobSearchOrigin
+    public let hasAdditionalCriteria: Bool
+    let apiRequest: AtlasSearchRequest
 
     public init(
         query: String,
@@ -75,6 +101,45 @@ public struct AtlasPublicJobSearchRequest:
         self.query = query
         self.limit = limit
         self.offset = offset
+        origin = .manual
+        hasAdditionalCriteria = false
+        apiRequest = AtlasSearchRequest(
+            text: query,
+            includeFacets: false,
+            limit: limit,
+            offset: offset
+        )
+    }
+
+    public init(
+        validatingSavedSearch request: AtlasSearchRequest,
+        maximumLimit: Int
+    ) throws {
+        guard
+            request.status == ["open"],
+            !request.includeLowConfidence,
+            request.sort == "closing_date_asc",
+            request.limit > 0,
+            request.offset >= 0,
+            (1...Self.maximumLimit).contains(maximumLimit),
+            Self.validText(request.text),
+            Self.validFilterDimensions(request),
+            Self.validClosingDate(request.closingDateTo)
+        else {
+            throw AtlasPublicJobServiceError.invalidRequest
+        }
+
+        var canonical = request
+        canonical.includeFacets = false
+        canonical.limit = min(request.limit, maximumLimit)
+        canonical.offset = 0
+
+        query = canonical.text ?? ""
+        limit = canonical.limit
+        offset = canonical.offset
+        origin = .savedSearchHandoff
+        hasAdditionalCriteria = Self.hasAdditionalCriteria(canonical)
+        apiRequest = canonical
     }
 
     public var description: String {
@@ -83,6 +148,127 @@ public struct AtlasPublicJobSearchRequest:
 
     public var debugDescription: String {
         description
+    }
+
+    private static func validText(_ value: String?) -> Bool {
+        guard let value else {
+            return true
+        }
+        return value.unicodeScalars.count <= 512
+            && !containsForbiddenScalar(value)
+    }
+
+    private static func validFilterDimensions(
+        _ request: AtlasSearchRequest
+    ) -> Bool {
+        [
+            request.organizations,
+            request.sourceIDs,
+            request.cities,
+            request.countriesISO3,
+            request.nationalInternational,
+            request.gradeCodes,
+            request.ccogFamilies,
+            request.capabilityTags,
+            request.contractGroups,
+            request.seniorityGroups,
+            request.workModalities,
+            request.volunteerKinds,
+            request.unvCategories,
+            request.unvVolunteerTypes,
+        ].allSatisfy(validFilterDimension)
+    }
+
+    private static func validFilterDimension(
+        _ values: [String]
+    ) -> Bool {
+        guard values.count <= 100,
+              Set(values).count == values.count else {
+            return false
+        }
+        return values.allSatisfy { value in
+            let trimmed = value.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            return value == trimmed
+                && !value.isEmpty
+                && value.unicodeScalars.count <= 256
+                && !containsForbiddenScalar(value)
+        }
+    }
+
+    private static func containsForbiddenScalar(_ value: String) -> Bool {
+        value.unicodeScalars.contains {
+            CharacterSet.newlines.contains($0)
+                || CharacterSet.controlCharacters.contains($0)
+        }
+    }
+
+    private static func validClosingDate(_ value: String?) -> Bool {
+        guard let value else {
+            return true
+        }
+        let bytes = Array(value.utf8)
+        guard bytes.count == 10,
+              bytes[4] == 45,
+              bytes[7] == 45 else {
+            return false
+        }
+        for index in bytes.indices
+        where index != 4 && index != 7 {
+            guard (48...57).contains(bytes[index]) else {
+                return false
+            }
+        }
+        guard
+            let year = Int(value.prefix(4)),
+            let month = Int(value.dropFirst(5).prefix(2)),
+            let day = Int(value.suffix(2))
+        else {
+            return false
+        }
+        guard let utc = TimeZone(secondsFromGMT: 0) else {
+            return false
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = utc
+        let components = DateComponents(
+            calendar: calendar,
+            timeZone: calendar.timeZone,
+            year: year,
+            month: month,
+            day: day
+        )
+        guard let date = calendar.date(from: components) else {
+            return false
+        }
+        let verified = calendar.dateComponents(
+            [.year, .month, .day],
+            from: date
+        )
+        return verified.year == year
+            && verified.month == month
+            && verified.day == day
+    }
+
+    private static func hasAdditionalCriteria(
+        _ request: AtlasSearchRequest
+    ) -> Bool {
+        request.closingDateTo != nil
+            || !request.organizations.isEmpty
+            || !request.sourceIDs.isEmpty
+            || !request.cities.isEmpty
+            || !request.countriesISO3.isEmpty
+            || !request.nationalInternational.isEmpty
+            || !request.gradeCodes.isEmpty
+            || !request.ccogFamilies.isEmpty
+            || !request.capabilityTags.isEmpty
+            || !request.contractGroups.isEmpty
+            || !request.seniorityGroups.isEmpty
+            || !request.workModalities.isEmpty
+            || !request.volunteerKinds.isEmpty
+            || !request.unvCategories.isEmpty
+            || !request.unvVolunteerTypes.isEmpty
     }
 }
 
@@ -627,6 +813,79 @@ public protocol AtlasVaultPrivateMutationHosting: Sendable {
 
 public protocol AtlasVaultPrivateMutationContainmentHosting: Sendable {
     func containCommittedPrivateMutationFailure() async
+}
+
+public enum AtlasSavedSearchPublicHandoffResult:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case completed
+    case publicSearchFailed
+    case lockFailed
+    case cancelled
+    case stopped
+
+    public var description: String {
+        switch self {
+        case .completed:
+            "completed"
+        case .publicSearchFailed:
+            "publicSearchFailed"
+        case .lockFailed:
+            "lockFailed"
+        case .cancelled:
+            "cancelled"
+        case .stopped:
+            "stopped"
+        }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public struct AtlasSavedSearchPublicHandoffReservation:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    let identifier: UUID
+
+    init(identifier: UUID = UUID()) {
+        self.identifier = identifier
+    }
+
+    public var description: String {
+        "AtlasSavedSearchPublicHandoffReservation(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public protocol AtlasSavedSearchPublicHandoffHosting: Sendable {
+    func performSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult
+}
+
+public protocol AtlasSavedSearchPublicHandoffReservationHosting: Sendable {
+    func reserveSavedSearchPublicHandoff() async
+        -> AtlasSavedSearchPublicHandoffReservation?
+
+    func cancelSavedSearchPublicHandoff(
+        _ reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async
+
+    func performReservedSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest,
+        reservation: AtlasSavedSearchPublicHandoffReservation
+    ) async -> AtlasSavedSearchPublicHandoffResult
 }
 
 public protocol AtlasVaultPrivateSessionBoundary: Sendable {

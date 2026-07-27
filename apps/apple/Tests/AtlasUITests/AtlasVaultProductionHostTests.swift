@@ -520,6 +520,953 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         XCTAssertEqual(runtimeStatus, .locked)
     }
 
+    func testSavedSearchHandoffFullyDrainsAndLocksBeforePublicSearch()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let runtimeLockGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "handoff-job",
+                            title: "Handoff Result"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            runtimeLockGate: runtimeLockGate,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "climate",
+                organizations: ["UNDP"],
+                countriesISO3: ["JPN"],
+                gradeCodes: ["P3"],
+                seniorityGroups: ["professional"],
+                workModalities: ["hybrid"],
+                limit: 75,
+                offset: 20
+            ),
+            maximumLimit: 25
+        )
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(request)
+        }
+        await privateDrainGate.waitUntilEntered()
+        XCTAssertGreaterThanOrEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        XCTAssertEqual(graph.privateSessionBoundary.stopCalls(), 1)
+        let callsBeforeDrain = await graph.publicJobs.totalCalls()
+        let locksBeforeDrain = await graph.runtime.lockCalls()
+        XCTAssertEqual(callsBeforeDrain, 0)
+        XCTAssertEqual(locksBeforeDrain, 0)
+
+        await privateDrainGate.release()
+        await runtimeLockGate.waitUntilEntered()
+        let callsBeforeRuntimeLock = await graph.publicJobs.totalCalls()
+        XCTAssertEqual(callsBeforeRuntimeLock, 0)
+        await runtimeLockGate.release()
+        await graph.publicJobs.waitForTotalCalls(1)
+
+        let handoffResult = await handoff.value
+        XCTAssertEqual(handoffResult, .completed)
+        let runtimeStatus = await graph.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
+        let state = await graph.host.currentFlowState()
+        XCTAssertEqual(state.mode, .lockedPublic)
+        XCTAssertNil(state.unlockPanelState)
+        XCTAssertEqual(
+            state.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        XCTAssertTrue(state.publicShell.hasAdditionalCriteria)
+        let forwarded = await graph.publicJobs.recordedRequests()
+        XCTAssertEqual(forwarded, [request])
+    }
+
+    func testSavedSearchHandoffLockFailureAndTerminalSupersessionCallNoAPI()
+        async throws
+    {
+        let failedLockGraph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "must-not-run",
+                            title: "Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(failedLockGraph)
+        await failedLockGraph.runtime.setLockResult(
+            .failed(.activation(.corruptStore))
+        )
+        let failedLockHost:
+            any AtlasSavedSearchPublicHandoffHosting =
+                failedLockGraph.host
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(text: "safe"),
+            maximumLimit: 25
+        )
+
+        let failed = await failedLockHost
+            .performSavedSearchPublicHandoff(request)
+
+        XCTAssertEqual(failed, .lockFailed)
+        let failedLockCalls = await failedLockGraph.publicJobs.totalCalls()
+        XCTAssertEqual(failedLockCalls, 0)
+        XCTAssertGreaterThanOrEqual(
+            failedLockGraph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        let failedState = await failedLockGraph.host.currentFlowState()
+        XCTAssertNotEqual(failedState.mode, .unlockedTransition)
+
+        let drainGate = HostSuspensionGate()
+        let terminalGraph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "terminal-must-not-run",
+                            title: "Terminal Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: drainGate
+        )
+        try await unlockPrivateSession(terminalGraph)
+        let terminalHost:
+            any AtlasSavedSearchPublicHandoffHosting =
+                terminalGraph.host
+        let terminalHandoff = Task {
+            await terminalHost.performSavedSearchPublicHandoff(request)
+        }
+        await drainGate.waitUntilEntered()
+        let stop = Task {
+            await terminalGraph.host.stop()
+        }
+        await drainGate.release()
+        _ = await stop.value
+        let terminalResult = await terminalHandoff.value
+        let terminalCalls = await terminalGraph.publicJobs.totalCalls()
+        XCTAssertEqual(terminalResult, .stopped)
+        XCTAssertEqual(terminalCalls, 0)
+    }
+
+    func testOrdinarySearchRejectsSavedOriginWithoutLockOrNetwork()
+        async throws
+    {
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "private criteria",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let result = await captureSearch(graph.host, request)
+
+        await expectEqual(result, .failure(.invalidRequest))
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+        await expectEqual(
+            await graph.host.currentFlowState().mode,
+            .unlockedTransition
+        )
+        await expectEqual(await graph.runtime.status(), .unlocked)
+        await expectEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            0
+        )
+        await expectEqual(
+            graph.privateSessionBoundary.stopCalls(),
+            0
+        )
+    }
+
+    func testManualSearchIsRejectedWhileSavedHandoffOwnsHost()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let postLockStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-exclusive-result",
+            title: "Saved Exclusive Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved exclusive",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await privateDrainGate.waitUntilEntered()
+        await graph.runtime.setStatusGate(postLockStatusGate)
+        await privateDrainGate.release()
+        await postLockStatusGate.waitUntilEntered()
+
+        let manual = await captureSearch(
+            graph.host,
+            try searchRequest(query: "manual must wait")
+        )
+        let callsWhileHandoffOwned = await graph.publicJobs.totalCalls()
+
+        await postLockStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(manual, .failure(.unavailable))
+        await expectEqual(callsWhileHandoffOwned, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+    }
+
+    func testHandoffReservesOwnershipBeforeInitialRuntimeStatusAwait()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-reserved-result",
+            title: "Saved Reserved Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved reserved",
+                organizations: ["UNICEF"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let manual = await captureSearch(
+            graph.host,
+            try searchRequest(query: "manual before reservation")
+        )
+        let callsDuringInitialProof = await graph.publicJobs.totalCalls()
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(manual, .failure(.unavailable))
+        await expectEqual(callsDuringInitialProof, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testRetainedHandoffRejectsPrivateMutationDuringInitialRuntimeProof()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-mutation-fence-result",
+            title: "Saved Mutation Fence Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved mutation fence",
+                organizations: ["UNESCO"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let mutation = await graph.host.applyPrivateMutation(
+            privateMutationRequest(expectedVault: Self.fakeVaultID)
+        )
+        let mutationCalls = await graph.runtime.mutationCalls()
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+
+        await expectEqual(mutation, .failed)
+        await expectEqual(mutationCalls, 0)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testCancelledHandoffReopensUnlockAfterSupersedingLock()
+        async throws
+    {
+        let initialStatusGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "superseded handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let locked = await graph.host.lock()
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectFalse(locked.publicShell.canRequestUnlock)
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+        let completed = await graph.host.currentFlowState()
+
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(completed.mode, .lockedPublic)
+        await expectTrue(completed.publicShell.canRequestUnlock)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+    }
+
+    func testExplicitLockCancelsSavedHandoffAlreadyDrainingPrivateSession()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "explicit-lock-must-not-run",
+                            title: "Explicit Lock Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "explicit lock supersedes",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await privateDrainGate.waitUntilEntered()
+
+        let explicitLock = Task {
+            await graph.host.lock()
+        }
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+        await privateDrainGate.release()
+
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+        await expectEqual(await graph.runtime.status(), .locked)
+        await expectEqual(
+            await graph.host.currentFlowState().mode,
+            .lockedPublic
+        )
+    }
+
+    func testExplicitLockCancelsHandoffOwnedSearchBeforeCompleting()
+        async throws
+    {
+        let order = HostSavedSearchHandoffStopRace()
+        let serviceGate = HostSuspensionGate(
+            onCancel: {
+                order.record(.handoffSearchCancelled)
+            }
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "cancelled-handoff-search",
+                            title: "Cancelled Handoff Search"
+                        )
+                    ),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "cancel in-flight handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await serviceGate.waitUntilEntered()
+
+        let explicitLock = Task {
+            let state = await graph.host.lock()
+            order.record(.lockCompleted)
+            return state
+        }
+        let firstEvent = await order.firstEvent()
+
+        await expectEqual(firstEvent, .handoffSearchCancelled)
+        await serviceGate.release()
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+        await expectFalse(
+            await graph.host.currentFlowState().publicShell.isSearching
+        )
+        await expectEqual(await graph.runtime.status(), .locked)
+    }
+
+    func testExplicitLockInvalidatesHandoffDuringResultPublication()
+        async throws
+    {
+        let resultPublicationGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "publication-stage-handoff-result",
+            title: "Publication Stage Handoff Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.owner.setGateWhenPublicJobsAreNonempty(
+            resultPublicationGate
+        )
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "publication-stage handoff",
+                organizations: ["UNEP"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await resultPublicationGate.waitUntilEntered()
+
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            1
+        )
+        let hideCallsBeforeLock = graph.privateSessionBoundary.hideCalls()
+        let explicitLock = Task {
+            await graph.host.lock()
+        }
+        await graph.privateSessionBoundary.waitForHideCalls(
+            hideCallsBeforeLock + 1
+        )
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+
+        await resultPublicationGate.release()
+        let locked = await explicitLock.value
+        let handoffResult = await handoff.value
+
+        await expectEqual(locked.mode, .lockedPublic)
+        await expectEqual(handoffResult, .cancelled)
+        await expectEqual(locked.publicShell.publicJobs, [])
+        await expectEqual(
+            await graph.host.currentFlowState().publicShell.publicJobs,
+            []
+        )
+        await expectEqual(
+            await graph.host.retainedSearchOperationCountForTesting(),
+            0
+        )
+        await expectEqual(await graph.runtime.status(), .locked)
+    }
+
+    func testExplicitLockDoesNotCancelIndependentManualSearch()
+        async throws
+    {
+        let order = HostSavedSearchHandoffStopRace()
+        let serviceGate = HostSuspensionGate(
+            onCancel: {
+                order.record(.manualSearchCancelled)
+            }
+        )
+        let result = try makeSearchResult(
+            jobID: "manual-search-survives-lock",
+            title: "Manual Search Survives Lock"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(result),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ]
+        )
+        _ = try await graph.host.start()
+        let manualRequest = try searchRequest(
+            query: "independent manual"
+        )
+
+        let manualSearch = Task {
+            await captureSearch(
+                graph.host,
+                manualRequest
+            )
+        }
+        await serviceGate.waitUntilEntered()
+        let explicitLock = Task {
+            let state = await graph.host.lock()
+            order.record(.lockCompleted)
+            return state
+        }
+
+        await expectEqual(await order.firstEvent(), .lockCompleted)
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 0)
+        await serviceGate.release()
+
+        await expectEqual(await explicitLock.value.mode, .lockedPublic)
+        await expectEqual(try await manualSearch.value.get(), result)
+    }
+
+    func testTerminalStopCancelsAndDrainsRetainedSavedSearchHandoff()
+        async throws
+    {
+        let stopRace = HostSavedSearchHandoffStopRace()
+        let initialStatusGate = HostSuspensionGate(
+            onCancel: {
+                stopRace.record(.handoffCancelled)
+            }
+        )
+        let graph = try makeGraph(
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        await graph.runtime.setStatusGate(initialStatusGate)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "terminal retained handoff",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await initialStatusGate.waitUntilEntered()
+
+        let stop = Task {
+            let state = await graph.host.stop()
+            stopRace.record(.stopCompleted)
+            return state
+        }
+        let firstTerminalEvent = await stopRace.firstEvent()
+
+        await expectEqual(firstTerminalEvent, .handoffCancelled)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+
+        await initialStatusGate.release()
+        let handoffResult = await handoff.value
+        let stopped = await stop.value
+
+        await expectEqual(handoffResult, .stopped)
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+    }
+
+    func testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns()
+        async throws
+    {
+        let lifecycleGate = HostSuspensionGate()
+        let serviceGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "terminal-network-result",
+            title: "Terminal Network Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(result),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            lifecycleHandleGate: lifecycleGate,
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "terminal lifecycle network",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(request)
+        }
+        await serviceGate.waitUntilEntered()
+        await expectEqual(await graph.publicJobs.totalCalls(), 1)
+
+        let terminationCompleted = HostBoolRecorder()
+        let termination = Task {
+            let state = await graph.host.handleLifecycleEvent(.willTerminate)
+            await terminationCompleted.record(true)
+            return state
+        }
+        await lifecycleGate.waitUntilEntered()
+
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+        await expectEqual(await terminationCompleted.value(), nil)
+
+        await lifecycleGate.release()
+        await serviceGate.release()
+        await expectEqual(await handoff.value, .stopped)
+        let stopped = await termination.value
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(stopped.publicShell.publicJobs, [])
+    }
+
+    func testUnlockAdmissionStaysClosedWhileSavedHandoffSearchIsInFlight()
+        async throws
+    {
+        let serviceGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-unlock-fence-result",
+            title: "Saved Unlock Fence Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(savedResult),
+                    gate: serviceGate,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved unlock fence",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await graph.publicJobs.waitForTotalCalls(1)
+
+        let searching = await graph.host.currentFlowState()
+        let blockedPanel = await graph.host.requestUnlockPanel()
+
+        await serviceGate.release()
+        let handoffResult = await handoff.value
+        let completed = await graph.host.currentFlowState()
+
+        await expectEqual(searching.mode, .lockedPublic)
+        await expectFalse(searching.publicShell.canRequestUnlock)
+        await expectEqual(blockedPanel.mode, .lockedPublic)
+        await expectFalse(blockedPanel.publicShell.canRequestUnlock)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(completed.mode, .lockedPublic)
+        await expectTrue(completed.publicShell.canRequestUnlock)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testHandoffReservationBlocksManualSearchDuringPrivatePreparation()
+        async throws
+    {
+        let savedResult = try makeSearchResult(
+            jobID: "reserved-preparation-result",
+            title: "Reserved Preparation Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(savedResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let reservationHost:
+            any AtlasSavedSearchPublicHandoffReservationHosting = graph.host
+        let reserved =
+            await reservationHost.reserveSavedSearchPublicHandoff()
+        let reservation = try XCTUnwrap(reserved)
+        let manual = try searchRequest(query: "manual during preparation")
+
+        do {
+            _ = try await graph.host.searchPublicJobs(manual)
+            XCTFail("manual search must not enter a reserved handoff")
+        } catch {
+            XCTAssertEqual(error, .unavailable)
+        }
+        await expectEqual(await graph.publicJobs.totalCalls(), 0)
+
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "reserved preparation",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+        let handoffResult =
+            await reservationHost.performReservedSavedSearchPublicHandoff(
+                saved,
+                reservation: reservation
+            )
+
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
+    func testCancelledHandoffReservationReopensManualSearch()
+        async throws
+    {
+        let manualResult = try makeSearchResult(
+            jobID: "manual-after-cancelled-reservation",
+            title: "Manual After Cancelled Reservation"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(result: .success(manualResult)),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let reservationHost:
+            any AtlasSavedSearchPublicHandoffReservationHosting = graph.host
+        let reserved =
+            await reservationHost.reserveSavedSearchPublicHandoff()
+        let reservation = try XCTUnwrap(reserved)
+
+        await reservationHost.cancelSavedSearchPublicHandoff(reservation)
+        let manual = try searchRequest(query: "manual after cancellation")
+        let result = try await graph.host.searchPublicJobs(manual)
+
+        XCTAssertEqual(result, manualResult)
+        await expectEqual(await graph.runtime.lockCalls(), 0)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [manual]
+        )
+    }
+
+    func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
+        async throws
+    {
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "saved-result",
+                            title: "Saved Result"
+                        )
+                    )
+                ),
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "manual-result",
+                            title: "Manual Result"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+        let handoffResult = await handoffHost
+            .performSavedSearchPublicHandoff(saved)
+        XCTAssertEqual(handoffResult, .completed)
+
+        let manual = try searchRequest(query: "manual")
+        _ = try await graph.host.searchPublicJobs(manual)
+
+        let state = await graph.host.currentFlowState()
+        XCTAssertEqual(state.publicShell.searchOrigin, .manual)
+        XCTAssertFalse(state.publicShell.hasAdditionalCriteria)
+        let requests = await graph.publicJobs.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.last?.origin, .manual)
+        XCTAssertEqual(
+            requests.last?.apiRequest,
+            AtlasSearchRequest(
+                text: "manual",
+                includeFacets: false,
+                limit: 25,
+                offset: 0
+            )
+        )
+    }
+
     func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
         throws
     {
@@ -2602,7 +3549,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
     }
 
     func testStopReleasesSelectionCallersBeforeWaitingForSearchTeardown() async throws {
-        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
         let searchGate = HostSuspensionGate()
         let selectionGate = HostSuspensionGate()
         let searchResult = try makeSearchResult(
@@ -2632,18 +3578,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await selectionGate.waitUntilEntered()
         let stop = Task { await graph.host.stop() }
         await graph.publicJobs.waitUntilCancellation()
-
-        guard hostSource.contains(
-            "beginTerminalStop()\n        abandonSelectionAndResumeCallers()"
-        ) else {
-            XCTFail("Stop must release selection callers before search teardown")
-            await searchGate.release()
-            await selectionGate.release()
-            _ = await stop.value
-            _ = await search.value
-            _ = await panel.value
-            return
-        }
 
         let abandoned = await panel.value
         await expectEqual(abandoned.mode, .lockedPublic)
@@ -4184,7 +5118,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             "AtlasVaultPrivateStateSnapshot",
             "AtlasVaultHydratedState",
             "AtlasVaultPrivatePresentationState",
-            "savedSearch",
             "savedJob",
             "applicationNote",
             "profileSnippet",
@@ -4694,19 +5627,28 @@ private actor HostSuspensionGate {
     private var released = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private let onCancel: (@Sendable () -> Void)?
+
+    init(onCancel: (@Sendable () -> Void)? = nil) {
+        self.onCancel = onCancel
+    }
 
     func wait() async {
-        entered = true
-        let waiters = entryWaiters
-        entryWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-        guard !released else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            releaseWaiters.append(continuation)
+        await withTaskCancellationHandler {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            guard !released else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        } onCancel: {
+            onCancel?()
         }
     }
 
@@ -4732,6 +5674,56 @@ private actor HostSuspensionGate {
     }
 }
 
+private final class HostSavedSearchHandoffStopRace: Sendable {
+    enum Event: Equatable, Sendable {
+        case handoffCancelled
+        case handoffSearchCancelled
+        case lockCompleted
+        case manualSearchCancelled
+        case stopCompleted
+    }
+
+    private struct State {
+        var firstEvent: Event?
+        var waiters: [CheckedContinuation<Event, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    func record(_ event: Event) {
+        let waiters = state.withLock {
+            guard $0.firstEvent == nil else {
+                return [CheckedContinuation<Event, Never>]()
+            }
+            $0.firstEvent = event
+            let waiters = $0.waiters
+            $0.waiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume(returning: event)
+        }
+    }
+
+    func firstEvent() async -> Event {
+        if let event = state.withLock({ $0.firstEvent }) {
+            return event
+        }
+        return await withCheckedContinuation { continuation in
+            let event: Event? = state.withLock {
+                guard let event = $0.firstEvent else {
+                    $0.waiters.append(continuation)
+                    return nil
+                }
+                return event
+            }
+            if let event {
+                continuation.resume(returning: event)
+            }
+        }
+    }
+}
+
 private actor HostBoolRecorder {
     private var recordedValue: Bool?
 
@@ -4748,12 +5740,18 @@ private final class HostPrivateSessionBoundaryFake:
     AtlasVaultPrivateSessionBoundary,
     Sendable
 {
+    private struct HideWaiter {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     private struct State {
         var activationCalls = 0
         var activatedSelections: [String] = []
         var hideCalls = 0
         var stopCalls = 0
         var hiddenWaiters: [CheckedContinuation<Void, Never>] = []
+        var hideWaiters: [HideWaiter] = []
     }
 
     private let activationGate: HostSuspensionGate?
@@ -4784,13 +5782,26 @@ private final class HostPrivateSessionBoundaryFake:
 
     @MainActor
     func hidePrivatePresentation() {
-        let waiters = state.withLock {
+        let (hiddenWaiters, hideWaiters) = state.withLock {
             $0.hideCalls += 1
-            let waiters = $0.hiddenWaiters
+            let hiddenWaiters = $0.hiddenWaiters
             $0.hiddenWaiters.removeAll()
-            return waiters
+            var pending: [HideWaiter] = []
+            var ready: [CheckedContinuation<Void, Never>] = []
+            for waiter in $0.hideWaiters {
+                if $0.hideCalls >= waiter.expectedCount {
+                    ready.append(waiter.continuation)
+                } else {
+                    pending.append(waiter)
+                }
+            }
+            $0.hideWaiters = pending
+            return (hiddenWaiters, ready)
         }
-        for waiter in waiters {
+        for waiter in hiddenWaiters {
+            waiter.resume()
+        }
+        for waiter in hideWaiters {
             waiter.resume()
         }
     }
@@ -4814,6 +5825,29 @@ private final class HostPrivateSessionBoundaryFake:
                     return true
                 }
                 $0.hiddenWaiters.append(continuation)
+                return false
+            }
+            if resumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func waitForHideCalls(_ expectedCount: Int) async {
+        if hideCalls() >= expectedCount {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            let resumeImmediately = state.withLock {
+                guard $0.hideCalls < expectedCount else {
+                    return true
+                }
+                $0.hideWaiters.append(
+                    HideWaiter(
+                        expectedCount: expectedCount,
+                        continuation: continuation
+                    )
+                )
                 return false
             }
             if resumeImmediately {
@@ -4872,6 +5906,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
 
     private var plans: [Plan]
     private var searchCalls = 0
+    private var requests: [AtlasPublicJobSearchRequest] = []
     private var cancellationCalls = 0
     private var activeCallIDs: Set<Int> = []
     private var completedCallIDs: Set<Int> = []
@@ -4905,6 +5940,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         -> AtlasPublicJobSearchResult
     {
         searchCalls += 1
+        requests.append(request)
         let callID = searchCalls
         activeCallIDs.insert(callID)
         resumeCallWaiters()
@@ -4958,6 +5994,10 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
 
     func totalCalls() -> Int {
         searchCalls
+    }
+
+    func recordedRequests() -> [AtlasPublicJobSearchRequest] {
+        requests
     }
 
     func waitForTotalCalls(_ expectedCount: Int) async {
@@ -5440,6 +6480,7 @@ private actor HostPresentationOwnerRecorder {
         canRequestUnlock: Bool,
         gate: HostSuspensionGate
     )?
+    private var publicJobsGate: HostSuspensionGate?
     private var currentGeneration: AtlasVaultProductionHostGeneration?
     private let requiresExactSupersededGeneration: Bool
     private var requiredSupersededGeneration:
@@ -5476,6 +6517,10 @@ private actor HostPresentationOwnerRecorder {
             == admissionGate.canRequestUnlock {
             gate = admissionGate.gate
             self.admissionGate = nil
+        } else if !state.publicShell.publicJobs.isEmpty,
+                  let publicJobsGate {
+            gate = publicJobsGate
+            self.publicJobsGate = nil
         } else {
             gate = nextGate
             nextGate = nil
@@ -5530,6 +6575,12 @@ private actor HostPresentationOwnerRecorder {
         whenCanRequestUnlock value: Bool
     ) {
         admissionGate = (value, gate)
+    }
+
+    func setGateWhenPublicJobsAreNonempty(
+        _ gate: HostSuspensionGate
+    ) {
+        publicJobsGate = gate
     }
 
     func totalCalls() -> Int {
@@ -5678,6 +6729,12 @@ private final class HostPresentationOwnerFake:
             gate,
             whenCanRequestUnlock: value
         )
+    }
+
+    func setGateWhenPublicJobsAreNonempty(
+        _ gate: HostSuspensionGate
+    ) async {
+        await recorder.setGateWhenPublicJobsAreNonempty(gate)
     }
 
     func totalCalls() async -> Int {

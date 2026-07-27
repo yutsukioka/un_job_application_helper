@@ -13,10 +13,13 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let keychain = PrivateSearchE2EKeychainClient()
         let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let savedSearchTimestamps =
+            PrivateSearchE2ETimestampProvider()
 
         let first = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         XCTAssertEqual(keychain.operationCount(), 0)
         XCTAssertEqual(directory.callCount(), 0)
@@ -37,6 +40,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let privateName = "PRIVATE_SAVED_SEARCH_NAME_2D63"
         let privateQuery = "PRIVATE_SAVED_SEARCH_QUERY_2D63"
+        let editedPrivateName = "PRIVATE_EDITED_NAME_2D64"
+        let editedPrivateQuery = "PRIVATE_EDITED_QUERY_2D64"
         await firstContext.actions.create(
             AtlasVaultSavedSearchDraft(
                 name: privateName,
@@ -84,6 +89,116 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         XCTAssertEqual(createdStore.records.count, 1)
         XCTAssertFalse(createdStore.records[0].deleted)
         XCTAssertFalse(createdStore.records[0].ciphertext.isEmpty)
+        let localVaultKey = try XCTUnwrap(
+            AtlasKeychainVaultKeyStore(client: keychain)
+                .loadVaultKey(for: selected.vaultID)
+        )
+        let localSession = try AtlasVaultUnlockedSession(
+            vaultID: selected.vaultID,
+            vaultKey: localVaultKey
+        )
+        let createdHydrated = try XCTUnwrap(
+            AtlasVaultRecordHydrator()
+                .hydrate(
+                    records: createdStore.records,
+                    session: localSession
+                )
+                .savedSearches
+                .first
+        )
+
+        await firstContext.actions.update(
+            firstPresentationIdentifier,
+            draft: AtlasVaultSavedSearchDraft(
+                name: editedPrivateName,
+                searchText: editedPrivateQuery
+            )
+        )
+        XCTAssertEqual(firstContext.owner.status, .ready)
+        XCTAssertEqual(firstContext.owner.items.count, 1)
+        XCTAssertEqual(
+            firstContext.owner.items[0].id,
+            firstPresentationIdentifier
+        )
+        XCTAssertEqual(
+            firstContext.owner.items[0].name,
+            editedPrivateName
+        )
+        XCTAssertEqual(
+            firstContext.owner.items[0].request.text,
+            editedPrivateQuery
+        )
+
+        let editedStoreBytes = try storeBytes(
+            root: root,
+            selected: selected
+        )
+        let editedStoreText = String(
+            decoding: editedStoreBytes,
+            as: UTF8.self
+        )
+        for plaintext in [
+            privateName,
+            privateQuery,
+            editedPrivateName,
+            editedPrivateQuery,
+        ] {
+            XCTAssertFalse(editedStoreText.contains(plaintext), plaintext)
+        }
+        let editedStore = try AtlasVaultLocalStoreIO.decode(
+            editedStoreBytes
+        )
+        XCTAssertEqual(editedStore.records.count, 1)
+        XCTAssertEqual(
+            editedStore.records[0].id,
+            createdStore.records[0].id
+        )
+        XCTAssertEqual(
+            editedStore.records[0].keyID,
+            createdStore.records[0].keyID
+        )
+        XCTAssertNotEqual(
+            editedStore.records[0].revision,
+            createdStore.records[0].revision
+        )
+        XCTAssertEqual(
+            editedStore.records[0].parentRevision,
+            createdStore.records[0].revision
+        )
+        let editedHydrated = try XCTUnwrap(
+            AtlasVaultRecordHydrator()
+                .hydrate(
+                    records: editedStore.records,
+                    session: localSession
+                )
+                .savedSearches
+                .first
+        )
+        XCTAssertEqual(editedHydrated.payload.name, editedPrivateName)
+        XCTAssertEqual(
+            editedHydrated.payload.request.text,
+            editedPrivateQuery
+        )
+        XCTAssertEqual(
+            editedHydrated.payload.createdAt,
+            createdHydrated.payload.createdAt
+        )
+        XCTAssertEqual(
+            editedHydrated.clientCreatedAt,
+            createdHydrated.clientCreatedAt
+        )
+        XCTAssertNotEqual(
+            editedHydrated.payload.updatedAt,
+            createdHydrated.payload.updatedAt
+        )
+        XCTAssertNotEqual(
+            editedHydrated.clientUpdatedAt,
+            createdHydrated.clientUpdatedAt
+        )
+        XCTAssertEqual(
+            first.presentationOwner.flowState.publicShell,
+            publicShellBeforeCreate
+        )
 
         let recoveryCode = try await configureRecovery(
             with: first
@@ -95,13 +210,22 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let second = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         try await unlockExistingLocally(with: second)
         let secondContext = try XCTUnwrap(
             second.savedSearchContextForTesting
         )
         XCTAssertEqual(secondContext.owner.items.count, 1)
+        XCTAssertEqual(
+            secondContext.owner.items[0].name,
+            editedPrivateName
+        )
+        XCTAssertEqual(
+            secondContext.owner.items[0].request.text,
+            editedPrivateQuery
+        )
         XCTAssertNotEqual(
             secondContext.owner.items[0].id,
             firstPresentationIdentifier
@@ -118,6 +242,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         let deletedText = String(decoding: deletedBytes, as: UTF8.self)
         XCTAssertFalse(deletedText.contains(privateName))
         XCTAssertFalse(deletedText.contains(privateQuery))
+        XCTAssertFalse(deletedText.contains(editedPrivateName))
+        XCTAssertFalse(deletedText.contains(editedPrivateQuery))
         XCTAssertFalse(deletedText.contains("saved_search"))
         let deletedStore = try AtlasVaultLocalStoreIO.decode(
             deletedBytes
@@ -147,7 +273,8 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
         let third = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps
         )
         try await unlockExistingLocally(with: third)
         let thirdContext = try XCTUnwrap(
@@ -169,9 +296,12 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             try keyStore.loadVaultKey(for: selected.vaultID)
         )
 
+        let recoveryPublicJobs = PrivateSearchE2EPublicJobs()
         let recoveryOnly = try makeHarness(
             keychain: keychain,
-            directory: directory
+            directory: directory,
+            savedSearchTimestamps: savedSearchTimestamps,
+            publicJobs: recoveryPublicJobs
         )
         _ = try await recoveryOnly.start()
         await recoveryOnly.publicShellActions.requestUnlock()
@@ -206,6 +336,50 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             recoveryContext.owner.items[0].name,
             "RECOVERY_SESSION_PRIVATE_NAME"
         )
+        let recoveryIdentifier = recoveryContext.owner.items[0].id
+        await recoveryContext.actions.update(
+            recoveryIdentifier,
+            draft: AtlasVaultSavedSearchDraft(
+                name: "RECOVERY_EDITED_PRIVATE_NAME",
+                searchText: "recovery public criteria"
+            )
+        )
+        XCTAssertEqual(
+            recoveryContext.owner.items[0].name,
+            "RECOVERY_EDITED_PRIVATE_NAME"
+        )
+        XCTAssertNil(
+            try keyStore.loadVaultKey(for: selected.vaultID)
+        )
+
+        await recoveryContext.actions.execute(
+            recoveryContext.owner.items[0].id
+        )
+        XCTAssertEqual(
+            recoveryOnly.presentationOwner.flowState.mode,
+            .lockedPublic
+        )
+        XCTAssertTrue(recoveryContext.owner.items.isEmpty)
+        let recordedRecoveryRequest =
+            await recoveryPublicJobs.lastSearchRequest()
+        let recoveryRequest = try XCTUnwrap(recordedRecoveryRequest)
+        XCTAssertEqual(recoveryRequest.origin, .savedSearchHandoff)
+        XCTAssertEqual(recoveryRequest.query, "recovery public criteria")
+        XCTAssertNil(
+            try keyStore.loadVaultKey(for: selected.vaultID)
+        )
+
+        await recoveryOnly.publicShellActions.requestUnlock()
+        await recoveryOnly.unlockActions.select(.recoveryKey)
+        let recoveredAgain = await recoveryOnly.unlockActions.submit(
+            .recoveryKey(
+                AtlasVaultInMemorySecretBuffer(
+                    bytes: Data(recoveryCode.utf8)
+                )
+            )
+        )
+        XCTAssertEqual(recoveredAgain, .unlocked)
+        XCTAssertEqual(recoveryContext.owner.items.count, 1)
         await recoveryContext.actions.delete(
             recoveryContext.owner.items[0].id
         )
@@ -226,6 +400,306 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
         XCTAssertFalse(finalText.contains("RECOVERY_SESSION_PRIVATE_NAME"))
         XCTAssertFalse(finalText.contains("RECOVERY_SESSION_PRIVATE_QUERY"))
+        XCTAssertFalse(finalText.contains("RECOVERY_EDITED_PRIVATE_NAME"))
+        XCTAssertFalse(finalText.contains("recovery public criteria"))
+    }
+
+    func testExplicitSavedSearchExecutionLocksBeforePublicHandoff()
+        async throws
+    {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keychain = PrivateSearchE2EKeychainClient()
+        let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let timestamps = PrivateSearchE2ETimestampProvider()
+        let publicJobs = PrivateSearchE2EPublicJobs()
+        let harness = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps,
+            publicJobs: publicJobs
+        )
+        _ = try await createAndUnlock(
+            with: harness,
+            keychain: keychain
+        )
+        let context = try XCTUnwrap(
+            harness.savedSearchContextForTesting
+        )
+        await context.actions.create(
+            AtlasVaultSavedSearchDraft(
+                name: "PRIVATE_HANDOFF_NAME",
+                searchText: "public handoff terms"
+            )
+        )
+        let identifier = try XCTUnwrap(context.owner.items.first?.id)
+        let callsBeforeHandoff = await publicJobs.searchCallCount()
+
+        await context.actions.execute(identifier)
+
+        XCTAssertEqual(context.owner.status, .hidden)
+        XCTAssertTrue(context.owner.items.isEmpty)
+        let flow = harness.presentationOwner.flowState
+        XCTAssertEqual(flow.mode, .lockedPublic)
+        XCTAssertEqual(
+            flow.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        let callsAfterHandoff = await publicJobs.searchCallCount()
+        XCTAssertEqual(callsAfterHandoff, callsBeforeHandoff + 1)
+        let recordedRequest = await publicJobs.lastSearchRequest()
+        let request = try XCTUnwrap(recordedRequest)
+        XCTAssertEqual(request.query, "public handoff terms")
+        XCTAssertEqual(request.origin, .savedSearchHandoff)
+        XCTAssertFalse(
+            String(reflecting: request)
+                .contains("PRIVATE_HANDOFF_NAME")
+        )
+        _ = await harness.stop()
+    }
+
+    func testFullFilterHandoffManualResetAndStaleIDRemainPrivate()
+        async throws
+    {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keychain = PrivateSearchE2EKeychainClient()
+        let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let timestamps = PrivateSearchE2ETimestampProvider()
+
+        let seed = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps
+        )
+        let selected = try await createAndUnlock(
+            with: seed,
+            keychain: keychain
+        )
+        let seedContext = try XCTUnwrap(
+            seed.savedSearchContextForTesting
+        )
+        await seedContext.actions.create(
+            AtlasVaultSavedSearchDraft(
+                name: "PRIVATE_FULL_FILTER_NAME",
+                searchText: "climate policy"
+            )
+        )
+        _ = await seed.stop()
+
+        let fullCriteria = AtlasSearchRequest(
+            text: "climate policy",
+            status: ["open"],
+            organizations: ["UNDP"],
+            sourceIDs: ["undp"],
+            cities: ["Tokyo"],
+            countriesISO3: ["JPN"],
+            nationalInternational: ["international"],
+            gradeCodes: ["P3"],
+            ccogFamilies: ["Programme Management"],
+            capabilityTags: ["policy"],
+            contractGroups: ["staff"],
+            seniorityGroups: ["professional"],
+            workModalities: ["hybrid"],
+            volunteerKinds: ["specialist"],
+            unvCategories: ["international"],
+            unvVolunteerTypes: ["expert"],
+            closingDateTo: "2026-12-31",
+            includeLowConfidence: false,
+            includeFacets: true,
+            limit: 75,
+            offset: 40,
+            sort: "closing_date_asc"
+        )
+        try replaceOnlySavedSearchRequest(
+            root: root,
+            selected: selected,
+            keychain: keychain,
+            request: fullCriteria
+        )
+
+        let publicJobs = PrivateSearchE2EPublicJobs()
+        let harness = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps,
+            publicJobs: publicJobs
+        )
+        try await unlockExistingLocally(with: harness)
+        let context = try XCTUnwrap(
+            harness.savedSearchContextForTesting
+        )
+        let sessionAIdentifier = try XCTUnwrap(
+            context.owner.items.first?.id
+        )
+
+        await context.actions.execute(sessionAIdentifier)
+
+        XCTAssertTrue(context.owner.items.isEmpty)
+        XCTAssertEqual(context.owner.status, .hidden)
+        let lockedFlow = harness.presentationOwner.flowState
+        XCTAssertEqual(lockedFlow.mode, .lockedPublic)
+        XCTAssertEqual(
+            lockedFlow.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        XCTAssertTrue(lockedFlow.publicShell.hasAdditionalCriteria)
+        let recordedForwardedRequest =
+            await publicJobs.lastSearchRequest()
+        let forwarded = try XCTUnwrap(recordedForwardedRequest)
+        var expected = fullCriteria
+        expected.includeFacets = false
+        expected.limit = 50
+        expected.offset = 0
+        XCTAssertEqual(forwarded.apiRequest, expected)
+        XCTAssertFalse(
+            String(reflecting: forwarded)
+                .contains("PRIVATE_FULL_FILTER_NAME")
+        )
+
+        await harness.publicShellActions.search(query: "manual query")
+        let manualFlow = harness.presentationOwner.flowState
+        XCTAssertEqual(manualFlow.publicShell.searchOrigin, .manual)
+        XCTAssertFalse(manualFlow.publicShell.hasAdditionalCriteria)
+        let recordedManualRequest =
+            await publicJobs.lastSearchRequest()
+        let manualRequest = try XCTUnwrap(recordedManualRequest)
+        XCTAssertEqual(
+            manualRequest.apiRequest,
+            AtlasSearchRequest(
+                text: "manual query",
+                includeFacets: false,
+                limit: 50,
+                offset: 0
+            )
+        )
+
+        await harness.publicShellActions.requestUnlock()
+        await harness.unlockActions.select(.localKey)
+        let unlockedAgain = await harness.unlockActions.submit(.localKey)
+        XCTAssertEqual(unlockedAgain, .unlocked)
+        XCTAssertEqual(context.owner.items.count, 1)
+        XCTAssertNotEqual(
+            context.owner.items[0].id,
+            sessionAIdentifier
+        )
+        let callsBeforeStale = await publicJobs.searchCallCount()
+
+        await context.actions.execute(sessionAIdentifier)
+
+        XCTAssertEqual(context.owner.status, .handoffFailed)
+        XCTAssertEqual(context.owner.items.count, 1)
+        XCTAssertEqual(
+            harness.presentationOwner.flowState.mode,
+            .unlockedTransition
+        )
+        let callsAfterStale = await publicJobs.searchCallCount()
+        XCTAssertEqual(callsAfterStale, callsBeforeStale)
+        _ = await harness.stop()
+    }
+
+    func testMalformedCriteriaPreservePrivateSessionAndPublicFailureStaysLocked()
+        async throws
+    {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keychain = PrivateSearchE2EKeychainClient()
+        let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let timestamps = PrivateSearchE2ETimestampProvider()
+        let seed = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps
+        )
+        let selected = try await createAndUnlock(
+            with: seed,
+            keychain: keychain
+        )
+        let seedContext = try XCTUnwrap(
+            seed.savedSearchContextForTesting
+        )
+        await seedContext.actions.create(
+            AtlasVaultSavedSearchDraft(
+                name: "PRIVATE_MALFORMED_NAME",
+                searchText: "criteria"
+            )
+        )
+        _ = await seed.stop()
+        try replaceOnlySavedSearchRequest(
+            root: root,
+            selected: selected,
+            keychain: keychain,
+            request: AtlasSearchRequest(
+                text: "criteria",
+                status: ["closed"]
+            )
+        )
+
+        let publicJobs = PrivateSearchE2EPublicJobs()
+        let malformedHarness = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps,
+            publicJobs: publicJobs
+        )
+        try await unlockExistingLocally(with: malformedHarness)
+        let malformedContext = try XCTUnwrap(
+            malformedHarness.savedSearchContextForTesting
+        )
+        let malformedIdentifier = try XCTUnwrap(
+            malformedContext.owner.items.first?.id
+        )
+
+        await malformedContext.actions.execute(malformedIdentifier)
+
+        XCTAssertEqual(malformedContext.owner.status, .handoffFailed)
+        XCTAssertEqual(malformedContext.owner.items.count, 1)
+        XCTAssertEqual(
+            malformedHarness.presentationOwner.flowState.mode,
+            .unlockedTransition
+        )
+        let malformedCalls = await publicJobs.searchCallCount()
+        XCTAssertEqual(malformedCalls, 0)
+        _ = await malformedHarness.stop()
+
+        try replaceOnlySavedSearchRequest(
+            root: root,
+            selected: selected,
+            keychain: keychain,
+            request: AtlasSearchRequest(text: "public failure")
+        )
+        let failingPublicJobs = PrivateSearchE2EPublicJobs()
+        let failingHarness = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps,
+            publicJobs: failingPublicJobs
+        )
+        try await unlockExistingLocally(with: failingHarness)
+        let failingContext = try XCTUnwrap(
+            failingHarness.savedSearchContextForTesting
+        )
+        await failingPublicJobs.failNextSearch()
+
+        await failingContext.actions.execute(
+            failingContext.owner.items[0].id
+        )
+
+        XCTAssertEqual(failingContext.owner.status, .hidden)
+        XCTAssertTrue(failingContext.owner.items.isEmpty)
+        let failedFlow = failingHarness.presentationOwner.flowState
+        XCTAssertEqual(failedFlow.mode, .lockedPublic)
+        XCTAssertEqual(
+            failedFlow.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        XCTAssertEqual(
+            failedFlow.publicShell.serviceStatus,
+            .unavailable
+        )
+        let failedCalls = await failingPublicJobs.searchCallCount()
+        XCTAssertEqual(failedCalls, 1)
+        _ = await failingHarness.stop()
     }
 
     func testProductionCompositionContainsPrivateSavedSearchJourney()
@@ -242,10 +716,19 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
 
         XCTAssertTrue(feature.contains("AtlasVaultCreateMutation"))
+        XCTAssertTrue(feature.contains("publicSearchRequest"))
+        XCTAssertTrue(
+            feature.contains(
+                "AtlasVaultSavedSearchPublicHandoffCoordinator"
+            )
+        )
         XCTAssertTrue(feature.contains("AtlasVaultDeleteMutation"))
         XCTAssertTrue(feature.contains("tombstones"))
         XCTAssertTrue(host.contains("activatePrivateSession"))
         XCTAssertTrue(host.contains("applyPrivateMutation"))
+        XCTAssertTrue(
+            host.contains("performSavedSearchPublicHandoff")
+        )
         XCTAssertTrue(harness.contains("savedSearchContext"))
         XCTAssertTrue(harness.contains("AtlasVaultSavedSearchCoordinator"))
         XCTAssertTrue(
@@ -368,7 +851,10 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
 
     private func makeHarness(
         keychain: PrivateSearchE2EKeychainClient,
-        directory: PrivateSearchE2EDirectoryLocator
+        directory: PrivateSearchE2EDirectoryLocator,
+        savedSearchTimestamps: PrivateSearchE2ETimestampProvider,
+        publicJobs: PrivateSearchE2EPublicJobs =
+            PrivateSearchE2EPublicJobs()
     ) throws -> AtlasVaultProductionCompositionHarness {
         let time = PrivateSearchE2ELifecycleTime()
         return try AtlasVaultProductionCompositionFactory
@@ -381,9 +867,12 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
                     AtlasFoundationAtomicFileSystemClient(),
                 lifecycleClock: time,
                 lifecycleSleeper: time,
-                publicJobs: PrivateSearchE2EPublicJobs(),
+                publicJobs: publicJobs,
                 publicSnapshotRestorer:
                     PrivateSearchE2EPublicSnapshotRestorer(),
+                savedSearchTimestamp: {
+                    savedSearchTimestamps.next()
+                },
                 unlockRequestSleep: { _ in
                     throw CancellationError()
                 }
@@ -408,17 +897,92 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         root: URL,
         selected: AtlasSelectedVaultID
     ) throws -> Data {
-        try Data(
-            contentsOf: root
-                .appendingPathComponent("Atlas", isDirectory: true)
-                .appendingPathComponent("Vaults", isDirectory: true)
-                .appendingPathComponent(
-                    selected.vaultID,
-                    isDirectory: true
-                )
-                .appendingPathComponent(
-                    "atlasvault-local-store.json"
-                )
+        try Data(contentsOf: storeURL(root: root, selected: selected))
+    }
+
+    private func storeURL(
+        root: URL,
+        selected: AtlasSelectedVaultID
+    ) -> URL {
+        root
+            .appendingPathComponent("Atlas", isDirectory: true)
+            .appendingPathComponent("Vaults", isDirectory: true)
+            .appendingPathComponent(
+                selected.vaultID,
+                isDirectory: true
+            )
+            .appendingPathComponent("atlasvault-local-store.json")
+    }
+
+    private func replaceOnlySavedSearchRequest(
+        root: URL,
+        selected: AtlasSelectedVaultID,
+        keychain: PrivateSearchE2EKeychainClient,
+        request: AtlasSearchRequest
+    ) throws {
+        let key = try XCTUnwrap(
+            AtlasKeychainVaultKeyStore(client: keychain)
+                .loadVaultKey(for: selected.vaultID)
+        )
+        let session = try AtlasVaultUnlockedSession(
+            vaultID: selected.vaultID,
+            vaultKey: key
+        )
+        let store = try AtlasVaultLocalStoreIO.decode(
+            storeBytes(root: root, selected: selected)
+        )
+        let state = try AtlasVaultRecordHydrator().hydrate(
+            records: store.records,
+            session: session
+        )
+        let current = try XCTUnwrap(state.savedSearches.first)
+        XCTAssertEqual(state.savedSearches.count, 1)
+        let updatedAt = "2026-07-27T04:00:00Z"
+        let payload = AtlasSavedSearchVaultPayload(
+            name: current.payload.name,
+            summary: request.text ?? "All open jobs",
+            description: current.payload.description,
+            request: request,
+            createdAt: current.payload.createdAt,
+            updatedAt: updatedAt
+        )
+        let envelope = AtlasSavedSearchVaultRecordPayload(
+            type: .savedSearch,
+            payload: payload,
+            clientCreatedAt: current.clientCreatedAt,
+            clientUpdatedAt: updatedAt
+        )
+        let updatedRecord = try XCTUnwrap(
+            AtlasVaultRecordSaver().save(
+                mutations: AtlasVaultMutationSet(
+                    updates: [
+                        AtlasVaultUpdateMutation(
+                            recordID: current.metadata.id,
+                            currentRevision: current.metadata.revision,
+                            payload: .savedSearch(envelope),
+                            keyID: current.metadata.keyID
+                        ),
+                    ]
+                ),
+                session: session
+            ).first
+        )
+        let records = store.records.map { record in
+            record.id == current.metadata.id ? updatedRecord : record
+        }
+        let replacement = AtlasVaultLocalStoreEnvelope(
+            format: store.format,
+            version: store.version,
+            storeID: store.storeID,
+            createdAt: store.createdAt,
+            updatedAt: updatedAt,
+            vaultMetadata: store.vaultMetadata,
+            records: records
+        )
+        _ = try AtlasVaultAtomicStoreWriter().write(
+            replacement,
+            to: storeURL(root: root, selected: selected),
+            overwrite: true
         )
     }
 
@@ -453,6 +1017,28 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+}
+
+private final class PrivateSearchE2ETimestampProvider: Sendable {
+    private struct State: Sendable {
+        var index = 0
+    }
+
+    private let values = [
+        "2026-07-27T00:00:00Z",
+        "2026-07-27T01:00:00Z",
+        "2026-07-27T02:00:00Z",
+        "2026-07-27T03:00:00Z",
+    ]
+    private let state = Mutex(State())
+
+    func next() -> String {
+        state.withLock { state in
+            let value = values[min(state.index, values.count - 1)]
+            state.index += 1
+            return value
+        }
     }
 }
 
@@ -563,6 +1149,9 @@ private final class PrivateSearchE2EDirectoryLocator:
 }
 
 private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
+    private var searchRequests: [AtlasPublicJobSearchRequest] = []
+    private var shouldFailNextSearch = false
+
     func health() async throws(AtlasPublicJobServiceError)
         -> AtlasPublicServiceHealth
     {
@@ -583,6 +1172,11 @@ private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
     ) async throws(AtlasPublicJobServiceError)
         -> AtlasPublicJobSearchResult
     {
+        searchRequests.append(request)
+        if shouldFailNextSearch {
+            shouldFailNextSearch = false
+            throw .unavailable
+        }
         do {
             return try AtlasPublicJobSearchResult(
                 jobs: [],
@@ -593,6 +1187,18 @@ private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
         } catch {
             throw .invalidResponse
         }
+    }
+
+    func searchCallCount() -> Int {
+        searchRequests.count
+    }
+
+    func lastSearchRequest() -> AtlasPublicJobSearchRequest? {
+        searchRequests.last
+    }
+
+    func failNextSearch() {
+        shouldFailNextSearch = true
     }
 
     func sources() async throws(AtlasPublicJobServiceError)
