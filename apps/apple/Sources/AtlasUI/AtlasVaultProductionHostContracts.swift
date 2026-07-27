@@ -1,5 +1,6 @@
 // Phase 2D-56 repository boundary.
 import Foundation
+import Synchronization
 
 public enum AtlasPublicServiceAvailability:
     Equatable,
@@ -586,6 +587,138 @@ public protocol AtlasVaultProductionHosting: Sendable {
     ) async -> AtlasLockedShellUnlockFlowState
 }
 
+public enum AtlasVaultPrivateMutationResult:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    case committed
+    case committedDurabilityUnconfirmed
+    case failed
+    case cancelled
+    case locked
+
+    public var description: String {
+        switch self {
+        case .committed:
+            "committed"
+        case .committedDurabilityUnconfirmed:
+            "committedDurabilityUnconfirmed"
+        case .failed:
+            "failed"
+        case .cancelled:
+            "cancelled"
+        case .locked:
+            "locked"
+        }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public protocol AtlasVaultPrivateMutationHosting: Sendable {
+    func applyPrivateMutation(
+        _ request: AtlasVaultRuntimeMutationRequest
+    ) async -> AtlasVaultPrivateMutationResult
+}
+
+public protocol AtlasVaultPrivateMutationContainmentHosting: Sendable {
+    func containCommittedPrivateMutationFailure() async
+}
+
+public protocol AtlasVaultPrivateSessionBoundary: Sendable {
+    func activatePrivateSession(selectedVault: String) async -> Bool
+
+    @MainActor
+    func hidePrivatePresentation()
+
+    func stopAndDrainPrivateSession() async
+}
+
+public struct AtlasNoopVaultPrivateSessionBoundary:
+    AtlasVaultPrivateSessionBoundary,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    public init() {}
+
+    public func activatePrivateSession(selectedVault: String) async -> Bool {
+        true
+    }
+
+    @MainActor
+    public func hidePrivatePresentation() {}
+
+    public func stopAndDrainPrivateSession() async {}
+
+    public var description: String {
+        "AtlasNoopVaultPrivateSessionBoundary(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public final class AtlasVaultPrivateSessionBoundaryBridge:
+    AtlasVaultPrivateSessionBoundary,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private let target = Mutex<
+        (any AtlasVaultPrivateSessionBoundary)?
+    >(nil)
+
+    public init() {}
+
+    @discardableResult
+    public func attach(
+        _ candidate: any AtlasVaultPrivateSessionBoundary
+    ) -> Bool {
+        target.withLock { target in
+            guard target == nil else {
+                return false
+            }
+            target = candidate
+            return true
+        }
+    }
+
+    public func activatePrivateSession(selectedVault: String) async -> Bool {
+        guard let target = target.withLock({ $0 }) else {
+            return false
+        }
+        return await target.activatePrivateSession(
+            selectedVault: selectedVault
+        )
+    }
+
+    @MainActor
+    public func hidePrivatePresentation() {
+        target.withLock { $0 }?.hidePrivatePresentation()
+    }
+
+    public func stopAndDrainPrivateSession() async {
+        guard let target = target.withLock({ $0 }) else {
+            return
+        }
+        await target.stopAndDrainPrivateSession()
+    }
+
+    public var description: String {
+        "AtlasVaultPrivateSessionBoundaryBridge(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 public protocol AtlasVaultUnlockPresentationControllerBuilding: Sendable {
     func makeController(
         selectedVaultID: AtlasSelectedVaultID,
@@ -613,6 +746,8 @@ public struct AtlasVaultProductionHostDependencies:
         any AtlasVaultUnlockPresentationControllerBuilding
     public let unlockCapabilitiesResolver:
         any AtlasVaultUnlockCapabilitiesResolving
+    public let privateSessionBoundary:
+        any AtlasVaultPrivateSessionBoundary
 
     public init(
         publicJobs: any AtlasPublicJobSearching,
@@ -630,7 +765,10 @@ public struct AtlasVaultProductionHostDependencies:
             any AtlasVaultUnlockCapabilitiesResolving =
                 AtlasFixedVaultUnlockCapabilitiesResolver(
                     capabilities: .currentProduction
-                )
+                ),
+        privateSessionBoundary:
+            any AtlasVaultPrivateSessionBoundary =
+                AtlasNoopVaultPrivateSessionBoundary()
     ) {
         self.publicJobs = publicJobs
         self.publicSnapshotRestorer = publicSnapshotRestorer
@@ -642,6 +780,7 @@ public struct AtlasVaultProductionHostDependencies:
         self.unlockCoordinator = unlockCoordinator
         self.unlockControllerBuilder = unlockControllerBuilder
         self.unlockCapabilitiesResolver = unlockCapabilitiesResolver
+        self.privateSessionBoundary = privateSessionBoundary
     }
 
     public var description: String {

@@ -320,6 +320,7 @@ public enum AtlasVaultProductionCompositionError:
     case invalidSearchLimit
     case invalidUnlockTimeout
     case productionCapabilityUnavailable
+    case privateFeatureUnavailable
     case unlockMethodUnavailable
     case startUnavailable
     case stopped
@@ -334,6 +335,8 @@ public enum AtlasVaultProductionCompositionError:
             "invalidUnlockTimeout"
         case .productionCapabilityUnavailable:
             "productionCapabilityUnavailable"
+        case .privateFeatureUnavailable:
+            "privateFeatureUnavailable"
         case .unlockMethodUnavailable:
             "unlockMethodUnavailable"
         case .startUnavailable:
@@ -503,6 +506,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private let creationContext: AtlasLocalVaultCreationContext?
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
+    private let savedSearchContext: AtlasVaultSavedSearchContext?
     private var lifetime: Lifetime = .inactive
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -525,7 +529,8 @@ public final class AtlasVaultProductionCompositionHarness:
             unlockTimeout: unlockTimeout,
             creationContext: nil,
             recoveryExportContext: nil,
-            recoveryImportContext: nil
+            recoveryImportContext: nil,
+            savedSearchContext: nil
         )
     }
 
@@ -545,7 +550,8 @@ public final class AtlasVaultProductionCompositionHarness:
             unlockTimeout: unlockTimeout,
             creationContext: creationContext,
             recoveryExportContext: nil,
-            recoveryImportContext: nil
+            recoveryImportContext: nil,
+            savedSearchContext: nil
         )
     }
 
@@ -557,7 +563,8 @@ public final class AtlasVaultProductionCompositionHarness:
         unlockTimeout: Duration,
         creationContext: AtlasLocalVaultCreationContext?,
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
-        recoveryImportContext: AtlasVaultRecoveryImportContext? = nil
+        recoveryImportContext: AtlasVaultRecoveryImportContext? = nil,
+        savedSearchContext: AtlasVaultSavedSearchContext? = nil
     ) {
         self.host = host
         self.presentationOwner = presentationOwner
@@ -565,6 +572,7 @@ public final class AtlasVaultProductionCompositionHarness:
         self.creationContext = creationContext
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
+        self.savedSearchContext = savedSearchContext
 
         publicShellActions = AtlasLockedPublicShellActions(
             search: { query in
@@ -701,6 +709,8 @@ public final class AtlasVaultProductionCompositionHarness:
         let creationOwner = creationContext?.owner
         let recoveryOwner = recoveryExportContext?.owner
         let recoveryImportOwner = recoveryImportContext?.owner
+        let savedSearchOwner = savedSearchContext?.owner
+        savedSearchOwner?.hidePrivatePresentation()
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
@@ -714,6 +724,9 @@ public final class AtlasVaultProductionCompositionHarness:
                 await recoveryImportOwner.stop()
             }
             let state = await hostState
+            if let savedSearchOwner {
+                await savedSearchOwner.stopAndDrainPrivateSession()
+            }
             _ = await lifecycleStop
             return state
         }
@@ -734,7 +747,8 @@ public final class AtlasVaultProductionCompositionHarness:
             unlockActions: unlockActions,
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
-            recoveryImportContext: recoveryImportContext
+            recoveryImportContext: recoveryImportContext,
+            savedSearchContext: savedSearchContext
         )
     }
 
@@ -764,6 +778,12 @@ public final class AtlasVaultProductionCompositionHarness:
         AtlasVaultRecoveryImportContext?
     {
         recoveryImportContext
+    }
+
+    var savedSearchContextForTesting:
+        AtlasVaultSavedSearchContext?
+    {
+        savedSearchContext
     }
 
     func waitUntilStoppingForTesting() async {
@@ -989,6 +1009,8 @@ public enum AtlasVaultProductionCompositionFactory {
         )
         let unlockControllerBuilder =
             AtlasVaultProductionUnlockPresentationControllerBuilder()
+        let privateSessionBridge =
+            AtlasVaultPrivateSessionBoundaryBridge()
         let hostDependencies = AtlasVaultProductionHostDependencies(
             publicJobs: publicJobs,
             publicSnapshotRestorer: publicSnapshotRestorer,
@@ -999,13 +1021,68 @@ public enum AtlasVaultProductionCompositionFactory {
             presentationOwner: presentationOwner,
             unlockCoordinator: unlockCoordinator,
             unlockControllerBuilder: unlockControllerBuilder,
-            unlockCapabilitiesResolver: unlockCapabilitiesResolver
+            unlockCapabilitiesResolver: unlockCapabilitiesResolver,
+            privateSessionBoundary: privateSessionBridge
         )
         let hostFactory = AtlasVaultProductionHostFactory(
             dependencies: hostDependencies,
             builder: AtlasVaultProductionHostBuilder()
         )
         let host = hostFactory.makeHost()
+        guard
+            let privateMutationHost =
+                host as? any AtlasVaultPrivateMutationHosting,
+            let privateMutationContainmentHost =
+                host as? any AtlasVaultPrivateMutationContainmentHosting
+        else {
+            throw AtlasVaultProductionCompositionError
+                .privateFeatureUnavailable
+        }
+        let savedSearchCoordinator = AtlasVaultSavedSearchCoordinator(
+            environment: AtlasVaultSavedSearchEnvironment(
+                readPrivateState: {
+                    try await runtime.privateState().state
+                },
+                applyPrivateMutation: { request in
+                    await privateMutationHost.applyPrivateMutation(request)
+                },
+                containCommittedPrivateMutationFailure: {
+                    await privateMutationContainmentHost
+                        .containCommittedPrivateMutationFailure()
+                },
+                timestamp: {
+                    let formatter = ISO8601DateFormatter()
+                    formatter.formatOptions = [.withInternetDateTime]
+                    return formatter.string(from: Date())
+                }
+            )
+        )
+        let savedSearchOwner =
+            AtlasVaultSavedSearchPresentationOwner(
+                coordinator: savedSearchCoordinator
+            )
+        guard privateSessionBridge.attach(savedSearchOwner) else {
+            throw AtlasVaultProductionCompositionError
+                .privateFeatureUnavailable
+        }
+        let savedSearchActions = AtlasVaultSavedSearchActions(
+            create: { [weak savedSearchOwner] draft in
+                await savedSearchOwner?.create(draft)
+            },
+            delete: { [weak savedSearchOwner] identifier in
+                await savedSearchOwner?.delete(
+                    presentationID: identifier
+                )
+            },
+            lock: { [weak savedSearchOwner] in
+                await savedSearchOwner?.beginLocking()
+                _ = await host.lock()
+            }
+        )
+        let savedSearchContext = AtlasVaultSavedSearchContext(
+            owner: savedSearchOwner,
+            actions: savedSearchActions
+        )
         let vaultKeyCreator = AtlasKeychainVaultKeyStore(
             client: keychainClient
         )
@@ -1246,11 +1323,15 @@ public enum AtlasVaultProductionCompositionFactory {
             eventObserver: { event in
                 switch event {
                 case .willTerminate:
+                    await savedSearchOwner
+                        .stopAndDrainPrivateSession()
                     await recoveryOwner.stop()
                     await recoveryImportOwner.stop()
                 case .willResignActive,
                      .didEnterBackground,
                      .protectedDataBecameUnavailable:
+                    await savedSearchOwner
+                        .hidePrivatePresentation()
                     await recoveryOwner.dismissForUnsafeLifecycle()
                     await recoveryImportOwner
                         .dismissForUnsafeLifecycle()
@@ -1268,7 +1349,8 @@ public enum AtlasVaultProductionCompositionFactory {
             unlockTimeout: configuration.unlockTimeout,
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
-            recoveryImportContext: recoveryImportContext
+            recoveryImportContext: recoveryImportContext,
+            savedSearchContext: savedSearchContext
         )
     }
 }

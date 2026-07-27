@@ -8,6 +8,52 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_QUERY_DO_NOT_LOG"
     private static let fakeURL = URL(string: "https://example.invalid")!
 
+    func testProductionCompositionBuildsOneSavedSearchPrivateAuthority()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "savedSearchContext",
+            "AtlasVaultPrivateSessionBoundaryBridge",
+            "AtlasVaultPrivateMutationHosting",
+            "AtlasVaultPrivateMutationContainmentHosting",
+            "AtlasVaultSavedSearchCoordinator",
+            "AtlasVaultSavedSearchPresentationOwner",
+            "AtlasVaultSavedSearchActions",
+            "containCommittedPrivateMutationFailure",
+            "privateState()",
+            "attach",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        let savedSearchStart = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchCoordinator = "
+                    + "AtlasVaultSavedSearchCoordinator("
+            )
+        )
+        let savedSearchEnd = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchOwner =",
+                range: savedSearchStart.upperBound..<source.endIndex
+            )
+        )
+        let savedSearchAssembly = String(
+            source[
+                savedSearchStart.lowerBound..<savedSearchEnd.lowerBound
+            ]
+        )
+        XCTAssertTrue(
+            savedSearchAssembly.contains(
+                "containCommittedPrivateMutationFailure"
+            )
+        )
+        XCTAssertFalse(savedSearchAssembly.contains("host.lock()"))
+    }
+
     func testProductionCompositionSharesImportAndRecoveryUnlockAuthority()
         throws
     {
@@ -1608,7 +1654,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         let recoveryContext = try XCTUnwrap(
             harness.recoveryExportContextForTesting
         )
+        let savedSearchContext = try XCTUnwrap(
+            harness.savedSearchContextForTesting
+        )
         XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
+        XCTAssertEqual(savedSearchContext.owner.status, .hidden)
+        XCTAssertTrue(savedSearchContext.owner.items.isEmpty)
         _ = harness.makeRootView()
         _ = harness.makeRootView()
         XCTAssertTrue(
@@ -1616,6 +1667,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
                 === harness.recoveryExportContextForTesting?.owner
         )
         XCTAssertEqual(recoveryContext.owner.presentation, .hidden)
+        XCTAssertTrue(
+            savedSearchContext.owner
+                === harness.savedSearchContextForTesting?.owner
+        )
+        XCTAssertEqual(savedSearchContext.owner.status, .hidden)
+        XCTAssertTrue(savedSearchContext.owner.items.isEmpty)
     }
 
     @MainActor
