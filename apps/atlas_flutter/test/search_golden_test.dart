@@ -156,7 +156,13 @@ void main() {
 
     await _pumpFilterSheetGolden(tester, controller);
 
-    expect(controller.filters.countryISO3, 'JPN');
+    final countryField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'Country',
+      ),
+    );
+    expect(countryField.controller?.text, 'JPN');
     expect(find.text('Location'), findsOneWidget);
     expect(find.text('Apply filters'), findsOneWidget);
   });
@@ -172,7 +178,13 @@ void main() {
 
     await _pumpFilterSheetGolden(tester, controller);
 
-    expect(controller.filters.city, 'Tokyo');
+    final cityField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'City',
+      ),
+    );
+    expect(cityField.controller?.text, 'Tokyo');
     expect(find.text('Location'), findsOneWidget);
     expect(find.text('Apply filters'), findsOneWidget);
   });
