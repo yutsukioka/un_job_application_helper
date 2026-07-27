@@ -64,22 +64,38 @@ void main() {
   });
 
   test('wrong passphrase and tampered v1 wrap fail closed', () async {
-    final tamperedJson = _clone(wrap.toJson());
-    final ciphertext = base64Decode(tamperedJson['ciphertext']! as String)
+    final tamperedCiphertext = _clone(wrap.toJson());
+    final ciphertext = base64Decode(tamperedCiphertext['ciphertext']! as String)
       ..[0] ^= 0x01;
-    tamperedJson['ciphertext'] = base64Encode(ciphertext);
+    tamperedCiphertext['ciphertext'] = base64Encode(ciphertext);
+    final tamperedNonce = _clone(wrap.toJson());
+    final nonce = base64Decode(tamperedNonce['nonce']! as String)..[0] ^= 0x01;
+    tamperedNonce['nonce'] = base64Encode(nonce);
+    final tamperedSalt = _clone(wrap.toJson());
+    final kdf = atlasVaultObject(tamperedSalt['kdf']);
+    final salt = base64Decode(kdf['salt']! as String)..[0] ^= 0x01;
+    kdf['salt'] = base64Encode(salt);
+    final changedIterations = _clone(wrap.toJson());
+    atlasVaultObject(changedIterations['kdf'])['iterations'] = 1;
 
     await expectLater(
       unwrapAtlasVaultPassphraseWrapV1(wrap: wrap, passphrase: wrongPassphrase),
       throwsA(isA<AtlasVaultCryptoException>()),
     );
-    await expectLater(
-      unwrapAtlasVaultPassphraseWrapV1(
-        wrap: AtlasVaultPassphraseKeyWrapV1.fromJson(tamperedJson),
-        passphrase: passphrase,
-      ),
-      throwsA(isA<AtlasVaultCryptoException>()),
-    );
+    for (final invalid in <Map<String, Object?>>[
+      tamperedCiphertext,
+      tamperedNonce,
+      tamperedSalt,
+      changedIterations,
+    ]) {
+      await expectLater(
+        unwrapAtlasVaultPassphraseWrapV1(
+          wrap: AtlasVaultPassphraseKeyWrapV1.fromJson(invalid),
+          passphrase: passphrase,
+        ),
+        throwsA(isA<AtlasVaultCryptoException>()),
+      );
+    }
   });
 
   test('serialized v1 metadata contains no passphrase or raw vault key', () {

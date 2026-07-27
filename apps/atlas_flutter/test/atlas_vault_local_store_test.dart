@@ -76,6 +76,9 @@ void main() {
     final badNonce = _clone(localStore);
     atlasVaultObject(atlasVaultList(badNonce['records']).single)['nonce'] =
         'AA==';
+    final shortTag = _clone(localStore);
+    atlasVaultObject(atlasVaultList(shortTag['records']).single)['ciphertext'] =
+        base64Encode(List<int>.filled(15, 0));
 
     expect(
       () => AtlasVaultLocalStore.fromJson(unknown),
@@ -83,6 +86,10 @@ void main() {
     );
     expect(
       () => AtlasVaultLocalStore.fromJson(badNonce),
+      throwsA(isA<AtlasVaultFormatException>()),
+    );
+    expect(
+      () => AtlasVaultLocalStore.fromJson(shortTag),
       throwsA(isA<AtlasVaultFormatException>()),
     );
   });

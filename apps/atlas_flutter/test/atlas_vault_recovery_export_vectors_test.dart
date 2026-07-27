@@ -54,6 +54,8 @@ void main() {
       final canonical = vector['canonical_recovery_text']! as String;
       final wrongChecksum = '${canonical.substring(0, canonical.length - 1)}A';
       final invalidAlphabet = canonical.replaceFirst('A', '0', 6);
+      final ambiguousOne = canonical.replaceFirst('A', '1', 6);
+      final ambiguousEight = canonical.replaceFirst('A', '8', 6);
       final unsupportedPrefix = canonical.replaceFirst('AVRK1', 'AVRK2');
       final padded = '$canonical=';
       final unusedBitAlias = '${canonical.substring(0, canonical.length - 1)}R';
@@ -61,6 +63,8 @@ void main() {
       for (final invalid in <String>[
         wrongChecksum,
         invalidAlphabet,
+        ambiguousOne,
+        ambiguousEight,
         unsupportedPrefix,
         padded,
         unusedBitAlias,
@@ -109,6 +113,11 @@ void main() {
     );
     final changedNonce = _tamperBase64(wrap.toJson(), 'nonce');
     final changedCiphertext = _tamperBase64(wrap.toJson(), 'ciphertext');
+    final changedTag = _tamperBase64(
+      wrap.toJson(),
+      'ciphertext',
+      fromEnd: true,
+    );
 
     final attempts = <Future<Uint8List>>[
       unwrapAtlasVaultRecoveryWrapV2(
@@ -136,11 +145,31 @@ void main() {
         recoveryKey: recoveryKey,
         vaultId: vaultId,
       ),
+      unwrapAtlasVaultRecoveryWrapV2(
+        wrap: AtlasVaultRecoveryKeyWrapV2.fromJson(changedTag),
+        recoveryKey: recoveryKey,
+        vaultId: vaultId,
+      ),
     ];
 
     for (final attempt in attempts) {
       await expectLater(attempt, throwsA(isA<AtlasVaultCryptoException>()));
     }
+  });
+
+  test('recovery v2 rejects changed fixed identity and KDF info', () {
+    final changedId = _clone(wrap.toJson())..['id'] = 'other-recovery-wrap';
+    final changedInfo = _clone(wrap.toJson());
+    atlasVaultObject(changedInfo['kdf'])['info'] = 'other-info';
+
+    expect(
+      () => AtlasVaultRecoveryKeyWrapV2.fromJson(changedId),
+      throwsA(isA<AtlasVaultFormatException>()),
+    );
+    expect(
+      () => AtlasVaultRecoveryKeyWrapV2.fromJson(changedInfo),
+      throwsA(isA<AtlasVaultFormatException>()),
+    );
   });
 
   test('canonical encrypted export bytes and SHA-256 match exactly', () async {
@@ -218,9 +247,14 @@ void main() {
   );
 }
 
-Map<String, Object?> _tamperBase64(Map<String, Object?> source, String field) {
+Map<String, Object?> _tamperBase64(
+  Map<String, Object?> source,
+  String field, {
+  bool fromEnd = false,
+}) {
   final result = _clone(source);
-  final bytes = base64Decode(result[field]! as String)..[0] ^= 0x01;
+  final bytes = base64Decode(result[field]! as String);
+  bytes[fromEnd ? bytes.length - 1 : 0] ^= 0x01;
   result[field] = base64Encode(bytes);
   return result;
 }

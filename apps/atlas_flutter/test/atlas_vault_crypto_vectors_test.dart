@@ -61,6 +61,12 @@ void main() {
   test('wrong keys, AAD changes, nonce changes, and ciphertext fail', () async {
     final wrongKey = Uint8List.fromList(vaultKey)..[0] ^= 0xff;
     final wrongRecordId = _clone(recordJson)..['id'] = 'different-record';
+    final wrongRevision = _clone(recordJson)
+      ..['revision'] = 'different-revision';
+    final wrongParent = _clone(recordJson)
+      ..['parent_revision'] = 'different-parent';
+    final wrongDeleted = _clone(recordJson)..['deleted'] = true;
+    final wrongKeyId = _clone(recordJson)..['key_id'] = 'different-key';
     final wrongNonce = _tamperBase64(recordJson, 'nonce', 0);
     final wrongCiphertext = _tamperBase64(recordJson, 'ciphertext', 0);
     final wrongTag = _tamperBase64(
@@ -84,6 +90,26 @@ void main() {
         vaultKey: vaultKey,
         vaultId: vaultId,
         record: AtlasVaultEncryptedRecord.fromJson(wrongRecordId),
+      ),
+      openAtlasVaultRecord(
+        vaultKey: vaultKey,
+        vaultId: vaultId,
+        record: AtlasVaultEncryptedRecord.fromJson(wrongRevision),
+      ),
+      openAtlasVaultRecord(
+        vaultKey: vaultKey,
+        vaultId: vaultId,
+        record: AtlasVaultEncryptedRecord.fromJson(wrongParent),
+      ),
+      openAtlasVaultRecord(
+        vaultKey: vaultKey,
+        vaultId: vaultId,
+        record: AtlasVaultEncryptedRecord.fromJson(wrongDeleted),
+      ),
+      openAtlasVaultRecord(
+        vaultKey: vaultKey,
+        vaultId: vaultId,
+        record: AtlasVaultEncryptedRecord.fromJson(wrongKeyId),
       ),
       openAtlasVaultRecord(
         vaultKey: vaultKey,
