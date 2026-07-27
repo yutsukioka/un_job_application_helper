@@ -14,6 +14,8 @@ final class AtlasLockedPublicShellTests: XCTestCase {
         XCTAssertEqual(model.vaultStatus, .locked)
         XCTAssertEqual(model.publicJobs, [fakeJob()])
         XCTAssertTrue(model.canRequestUnlock)
+        XCTAssertEqual(model.searchOrigin, .manual)
+        XCTAssertFalse(model.hasAdditionalCriteria)
         for privateMember in [
             "savedSearches",
             "savedJobs",
@@ -47,6 +49,39 @@ final class AtlasLockedPublicShellTests: XCTestCase {
     func testSearchingModelRejectsAnotherSearchSubmission() {
         XCTAssertTrue(makeModel(isSearching: false).permitsSearchSubmission)
         XCTAssertFalse(makeModel(isSearching: true).permitsSearchSubmission)
+    }
+
+    func testSavedSearchOriginIsFixedPublicStateWithoutFilterRetention() {
+        let model = AtlasLockedPublicShellModel(
+            vaultStatus: .locked,
+            serviceStatus: .available,
+            cacheFreshness: .current,
+            searchQuery: "public query",
+            publicJobs: [fakeJob()],
+            isSearching: false,
+            canRequestUnlock: true,
+            searchOrigin: .savedSearchHandoff,
+            hasAdditionalCriteria: true
+        )
+        let memberNames = Set(
+            Mirror(reflecting: model).children.compactMap(\.label)
+        )
+
+        XCTAssertEqual(model.searchOrigin, .savedSearchHandoff)
+        XCTAssertTrue(model.hasAdditionalCriteria)
+        for forbidden in [
+            "organizations",
+            "countriesISO3",
+            "gradeCodes",
+            "recordID",
+            "savedSearchName",
+        ] {
+            XCTAssertFalse(memberNames.contains(forbidden), forbidden)
+        }
+        XCTAssertEqual(
+            AtlasPublicJobSearchOrigin.savedSearchHandoff.description,
+            "savedSearchHandoff"
+        )
     }
 
     func testLockedModelSourceIsNotCodable() throws {
@@ -246,6 +281,17 @@ final class AtlasLockedPublicShellTests: XCTestCase {
 
         XCTAssertFalse(source.contains("AtlasRootView"))
         XCTAssertFalse(source.contains("refreshSidebarData"))
+    }
+
+    func testViewShowsOnlyFixedSavedCriteriaIndicator() throws {
+        let source = try source(named: "AtlasLockedPublicShellView.swift")
+
+        XCTAssertTrue(source.contains("Saved search criteria applied"))
+        XCTAssertTrue(source.contains("searchOrigin"))
+        XCTAssertFalse(source.contains("savedSearchName"))
+        XCTAssertFalse(source.contains("recordID"))
+        XCTAssertFalse(source.contains("organizations"))
+        XCTAssertFalse(source.contains("countriesISO3"))
     }
 
     func testViewSourceDoesNotReferenceLegacyPrivatePanelsOrRoutes() throws {

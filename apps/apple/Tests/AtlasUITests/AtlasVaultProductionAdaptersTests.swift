@@ -272,6 +272,65 @@ final class AtlasVaultProductionAdaptersTests: XCTestCase {
         XCTAssertEqual(counts, .init(search: 1))
     }
 
+    func testSavedSearchHandoffForwardsEveryValidatedPublicCriterion()
+        async throws
+    {
+        let response = try makeSearchResponse(
+            jobs: [
+                makeJob(
+                    id: Self.publicJobID,
+                    title: "Public Filtered Role",
+                    organization: "UNDP",
+                    location: "Tokyo, Japan"
+                ),
+            ],
+            total: 1,
+            limit: 40,
+            offset: 0
+        )
+        let client = RecordingPublicJobClient(searchResponses: [response])
+        let adapter = AtlasAPIClientPublicJobAdapter(client: client)
+        let saved = AtlasSearchRequest(
+            text: "climate",
+            status: ["open"],
+            organizations: ["UNDP"],
+            sourceIDs: ["undp"],
+            cities: ["Tokyo"],
+            countriesISO3: ["JPN"],
+            nationalInternational: ["international"],
+            gradeCodes: ["P3"],
+            ccogFamilies: ["Programme Management"],
+            capabilityTags: ["policy"],
+            contractGroups: ["staff"],
+            seniorityGroups: ["professional"],
+            workModalities: ["hybrid"],
+            volunteerKinds: ["specialist"],
+            unvCategories: ["international"],
+            unvVolunteerTypes: ["expert"],
+            closingDateTo: "2026-12-31",
+            includeLowConfidence: false,
+            includeFacets: true,
+            limit: 75,
+            offset: 19,
+            sort: "closing_date_asc"
+        )
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: saved,
+            maximumLimit: 40
+        )
+
+        _ = try await adapter.search(request)
+
+        var expected = saved
+        expected.includeFacets = false
+        expected.limit = 40
+        expected.offset = 0
+        let forwarded = await client.lastSearchRequest()
+        XCTAssertEqual(forwarded, expected)
+        XCTAssertEqual(request.origin, .savedSearchHandoff)
+        XCTAssertTrue(request.hasAdditionalCriteria)
+    }
+
     func testSearchRowsNormalizeMachineOrganizationsWithSharedCandidateProjection()
         async throws
     {

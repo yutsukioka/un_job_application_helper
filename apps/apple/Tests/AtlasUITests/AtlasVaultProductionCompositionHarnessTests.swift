@@ -20,10 +20,16 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "AtlasVaultPrivateSessionBoundaryBridge",
             "AtlasVaultPrivateMutationHosting",
             "AtlasVaultPrivateMutationContainmentHosting",
+            "AtlasVaultSavedSearchPublicHandoffHosting",
             "AtlasVaultSavedSearchCoordinator",
+            "AtlasVaultSavedSearchPublicHandoffCoordinator",
             "AtlasVaultSavedSearchPresentationOwner",
             "AtlasVaultSavedSearchActions",
             "containCommittedPrivateMutationFailure",
+            "performSavedSearchPublicHandoff",
+            "publicSearchRequest",
+            "beginPublicSearchHandoff",
+            "completePublicSearchHandoff",
             "privateState()",
             "attach",
         ] {
@@ -52,6 +58,47 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             )
         )
         XCTAssertFalse(savedSearchAssembly.contains("host.lock()"))
+    }
+
+    func testSavedSearchHandoffIsHarnessOwnedAndDrainedAtStop()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let ownerStart = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchOwner ="
+            )
+        )
+        let actionsEnd = try XCTUnwrap(
+            source.range(
+                of: "let savedSearchContext =",
+                range: ownerStart.upperBound..<source.endIndex
+            )
+        )
+        let orchestration = String(
+            source[ownerStart.lowerBound..<actionsEnd.lowerBound]
+        )
+
+        XCTAssertTrue(
+            orchestration.contains(
+                "AtlasVaultSavedSearchPublicHandoffCoordinator"
+            )
+        )
+        XCTAssertTrue(
+            orchestration.contains("beginPublicSearchHandoff")
+        )
+        XCTAssertTrue(
+            orchestration.contains("publicSearchRequest")
+        )
+        XCTAssertTrue(
+            orchestration.contains("completePublicSearchHandoff")
+        )
+        XCTAssertFalse(orchestration.contains("host.lock()"))
+        XCTAssertTrue(
+            source.contains("savedSearchHandoffCoordinator.stop()")
+        )
     }
 
     func testProductionCompositionSharesImportAndRecoveryUnlockAuthority()
@@ -1502,6 +1549,8 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         XCTAssertEqual(request.query, Self.fakeQuery)
         XCTAssertEqual(request.limit, 37)
         XCTAssertEqual(request.offset, 0)
+        XCTAssertEqual(request.origin, .manual)
+        XCTAssertFalse(request.hasAdditionalCriteria)
         await harnessExpectEqual(await host.searchCallCount(), 1)
 
         await harness.publicShellActions.requestUnlock()

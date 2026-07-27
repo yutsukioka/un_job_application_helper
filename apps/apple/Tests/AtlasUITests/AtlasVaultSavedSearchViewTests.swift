@@ -449,7 +449,80 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
         XCTAssertEqual(calls.filter { $0 == "stop" }.count, 1)
     }
 
-    func testActionsCarryOnlyDraftOpaqueIDAndLockCommands() async {
+    func testExecutionClaimPreservesOnPreparationFailureAndHidesOnCompletion()
+        async
+    {
+        let snapshot = Self.snapshot(name: "Execute")
+        let coordinator = SavedSearchViewCoordinatorFake(
+            activationSnapshot: snapshot
+        )
+        let owner = AtlasVaultSavedSearchPresentationOwner(
+            coordinator: coordinator
+        )
+        let firstActivation = await owner.activatePrivateSession(
+            selectedVault:
+                "00000000-0000-4000-8000-000000000063"
+        )
+        XCTAssertTrue(firstActivation)
+
+        let failedClaim = try XCTUnwrap(
+            owner.beginPublicSearchHandoff()
+        )
+        XCTAssertEqual(owner.status, .handoffPreparing)
+        XCTAssertEqual(owner.items, snapshot.searches)
+        owner.failPublicSearchHandoff(failedClaim)
+        XCTAssertEqual(owner.status, .handoffFailed)
+        XCTAssertEqual(owner.items, snapshot.searches)
+
+        let completedClaim = try XCTUnwrap(
+            owner.beginPublicSearchHandoff()
+        )
+        XCTAssertTrue(
+            owner.completePublicSearchHandoff(completedClaim)
+        )
+        XCTAssertEqual(owner.status, .hidden)
+        XCTAssertTrue(owner.items.isEmpty)
+        XCTAssertFalse(
+            owner.completePublicSearchHandoff(failedClaim)
+        )
+
+        let secondActivation = await owner.activatePrivateSession(
+            selectedVault:
+                "00000000-0000-4000-8000-000000000063"
+        )
+        XCTAssertTrue(secondActivation)
+        let staleClaim = try XCTUnwrap(
+            owner.beginPublicSearchHandoff()
+        )
+        owner.hidePrivatePresentation()
+        XCTAssertFalse(
+            owner.completePublicSearchHandoff(staleClaim)
+        )
+        XCTAssertEqual(owner.status, .hidden)
+        XCTAssertTrue(owner.items.isEmpty)
+    }
+
+    func testViewRequiresExplicitRunAndLockConfirmation() throws {
+        let source = try requiredSource(
+            named: "AtlasVaultSavedSearchView.swift"
+        )
+
+        for required in [
+            "Run Search",
+            "Run Saved Search and Lock Vault?",
+            "Run & Lock",
+            "vault locks first",
+            "configured public job service",
+            "handoffPreparing",
+            "handoffFailed",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(source.contains(".task"))
+        XCTAssertFalse(source.contains(".onAppear"))
+    }
+
+    func testActionsCarryOnlyDraftOpaqueIDExecuteAndLockCommands() async {
         let recorder = SavedSearchViewActionRecorder()
         let actions = AtlasVaultSavedSearchActions(
             create: { draft in
@@ -460,6 +533,9 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
             },
             delete: { identifier in
                 await recorder.recordDelete(identifier)
+            },
+            execute: { identifier in
+                await recorder.recordExecute(identifier)
             },
             lock: {
                 await recorder.recordLock()
@@ -481,12 +557,14 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
             )
         )
         await actions.delete(presentation.id)
+        await actions.execute(presentation.id)
         await actions.lock()
 
         let counts = await recorder.counts()
         XCTAssertEqual(counts.creates, 1)
         XCTAssertEqual(counts.updates, 1)
         XCTAssertEqual(counts.deletes, 1)
+        XCTAssertEqual(counts.executes, 1)
         XCTAssertEqual(counts.locks, 1)
     }
 
@@ -628,6 +706,17 @@ private actor SavedSearchViewCoordinatorFake:
         return updateResults.removeFirst()
     }
 
+    func publicSearchRequest(
+        presentationID: AtlasVaultPresentationID,
+        maximumLimit: Int
+    ) async throws -> AtlasPublicJobSearchRequest {
+        try AtlasPublicJobSearchRequest(
+            query: "public",
+            limit: maximumLimit,
+            offset: 0
+        )
+    }
+
     func stop() {
         recordedCalls.append("stop")
     }
@@ -715,6 +804,7 @@ private actor SavedSearchViewActionRecorder {
     private var creates = 0
     private var updates = 0
     private var deletes = 0
+    private var executes = 0
     private var locks = 0
 
     func recordCreate(_ draft: AtlasVaultSavedSearchDraft) {
@@ -732,6 +822,10 @@ private actor SavedSearchViewActionRecorder {
         updates += 1
     }
 
+    func recordExecute(_ identifier: AtlasVaultPresentationID) {
+        executes += 1
+    }
+
     func recordLock() {
         locks += 1
     }
@@ -740,8 +834,9 @@ private actor SavedSearchViewActionRecorder {
         creates: Int,
         updates: Int,
         deletes: Int,
+        executes: Int,
         locks: Int
     ) {
-        (creates, updates, deletes, locks)
+        (creates, updates, deletes, executes, locks)
     }
 }

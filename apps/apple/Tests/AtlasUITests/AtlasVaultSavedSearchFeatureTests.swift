@@ -902,6 +902,200 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
         }
     }
 
+    func testPublicSearchRequestPreservesValidatedCriteriaAndRedactsMetadata()
+        async throws
+    {
+        let savedRequest = AtlasSearchRequest(
+            text: "climate policy",
+            status: ["open"],
+            organizations: ["UNDP"],
+            sourceIDs: ["undp"],
+            cities: ["Tokyo"],
+            countriesISO3: ["JPN"],
+            nationalInternational: ["international"],
+            gradeCodes: ["P3"],
+            ccogFamilies: ["Programme Management"],
+            capabilityTags: ["policy"],
+            contractGroups: ["staff"],
+            seniorityGroups: ["professional"],
+            workModalities: ["hybrid"],
+            volunteerKinds: ["specialist"],
+            unvCategories: ["international"],
+            unvVolunteerTypes: ["expert"],
+            closingDateTo: "2026-12-31",
+            includeLowConfidence: false,
+            includeFacets: true,
+            limit: 75,
+            offset: 25,
+            sort: "closing_date_asc"
+        )
+        let record = makeSavedSearch(
+            id: "PRIVATE_RECORD_ID_MUST_NOT_CROSS",
+            name: "PRIVATE_NAME_MUST_NOT_CROSS",
+            text: "climate policy",
+            request: savedRequest
+        )
+        let environment = SavedSearchEnvironmentFake(
+            reads: [
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [record])
+                ),
+            ]
+        )
+        let coordinator = makeCoordinator(environment)
+        let snapshot = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        let identifier = try XCTUnwrap(snapshot.searches.first?.id)
+
+        let request = try await coordinator.publicSearchRequest(
+            presentationID: identifier,
+            maximumLimit: 60
+        )
+
+        XCTAssertEqual(request.origin, .savedSearchHandoff)
+        XCTAssertTrue(request.hasAdditionalCriteria)
+        XCTAssertEqual(request.query, "climate policy")
+        XCTAssertEqual(request.limit, 60)
+        XCTAssertEqual(request.offset, 0)
+        var expected = savedRequest
+        expected.includeFacets = false
+        expected.limit = 60
+        expected.offset = 0
+        XCTAssertEqual(request.apiRequest, expected)
+        let rendered = [
+            request.description,
+            request.debugDescription,
+        ].joined(separator: "\n")
+        XCTAssertFalse(rendered.contains("PRIVATE_NAME_MUST_NOT_CROSS"))
+        XCTAssertFalse(rendered.contains("PRIVATE_RECORD_ID_MUST_NOT_CROSS"))
+        XCTAssertFalse(rendered.contains(Self.selectedVault))
+
+        _ = try await coordinator.activate(
+            selectedVault: Self.selectedVault
+        )
+        do {
+            _ = try await coordinator.publicSearchRequest(
+                presentationID: identifier,
+                maximumLimit: 60
+            )
+            XCTFail("A prior unlock generation ID was accepted")
+        } catch {
+            XCTAssertEqual(
+                error as? AtlasVaultSavedSearchFailure,
+                .unavailable
+            )
+        }
+        let mutationCount = await environment.mutationCount()
+        XCTAssertEqual(mutationCount, 0)
+    }
+
+    func testSavedSearchPublicRequestRejectsUnsupportedCriteriaBeforeHandoff()
+        throws
+    {
+        let valid = AtlasSearchRequest(
+            text: "policy",
+            organizations: ["UNDP"],
+            closingDateTo: "2026-12-31",
+            limit: 50,
+            offset: 4
+        )
+        XCTAssertNoThrow(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 25
+            )
+        )
+
+        var invalidRequests: [AtlasSearchRequest] = []
+        var invalid = valid
+        invalid.status = ["closed"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.includeLowConfidence = true
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.sort = "relevance"
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.limit = 0
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.offset = -1
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.text = "line\nbreak"
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.organizations = [" UNDP"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.organizations = ["UNDP", "UNDP"]
+        invalidRequests.append(invalid)
+        invalid = valid
+        invalid.closingDateTo = "2026-02-30"
+        invalidRequests.append(invalid)
+
+        for request in invalidRequests {
+            XCTAssertThrowsError(
+                try AtlasPublicJobSearchRequest(
+                    validatingSavedSearch: request,
+                    maximumLimit: 25
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? AtlasPublicJobServiceError,
+                    .invalidRequest
+                )
+            }
+        }
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 0
+            )
+        )
+        XCTAssertThrowsError(
+            try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: valid,
+                maximumLimit: 201
+            )
+        )
+    }
+
+    func testPublicHandoffCoordinatorRetainsOneCallerIndependentOperation()
+        async throws
+    {
+        let gate = SavedSearchSuspensionGate()
+        let host = SavedSearchPublicHandoffHostFake(gate: gate)
+        let coordinator = AtlasVaultSavedSearchPublicHandoffCoordinator(
+            host: host
+        )
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(text: "policy"),
+            maximumLimit: 25
+        )
+
+        let first = Task {
+            await coordinator.perform(request)
+        }
+        await gate.waitUntilEntered()
+        first.cancel()
+        let duplicate = await coordinator.perform(request)
+        XCTAssertEqual(duplicate, .cancelled)
+        let callsWhileSuspended = await host.callCount()
+        XCTAssertEqual(callsWhileSuspended, 1)
+
+        await gate.release()
+        let completed = await first.value
+        XCTAssertEqual(completed, .completed)
+        let recordedRequest = await host.lastRequest()
+        XCTAssertEqual(recordedRequest, request)
+        await coordinator.stop()
+        let finalCalls = await host.callCount()
+        XCTAssertEqual(finalCalls, 1)
+    }
+
     func testConcurrentCreateDoesNotDuplicateMutation() async throws {
         let created = makeSavedSearch(
             id: "single",
@@ -1163,6 +1357,35 @@ private actor SavedSearchSuspensionGate {
         for waiter in releaseWaiters {
             waiter.resume()
         }
+    }
+}
+
+private actor SavedSearchPublicHandoffHostFake:
+    AtlasVaultSavedSearchPublicHandoffHosting
+{
+    private let gate: SavedSearchSuspensionGate
+    private var calls = 0
+    private var request: AtlasPublicJobSearchRequest?
+
+    init(gate: SavedSearchSuspensionGate) {
+        self.gate = gate
+    }
+
+    func performSavedSearchPublicHandoff(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasVaultSavedSearchPublicHandoffResult {
+        calls += 1
+        self.request = request
+        await gate.wait()
+        return .completed
+    }
+
+    func callCount() -> Int {
+        calls
+    }
+
+    func lastRequest() -> AtlasPublicJobSearchRequest? {
+        request
     }
 }
 

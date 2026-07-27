@@ -356,6 +356,60 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         XCTAssertFalse(finalText.contains("RECOVERY_SESSION_PRIVATE_QUERY"))
     }
 
+    func testExplicitSavedSearchExecutionLocksBeforePublicHandoff()
+        async throws
+    {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keychain = PrivateSearchE2EKeychainClient()
+        let directory = PrivateSearchE2EDirectoryLocator(root: root)
+        let timestamps = PrivateSearchE2ETimestampProvider()
+        let publicJobs = PrivateSearchE2EPublicJobs()
+        let harness = try makeHarness(
+            keychain: keychain,
+            directory: directory,
+            savedSearchTimestamps: timestamps,
+            publicJobs: publicJobs
+        )
+        _ = try await createAndUnlock(
+            with: harness,
+            keychain: keychain
+        )
+        let context = try XCTUnwrap(
+            harness.savedSearchContextForTesting
+        )
+        await context.actions.create(
+            AtlasVaultSavedSearchDraft(
+                name: "PRIVATE_HANDOFF_NAME",
+                searchText: "public handoff terms"
+            )
+        )
+        let identifier = try XCTUnwrap(context.owner.items.first?.id)
+        let callsBeforeHandoff = await publicJobs.searchCallCount()
+
+        await context.actions.execute(identifier)
+
+        XCTAssertEqual(context.owner.status, .hidden)
+        XCTAssertTrue(context.owner.items.isEmpty)
+        let flow = harness.presentationOwner.flowState
+        XCTAssertEqual(flow.mode, .lockedPublic)
+        XCTAssertEqual(
+            flow.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        let callsAfterHandoff = await publicJobs.searchCallCount()
+        XCTAssertEqual(callsAfterHandoff, callsBeforeHandoff + 1)
+        let recordedRequest = await publicJobs.lastSearchRequest()
+        let request = try XCTUnwrap(recordedRequest)
+        XCTAssertEqual(request.query, "public handoff terms")
+        XCTAssertEqual(request.origin, .savedSearchHandoff)
+        XCTAssertFalse(
+            String(reflecting: request)
+                .contains("PRIVATE_HANDOFF_NAME")
+        )
+        _ = await harness.stop()
+    }
+
     func testProductionCompositionContainsPrivateSavedSearchJourney()
         throws
     {
@@ -370,10 +424,19 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
         )
 
         XCTAssertTrue(feature.contains("AtlasVaultCreateMutation"))
+        XCTAssertTrue(feature.contains("publicSearchRequest"))
+        XCTAssertTrue(
+            feature.contains(
+                "AtlasVaultSavedSearchPublicHandoffCoordinator"
+            )
+        )
         XCTAssertTrue(feature.contains("AtlasVaultDeleteMutation"))
         XCTAssertTrue(feature.contains("tombstones"))
         XCTAssertTrue(host.contains("activatePrivateSession"))
         XCTAssertTrue(host.contains("applyPrivateMutation"))
+        XCTAssertTrue(
+            host.contains("performSavedSearchPublicHandoff")
+        )
         XCTAssertTrue(harness.contains("savedSearchContext"))
         XCTAssertTrue(harness.contains("AtlasVaultSavedSearchCoordinator"))
         XCTAssertTrue(
@@ -497,7 +560,9 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
     private func makeHarness(
         keychain: PrivateSearchE2EKeychainClient,
         directory: PrivateSearchE2EDirectoryLocator,
-        savedSearchTimestamps: PrivateSearchE2ETimestampProvider
+        savedSearchTimestamps: PrivateSearchE2ETimestampProvider,
+        publicJobs: PrivateSearchE2EPublicJobs =
+            PrivateSearchE2EPublicJobs()
     ) throws -> AtlasVaultProductionCompositionHarness {
         let time = PrivateSearchE2ELifecycleTime()
         return try AtlasVaultProductionCompositionFactory
@@ -510,7 +575,7 @@ final class AtlasIOSPrivateSavedSearchEndToEndTests: XCTestCase {
                     AtlasFoundationAtomicFileSystemClient(),
                 lifecycleClock: time,
                 lifecycleSleeper: time,
-                publicJobs: PrivateSearchE2EPublicJobs(),
+                publicJobs: publicJobs,
                 publicSnapshotRestorer:
                     PrivateSearchE2EPublicSnapshotRestorer(),
                 savedSearchTimestamp: {
@@ -717,6 +782,8 @@ private final class PrivateSearchE2EDirectoryLocator:
 }
 
 private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
+    private var searchRequests: [AtlasPublicJobSearchRequest] = []
+
     func health() async throws(AtlasPublicJobServiceError)
         -> AtlasPublicServiceHealth
     {
@@ -737,6 +804,7 @@ private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
     ) async throws(AtlasPublicJobServiceError)
         -> AtlasPublicJobSearchResult
     {
+        searchRequests.append(request)
         do {
             return try AtlasPublicJobSearchResult(
                 jobs: [],
@@ -747,6 +815,14 @@ private actor PrivateSearchE2EPublicJobs: AtlasPublicJobSearching {
         } catch {
             throw .invalidResponse
         }
+    }
+
+    func searchCallCount() -> Int {
+        searchRequests.count
+    }
+
+    func lastSearchRequest() -> AtlasPublicJobSearchRequest? {
+        searchRequests.last
     }
 
     func sources() async throws(AtlasPublicJobServiceError)

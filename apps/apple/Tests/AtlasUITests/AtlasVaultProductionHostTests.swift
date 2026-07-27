@@ -520,6 +520,221 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         XCTAssertEqual(runtimeStatus, .locked)
     }
 
+    func testSavedSearchHandoffFullyDrainsAndLocksBeforePublicSearch()
+        async throws
+    {
+        let privateDrainGate = HostSuspensionGate()
+        let runtimeLockGate = HostSuspensionGate()
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "handoff-job",
+                            title: "Handoff Result"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            runtimeLockGate: runtimeLockGate,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: privateDrainGate
+        )
+        try await unlockPrivateSession(graph)
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "climate",
+                organizations: ["UNDP"],
+                countriesISO3: ["JPN"],
+                gradeCodes: ["P3"],
+                seniorityGroups: ["professional"],
+                workModalities: ["hybrid"],
+                limit: 75,
+                offset: 20
+            ),
+            maximumLimit: 25
+        )
+        let handoffHost:
+            any AtlasVaultSavedSearchPublicHandoffHosting = graph.host
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(request)
+        }
+        await privateDrainGate.waitUntilEntered()
+        XCTAssertGreaterThanOrEqual(
+            graph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        XCTAssertEqual(graph.privateSessionBoundary.stopCalls(), 1)
+        let callsBeforeDrain = await graph.publicJobs.totalCalls()
+        let locksBeforeDrain = await graph.runtime.lockCalls()
+        XCTAssertEqual(callsBeforeDrain, 0)
+        XCTAssertEqual(locksBeforeDrain, 0)
+
+        await privateDrainGate.release()
+        await runtimeLockGate.waitUntilEntered()
+        let callsBeforeRuntimeLock = await graph.publicJobs.totalCalls()
+        XCTAssertEqual(callsBeforeRuntimeLock, 0)
+        await runtimeLockGate.release()
+        await graph.publicJobs.waitForTotalCalls(1)
+
+        let handoffResult = await handoff.value
+        XCTAssertEqual(handoffResult, .completed)
+        let runtimeStatus = await graph.runtime.status()
+        XCTAssertEqual(runtimeStatus, .locked)
+        let state = await graph.host.currentFlowState()
+        XCTAssertEqual(state.mode, .lockedPublic)
+        XCTAssertNil(state.unlockPanelState)
+        XCTAssertEqual(
+            state.publicShell.searchOrigin,
+            .savedSearchHandoff
+        )
+        XCTAssertTrue(state.publicShell.hasAdditionalCriteria)
+        let forwarded = await graph.publicJobs.recordedRequests()
+        XCTAssertEqual(forwarded, [request])
+    }
+
+    func testSavedSearchHandoffLockFailureAndTerminalSupersessionCallNoAPI()
+        async throws
+    {
+        let failedLockGraph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "must-not-run",
+                            title: "Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(failedLockGraph)
+        await failedLockGraph.runtime.setLockResult(
+            .failed(.activation(.corruptStore))
+        )
+        let failedLockHost:
+            any AtlasVaultSavedSearchPublicHandoffHosting =
+                failedLockGraph.host
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(text: "safe"),
+            maximumLimit: 25
+        )
+
+        let failed = await failedLockHost
+            .performSavedSearchPublicHandoff(request)
+
+        XCTAssertEqual(failed, .lockFailed)
+        let failedLockCalls = await failedLockGraph.publicJobs.totalCalls()
+        XCTAssertEqual(failedLockCalls, 0)
+        XCTAssertGreaterThanOrEqual(
+            failedLockGraph.privateSessionBoundary.hideCalls(),
+            1
+        )
+        let failedState = await failedLockGraph.host.currentFlowState()
+        XCTAssertNotEqual(failedState.mode, .unlockedTransition)
+
+        let drainGate = HostSuspensionGate()
+        let terminalGraph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "terminal-must-not-run",
+                            title: "Terminal Must Not Run"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked),
+            privateStopGate: drainGate
+        )
+        try await unlockPrivateSession(terminalGraph)
+        let terminalHost:
+            any AtlasVaultSavedSearchPublicHandoffHosting =
+                terminalGraph.host
+        let terminalHandoff = Task {
+            await terminalHost.performSavedSearchPublicHandoff(request)
+        }
+        await drainGate.waitUntilEntered()
+        let stop = Task {
+            await terminalGraph.host.stop()
+        }
+        await drainGate.release()
+        _ = await stop.value
+        let terminalResult = await terminalHandoff.value
+        let terminalCalls = await terminalGraph.publicJobs.totalCalls()
+        XCTAssertEqual(terminalResult, .stopped)
+        XCTAssertEqual(terminalCalls, 0)
+    }
+
+    func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
+        async throws
+    {
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "saved-result",
+                            title: "Saved Result"
+                        )
+                    )
+                ),
+                .init(
+                    result: .success(
+                        try makeSearchResult(
+                            jobID: "manual-result",
+                            title: "Manual Result"
+                        )
+                    )
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasVaultSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved",
+                organizations: ["UNDP"]
+            ),
+            maximumLimit: 25
+        )
+        let handoffResult = await handoffHost
+            .performSavedSearchPublicHandoff(saved)
+        XCTAssertEqual(handoffResult, .completed)
+
+        let manual = try searchRequest(query: "manual")
+        _ = try await graph.host.searchPublicJobs(manual)
+
+        let state = await graph.host.currentFlowState()
+        XCTAssertEqual(state.publicShell.searchOrigin, .manual)
+        XCTAssertFalse(state.publicShell.hasAdditionalCriteria)
+        let requests = await graph.publicJobs.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.last?.origin, .manual)
+        XCTAssertEqual(
+            requests.last?.apiRequest,
+            AtlasSearchRequest(
+                text: "manual",
+                includeFacets: false,
+                limit: 25,
+                offset: 0
+            )
+        )
+    }
+
     func testSelectedVaultUsesDynamicCapabilitiesAndPreservesSnapshot()
         throws
     {
@@ -4872,6 +5087,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
 
     private var plans: [Plan]
     private var searchCalls = 0
+    private var requests: [AtlasPublicJobSearchRequest] = []
     private var cancellationCalls = 0
     private var activeCallIDs: Set<Int> = []
     private var completedCallIDs: Set<Int> = []
@@ -4905,6 +5121,7 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
         -> AtlasPublicJobSearchResult
     {
         searchCalls += 1
+        requests.append(request)
         let callID = searchCalls
         activeCallIDs.insert(callID)
         resumeCallWaiters()
@@ -4958,6 +5175,10 @@ private actor HostPublicJobsFake: AtlasPublicJobSearching {
 
     func totalCalls() -> Int {
         searchCalls
+    }
+
+    func recordedRequests() -> [AtlasPublicJobSearchRequest] {
+        requests
     }
 
     func waitForTotalCalls(_ expectedCount: Int) async {
