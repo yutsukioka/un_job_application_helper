@@ -557,7 +557,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             maximumLimit: 25
         )
         let handoffHost:
-            any AtlasVaultSavedSearchPublicHandoffHosting = graph.host
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
 
         let handoff = Task {
             await handoffHost.performSavedSearchPublicHandoff(request)
@@ -619,7 +619,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             .failed(.activation(.corruptStore))
         )
         let failedLockHost:
-            any AtlasVaultSavedSearchPublicHandoffHosting =
+            any AtlasSavedSearchPublicHandoffHosting =
                 failedLockGraph.host
         let request = try AtlasPublicJobSearchRequest(
             validatingSavedSearch: AtlasSearchRequest(text: "safe"),
@@ -658,7 +658,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
         try await unlockPrivateSession(terminalGraph)
         let terminalHost:
-            any AtlasVaultSavedSearchPublicHandoffHosting =
+            any AtlasSavedSearchPublicHandoffHosting =
                 terminalGraph.host
         let terminalHandoff = Task {
             await terminalHost.performSavedSearchPublicHandoff(request)
@@ -703,7 +703,7 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
         try await unlockPrivateSession(graph)
         let handoffHost:
-            any AtlasVaultSavedSearchPublicHandoffHosting = graph.host
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
         let saved = try AtlasPublicJobSearchRequest(
             validatingSavedSearch: AtlasSearchRequest(
                 text: "saved",
@@ -4399,7 +4399,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
             "AtlasVaultPrivateStateSnapshot",
             "AtlasVaultHydratedState",
             "AtlasVaultPrivatePresentationState",
-            "savedSearch",
             "savedJob",
             "applicationNote",
             "profileSnippet",

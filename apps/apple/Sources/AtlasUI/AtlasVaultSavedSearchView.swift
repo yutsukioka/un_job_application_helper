@@ -12,6 +12,8 @@ public enum AtlasVaultSavedSearchPresentationStatus:
     case saving
     case saveFailed
     case saveDurabilityUnconfirmed
+    case handoffPreparing
+    case handoffFailed
     case locking
     case unavailable
 
@@ -29,11 +31,33 @@ public enum AtlasVaultSavedSearchPresentationStatus:
             "saveFailed"
         case .saveDurabilityUnconfirmed:
             "saveDurabilityUnconfirmed"
+        case .handoffPreparing:
+            "handoffPreparing"
+        case .handoffFailed:
+            "handoffFailed"
         case .locking:
             "locking"
         case .unavailable:
             "unavailable"
         }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+public struct AtlasVaultSavedSearchExecutionClaim:
+    Equatable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    fileprivate let ownerGeneration: UInt64
+    fileprivate let operationIdentifier: UUID
+
+    public var description: String {
+        "AtlasVaultSavedSearchExecutionClaim(<redacted>)"
     }
 
     public var debugDescription: String {
@@ -81,6 +105,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     private var ownerGeneration: UInt64 = 0
     private var activationOperation: ActivationOperation?
     private var mutationOperation: MutationOperation?
+    private var handoffClaim: AtlasVaultSavedSearchExecutionClaim?
 
     public init(
         coordinator: any AtlasVaultSavedSearchCoordinating
@@ -91,6 +116,7 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     public func activatePrivateSession(
         selectedVault: String
     ) async -> Bool {
+        handoffClaim = nil
         let drainGeneration = ownerGeneration
         await cancelAndDrainActivation()
         guard ownerGeneration == drainGeneration else {
@@ -194,7 +220,55 @@ public final class AtlasVaultSavedSearchPresentationOwner:
         }
     }
 
+    public func beginPublicSearchHandoff()
+        -> AtlasVaultSavedSearchExecutionClaim?
+    {
+        guard handoffClaim == nil,
+              activationOperation == nil,
+              mutationOperation == nil,
+              status == .ready
+                || status == .saveFailed
+                || status == .handoffFailed else {
+            return nil
+        }
+        let claim = AtlasVaultSavedSearchExecutionClaim(
+            ownerGeneration: ownerGeneration,
+            operationIdentifier: UUID()
+        )
+        handoffClaim = claim
+        status = .handoffPreparing
+        return claim
+    }
+
+    public func completePublicSearchHandoff(
+        _ claim: AtlasVaultSavedSearchExecutionClaim
+    ) -> Bool {
+        guard handoffClaim == claim,
+              claim.ownerGeneration == ownerGeneration else {
+            return false
+        }
+        handoffClaim = nil
+        ownerGeneration &+= 1
+        activationOperation?.work.cancel()
+        mutationOperation?.work.cancel()
+        items = []
+        status = .hidden
+        return true
+    }
+
+    public func failPublicSearchHandoff(
+        _ claim: AtlasVaultSavedSearchExecutionClaim
+    ) {
+        guard handoffClaim == claim,
+              claim.ownerGeneration == ownerGeneration else {
+            return
+        }
+        handoffClaim = nil
+        status = .handoffFailed
+    }
+
     public func hidePrivatePresentation() {
+        handoffClaim = nil
         ownerGeneration &+= 1
         activationOperation?.work.cancel()
         mutationOperation?.work.cancel()
@@ -227,7 +301,12 @@ public final class AtlasVaultSavedSearchPresentationOwner:
     private var mayBeginMutation: Bool {
         mutationOperation == nil
             && activationOperation == nil
-            && (status == .ready || status == .saveFailed)
+            && handoffClaim == nil
+            && (
+                status == .ready
+                    || status == .saveFailed
+                    || status == .handoffFailed
+            )
     }
 
     private func performMutation(
@@ -323,6 +402,8 @@ public struct AtlasVaultSavedSearchActions: Sendable {
         ) async -> Void
     private let deleteAction:
         @Sendable (AtlasVaultPresentationID) async -> Void
+    private let executeAction:
+        @Sendable (AtlasVaultPresentationID) async -> Void
     private let lockAction: @Sendable () async -> Void
 
     public init(
@@ -339,11 +420,16 @@ public struct AtlasVaultSavedSearchActions: Sendable {
             @escaping @Sendable (
                 AtlasVaultPresentationID
             ) async -> Void,
+        execute:
+            @escaping @Sendable (
+                AtlasVaultPresentationID
+            ) async -> Void = { _ in },
         lock: @escaping @Sendable () async -> Void
     ) {
         createAction = create
         updateAction = update
         deleteAction = delete
+        executeAction = execute
         lockAction = lock
     }
 
@@ -360,6 +446,10 @@ public struct AtlasVaultSavedSearchActions: Sendable {
         draft: AtlasVaultSavedSearchDraft
     ) async {
         await updateAction(id, draft)
+    }
+
+    public func execute(_ id: AtlasVaultPresentationID) async {
+        await executeAction(id)
     }
 
     public func lock() async {
@@ -392,6 +482,10 @@ public struct AtlasVaultSavedSearchView: View {
         let name: String
     }
 
+    private struct RunCandidate {
+        let id: AtlasVaultPresentationID
+    }
+
     @ObservedObject private var owner:
         AtlasVaultSavedSearchPresentationOwner
     private let actions: AtlasVaultSavedSearchActions
@@ -404,6 +498,8 @@ public struct AtlasVaultSavedSearchView: View {
     @State private var isEditPresented = false
     @State private var deleteCandidate: DeleteCandidate?
     @State private var isDeletePresented = false
+    @State private var runCandidate: RunCandidate?
+    @State private var isRunPresented = false
 
     public init(
         owner: AtlasVaultSavedSearchPresentationOwner,
@@ -567,6 +663,28 @@ public struct AtlasVaultSavedSearchView: View {
                 Text(deleteCandidate.name)
             }
         }
+        .confirmationDialog(
+            "Run Saved Search and Lock Vault?",
+            isPresented: $isRunPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Run & Lock") {
+                guard let candidate = runCandidate else {
+                    return
+                }
+                runCandidate = nil
+                Task {
+                    await actions.execute(candidate.id)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                runCandidate = nil
+            }
+        } message: {
+            Text(
+                "The vault locks first. Only then are the saved criteria sent to the configured public job service."
+            )
+        }
         .onChange(of: owner.status) { _, status in
             if status == .hidden || status == .locking {
                 clearCreateDraft()
@@ -575,12 +693,15 @@ public struct AtlasVaultSavedSearchView: View {
                 isEditPresented = false
                 deleteCandidate = nil
                 isDeletePresented = false
+                runCandidate = nil
+                isRunPresented = false
             }
         }
         .onDisappear {
             clearCreateDraft()
             clearEditDraft()
             deleteCandidate = nil
+            runCandidate = nil
         }
     }
 
@@ -604,6 +725,14 @@ public struct AtlasVaultSavedSearchView: View {
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                runCandidate = RunCandidate(id: item.id)
+                isRunPresented = true
+            } label: {
+                Label("Run Search", systemImage: "play")
+            }
+            .disabled(!allowsMutation)
+
             Button {
                 editCandidate = EditCandidate(id: item.id)
                 editName = item.name
@@ -648,6 +777,16 @@ public struct AtlasVaultSavedSearchView: View {
             .padding(12)
             .frame(maxWidth: .infinity)
             .background(.bar)
+        case .handoffPreparing:
+            ProgressView("Preparing saved search")
+                .padding(12)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+        case .handoffFailed:
+            Text("The saved search could not be prepared.")
+                .padding(12)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
         case .unavailable:
             Text("Saved searches are unavailable.")
                 .padding(12)
@@ -659,7 +798,9 @@ public struct AtlasVaultSavedSearchView: View {
     }
 
     private var allowsMutation: Bool {
-        owner.status == .ready || owner.status == .saveFailed
+        owner.status == .ready
+            || owner.status == .saveFailed
+            || owner.status == .handoffFailed
     }
 
     private func clearCreateDraft() {

@@ -126,6 +126,19 @@ public protocol AtlasVaultSavedSearchCoordinating: Sendable {
         presentationID: AtlasVaultPresentationID
     ) async throws -> AtlasVaultSavedSearchMutationResult
 
+    func publicSearchRequest(
+        presentationID: AtlasVaultPresentationID,
+        maximumLimit: Int
+    ) async throws -> AtlasPublicJobSearchRequest
+
+    func stop() async
+}
+
+public protocol AtlasVaultSavedSearchPublicHandoffCoordinating: Sendable {
+    func perform(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult
+
     func stop() async
 }
 
@@ -434,6 +447,27 @@ public actor AtlasVaultSavedSearchCoordinator:
         }
     }
 
+    public func publicSearchRequest(
+        presentationID: AtlasVaultPresentationID,
+        maximumLimit: Int
+    ) async throws -> AtlasPublicJobSearchRequest {
+        guard activeVaultIdentifier != nil,
+              presentationGeneration != nil,
+              mutationOperation == nil,
+              let metadata = metadataByPresentationID[presentationID]
+        else {
+            throw AtlasVaultSavedSearchFailure.unavailable
+        }
+        do {
+            return try AtlasPublicJobSearchRequest(
+                validatingSavedSearch: metadata.payload.request,
+                maximumLimit: maximumLimit
+            )
+        } catch {
+            throw AtlasVaultSavedSearchFailure.unavailable
+        }
+    }
+
     public func stop() async {
         await stopMutation()
         invalidateSession()
@@ -699,5 +733,71 @@ public actor AtlasVaultSavedSearchCoordinator:
             return false
         }
         return formatter.string(from: date) == value
+    }
+}
+
+public actor AtlasVaultSavedSearchPublicHandoffCoordinator:
+    AtlasVaultSavedSearchPublicHandoffCoordinating,
+    CustomStringConvertible,
+    CustomDebugStringConvertible
+{
+    private struct Operation {
+        let identifier: UUID
+        let work: Task<
+            AtlasSavedSearchPublicHandoffResult,
+            Never
+        >
+    }
+
+    private let host: any AtlasSavedSearchPublicHandoffHosting
+    private var operation: Operation?
+
+    public init(
+        host: any AtlasSavedSearchPublicHandoffHosting
+    ) {
+        self.host = host
+    }
+
+    public func perform(
+        _ request: AtlasPublicJobSearchRequest
+    ) async -> AtlasSavedSearchPublicHandoffResult {
+        guard request.origin == .savedSearchHandoff,
+              operation == nil else {
+            return .cancelled
+        }
+        let identifier = UUID()
+        let host = host
+        let work = Task {
+            await host.performSavedSearchPublicHandoff(request)
+        }
+        operation = Operation(
+            identifier: identifier,
+            work: work
+        )
+        let result = await work.value
+        guard operation?.identifier == identifier else {
+            return .cancelled
+        }
+        operation = nil
+        return result
+    }
+
+    public func stop() async {
+        guard let operation else {
+            return
+        }
+        operation.work.cancel()
+        _ = await operation.work.value
+        if self.operation?.identifier == operation.identifier {
+            self.operation = nil
+        }
+    }
+
+    public nonisolated var description: String {
+        "AtlasVaultSavedSearchPublicHandoffCoordinator(<redacted>)"
+    }
+
+    public nonisolated var debugDescription: String {
+        description
     }
 }

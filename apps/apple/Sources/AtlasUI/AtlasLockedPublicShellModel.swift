@@ -127,6 +127,8 @@ public struct AtlasLockedPublicShellModel:
     public let publicJobs: [AtlasLockedPublicJob]
     public let isSearching: Bool
     public let canRequestUnlock: Bool
+    public let searchOrigin: AtlasPublicJobSearchOrigin
+    public let hasAdditionalCriteria: Bool
 
     public init(
         vaultStatus: AtlasLockedPublicVaultStatus = .locked,
@@ -135,7 +137,9 @@ public struct AtlasLockedPublicShellModel:
         searchQuery: String = "",
         publicJobs: [AtlasLockedPublicJob] = [],
         isSearching: Bool = false,
-        canRequestUnlock: Bool = true
+        canRequestUnlock: Bool = true,
+        searchOrigin: AtlasPublicJobSearchOrigin = .manual,
+        hasAdditionalCriteria: Bool = false
     ) {
         self.vaultStatus = vaultStatus
         self.serviceStatus = serviceStatus
@@ -144,6 +148,8 @@ public struct AtlasLockedPublicShellModel:
         self.publicJobs = publicJobs
         self.isSearching = isSearching
         self.canRequestUnlock = canRequestUnlock
+        self.searchOrigin = searchOrigin
+        self.hasAdditionalCriteria = hasAdditionalCriteria
     }
 
     public var description: String {

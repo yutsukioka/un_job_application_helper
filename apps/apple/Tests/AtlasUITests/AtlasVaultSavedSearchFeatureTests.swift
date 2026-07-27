@@ -940,6 +940,9 @@ final class AtlasVaultSavedSearchFeatureTests: XCTestCase {
                 .state(
                     AtlasVaultHydratedState(savedSearches: [record])
                 ),
+                .state(
+                    AtlasVaultHydratedState(savedSearches: [record])
+                ),
             ]
         )
         let coordinator = makeCoordinator(environment)
@@ -1361,7 +1364,7 @@ private actor SavedSearchSuspensionGate {
 }
 
 private actor SavedSearchPublicHandoffHostFake:
-    AtlasVaultSavedSearchPublicHandoffHosting
+    AtlasSavedSearchPublicHandoffHosting
 {
     private let gate: SavedSearchSuspensionGate
     private var calls = 0
@@ -1373,7 +1376,7 @@ private actor SavedSearchPublicHandoffHostFake:
 
     func performSavedSearchPublicHandoff(
         _ request: AtlasPublicJobSearchRequest
-    ) async -> AtlasVaultSavedSearchPublicHandoffResult {
+    ) async -> AtlasSavedSearchPublicHandoffResult {
         calls += 1
         self.request = request
         await gate.wait()

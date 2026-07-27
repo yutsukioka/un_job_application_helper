@@ -507,6 +507,8 @@ public final class AtlasVaultProductionCompositionHarness:
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private let savedSearchContext: AtlasVaultSavedSearchContext?
+    private let savedSearchHandoffCoordinator:
+        (any AtlasVaultSavedSearchPublicHandoffCoordinating)?
     private var lifetime: Lifetime = .inactive
     private var startOperation: StartOperation?
     private var stopOperation: StopOperation?
@@ -530,7 +532,8 @@ public final class AtlasVaultProductionCompositionHarness:
             creationContext: nil,
             recoveryExportContext: nil,
             recoveryImportContext: nil,
-            savedSearchContext: nil
+            savedSearchContext: nil,
+            savedSearchHandoffCoordinator: nil
         )
     }
 
@@ -551,7 +554,8 @@ public final class AtlasVaultProductionCompositionHarness:
             creationContext: creationContext,
             recoveryExportContext: nil,
             recoveryImportContext: nil,
-            savedSearchContext: nil
+            savedSearchContext: nil,
+            savedSearchHandoffCoordinator: nil
         )
     }
 
@@ -564,7 +568,9 @@ public final class AtlasVaultProductionCompositionHarness:
         creationContext: AtlasLocalVaultCreationContext?,
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
         recoveryImportContext: AtlasVaultRecoveryImportContext? = nil,
-        savedSearchContext: AtlasVaultSavedSearchContext? = nil
+        savedSearchContext: AtlasVaultSavedSearchContext? = nil,
+        savedSearchHandoffCoordinator:
+            (any AtlasVaultSavedSearchPublicHandoffCoordinating)? = nil
     ) {
         self.host = host
         self.presentationOwner = presentationOwner
@@ -573,6 +579,8 @@ public final class AtlasVaultProductionCompositionHarness:
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
         self.savedSearchContext = savedSearchContext
+        self.savedSearchHandoffCoordinator =
+            savedSearchHandoffCoordinator
 
         publicShellActions = AtlasLockedPublicShellActions(
             search: { query in
@@ -710,10 +718,16 @@ public final class AtlasVaultProductionCompositionHarness:
         let recoveryOwner = recoveryExportContext?.owner
         let recoveryImportOwner = recoveryImportContext?.owner
         let savedSearchOwner = savedSearchContext?.owner
+        let savedSearchHandoffCoordinator =
+            savedSearchHandoffCoordinator
         savedSearchOwner?.hidePrivatePresentation()
         let task = Task {
             async let hostState = host.stop()
             async let lifecycleStop: Void = lifecycleForwarder.stop()
+            async let savedSearchHandoffStop: Void =
+                Self.stopSavedSearchHandoffCoordinator(
+                    savedSearchHandoffCoordinator
+                )
             if let creationOwner {
                 await creationOwner.stop()
             }
@@ -727,6 +741,7 @@ public final class AtlasVaultProductionCompositionHarness:
             if let savedSearchOwner {
                 await savedSearchOwner.stopAndDrainPrivateSession()
             }
+            _ = await savedSearchHandoffStop
             _ = await lifecycleStop
             return state
         }
@@ -808,6 +823,16 @@ public final class AtlasVaultProductionCompositionHarness:
         for waiter in waiters {
             waiter.resume()
         }
+    }
+
+    private nonisolated static func stopSavedSearchHandoffCoordinator(
+        _ savedSearchHandoffCoordinator:
+            (any AtlasVaultSavedSearchPublicHandoffCoordinating)?
+    ) async {
+        guard let savedSearchHandoffCoordinator else {
+            return
+        }
+        await savedSearchHandoffCoordinator.stop()
     }
 
     private func stopIfLifecycleTerminatedDuringStart(
@@ -1041,7 +1066,9 @@ public enum AtlasVaultProductionCompositionFactory {
             let privateMutationHost =
                 host as? any AtlasVaultPrivateMutationHosting,
             let privateMutationContainmentHost =
-                host as? any AtlasVaultPrivateMutationContainmentHosting
+                host as? any AtlasVaultPrivateMutationContainmentHosting,
+            let savedSearchHandoffHost =
+                host as? any AtlasSavedSearchPublicHandoffHosting
         else {
             throw AtlasVaultProductionCompositionError
                 .privateFeatureUnavailable
@@ -1065,6 +1092,10 @@ public enum AtlasVaultProductionCompositionFactory {
             AtlasVaultSavedSearchPresentationOwner(
                 coordinator: savedSearchCoordinator
             )
+        let savedSearchHandoffCoordinator =
+            AtlasVaultSavedSearchPublicHandoffCoordinator(
+                host: savedSearchHandoffHost
+            )
         guard privateSessionBridge.attach(savedSearchOwner) else {
             throw AtlasVaultProductionCompositionError
                 .privateFeatureUnavailable
@@ -1084,6 +1115,29 @@ public enum AtlasVaultProductionCompositionFactory {
                 await savedSearchOwner?.delete(
                     presentationID: identifier
                 )
+            },
+            execute: { [weak savedSearchOwner] identifier in
+                guard let savedSearchOwner,
+                      let claim = await savedSearchOwner
+                          .beginPublicSearchHandoff() else {
+                    return
+                }
+                let request: AtlasPublicJobSearchRequest
+                do {
+                    request = try await savedSearchCoordinator
+                        .publicSearchRequest(
+                            presentationID: identifier,
+                            maximumLimit: configuration.publicSearchLimit
+                        )
+                } catch {
+                    await savedSearchOwner.failPublicSearchHandoff(claim)
+                    return
+                }
+                guard await savedSearchOwner
+                    .completePublicSearchHandoff(claim) else {
+                    return
+                }
+                _ = await savedSearchHandoffCoordinator.perform(request)
             },
             lock: { [weak savedSearchOwner] in
                 await savedSearchOwner?.beginLocking()
@@ -1334,6 +1388,7 @@ public enum AtlasVaultProductionCompositionFactory {
             eventObserver: { event in
                 switch event {
                 case .willTerminate:
+                    await savedSearchHandoffCoordinator.stop()
                     await savedSearchOwner
                         .stopAndDrainPrivateSession()
                     await recoveryOwner.stop()
@@ -1361,7 +1416,9 @@ public enum AtlasVaultProductionCompositionFactory {
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
-            savedSearchContext: savedSearchContext
+            savedSearchContext: savedSearchContext,
+            savedSearchHandoffCoordinator:
+                savedSearchHandoffCoordinator
         )
     }
 }

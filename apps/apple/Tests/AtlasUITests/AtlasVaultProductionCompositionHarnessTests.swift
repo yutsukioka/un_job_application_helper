@@ -20,13 +20,12 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
             "AtlasVaultPrivateSessionBoundaryBridge",
             "AtlasVaultPrivateMutationHosting",
             "AtlasVaultPrivateMutationContainmentHosting",
-            "AtlasVaultSavedSearchPublicHandoffHosting",
+            "AtlasSavedSearchPublicHandoffHosting",
             "AtlasVaultSavedSearchCoordinator",
             "AtlasVaultSavedSearchPublicHandoffCoordinator",
             "AtlasVaultSavedSearchPresentationOwner",
             "AtlasVaultSavedSearchActions",
             "containCommittedPrivateMutationFailure",
-            "performSavedSearchPublicHandoff",
             "publicSearchRequest",
             "beginPublicSearchHandoff",
             "completePublicSearchHandoff",
@@ -95,7 +94,21 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
         XCTAssertTrue(
             orchestration.contains("completePublicSearchHandoff")
         )
-        XCTAssertFalse(orchestration.contains("host.lock()"))
+        let executeStart = try XCTUnwrap(
+            orchestration.range(of: "execute:")
+        )
+        let lockStart = try XCTUnwrap(
+            orchestration.range(
+                of: "lock:",
+                range: executeStart.upperBound..<orchestration.endIndex
+            )
+        )
+        let executeOrchestration = String(
+            orchestration[
+                executeStart.lowerBound..<lockStart.lowerBound
+            ]
+        )
+        XCTAssertFalse(executeOrchestration.contains("host.lock()"))
         XCTAssertTrue(
             source.contains("savedSearchHandoffCoordinator.stop()")
         )

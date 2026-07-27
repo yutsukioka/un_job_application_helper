@@ -59,18 +59,9 @@ public actor AtlasAPIClientPublicJobAdapter:
     public func search(
         _ request: AtlasPublicJobSearchRequest
     ) async throws(AtlasPublicJobServiceError) -> AtlasPublicJobSearchResult {
-        let apiRequest = AtlasSearchRequest(
-            text: request.query,
-            status: ["open"],
-            includeLowConfidence: false,
-            includeFacets: false,
-            limit: request.limit,
-            offset: request.offset,
-            sort: "closing_date_asc"
-        )
         let response: AtlasSearchResponse
         do {
-            response = try await client.search(apiRequest)
+            response = try await client.search(request.apiRequest)
         } catch {
             throw Self.mapClientError(error)
         }

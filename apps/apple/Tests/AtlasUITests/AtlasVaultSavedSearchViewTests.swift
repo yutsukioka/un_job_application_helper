@@ -450,7 +450,7 @@ final class AtlasVaultSavedSearchViewTests: XCTestCase {
     }
 
     func testExecutionClaimPreservesOnPreparationFailureAndHidesOnCompletion()
-        async
+        async throws
     {
         let snapshot = Self.snapshot(name: "Execute")
         let coordinator = SavedSearchViewCoordinatorFake(
