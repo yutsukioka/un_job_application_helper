@@ -140,8 +140,10 @@ ordinary entry point also rejects manual searches. This keeps network
 admission exclusive through the post-lock proof and saved-search request
 completion. The host stores that handoff reservation synchronously before its
 first runtime-status await, closing actor-reentrancy admission from initial
-proof through completion. Ordinary manual behavior resumes after handoff
-ownership clears.
+proof through completion. The retained operation also keeps the public unlock
+affordance false and rejects direct unlock-panel or submission requests while
+the saved-origin service request is in flight. Ordinary manual and unlock
+behavior resume only after handoff ownership clears.
 
 ## 20. Saved-Search Validation
 
@@ -189,7 +191,10 @@ strict admission it runs the ordinary private-free barrier with private-session
 drain enabled. The barrier hides presentation, cancels and drains private
 mutation work, stops and drains the private coordinator, locks the runtime, and
 publishes an acknowledged locked-public state. The non-draining committed-save
-containment path is not used.
+containment path is not used. Barrier completion does not reopen unlock
+admission while the retained saved-search handoff remains active. Successful
+or public-search-failed completion clears handoff ownership before using the
+ordinary acknowledged publication path to reopen unlock admission.
 
 ## 26. Lock-Failure Contract
 
@@ -350,6 +355,17 @@ admission, and unlocked runtime status inside that task. The regression
 requires zero service calls during the initial proof and permits only the
 saved request after release.
 
+The fourth exact-head Codex review identified that the completed lock barrier
+reopened ordinary unlock admission while the saved-origin service request was
+still in flight. A deterministic service gate reproduced a visible unlock
+affordance, an admitted unlock panel, and cancellation of the saved handoff.
+The correction includes retained handoff ownership in every barrier,
+lifecycle, transient, and direct unlock admission gate. The handoff clears its
+ownership and republishes ordinary unlock availability only after saved-search
+completion or a post-lock public-service failure. The regression requires
+locked-public mode and closed direct unlock admission while the service is
+gated, then requires saved completion and reopened admission after release.
+
 ## 45. Full Verification
 
 Before the Checkpoint B implementation commit, the feature suite passed 22
@@ -389,6 +405,17 @@ and the exact-device normal-route smoke were repeated successfully. The
 initial-admission regression specifically holds the first runtime-status
 proof, requires a concurrent manual attempt to make zero service calls, then
 proves the reserved saved request alone completes after release.
+
+After the fourth Codex review correction, the production-host suite passed
+129 tests, the combined Checkpoint A/B matrix passed 345 tests, the explicit
+earlier-phase and supporting regression matrix passed 237 tests, and full
+Swift passed 1,285 tests. The complete Python mirror passed again, both generic
+iOS builds succeeded, and an iOS 26.5 iPhone 17 Pro normal-route smoke kept the
+AtlasIOSHost process alive for 42 seconds without an immediate crash. No
+tap-level edit or handoff automation was claimed. The unlock-admission
+regression holds the saved-origin service request, requires locked-public mode
+and closed direct unlock admission, then proves normal unlock admission
+reopens only after the saved request completes.
 
 ## 46. Go/No-Go
 

@@ -822,6 +822,62 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         )
     }
 
+    func testUnlockAdmissionStaysClosedWhileSavedHandoffSearchIsInFlight()
+        async throws
+    {
+        let serviceGate = HostSuspensionGate()
+        let savedResult = try makeSearchResult(
+            jobID: "saved-unlock-fence-result",
+            title: "Saved Unlock Fence Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(savedResult),
+                    gate: serviceGate,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let saved = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "saved unlock fence",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(saved)
+        }
+        await graph.publicJobs.waitForTotalCalls(1)
+
+        let searching = await graph.host.currentFlowState()
+        let blockedPanel = await graph.host.requestUnlockPanel()
+
+        await serviceGate.release()
+        let handoffResult = await handoff.value
+        let completed = await graph.host.currentFlowState()
+
+        await expectEqual(searching.mode, .lockedPublic)
+        await expectFalse(searching.publicShell.canRequestUnlock)
+        await expectEqual(blockedPanel.mode, .lockedPublic)
+        await expectFalse(blockedPanel.publicShell.canRequestUnlock)
+        await expectEqual(handoffResult, .completed)
+        await expectEqual(completed.mode, .lockedPublic)
+        await expectTrue(completed.publicShell.canRequestUnlock)
+        await expectEqual(
+            await graph.publicJobs.recordedRequests(),
+            [saved]
+        )
+    }
+
     func testManualSearchAfterHandoffResetsOriginAndSavedCriteria()
         async throws
     {

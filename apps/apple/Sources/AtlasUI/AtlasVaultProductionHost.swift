@@ -385,6 +385,18 @@ public actor AtlasVaultProductionHost:
         let result = await task.value
         if savedSearchHandoffOperation?.id == id {
             savedSearchHandoffOperation = nil
+            switch result {
+            case .completed, .publicSearchFailed:
+                let publication =
+                    await publishCurrentFlowAndReopenAdmission(
+                        status: presentationStatus
+                    )
+                if case .failed = publication {
+                    _ = await runPrivateFreeBarrier(terminal: false)
+                }
+            case .lockFailed, .cancelled, .stopped:
+                break
+            }
         }
         return result
     }
@@ -897,6 +909,7 @@ public actor AtlasVaultProductionHost:
     private var isUnlockOperationAvailable: Bool {
         lifetime == .started
             && unlockAdmissionOpen
+            && savedSearchHandoffOperation == nil
             && !isTerminated
     }
 
@@ -1480,6 +1493,7 @@ public actor AtlasVaultProductionHost:
             && runtimeStatus == .locked
             && selectionOperation == nil
             && submitOperation == nil
+            && savedSearchHandoffOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
     }
@@ -2027,6 +2041,7 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && savedSearchHandoffOperation == nil
             && barrierOperation == nil
             && stopOperation == nil
             && shell.vaultStatus != .noVault
@@ -2236,6 +2251,7 @@ public actor AtlasVaultProductionHost:
             && !isTerminated
             && selectionOperation == nil
             && submitOperation == nil
+            && savedSearchHandoffOperation == nil
             && stopOperation == nil
             && shell.vaultStatus != .noVault
             && unlockStatePermitsAdmission
