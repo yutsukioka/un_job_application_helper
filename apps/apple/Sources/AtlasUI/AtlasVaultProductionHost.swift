@@ -256,8 +256,11 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
 
-        beginTerminalStop()
-        abandonSelectionAndResumeCallers()
+        if lifetime != .stopping {
+            beginTerminalStop()
+            abandonSelectionAndResumeCallers()
+            cancelRetainedSearchOperations()
+        }
         let id = UUID()
         let task = Task { [self] in
             await performStop()
@@ -888,6 +891,14 @@ public actor AtlasVaultProductionHost:
             closeUnlockAdmission()
             _ = advanceGeneration()
         }
+        switch event {
+        case .willTerminate:
+            beginTerminalStop()
+            abandonSelectionAndResumeCallers()
+            cancelRetainedSearchOperations()
+        default:
+            break
+        }
 
         await dependencies.lifecycle.handle(event)
 
@@ -1146,6 +1157,14 @@ public actor AtlasVaultProductionHost:
         }
         for operation in operations {
             retainedSearchOperations[operation.id] = nil
+        }
+    }
+
+    private func cancelRetainedSearchOperations() {
+        searchGeneration &+= 1
+        searchOperation = nil
+        for operation in retainedSearchOperations.values {
+            operation.task.cancel()
         }
     }
 

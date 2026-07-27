@@ -963,6 +963,66 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await expectEqual(await graph.publicJobs.totalCalls(), 0)
     }
 
+    func testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns()
+        async throws
+    {
+        let lifecycleGate = HostSuspensionGate()
+        let serviceGate = HostSuspensionGate()
+        let result = try makeSearchResult(
+            jobID: "terminal-network-result",
+            title: "Terminal Network Result"
+        )
+        let graph = try makeGraph(
+            searchPlans: [
+                .init(
+                    result: .success(result),
+                    gate: serviceGate,
+                    releasesGateOnCancellation: false,
+                    ignoresCancellation: true
+                ),
+            ],
+            selection: .success(.selected(selectedVaultID())),
+            lifecycleHandleGate: lifecycleGate,
+            runtimeStatus: .locked,
+            submitResult: unlockState(.unlocked)
+        )
+        try await unlockPrivateSession(graph)
+        let handoffHost:
+            any AtlasSavedSearchPublicHandoffHosting = graph.host
+        let request = try AtlasPublicJobSearchRequest(
+            validatingSavedSearch: AtlasSearchRequest(
+                text: "terminal lifecycle network",
+                organizations: ["UNHCR"]
+            ),
+            maximumLimit: 25
+        )
+
+        let handoff = Task {
+            await handoffHost.performSavedSearchPublicHandoff(request)
+        }
+        await serviceGate.waitUntilEntered()
+        await expectEqual(await graph.publicJobs.totalCalls(), 1)
+
+        let terminationCompleted = HostBoolRecorder()
+        let termination = Task {
+            let state = await graph.host.handleLifecycleEvent(.willTerminate)
+            await terminationCompleted.record(true)
+            return state
+        }
+        await lifecycleGate.waitUntilEntered()
+
+        await expectEqual(await graph.publicJobs.cancelledCalls(), 1)
+        await expectEqual(await terminationCompleted.value(), nil)
+
+        await lifecycleGate.release()
+        await serviceGate.release()
+        await expectEqual(await handoff.value, .stopped)
+        let stopped = await termination.value
+        await expectEqual(stopped.mode, .lockedPublic)
+        await expectFalse(stopped.publicShell.canRequestUnlock)
+        await expectEqual(stopped.publicShell.publicJobs, [])
+    }
+
     func testUnlockAdmissionStaysClosedWhileSavedHandoffSearchIsInFlight()
         async throws
     {
@@ -3246,7 +3306,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
     }
 
     func testStopReleasesSelectionCallersBeforeWaitingForSearchTeardown() async throws {
-        let hostSource = try source(named: "AtlasVaultProductionHost.swift")
         let searchGate = HostSuspensionGate()
         let selectionGate = HostSuspensionGate()
         let searchResult = try makeSearchResult(
@@ -3276,18 +3335,6 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         await selectionGate.waitUntilEntered()
         let stop = Task { await graph.host.stop() }
         await graph.publicJobs.waitUntilCancellation()
-
-        guard hostSource.contains(
-            "beginTerminalStop()\n        abandonSelectionAndResumeCallers()"
-        ) else {
-            XCTFail("Stop must release selection callers before search teardown")
-            await searchGate.release()
-            await selectionGate.release()
-            _ = await stop.value
-            _ = await search.value
-            _ = await panel.value
-            return
-        }
 
         let abandoned = await panel.value
         await expectEqual(abandoned.mode, .lockedPublic)

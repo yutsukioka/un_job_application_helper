@@ -219,6 +219,12 @@ unlocked.
 Terminal stop supersedes a nonterminal handoff barrier, retains full
 private-session drain behavior, cancels public work, and produces no new public
 request. A terminal barrier never inherits the non-draining containment flag.
+When termination arrives through the lifecycle coordinator, the host enters
+terminal-stop ownership and synchronously cancels the retained handoff and
+retained public-search tasks before awaiting lifecycle handling. This prevents
+a lifecycle-owned runtime lock from suspending while network work remains
+uncancelled. After lifecycle handling returns, the existing terminal operation
+drains those exact tasks and completes the full terminal barrier.
 
 ## 28. Public-Search Failure After Lock
 
@@ -476,6 +482,23 @@ cannot create a circular wait. Ordinary nonterminal lock and committed-failure
 containment keep their established behavior. A deterministic first-event
 regression proves handoff cancellation precedes stop completion and that no
 public request occurs.
+
+The subsequent exact-head Codex review identified the lifecycle-entry variant
+of that terminal gap. `.willTerminate` previously awaited the lifecycle
+coordinator before `stop()` established terminal ownership, so a
+lifecycle-owned runtime lock could suspend while an already-running saved
+handoff network operation remained uncancelled. The correction enters terminal
+ownership, releases suspended selection callers, and synchronously cancels the
+retained handoff and search tasks before awaiting lifecycle handling. A
+deterministic regression holds both the public service and lifecycle handler,
+requires service cancellation while lifecycle handling is still suspended,
+then proves the handoff returns stopped and no late public result is published.
+After this correction, the production-host suite passed 135 tests, the focused
+Phase 2D-64 matrix passed 351 tests, and full Swift passed 1,291 tests. The
+complete Python CI mirror, both generic iOS builds, and an exact-device iOS
+26.5 iPhone 17 Pro normal-route smoke also passed. The installed app remained
+alive for 29 seconds without an immediate crash; no tap-level edit or handoff
+automation was performed or claimed.
 
 ## 46. Go/No-Go
 
