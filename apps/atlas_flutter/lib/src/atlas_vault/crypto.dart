@@ -76,7 +76,7 @@ Future<Uint8List> openAtlasVaultRecord({
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
-    _wipe(recordKey);
+    atlasVaultWipeBytesInternal(recordKey);
   }
 }
 
@@ -108,7 +108,7 @@ Future<AtlasVaultEncryptedRecord> sealAtlasVaultRecord({
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
-    _wipe(recordKey);
+    atlasVaultWipeBytesInternal(recordKey);
   }
 }
 
@@ -149,8 +149,8 @@ Future<Uint8List> deriveAtlasVaultPassphraseWrappingKeyV1({
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
-    _wipe(passphraseBytes);
-    _wipe(salt);
+    atlasVaultWipeBytesInternal(passphraseBytes);
+    atlasVaultWipeBytesInternal(salt);
   }
 }
 
@@ -197,7 +197,7 @@ Future<AtlasVaultPassphraseKeyWrapV1> wrapAtlasVaultKeyWithPassphraseV1({
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
-    _wipe(wrappingKey);
+    atlasVaultWipeBytesInternal(wrappingKey);
   }
 }
 
@@ -225,8 +225,8 @@ Future<Uint8List> unwrapAtlasVaultPassphraseWrapV1({
   } catch (_) {
     throw const AtlasVaultCryptoException();
   } finally {
-    _wipe(wrappingKey);
-    _wipe(plaintext);
+    atlasVaultWipeBytesInternal(wrappingKey);
+    atlasVaultWipeBytesInternal(plaintext);
   }
 }
 
@@ -324,9 +324,7 @@ Future<Uint8List> atlasVaultOpenAes256GcmInternal({
     throw const AtlasVaultCryptoException();
   } finally {
     secretKey.destroy();
-    if (opened is Uint8List) {
-      _wipe(opened);
-    }
+    atlasVaultWipeBytesInternal(opened);
   }
 }
 
@@ -352,6 +350,13 @@ void _requireRecordId(String recordId) {
   }
 }
 
-void _wipe(Uint8List? value) {
-  value?.fillRange(0, value.length, 0);
+void atlasVaultWipeBytesInternal(List<int>? value) {
+  if (value == null) {
+    return;
+  }
+  try {
+    value.fillRange(0, value.length, 0);
+  } catch (_) {
+    // Dart collection implementations do not all guarantee mutability.
+  }
 }

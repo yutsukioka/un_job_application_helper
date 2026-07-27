@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
+import 'package:atlas/src/atlas_vault/crypto.dart'
+    show atlasVaultWipeBytesInternal;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_vector_loader.dart';
@@ -83,6 +85,18 @@ void main() {
     );
     expect(replacementCharacterKey, hasLength(32));
     replacementCharacterKey.fillRange(0, replacementCharacterKey.length, 0);
+  });
+
+  test('best-effort secret wiping clears generic mutable byte lists', () {
+    final genericBytes = <int>[0x11, 0x22, 0x33];
+
+    atlasVaultWipeBytesInternal(genericBytes);
+
+    expect(genericBytes, everyElement(0));
+    expect(
+      () => atlasVaultWipeBytesInternal(List<int>.unmodifiable(<int>[1])),
+      returnsNormally,
+    );
   });
 
   test('wrong keys, AAD changes, nonce changes, and ciphertext fail', () async {
