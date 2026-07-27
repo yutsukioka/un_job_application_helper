@@ -5,6 +5,9 @@ import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+final _cacheFixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
+final _cacheFixtureNow = DateTime.utc(2026, 7, 3, 12);
+
 void main() {
   test('active filter chips use value equality', () {
     const openChip = AtlasActiveFilterChip(
@@ -152,6 +155,10 @@ void main() {
   test(
     'controller loads persisted cache before offline refresh fails',
     () async {
+      expect(
+        _cacheFixtureNow.difference(_cacheFixtureSavedAt),
+        lessThanOrEqualTo(AtlasLocalCacheSnapshot.retainFor),
+      );
       final tempDir = await Directory.systemTemp.createTemp(
         'atlas_controller_cache_test_',
       );
@@ -162,12 +169,13 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       await store.write(
         AtlasLocalCacheSnapshot(
           schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
           baseURL: Uri.parse('http://atlas.cached:8765'),
-          savedAt: DateTime.utc(2026, 7, 2, 12),
+          savedAt: _cacheFixtureSavedAt,
           searchRequest: const AtlasSearchRequest(text: 'Programme'),
           searchResponse: AtlasSearchResponse(
             total: 1,
@@ -206,6 +214,7 @@ void main() {
       );
       final controller = AtlasAppController(
         localCacheStore: store,
+        now: () => _cacheFixtureNow,
         clientFactory: (baseURL) =>
             AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
       );
@@ -244,6 +253,10 @@ void main() {
   test(
     'controller filters cached rows offline and cascades location and grade facets',
     () async {
+      expect(
+        _cacheFixtureNow.difference(_cacheFixtureSavedAt),
+        lessThanOrEqualTo(AtlasLocalCacheSnapshot.retainFor),
+      );
       final tempDir = await Directory.systemTemp.createTemp(
         'atlas_controller_cascade_cache_test_',
       );
@@ -254,6 +267,7 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       final cachedJobs = [
         _facetJob(
@@ -285,7 +299,7 @@ void main() {
         AtlasLocalCacheSnapshot(
           schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
           baseURL: Uri.parse('http://atlas.cached:8765'),
-          savedAt: DateTime.utc(2026, 7, 2, 12),
+          savedAt: _cacheFixtureSavedAt,
           searchRequest: const AtlasSearchRequest(),
           searchResponse: AtlasSearchResponse(
             total: cachedJobs.length,
@@ -301,6 +315,7 @@ void main() {
       );
       final controller = AtlasAppController(
         localCacheStore: store,
+        now: () => _cacheFixtureNow,
         clientFactory: (baseURL) =>
             AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
       );
@@ -398,6 +413,10 @@ void main() {
   test(
     'controller excludes deadline-past open rows from cached open-only search',
     () async {
+      expect(
+        _cacheFixtureNow.difference(_cacheFixtureSavedAt),
+        lessThanOrEqualTo(AtlasLocalCacheSnapshot.retainFor),
+      );
       final tempDir = await Directory.systemTemp.createTemp(
         'atlas_controller_deadline_cache_test_',
       );
@@ -408,6 +427,7 @@ void main() {
       });
       final store = AtlasLocalCacheStore(
         file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
       );
       final cachedJobs = [
         _facetJob(
@@ -452,7 +472,7 @@ void main() {
         AtlasLocalCacheSnapshot(
           schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
           baseURL: Uri.parse('http://atlas.cached:8765'),
-          savedAt: DateTime.utc(2026, 7, 2, 12),
+          savedAt: _cacheFixtureSavedAt,
           searchRequest: const AtlasSearchRequest(),
           searchResponse: AtlasSearchResponse(
             total: cachedJobs.length,
@@ -468,7 +488,7 @@ void main() {
       );
       final controller = AtlasAppController(
         localCacheStore: store,
-        now: () => DateTime.utc(2026, 7, 3, 12),
+        now: () => _cacheFixtureNow,
         clientFactory: (baseURL) =>
             AtlasAPIClient(baseURL: baseURL, transport: _FailingTransport()),
       );

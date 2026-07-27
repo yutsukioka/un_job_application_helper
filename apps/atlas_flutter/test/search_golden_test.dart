@@ -5,10 +5,10 @@ import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-bool get _skipAndroidGoldensOnWindows {
-  // These baselines are Android renderer parity assets; Windows text and
-  // rasterization differ enough to produce stable but irrelevant pixel diffs.
-  return Platform.isWindows;
+bool get _skipAndroidParityPixelGoldens {
+  // Android parity PNGs are supported on Linux; macOS and Windows use the
+  // host-independent semantic tests below.
+  return Platform.isMacOS || Platform.isWindows;
 }
 
 void main() {
@@ -36,7 +36,7 @@ void main() {
         matchesGoldenFile('goldens/android/search_top_compact.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -54,7 +54,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_sheet_top.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -74,7 +74,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_country_jpn.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -94,7 +94,7 @@ void main() {
         matchesGoldenFile('goldens/android/filter_city_tokyo.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
 
   testWidgets(
@@ -126,8 +126,98 @@ void main() {
         matchesGoldenFile('goldens/android/job_detail_top.png'),
       );
     },
-    skip: _skipAndroidGoldensOnWindows,
+    skip: _skipAndroidParityPixelGoldens,
   );
+
+  testWidgets('filter sheet exposes stable semantics on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController();
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    expect(find.text('Filters'), findsOneWidget);
+    expect(find.text('Open only'), findsWidgets);
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Scope'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('country cascade remains semantically selected on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(countryISO3: 'JPN'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    final countryField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'Country',
+      ),
+    );
+    expect(countryField.controller?.text, 'JPN');
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('city cascade remains semantically selected on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final controller = _filterSheetGoldenController(
+      filters: AtlasSearchFilters(city: 'Tokyo'),
+    );
+    addTearDown(controller.dispose);
+
+    await _pumpFilterSheetGolden(tester, controller);
+
+    final cityField = tester.widget<TextField>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'City',
+      ),
+    );
+    expect(cityField.controller?.text, 'Tokyo');
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('job detail exposes stable semantics on every host', (
+    tester,
+  ) async {
+    _configurePhoneViewport(tester);
+    final transport = _GoldenDetailTransport();
+    final controller = AtlasAppController(
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AtlasJobDetailScreen(
+          job: _detailGoldenJob(),
+          controller: controller,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Job Detail'), findsOneWidget);
+    expect(find.text('Emergency Specialist'), findsOneWidget);
+    expect(find.text('Full Description'), findsOneWidget);
+    expect(
+      find.textContaining('Coordinate emergency response'),
+      findsOneWidget,
+    );
+  });
 }
 
 void _configurePhoneViewport(WidgetTester tester) {

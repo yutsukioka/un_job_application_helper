@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:atlas/atlas.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+final _fixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
+final _fixtureReadAt = DateTime.utc(2026, 7, 3, 13);
+
 void main() {
   group('AtlasLocalCacheStore', () {
     late Directory tempDir;
@@ -20,8 +23,11 @@ void main() {
     });
 
     test('writes and reads a full local search snapshot', () async {
-      final store = AtlasLocalCacheStore(file: cacheFile);
-      final snapshot = _snapshot(savedAt: DateTime.utc(2026, 7, 2, 12));
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
+      final snapshot = _snapshot(savedAt: _fixtureSavedAt);
 
       await store.write(snapshot);
       final restored = await store.read();
@@ -47,6 +53,31 @@ void main() {
       expect(restored.isExpired(now: DateTime.utc(2026, 7, 9, 12, 1)), isTrue);
     });
 
+    test('retains a snapshot exactly at the retention boundary', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureSavedAt.add(AtlasLocalCacheSnapshot.retainFor),
+      );
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
+
+      expect(await store.read(), isNotNull);
+    });
+
+    test(
+      'rejects a snapshot immediately after the retention boundary',
+      () async {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureSavedAt
+              .add(AtlasLocalCacheSnapshot.retainFor)
+              .add(const Duration(microseconds: 1)),
+        );
+        await store.write(_snapshot(savedAt: _fixtureSavedAt));
+
+        expect(await store.read(), isNull);
+      },
+    );
+
     test('corrupted cache is ignored without crashing', () async {
       await cacheFile.writeAsString('{not valid json');
       final store = AtlasLocalCacheStore(file: cacheFile);
@@ -58,7 +89,7 @@ void main() {
 
     test('clear removes the persisted snapshot', () async {
       final store = AtlasLocalCacheStore(file: cacheFile);
-      await store.write(_snapshot(savedAt: DateTime.utc(2026, 7, 2, 12)));
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
       await File('${cacheFile.path}.tmp').writeAsString('stale temp');
 
       await store.clear();
