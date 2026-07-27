@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from jobagg.adapters.avature import AvatureAdapter
@@ -713,33 +714,43 @@ def test_oracle_hcm_falls_back_to_undp_listing_when_oracle_dns_fails(monkeypatch
     assert jobs[0].raw["fallback_reason"] == "dns_resolution_failed"
 
 
-def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monkeypatch):
+_UNFPA_ORACLE_FALLBACK_HTML = """
+<h2>Current Jobs</h2>
+<div>2 results found</div>
+<a href="/jobs/national-consultant-rmncah-monitoring-and-evaluation-me-consultant">
+  National Consultant: RMNCAH Monitoring and Evaluation (M&E) Consultant
+</a>
+<div>Closing date</div>
+<div>26 Jul 2026 20:56(America/New_York)</div>
+<div>Location</div>
+<div>Suva</div>
+<div>Staff grade/level</div>
+<div>Consultant</div>
+<div>Contract type</div>
+<div>Consultancy</div>
+<a href="https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2003/job/34001">Apply</a>
+<a href="/jobs/national-consultant-rmncah-monitoring-and-evaluation-me-consultant">View Job</a>
+<h4>Pagination</h4>
+"""
+
+
+def _freeze_oracle_hcm_utc_date(monkeypatch, *, year: int, month: int, day: int) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(year, month, day, 12, 0, 0, tzinfo=tz or UTC)
+
+    monkeypatch.setattr("jobagg.adapters.oracle_hcm.datetime", FrozenDateTime)
+
+
+def _unfpa_oracle_fallback_adapter(monkeypatch) -> OracleHCMAdapter:
     class FakeOracleHTTP:
         def __init__(self):
             self.get_calls = []
 
         def get(self, url, *, headers=None):
             self.get_calls.append((url, headers or {}))
-            return FakeResponse(
-                text="""
-                <h2>Current Jobs</h2>
-                <div>2 results found</div>
-                <a href="/jobs/national-consultant-rmncah-monitoring-and-evaluation-me-consultant">
-                  National Consultant: RMNCAH Monitoring and Evaluation (M&E) Consultant
-                </a>
-                <div>Closing date</div>
-                <div>26 Jul 2026 20:56(America/New_York)</div>
-                <div>Location</div>
-                <div>Suva</div>
-                <div>Staff grade/level</div>
-                <div>Consultant</div>
-                <div>Contract type</div>
-                <div>Consultancy</div>
-                <a href="https://estm.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2003/job/34001">Apply</a>
-                <a href="/jobs/national-consultant-rmncah-monitoring-and-evaluation-me-consultant">View Job</a>
-                <h4>Pagination</h4>
-                """
-            )
+            return FakeResponse(text=_UNFPA_ORACLE_FALLBACK_HTML)
 
     monkeypatch.setattr("jobagg.adapters.oracle_hcm._host_resolves", lambda url: False)
     org = source(
@@ -749,7 +760,12 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
         fallback_parser="unfpa_official",
         fallback_max_pages=1,
     )
-    adapter = OracleHCMAdapter(AdapterContext(source=org, http=FakeOracleHTTP()))
+    return OracleHCMAdapter(AdapterContext(source=org, http=FakeOracleHTTP()))
+
+
+def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monkeypatch):
+    _freeze_oracle_hcm_utc_date(monkeypatch, year=2026, month=7, day=26)
+    adapter = _unfpa_oracle_fallback_adapter(monkeypatch)
 
     jobs = adapter.fetch_jobs()
 
@@ -763,6 +779,13 @@ def test_oracle_hcm_falls_back_to_unfpa_current_jobs_when_oracle_dns_fails(monke
         "national-consultant-rmncah-monitoring-and-evaluation-me-consultant"
     )
     assert jobs[0].raw["listing_status"] == "public_listing_available_oracle_apply_link_unverified"
+
+
+def test_oracle_hcm_excludes_unfpa_fallback_after_closing_date(monkeypatch):
+    _freeze_oracle_hcm_utc_date(monkeypatch, year=2026, month=7, day=27)
+    adapter = _unfpa_oracle_fallback_adapter(monkeypatch)
+
+    assert adapter.fetch_jobs() == []
 
 
 def test_oracle_hcm_generic_official_fallback(monkeypatch):
