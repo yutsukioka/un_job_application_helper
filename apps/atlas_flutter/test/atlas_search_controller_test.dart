@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -705,6 +707,231 @@ void main() {
     expect(controller.filters.scope, AtlasScopeFilter.unspecified);
   });
 
+  test('private persistence construction performs no operation', () {
+    final privatePersistence = _FakePrivateStatePersistence();
+    final controller = AtlasAppController(
+      privateStatePersistence: privatePersistence,
+    );
+    addTearDown(controller.dispose);
+
+    expect(privatePersistence.calls, isEmpty);
+    expect(privatePersistence.isActive, isFalse);
+  });
+
+  test(
+    'in-memory plaintext requires migration before secure operations',
+    () async {
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+      controller.savedSearches = <AtlasSavedSearch>[
+        AtlasSavedSearch(
+          name: 'Legacy private search',
+          request: const AtlasSearchRequest(text: 'legacy'),
+        ),
+      ];
+
+      final result = await controller.activateExistingAtlasVault('vault-alpha');
+
+      expect(result, AtlasVaultActivationResult.migrationRequired);
+      expect(privatePersistence.calls, isEmpty);
+      expect(controller.savedSearches.single.name, 'Legacy private search');
+    },
+  );
+
+  test(
+    'persisted plaintext requires migration without secure-store I/O',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_private_activation_preflight_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+
+      final result = await controller.activateExistingAtlasVault('vault-alpha');
+
+      expect(result, AtlasVaultActivationResult.migrationRequired);
+      expect(privatePersistence.calls, isEmpty);
+      expect(await store.read(), isNotNull);
+      expect((await store.read())!.containsPrivateState, isTrue);
+    },
+  );
+
+  test(
+    'successful explicit activation publishes only committed snapshot',
+    () async {
+      final privatePersistence = _FakePrivateStatePersistence(
+        activationSnapshot: AtlasVaultPrivateStateSnapshot(
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Encrypted search',
+              request: const AtlasSearchRequest(text: 'encrypted'),
+            ),
+          ],
+          trackerRecords: <AtlasApplicationRecord>[
+            AtlasApplicationRecord(
+              id: 'encrypted-record',
+              jobKey: 'undp:encrypted',
+              status: 'saved',
+            ),
+          ],
+        ),
+      );
+      final controller = AtlasAppController(
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+
+      final result = await controller.activateExistingAtlasVault('vault-alpha');
+
+      expect(result, AtlasVaultActivationResult.activated);
+      expect(privatePersistence.calls, <String>['activate', 'read']);
+      expect(controller.savedSearches.single.name, 'Encrypted search');
+      expect(controller.trackerRecords.single.jobKey, 'undp:encrypted');
+    },
+  );
+
+  test(
+    'active private mutations are non-optimistic and avoid compatibility APIs',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_active_private_cache_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final privatePersistence = _FakePrivateStatePersistence();
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+        privateStateProtectionActive: () => privatePersistence.isActive,
+      );
+      final transport = _RecordingTransport();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+        now: () => _cacheFixtureNow,
+      );
+      addTearDown(controller.dispose);
+      await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+      transport.resetPrivateCounts();
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      privatePersistence.enteredSave = enteredSearch;
+      privatePersistence.releaseSave = releaseSearch;
+      final saveSearch = controller.saveCurrentSearch();
+      await enteredSearch.future;
+      expect(controller.savedSearches, isEmpty);
+      expect(transport.savedSearchNames, isEmpty);
+      releaseSearch.complete();
+      await saveSearch;
+      expect(controller.savedSearches.single.name, 'Search 1');
+
+      final enteredJob = Completer<void>();
+      final releaseJob = Completer<void>();
+      privatePersistence.enteredSave = enteredJob;
+      privatePersistence.releaseSave = releaseJob;
+      final saveJob = controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      await enteredJob.future;
+      expect(controller.trackerRecords, isEmpty);
+      expect(transport.savedJobKeys, isEmpty);
+      releaseJob.complete();
+      await saveJob;
+      expect(controller.trackerRecords.single.jobKey, 'undp_oracle_hcm:34063');
+
+      final persisted = await store.read();
+      expect(persisted, isNotNull);
+      expect(persisted!.containsPrivateState, isFalse);
+      expect(persisted.savedSearches, isEmpty);
+      expect(persisted.trackerRecords, isEmpty);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+    },
+  );
+
+  test(
+    'active refresh preserves public endpoints and suppresses private reads',
+    () async {
+      final transport = _RecordingTransport();
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+      await controller.activateExistingAtlasVault('vault-alpha');
+
+      await controller.testConnection(Uri.parse('http://atlas.test:8765'));
+
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(transport.updateReadCount, 1);
+      expect(transport.sourceReadCount, 1);
+      expect(controller.updateRuns, isNotEmpty);
+      expect(controller.sources, isNotEmpty);
+    },
+  );
+
+  test('explicit deactivation clears private controller state', () async {
+    final privatePersistence = _FakePrivateStatePersistence(
+      activationSnapshot: AtlasVaultPrivateStateSnapshot(
+        savedSearches: <AtlasSavedSearch>[
+          AtlasSavedSearch(
+            name: 'Encrypted search',
+            request: const AtlasSearchRequest(text: 'encrypted'),
+          ),
+        ],
+        trackerRecords: <AtlasApplicationRecord>[
+          AtlasApplicationRecord(
+            id: 'encrypted-record',
+            jobKey: 'undp:encrypted',
+            status: 'saved',
+          ),
+        ],
+      ),
+    );
+    final controller = AtlasAppController(
+      privateStatePersistence: privatePersistence,
+    );
+    addTearDown(controller.dispose);
+    await controller.activateExistingAtlasVault('vault-alpha');
+
+    await controller.deactivateAtlasVault();
+
+    expect(privatePersistence.calls.last, 'deactivate');
+    expect(privatePersistence.isActive, isFalse);
+    expect(controller.savedSearches, isEmpty);
+    expect(controller.trackerRecords, isEmpty);
+  });
+
   testWidgets('search submits query and renders refreshed result rows', (
     tester,
   ) async {
@@ -798,6 +1025,17 @@ final class _RecordingTransport implements AtlasTransport {
   final savedJobKeys = <String>[];
   final detailRequests = <String>[];
   final savedSearchStore = <Map<String, Object?>>[];
+  int savedSearchReadCount = 0;
+  int trackerReadCount = 0;
+  int updateReadCount = 0;
+  int sourceReadCount = 0;
+
+  void resetPrivateCounts() {
+    savedSearchNames.clear();
+    savedJobKeys.clear();
+    savedSearchReadCount = 0;
+    trackerReadCount = 0;
+  }
 
   @override
   Future<Object?> send(AtlasRequest request) async {
@@ -839,6 +1077,7 @@ final class _RecordingTransport implements AtlasTransport {
           return savedSearch;
         }
         expect(request.method, 'GET');
+        savedSearchReadCount += 1;
         return savedSearchStore;
       case 'api/job-detail':
         detailRequests.add(request.queryParameters['job_key'] ?? '');
@@ -876,8 +1115,10 @@ final class _RecordingTransport implements AtlasTransport {
           'updated_at': '2026-07-02T00:00:00Z',
         };
       case 'api/tracker':
+        trackerReadCount += 1;
         return <Object?>[];
       case 'api/updates':
+        updateReadCount += 1;
         return {
           'recent_source_runs': [
             {
@@ -892,6 +1133,7 @@ final class _RecordingTransport implements AtlasTransport {
           ],
         };
       case 'api/sources':
+        sourceReadCount += 1;
         return {
           'sources': [
             {
@@ -911,6 +1153,122 @@ final class _RecordingTransport implements AtlasTransport {
         fail('Unexpected request ${request.method} ${request.path}');
     }
   }
+}
+
+final class _FakePrivateStatePersistence
+    implements AtlasVaultPrivateStatePersistence {
+  _FakePrivateStatePersistence({
+    AtlasVaultPrivateStateSnapshot? activationSnapshot,
+    this.activationResult = AtlasVaultActivationResult.activated,
+  }) : _snapshot =
+           activationSnapshot ??
+           AtlasVaultPrivateStateSnapshot(
+             savedSearches: const <AtlasSavedSearch>[],
+             trackerRecords: const <AtlasApplicationRecord>[],
+           );
+
+  final AtlasVaultActivationResult activationResult;
+  final List<String> calls = <String>[];
+  AtlasVaultPrivateStateSnapshot _snapshot;
+  Completer<void>? enteredSave;
+  Completer<void>? releaseSave;
+
+  @override
+  bool isActive = false;
+
+  @override
+  Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
+    calls.add('activate');
+    if (activationResult == AtlasVaultActivationResult.activated) {
+      isActive = true;
+    }
+    return activationResult;
+  }
+
+  @override
+  Future<void> deactivate() async {
+    calls.add('deactivate');
+    isActive = false;
+    _snapshot = AtlasVaultPrivateStateSnapshot(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+    );
+  }
+
+  @override
+  Future<AtlasVaultPrivateStateSnapshot> read() async {
+    calls.add('read');
+    return _snapshot;
+  }
+
+  @override
+  Future<AtlasVaultPrivateStateSnapshot> saveSearch(
+    AtlasSavedSearch value,
+  ) async {
+    calls.add('saveSearch');
+    enteredSave?.complete();
+    if (releaseSave != null) {
+      await releaseSave!.future;
+    }
+    final remaining = _snapshot.savedSearches
+        .where((existing) => existing.name != value.name)
+        .toList();
+    _snapshot = AtlasVaultPrivateStateSnapshot(
+      savedSearches: <AtlasSavedSearch>[value, ...remaining],
+      trackerRecords: _snapshot.trackerRecords,
+    );
+    return _snapshot;
+  }
+
+  @override
+  Future<AtlasVaultPrivateStateSnapshot> saveTrackerRecord(
+    AtlasApplicationRecord value,
+  ) async {
+    calls.add('saveTrackerRecord');
+    enteredSave?.complete();
+    if (releaseSave != null) {
+      await releaseSave!.future;
+    }
+    final remaining = _snapshot.trackerRecords
+        .where((existing) => existing.jobKey != value.jobKey)
+        .toList();
+    _snapshot = AtlasVaultPrivateStateSnapshot(
+      savedSearches: _snapshot.savedSearches,
+      trackerRecords: <AtlasApplicationRecord>[value, ...remaining],
+    );
+    return _snapshot;
+  }
+}
+
+AtlasLocalCacheSnapshot _privateCacheSnapshot() {
+  return AtlasLocalCacheSnapshot(
+    schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+    baseURL: Uri.parse('http://atlas.test:8765'),
+    savedAt: _cacheFixtureSavedAt,
+    searchRequest: const AtlasSearchRequest(),
+    searchResponse: AtlasSearchResponse(
+      total: 0,
+      limit: 0,
+      offset: 0,
+      results: const <JobSearchResult>[],
+      facets: const <String, Map<String, int>>{},
+      facetLabels: const <String, Map<String, String>>{},
+      unclassifiedCount: 0,
+    ),
+    savedSearches: <AtlasSavedSearch>[
+      AtlasSavedSearch(
+        name: 'Legacy private search',
+        request: const AtlasSearchRequest(text: 'legacy'),
+      ),
+    ],
+    trackerRecords: <AtlasApplicationRecord>[
+      AtlasApplicationRecord(
+        id: 'legacy-record',
+        jobKey: 'undp:legacy',
+        status: 'saved',
+      ),
+    ],
+  );
 }
 
 final class _FailingTransport implements AtlasTransport {
