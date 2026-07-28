@@ -228,8 +228,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         if (!_isCurrent(revision)) {
           return;
         }
-        status =
-            AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
+        status = await _statusAfterMigrationFailure(revision);
       }
       notifyListeners();
     });

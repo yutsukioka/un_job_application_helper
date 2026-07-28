@@ -244,7 +244,9 @@ If journal deletion is uncertain, encrypted authority and selection remain.
 The owner publishes `completionPending`, blocks legacy operations, and offers
 only explicit Resume. Any other post-commit finalization failure is classified
 through authoritative journal/selection state and exposes Resume rather than
-an actionless recovery state.
+an actionless recovery state. Explicit Resume failures use the same
+authoritative classification: pending work remains resumable, while a
+completed but unacknowledged journal deletion publishes active authority.
 
 ## 41. Interruption Recovery
 
@@ -326,7 +328,8 @@ and activation behavior. The implementation adds deterministic interruption,
 cache-disappearance, retained-operation, restart-activation, and fixed
 asynchronous error-redaction regressions. Exact-head Codex review added
 regressions for post-commit Resume availability, interrupted exact selection,
-journal-delete read-back, and persisted pre-commit rollback progress.
+journal-delete read-back, persisted pre-commit rollback progress, and
+authoritative reclassification after a failed explicit Resume.
 
 ## 54. Android Integration Evidence
 

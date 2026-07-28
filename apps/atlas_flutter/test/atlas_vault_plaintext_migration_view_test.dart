@@ -252,6 +252,67 @@ void main() {
     expect(owner.trackerRecordCount, 0);
     expect(owner.blocksLegacyPrivateAuthority, isFalse);
   });
+
+  testWidgets(
+    'transient resume failure preserves explicit resume while pending',
+    (tester) async {
+      final coordinator =
+          _FakeMigrationCoordinator(
+              authorityState:
+                  AtlasVaultPlaintextAuthorityState.migrationPending,
+            )
+            ..resumeFailureAuthority =
+                AtlasVaultPlaintextAuthorityState.migrationPending;
+      final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: coordinator,
+      );
+      addTearDown(owner.dispose);
+      await owner.bootstrapAuthority();
+
+      await owner.resumeMigration();
+
+      expect(coordinator.calls, <String>[
+        'inspect-authority',
+        'resume',
+        'inspect-authority',
+      ]);
+      expect(
+        owner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: AtlasVaultPlaintextMigrationPanel(owner: owner)),
+        ),
+      );
+      expect(find.text('Resume Migration'), findsOneWidget);
+      expect(find.textContaining('requires recovery'), findsNothing);
+    },
+  );
+
+  test('failed resume adopts authoritative completed activation', () async {
+    final coordinator =
+        _FakeMigrationCoordinator(
+            authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+          )
+          ..resumeFailureAuthority =
+              AtlasVaultPlaintextAuthorityState.encryptedActive;
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+    await owner.bootstrapAuthority();
+
+    await owner.resumeMigration();
+
+    expect(coordinator.calls, <String>[
+      'inspect-authority',
+      'resume',
+      'inspect-authority',
+    ]);
+    expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.active);
+    expect(owner.blocksLegacyPrivateAuthority, isTrue);
+  });
 }
 
 final class _FakeMigrationCoordinator
@@ -270,6 +331,7 @@ final class _FakeMigrationCoordinator
       AtlasVaultPlaintextMigrationStage.commitInProgress;
   bool failFinalize = false;
   bool resumeCompletesLegacy = false;
+  AtlasVaultPlaintextAuthorityState? resumeFailureAuthority;
 
   AtlasVaultPlaintextMigrationSummary get _inventorySummary =>
       const AtlasVaultPlaintextMigrationSummary(
@@ -332,6 +394,11 @@ final class _FakeMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextMigrationSummary> resume() async {
     calls.add('resume');
+    final failureAuthority = resumeFailureAuthority;
+    if (failureAuthority != null) {
+      authorityState = failureAuthority;
+      throw const AtlasVaultPlaintextMigrationException();
+    }
     if (resumeCompletesLegacy) {
       authorityState = AtlasVaultPlaintextAuthorityState.legacy;
       return _inventorySummary;
