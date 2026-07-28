@@ -103,7 +103,11 @@ private lists directly. It also carries the cache snapshot's normalized API
 authority in memory. A cache containing private values must match the current
 compatibility authority before any compatibility read, preparation, resume, or
 remote deletion. Corrupt, incomplete, ambiguous, or authority-mismatched cache
-content fails closed.
+content fails closed. Every public object and row must also survive a lossless
+decode and canonical re-encode through its production model. Missing or
+defaulted nested search, job, detail, health, update-run, or source fields
+therefore fail before inventory instead of being rewritten during private
+state removal.
 
 ## 15. Expired-Cache Migration Read
 
@@ -172,8 +176,10 @@ master key and purpose-bound AES-GCM associated data before disk persistence.
 ## 23. Journal Schema
 
 The strict version-1 journal records non-semantic transaction IDs, canonical
-inventory, remote deletion handles, resource hashes, progress lists, cache
-state, selection progress, and monotonic rollback intent/store-removal flags.
+merged inventory, canonical original remote snapshots, remote deletion
+handles, resource hashes, progress lists, cache state, selection progress, and
+monotonic rollback intent/store-removal flags. The original snapshots remain
+separate from complementary optional values merged from memory or cache.
 Unknown or inconsistent fields fail closed.
 
 ## 24. Journal Stages
@@ -227,8 +233,9 @@ expected name is adopted once.
 ## 32. Compatibility Tracker Deletion
 
 Expected tracker handles are processed in deterministic job-key order. Record
-ID, job key, and canonical content are revalidated before deletion and after
-read-back.
+ID, job key, and the canonical original remote content are revalidated before
+deletion and after read-back. Resume uses the same protected snapshots, not
+the richer merged encrypted inventory.
 
 ## 33. Unexpected Remote Mutation Behavior
 
@@ -380,7 +387,11 @@ lossy compatibility inventory decoding, and enforce the ISO-8601 maximum UTC
 offset before migration side effects. The subsequent exact-head correction
 locks the strict compatibility decoder to the backend's complete
 `VacancySearchRequest` shape and rejects any non-default criterion that the
-reviewed encrypted payload cannot preserve.
+reviewed encrypted payload cannot preserve. The final review correction
+persists canonical compatibility rows separately from merged encrypted
+records, validates finalization and resume against those original snapshots,
+and rejects any cached public row or nested object that cannot round-trip
+losslessly before migration side effects.
 
 ## 54. Android Integration Evidence
 

@@ -242,6 +242,8 @@ final class AtlasVaultPlaintextMigrationJournal {
     required this.inventorySha256,
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
+    required List<AtlasSavedSearch> remoteSavedSearches,
+    required List<AtlasApplicationRecord> remoteTrackerRecords,
     required List<String> remoteSavedSearchNames,
     required List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles,
     required this.cachePrivateSha256,
@@ -256,6 +258,12 @@ final class AtlasVaultPlaintextMigrationJournal {
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
+       ),
+       remoteSavedSearches = List<AtlasSavedSearch>.unmodifiable(
+         remoteSavedSearches,
+       ),
+       remoteTrackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+         remoteTrackerRecords,
        ),
        remoteSavedSearchNames = List<String>.unmodifiable(
          remoteSavedSearchNames,
@@ -283,6 +291,8 @@ final class AtlasVaultPlaintextMigrationJournal {
   final String inventorySha256;
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
+  final List<AtlasSavedSearch> remoteSavedSearches;
+  final List<AtlasApplicationRecord> remoteTrackerRecords;
   final List<String> remoteSavedSearchNames;
   final List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles;
   final String? cachePrivateSha256;
@@ -311,6 +321,8 @@ final class AtlasVaultPlaintextMigrationJournal {
       inventorySha256: inventory.sha256,
       savedSearches: inventory.savedSearches,
       trackerRecords: inventory.trackerRecords,
+      remoteSavedSearches: inventory.remoteSavedSearches,
+      remoteTrackerRecords: inventory.remoteTrackerRecords,
       remoteSavedSearchNames: inventory.remoteSavedSearchNames,
       remoteTrackerHandles: inventory.remoteTrackerHandles,
       cachePrivateSha256: inventory.cachePrivateSha256,
@@ -357,6 +369,8 @@ final class AtlasVaultPlaintextMigrationJournal {
         'inventory_sha256',
         'saved_searches',
         'tracker_records',
+        'remote_saved_searches',
+        'remote_tracker_records',
         'remote_saved_search_names',
         'remote_tracker_handles',
         'cache_private_sha256',
@@ -380,6 +394,14 @@ final class AtlasVaultPlaintextMigrationJournal {
       ];
       final trackerRecords = <AtlasApplicationRecord>[
         for (final item in _requiredList(value['tracker_records']))
+          _trackerFromJournal(_stringMap(item)),
+      ];
+      final remoteSavedSearches = <AtlasSavedSearch>[
+        for (final item in _requiredList(value['remote_saved_searches']))
+          _savedSearchFromJournal(_stringMap(item)),
+      ];
+      final remoteTrackerRecords = <AtlasApplicationRecord>[
+        for (final item in _requiredList(value['remote_tracker_records']))
           _trackerFromJournal(_stringMap(item)),
       ];
       final remoteSavedSearchNames = <String>[
@@ -416,6 +438,8 @@ final class AtlasVaultPlaintextMigrationJournal {
         inventorySha256: _requiredSha256(value['inventory_sha256']),
         savedSearches: savedSearches,
         trackerRecords: trackerRecords,
+        remoteSavedSearches: remoteSavedSearches,
+        remoteTrackerRecords: remoteTrackerRecords,
         remoteSavedSearchNames: remoteSavedSearchNames,
         remoteTrackerHandles: remoteTrackerHandles,
         cachePrivateSha256: _optionalSha256(value['cache_private_sha256']),
@@ -530,6 +554,8 @@ final class AtlasVaultPlaintextMigrationJournal {
       inventorySha256: inventorySha256,
       savedSearches: savedSearches,
       trackerRecords: trackerRecords,
+      remoteSavedSearches: remoteSavedSearches,
+      remoteTrackerRecords: remoteTrackerRecords,
       remoteSavedSearchNames: remoteSavedSearchNames,
       remoteTrackerHandles: remoteTrackerHandles,
       cachePrivateSha256: cachePrivateSha256,
@@ -562,6 +588,12 @@ final class AtlasVaultPlaintextMigrationJournal {
     ],
     'tracker_records': <Object?>[
       for (final value in trackerRecords) _trackerJson(value),
+    ],
+    'remote_saved_searches': <Object?>[
+      for (final value in remoteSavedSearches) _savedSearchJson(value),
+    ],
+    'remote_tracker_records': <Object?>[
+      for (final value in remoteTrackerRecords) _trackerJson(value),
     ],
     'remote_saved_search_names': List<String>.from(remoteSavedSearchNames),
     'remote_tracker_handles': <Object?>[
@@ -598,6 +630,14 @@ final class AtlasVaultPlaintextMigrationJournal {
     _requireSortedUnique(
       trackerRecords.map((value) => value.jobKey).toList(growable: false),
     );
+    final remoteSearchNames = remoteSavedSearches
+        .map((value) => value.name)
+        .toList(growable: false);
+    _requireSortedUnique(remoteSearchNames);
+    final remoteTrackerKeys = remoteTrackerRecords
+        .map((value) => '${value.jobKey}\u0000${value.id}')
+        .toList(growable: false);
+    _requireSortedUnique(remoteTrackerKeys);
     _requireSortedUnique(remoteSavedSearchNames);
     _requireSortedUnique(deletedSavedSearchNames);
     _requireSortedUnique(deletedTrackerRecordIds);
@@ -607,6 +647,19 @@ final class AtlasVaultPlaintextMigrationJournal {
     _requireSortedUnique(trackerKeys);
     if (remoteTrackerHandles.map((value) => value.recordId).toSet().length !=
         remoteTrackerHandles.length) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (!_jsonEqual(remoteSearchNames, remoteSavedSearchNames) ||
+        !_jsonEqual(
+          <Object?>[
+            for (final value in remoteTrackerRecords)
+              AtlasVaultRemoteTrackerHandle(
+                recordId: value.id,
+                jobKey: value.jobKey,
+              ).toJson(),
+          ],
+          <Object?>[for (final value in remoteTrackerHandles) value.toJson()],
+        )) {
       throw const AtlasVaultPlaintextMigrationException();
     }
     if (!remoteSavedSearchNames.toSet().containsAll(deletedSavedSearchNames) ||
@@ -1247,7 +1300,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
     AtlasVaultPlaintextPrivateState state,
   ) {
     final expectedSearches = <String, AtlasSavedSearch>{
-      for (final value in journal.savedSearches) value.name: value,
+      for (final value in journal.remoteSavedSearches) value.name: value,
     };
     final expectedSearchNames = journal.remoteSavedSearchNames.toSet();
     for (final value in state.savedSearches) {
@@ -1269,7 +1322,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       for (final value in journal.remoteTrackerHandles) value.recordId: value,
     };
     final expectedTrackers = <String, AtlasApplicationRecord>{
-      for (final value in journal.trackerRecords) value.jobKey: value,
+      for (final value in journal.remoteTrackerRecords) value.id: value,
     };
     for (final value in state.trackerRecords) {
       final handle = handles[value.id];
@@ -1278,7 +1331,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
           journal.deletedTrackerRecordIds.contains(value.id)) {
         throw const AtlasVaultPlaintextMigrationException();
       }
-      final expected = expectedTrackers[value.jobKey];
+      final expected = expectedTrackers[value.id];
       if (expected == null ||
           !_jsonEqual(
             _trackerJson(expected),
@@ -1667,6 +1720,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final expected = _MigrationInventory(
         savedSearches: journal.savedSearches,
         trackerRecords: journal.trackerRecords,
+        remoteSavedSearches: journal.remoteSavedSearches,
+        remoteTrackerRecords: journal.remoteTrackerRecords,
         remoteSavedSearchNames: journal.remoteSavedSearchNames,
         remoteTrackerHandles: journal.remoteTrackerHandles,
         cachePrivateSha256: journal.cachePrivateSha256,
@@ -1747,6 +1802,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
     return _MigrationInventory(
       savedSearches: savedSearches,
       trackerRecords: trackerRecords,
+      remoteSavedSearches: const <AtlasSavedSearch>[],
+      remoteTrackerRecords: const <AtlasApplicationRecord>[],
       remoteSavedSearchNames: const <String>[],
       remoteTrackerHandles: const <AtlasVaultRemoteTrackerHandle>[],
       cachePrivateSha256: null,
@@ -1796,14 +1853,24 @@ final class AtlasVaultPlaintextMigrationCoordinator
         ..sort((left, right) => left.name.compareTo(right.name));
       final trackerRecords = trackerByKey.values.toList(growable: false)
         ..sort((left, right) => left.jobKey.compareTo(right.jobKey));
-      final remoteSavedSearchNames =
-          compatibility.savedSearches
-              .map((value) => _requiredText(value.name))
-              .toSet()
-              .toList(growable: false)
-            ..sort();
+      final remoteSavedSearches = <AtlasSavedSearch>[
+        for (final value in compatibility.savedSearches)
+          _savedSearchFromJournal(_savedSearchJson(value)),
+      ]..sort((left, right) => left.name.compareTo(right.name));
+      final remoteSavedSearchNames = remoteSavedSearches
+          .map((value) => value.name)
+          .toList(growable: false);
+      _requireSortedUnique(remoteSavedSearchNames);
+      final remoteTrackerRecords =
+          <AtlasApplicationRecord>[
+            for (final value in compatibility.trackerRecords)
+              _trackerFromJournal(_trackerJson(value)),
+          ]..sort((left, right) {
+            final keyOrder = left.jobKey.compareTo(right.jobKey);
+            return keyOrder == 0 ? left.id.compareTo(right.id) : keyOrder;
+          });
       final handlesByJobKey = <String, AtlasVaultRemoteTrackerHandle>{};
-      for (final value in compatibility.trackerRecords) {
+      for (final value in remoteTrackerRecords) {
         if (value.id.isEmpty || value.jobKey.isEmpty) {
           throw const AtlasVaultPlaintextMigrationException();
         }
@@ -1833,6 +1900,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
         trackerRecords: trackerRecords,
         remoteSavedSearchNames: remoteSavedSearchNames,
         remoteTrackerHandles: remoteTrackerHandles,
+        remoteSavedSearches: remoteSavedSearches,
+        remoteTrackerRecords: remoteTrackerRecords,
         cachePrivateSha256: cache.privateSha256,
         localCachePrivatePresent:
             cache.savedSearches.isNotEmpty || cache.trackerRecords.isNotEmpty,
@@ -1949,6 +2018,8 @@ final class _MigrationInventory {
   _MigrationInventory({
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
+    required List<AtlasSavedSearch> remoteSavedSearches,
+    required List<AtlasApplicationRecord> remoteTrackerRecords,
     required List<String> remoteSavedSearchNames,
     required List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles,
     required this.cachePrivateSha256,
@@ -1959,6 +2030,12 @@ final class _MigrationInventory {
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
        ),
+       remoteSavedSearches = List<AtlasSavedSearch>.unmodifiable(
+         remoteSavedSearches,
+       ),
+       remoteTrackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+         remoteTrackerRecords,
+       ),
        remoteSavedSearchNames = List<String>.unmodifiable(
          remoteSavedSearchNames,
        ),
@@ -1968,6 +2045,8 @@ final class _MigrationInventory {
 
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
+  final List<AtlasSavedSearch> remoteSavedSearches;
+  final List<AtlasApplicationRecord> remoteTrackerRecords;
   final List<String> remoteSavedSearchNames;
   final List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles;
   final String? cachePrivateSha256;
@@ -2164,6 +2243,8 @@ bool _journalMatchesInventory(
         _MigrationInventory(
           savedSearches: journal.savedSearches,
           trackerRecords: journal.trackerRecords,
+          remoteSavedSearches: journal.remoteSavedSearches,
+          remoteTrackerRecords: journal.remoteTrackerRecords,
           remoteSavedSearchNames: journal.remoteSavedSearchNames,
           remoteTrackerHandles: journal.remoteTrackerHandles,
           cachePrivateSha256: journal.cachePrivateSha256,
@@ -2179,6 +2260,25 @@ bool _journalMatchesInventory(
       _jsonEqual(
         journal.remoteSavedSearchNames,
         inventory.remoteSavedSearchNames,
+      ) &&
+      _jsonEqual(
+        <Object?>[
+          for (final value in journal.remoteSavedSearches)
+            _savedSearchJson(value),
+        ],
+        <Object?>[
+          for (final value in inventory.remoteSavedSearches)
+            _savedSearchJson(value),
+        ],
+      ) &&
+      _jsonEqual(
+        <Object?>[
+          for (final value in journal.remoteTrackerRecords) _trackerJson(value),
+        ],
+        <Object?>[
+          for (final value in inventory.remoteTrackerRecords)
+            _trackerJson(value),
+        ],
       ) &&
       _jsonEqual(
         <Object?>[
@@ -2221,6 +2321,23 @@ bool _sameInventory(_MigrationInventory left, _MigrationInventory right) {
       left.localCachePrivatePresent == right.localCachePrivatePresent &&
       left.compatibilityPrivatePresent == right.compatibilityPrivatePresent &&
       _jsonEqual(left.remoteSavedSearchNames, right.remoteSavedSearchNames) &&
+      _jsonEqual(
+        <Object?>[
+          for (final value in left.remoteSavedSearches) _savedSearchJson(value),
+        ],
+        <Object?>[
+          for (final value in right.remoteSavedSearches)
+            _savedSearchJson(value),
+        ],
+      ) &&
+      _jsonEqual(
+        <Object?>[
+          for (final value in left.remoteTrackerRecords) _trackerJson(value),
+        ],
+        <Object?>[
+          for (final value in right.remoteTrackerRecords) _trackerJson(value),
+        ],
+      ) &&
       _jsonEqual(
         <Object?>[
           for (final value in left.remoteTrackerHandles) value.toJson(),

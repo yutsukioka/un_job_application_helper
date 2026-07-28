@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
@@ -411,6 +412,49 @@ void main() {
           store.readPrivateStateForMigration(),
           throwsA(isA<AtlasLocalCacheMigrationException>()),
         );
+      },
+    );
+
+    test(
+      'migration strictly validates every cached public row and object',
+      () async {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureReadAt,
+        );
+        await store.write(_snapshot(savedAt: _fixtureSavedAt));
+        final original = Map<String, Object?>.from(
+          jsonDecode(await cacheFile.readAsString()) as Map,
+        );
+        final corruptions = <void Function(Map<String, Object?>)>[
+          (value) => value['search_request'] = <String, Object?>{},
+          (value) {
+            final response = Map<String, Object?>.from(
+              value['search_response']! as Map,
+            )..['results'] = <Object?>[<String, Object?>{}];
+            value['search_response'] = response;
+          },
+          (value) => value['cached_all_jobs'] = <Object?>[<String, Object?>{}],
+          (value) => value['health_summary'] = <String, Object?>{},
+          (value) => value['cached_job_details'] = <String, Object?>{
+            'undp_oracle_hcm:34063': <String, Object?>{},
+          },
+          (value) => value['update_runs'] = <Object?>[<String, Object?>{}],
+          (value) => value['sources'] = <Object?>[<String, Object?>{}],
+        ];
+
+        for (final corrupt in corruptions) {
+          final candidate = Map<String, Object?>.from(
+            jsonDecode(jsonEncode(original)) as Map,
+          );
+          corrupt(candidate);
+          await cacheFile.writeAsString(jsonEncode(candidate));
+
+          await expectLater(
+            store.readPrivateStateForMigration(),
+            throwsA(isA<AtlasLocalCacheMigrationException>()),
+          );
+        }
       },
     );
   });

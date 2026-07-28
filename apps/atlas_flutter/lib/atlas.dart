@@ -1380,6 +1380,7 @@ final class AtlasLocalCacheStore {
         details.values.any((item) => item is! Map)) {
       throw const AtlasLocalCacheMigrationException();
     }
+    _requireStrictMigrationPublicState(value);
     return value;
   }
 
@@ -1441,6 +1442,26 @@ Future<void> _deleteMigrationTemporaryFile(File file) async {
     }
   } catch (_) {
     // The fixed migration failure remains authoritative.
+  }
+}
+
+void _requireStrictMigrationPublicState(Map<String, Object?> value) {
+  try {
+    final publicCandidate = Map<String, Object?>.from(value)
+      ..['saved_searches'] = <Object?>[]
+      ..['tracker_records'] = <Object?>[];
+    final restored = AtlasLocalCacheSnapshot.fromJson(publicCandidate).toJson();
+    final expectedPublic = Map<String, Object?>.from(publicCandidate)
+      ..remove('saved_searches')
+      ..remove('tracker_records');
+    final restoredPublic = Map<String, Object?>.from(restored)
+      ..remove('saved_searches')
+      ..remove('tracker_records');
+    if (!_migrationJsonEquals(expectedPublic, restoredPublic)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
   }
 }
 

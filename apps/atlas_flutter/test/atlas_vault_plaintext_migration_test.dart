@@ -235,6 +235,49 @@ void main() {
   });
 
   test(
+    'remote deletion and resume validate original rows when merged data is richer',
+    () async {
+      final fixture = _MigrationFixture();
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          AtlasSavedSearch(name: 'UN roles', request: _savedSearch().request),
+        ],
+        trackerRecords: <AtlasApplicationRecord>[
+          AtlasApplicationRecord(
+            id: 'tracker-record-1',
+            jobKey: 'unicef:private-job',
+            status: 'saved',
+          ),
+        ],
+      );
+
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      final prepared = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+      );
+      expect(prepared.savedSearches.single.description, isNotNull);
+      expect(prepared.remoteSavedSearches.single.description, isNull);
+      expect(prepared.trackerRecords.single.notes, isNotNull);
+      expect(prepared.remoteTrackerRecords.single.notes, isNull);
+      fixture.compatibility.failAfterNextSavedSearchDelete = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      final result = await fixture.coordinator.resume();
+
+      expect(result.stage, isNull);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.compatibility.state.trackerRecords, isEmpty);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.selection.value, isNotNull);
+      expect(fixture.journal.bytes, isNull);
+    },
+  );
+
+  test(
     'compatibility inventory failure creates no migration resource',
     () async {
       final fixture = _MigrationFixture();
