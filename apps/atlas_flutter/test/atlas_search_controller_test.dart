@@ -1975,6 +1975,13 @@ void main() {
           releaseDelete.complete();
         }
       });
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
       final controller = AtlasAppController(
         localCacheStore: AtlasLocalCacheStore(
           file: _DeleteGatedFile(
@@ -1984,10 +1991,29 @@ void main() {
           ),
         ),
       );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
       addTearDown(controller.dispose);
+      await migrationOwner.bootstrapAuthority();
+      await migrationOwner.reviewInventory();
+      controller.savedSearches = <AtlasSavedSearch>[
+        AtlasSavedSearch(
+          name: 'Controller-only legacy search',
+          request: const AtlasSearchRequest(text: 'legacy'),
+        ),
+      ];
+      controller.trackerRecords = <AtlasApplicationRecord>[
+        AtlasApplicationRecord(
+          id: 'controller-only-record',
+          jobKey: 'legacy:controller-only',
+          status: 'saved',
+        ),
+      ];
 
       final clear = controller.clearPersistedCache();
       await enteredDelete.future;
+      await migrationOwner.prepareEncryptedMigration();
       var drainCompleted = false;
       final drain = controller.drainAdmittedPlaintextOperations().whenComplete(
         () => drainCompleted = true,
@@ -2002,6 +2028,8 @@ void main() {
 
       expect(drainCompleted, isTrue);
       expect(await cacheFile.exists(), isFalse);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
     },
   );
 

@@ -360,6 +360,7 @@ class AtlasAppController extends ChangeNotifier
       _publishPersistedCacheMigrationBlock();
       return;
     }
+    final clearsLegacyPrivateState = !_privateStateProtectionActive;
     await _retainCacheMutation(() async {
       if (_plaintextMigrationBlocksPersistedCacheWrites) {
         _publishPersistedCacheMigrationBlock();
@@ -374,7 +375,7 @@ class AtlasAppController extends ChangeNotifier
       results = const [];
       updateRuns = const [];
       sources = const [];
-      if (!_privateStateProtectionActive) {
+      if (clearsLegacyPrivateState) {
         savedSearches = const [];
         trackerRecords = const [];
       }

@@ -85,9 +85,11 @@ deletion. Cache writes and clears are one retained mutation stream, and
 compatibility saved-search and tracker writes are a second retained stream.
 The production coordinator drains both streams before reading any in-memory,
 cache, or compatibility value. An already-admitted clear includes its disk and
-in-memory clearing before the drain completes; a clear or compatibility write
-that has not yet been admitted is rejected once preparation publishes its
-blocking state.
+in-memory clearing before the drain completes. Whether that clear removes
+legacy controller private state is captured when the clear is admitted, so a
+later `preparing` state cannot preserve controller-only records after the disk
+clear. A clear or compatibility write that has not yet been admitted is
+rejected once preparation publishes its blocking state.
 
 ## 13. In-Memory Inventory
 
@@ -346,8 +348,9 @@ journal-delete read-back, persisted pre-commit rollback progress, and
 authoritative reclassification after a failed explicit Resume. Later
 exact-head cycles added pre-commit cache byte preservation, suppression of
 explicit clearing after an asynchronous gate crossing, retained clear draining
-before inventory, and draining every admitted compatibility mutation before
-the first inventory source read.
+before inventory, complete controller cleanup for an admitted legacy clear,
+and draining every admitted compatibility mutation before the first inventory
+source read.
 
 ## 54. Android Integration Evidence
 
