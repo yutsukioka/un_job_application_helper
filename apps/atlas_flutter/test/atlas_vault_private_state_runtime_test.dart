@@ -54,6 +54,30 @@ void main() {
   });
 
   test(
+    'activation fails closed when store metadata names another vault',
+    () async {
+      final storeJson = _emptyStore().toJson();
+      final metadata = Map<String, Object?>.from(
+        storeJson['vault_metadata']! as Map<String, Object?>,
+      );
+      metadata['vault_id'] = 'vault-other';
+      storeJson['vault_metadata'] = metadata;
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: _FakeLocalStoreIO(
+          store: vault.AtlasVaultLocalStore.fromJson(storeJson),
+        ),
+      );
+
+      expect(
+        await runtime.activateExisting(_vaultId),
+        AtlasVaultActivationResult.failed,
+      );
+      expect(runtime.isActive, isFalse);
+    },
+  );
+
+  test(
     'activation decrypts supported records and hides other families',
     () async {
       final records = <vault.AtlasVaultEncryptedRecord>[

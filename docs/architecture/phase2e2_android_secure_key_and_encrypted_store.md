@@ -251,7 +251,9 @@ metadata mappings, and clears projected private lists.
 
 While AtlasVault is active, controller cache writes explicitly transform
 snapshots to remove saved searches and tracker records while preserving every
-public field.
+committed public field. The controller separately retains the last committed
+public-search request, so a private saved-search draft cannot enter the public
+cache while a debounced public search is still pending.
 
 ## 43. Hard Plaintext Guard
 
@@ -320,7 +322,8 @@ and a real Android storage integration.
 
 Checkpoint B preserves a separate red commit before runtime wiring. Its green
 gate covers activation, migration preflight, encrypted mutations, endpoint
-suppression, cache guarding, deactivation, and real Android integration.
+suppression, cache guarding, private-draft/public-request separation,
+deactivation, and real Android integration.
 
 ## 55. Verification
 
@@ -338,12 +341,12 @@ scope, protected paths, and artifact scans.
 - Wrapped key: implemented.
 - Encrypted local store: implemented.
 - Atomic create/replace: implemented.
-- Explicit activation: pending Checkpoint B.
-- `migrationRequired` gate: pending Checkpoint B.
-- Encrypted saved-search writes: pending Checkpoint B.
-- Encrypted tracker writes: pending Checkpoint B.
-- Active plaintext cache writes: pending Checkpoint B.
-- Private compatibility endpoints while active: pending Checkpoint B.
+- Explicit activation: implemented.
+- `migrationRequired` gate: implemented.
+- Encrypted saved-search writes: implemented.
+- Encrypted tracker writes: implemented.
+- Active plaintext cache writes: blocked.
+- Private compatibility endpoints while active: blocked.
 - Automatic activation: not implemented.
 - User-facing activation: not implemented.
 - Migration: not implemented.

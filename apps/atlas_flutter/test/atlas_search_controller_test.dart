@@ -840,6 +840,7 @@ void main() {
         await controller.activateExistingAtlasVault('vault-alpha'),
         AtlasVaultActivationResult.activated,
       );
+      controller.updateQuery('PRIVATE_CACHE_SENTINEL');
 
       final enteredSearch = Completer<void>();
       final releaseSearch = Completer<void>();
@@ -870,6 +871,10 @@ void main() {
       expect(persisted!.containsPrivateState, isFalse);
       expect(persisted.savedSearches, isEmpty);
       expect(persisted.trackerRecords, isEmpty);
+      expect(
+        await store.file.readAsString(),
+        isNot(contains('PRIVATE_CACHE_SENTINEL')),
+      );
       expect(transport.savedSearchReadCount, 0);
       expect(transport.trackerReadCount, 0);
     },
@@ -1159,7 +1164,6 @@ final class _FakePrivateStatePersistence
     implements AtlasVaultPrivateStatePersistence {
   _FakePrivateStatePersistence({
     AtlasVaultPrivateStateSnapshot? activationSnapshot,
-    this.activationResult = AtlasVaultActivationResult.activated,
   }) : _snapshot =
            activationSnapshot ??
            AtlasVaultPrivateStateSnapshot(
@@ -1167,7 +1171,6 @@ final class _FakePrivateStatePersistence
              trackerRecords: const <AtlasApplicationRecord>[],
            );
 
-  final AtlasVaultActivationResult activationResult;
   final List<String> calls = <String>[];
   AtlasVaultPrivateStateSnapshot _snapshot;
   Completer<void>? enteredSave;
@@ -1179,10 +1182,8 @@ final class _FakePrivateStatePersistence
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
     calls.add('activate');
-    if (activationResult == AtlasVaultActivationResult.activated) {
-      isActive = true;
-    }
-    return activationResult;
+    isActive = true;
+    return AtlasVaultActivationResult.activated;
   }
 
   @override
