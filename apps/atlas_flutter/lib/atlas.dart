@@ -1306,9 +1306,12 @@ final class AtlasLocalCacheStore {
     if (!await file.exists()) {
       throw const AtlasLocalCacheMigrationException();
     }
+    final String source;
     final Object? decoded;
     try {
-      decoded = jsonDecode(await file.readAsString());
+      source = await file.readAsString();
+      _rejectMigrationDuplicateJsonKeys(source);
+      decoded = jsonDecode(source);
     } catch (_) {
       throw const AtlasLocalCacheMigrationException();
     }
@@ -1443,6 +1446,237 @@ Future<void> _deleteMigrationTemporaryFile(File file) async {
   } catch (_) {
     // The fixed migration failure remains authoritative.
   }
+}
+
+void _rejectMigrationDuplicateJsonKeys(String source) {
+  try {
+    _MigrationJsonKeyScanner(source).parse();
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+final class _MigrationJsonKeyScanner {
+  _MigrationJsonKeyScanner(this._source);
+
+  final String _source;
+  int _offset = 0;
+
+  void parse() {
+    _skipWhitespace();
+    _parseValue();
+    _skipWhitespace();
+    if (_offset != _source.length) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  void _parseValue() {
+    if (_offset >= _source.length) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    switch (_source.codeUnitAt(_offset)) {
+      case 0x7b:
+        _parseObject();
+        return;
+      case 0x5b:
+        _parseArray();
+        return;
+      case 0x22:
+        _parseString();
+        return;
+      case 0x74:
+        _parseLiteral('true');
+        return;
+      case 0x66:
+        _parseLiteral('false');
+        return;
+      case 0x6e:
+        _parseLiteral('null');
+        return;
+      default:
+        _parseNumber();
+        return;
+    }
+  }
+
+  void _parseObject() {
+    _consume(0x7b);
+    _skipWhitespace();
+    if (_tryConsume(0x7d)) {
+      return;
+    }
+    final keys = <String>{};
+    while (true) {
+      final key = _parseString();
+      if (!keys.add(key)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      _skipWhitespace();
+      _consume(0x3a);
+      _skipWhitespace();
+      _parseValue();
+      _skipWhitespace();
+      if (_tryConsume(0x7d)) {
+        return;
+      }
+      _consume(0x2c);
+      _skipWhitespace();
+    }
+  }
+
+  void _parseArray() {
+    _consume(0x5b);
+    _skipWhitespace();
+    if (_tryConsume(0x5d)) {
+      return;
+    }
+    while (true) {
+      _parseValue();
+      _skipWhitespace();
+      if (_tryConsume(0x5d)) {
+        return;
+      }
+      _consume(0x2c);
+      _skipWhitespace();
+    }
+  }
+
+  String _parseString() {
+    final start = _offset;
+    _consume(0x22);
+    while (_offset < _source.length) {
+      final codeUnit = _source.codeUnitAt(_offset);
+      if (codeUnit == 0x22) {
+        _offset += 1;
+        final decoded = jsonDecode(_source.substring(start, _offset));
+        if (decoded is! String) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+        return decoded;
+      }
+      if (codeUnit < 0x20) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      if (codeUnit != 0x5c) {
+        _offset += 1;
+        continue;
+      }
+      _offset += 1;
+      if (_offset >= _source.length) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final escape = _source.codeUnitAt(_offset);
+      _offset += 1;
+      if (escape == 0x75) {
+        for (var index = 0; index < 4; index += 1) {
+          if (_offset >= _source.length ||
+              !_isHex(_source.codeUnitAt(_offset))) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          _offset += 1;
+        }
+      } else if (escape != 0x22 &&
+          escape != 0x5c &&
+          escape != 0x2f &&
+          escape != 0x62 &&
+          escape != 0x66 &&
+          escape != 0x6e &&
+          escape != 0x72 &&
+          escape != 0x74) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    throw const AtlasLocalCacheMigrationException();
+  }
+
+  void _parseNumber() {
+    if (_tryConsume(0x2d) && _offset >= _source.length) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (_tryConsume(0x30)) {
+      if (_offset < _source.length && _isDigit(_source.codeUnitAt(_offset))) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    } else {
+      if (_offset >= _source.length ||
+          !_isNonzeroDigit(_source.codeUnitAt(_offset))) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      _offset += 1;
+      while (_offset < _source.length &&
+          _isDigit(_source.codeUnitAt(_offset))) {
+        _offset += 1;
+      }
+    }
+    if (_tryConsume(0x2e)) {
+      _consumeDigits();
+    }
+    if (_offset < _source.length &&
+        (_source.codeUnitAt(_offset) == 0x65 ||
+            _source.codeUnitAt(_offset) == 0x45)) {
+      _offset += 1;
+      if (_offset < _source.length &&
+          (_source.codeUnitAt(_offset) == 0x2b ||
+              _source.codeUnitAt(_offset) == 0x2d)) {
+        _offset += 1;
+      }
+      _consumeDigits();
+    }
+  }
+
+  void _consumeDigits() {
+    if (_offset >= _source.length || !_isDigit(_source.codeUnitAt(_offset))) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    while (_offset < _source.length && _isDigit(_source.codeUnitAt(_offset))) {
+      _offset += 1;
+    }
+  }
+
+  void _parseLiteral(String literal) {
+    if (!_source.startsWith(literal, _offset)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    _offset += literal.length;
+  }
+
+  void _skipWhitespace() {
+    while (_offset < _source.length) {
+      final codeUnit = _source.codeUnitAt(_offset);
+      if (codeUnit != 0x20 &&
+          codeUnit != 0x09 &&
+          codeUnit != 0x0a &&
+          codeUnit != 0x0d) {
+        return;
+      }
+      _offset += 1;
+    }
+  }
+
+  void _consume(int expected) {
+    if (!_tryConsume(expected)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+
+  bool _tryConsume(int expected) {
+    if (_offset >= _source.length || _source.codeUnitAt(_offset) != expected) {
+      return false;
+    }
+    _offset += 1;
+    return true;
+  }
+
+  static bool _isDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39;
+
+  static bool _isNonzeroDigit(int codeUnit) =>
+      codeUnit >= 0x31 && codeUnit <= 0x39;
+
+  static bool _isHex(int codeUnit) =>
+      _isDigit(codeUnit) ||
+      (codeUnit >= 0x41 && codeUnit <= 0x46) ||
+      (codeUnit >= 0x61 && codeUnit <= 0x66);
 }
 
 void _requireStrictMigrationPublicState(Map<String, Object?> value) {

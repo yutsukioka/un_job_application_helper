@@ -246,6 +246,7 @@ final class AtlasVaultPlaintextMigrationJournal {
     required List<AtlasApplicationRecord> remoteTrackerRecords,
     required List<String> remoteSavedSearchNames,
     required List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles,
+    required this.compatibilityAuthority,
     required this.cachePrivateSha256,
     required this.vaultKeySha256,
     required this.storeSha256,
@@ -295,6 +296,7 @@ final class AtlasVaultPlaintextMigrationJournal {
   final List<AtlasApplicationRecord> remoteTrackerRecords;
   final List<String> remoteSavedSearchNames;
   final List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles;
+  final String compatibilityAuthority;
   final String? cachePrivateSha256;
   final String? vaultKeySha256;
   final String? storeSha256;
@@ -325,6 +327,7 @@ final class AtlasVaultPlaintextMigrationJournal {
       remoteTrackerRecords: inventory.remoteTrackerRecords,
       remoteSavedSearchNames: inventory.remoteSavedSearchNames,
       remoteTrackerHandles: inventory.remoteTrackerHandles,
+      compatibilityAuthority: inventory.compatibilityAuthority,
       cachePrivateSha256: inventory.cachePrivateSha256,
       vaultKeySha256: null,
       storeSha256: null,
@@ -373,6 +376,7 @@ final class AtlasVaultPlaintextMigrationJournal {
         'remote_tracker_records',
         'remote_saved_search_names',
         'remote_tracker_handles',
+        'compatibility_authority',
         'cache_private_sha256',
         'vault_key_sha256',
         'store_sha256',
@@ -442,6 +446,9 @@ final class AtlasVaultPlaintextMigrationJournal {
         remoteTrackerRecords: remoteTrackerRecords,
         remoteSavedSearchNames: remoteSavedSearchNames,
         remoteTrackerHandles: remoteTrackerHandles,
+        compatibilityAuthority: _requiredCompatibilityAuthority(
+          value['compatibility_authority'],
+        ),
         cachePrivateSha256: _optionalSha256(value['cache_private_sha256']),
         vaultKeySha256: _optionalSha256(value['vault_key_sha256']),
         storeSha256: _optionalSha256(value['store_sha256']),
@@ -558,6 +565,7 @@ final class AtlasVaultPlaintextMigrationJournal {
       remoteTrackerRecords: remoteTrackerRecords,
       remoteSavedSearchNames: remoteSavedSearchNames,
       remoteTrackerHandles: remoteTrackerHandles,
+      compatibilityAuthority: compatibilityAuthority,
       cachePrivateSha256: cachePrivateSha256,
       vaultKeySha256: preserveVaultKeySha256
           ? this.vaultKeySha256
@@ -599,6 +607,7 @@ final class AtlasVaultPlaintextMigrationJournal {
     'remote_tracker_handles': <Object?>[
       for (final value in remoteTrackerHandles) value.toJson(),
     ],
+    'compatibility_authority': compatibilityAuthority,
     'cache_private_sha256': cachePrivateSha256,
     'vault_key_sha256': vaultKeySha256,
     'store_sha256': storeSha256,
@@ -620,6 +629,7 @@ final class AtlasVaultPlaintextMigrationJournal {
     requireAtlasVaultVaultId(vaultId);
     requireAtlasVaultCanonicalUuid(storeId, field: 'migration.store_id');
     requireAtlasVaultUtcSeconds(createdAt, field: 'migration.created_at');
+    _requiredCompatibilityAuthority(compatibilityAuthority);
     _requiredSha256(inventorySha256);
     _optionalSha256(cachePrivateSha256);
     _optionalSha256(vaultKeySha256);
@@ -1221,6 +1231,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationJournal> _removeCompatibilityPrivateState(
     AtlasVaultPlaintextMigrationJournal initialJournal,
   ) async {
+    _requireJournalCompatibilityAuthority(initialJournal);
     if (initialJournal.cachePrivateSha256 != null) {
       final cache = await _cacheSource.readPrivateStateForMigration();
       final cachePrivateAbsent =
@@ -1232,16 +1243,21 @@ final class AtlasVaultPlaintextMigrationCoordinator
               cache.privateSha256 != initialJournal.cachePrivateSha256)) {
         throw const AtlasVaultPlaintextMigrationException();
       }
-      _requireCompatibilityAuthority(cache, required: true);
+      _requireCacheCompatibilityAuthority(
+        cache,
+        initialJournal.compatibilityAuthority,
+        required: true,
+      );
     }
     var journal = initialJournal;
     for (final name in journal.remoteSavedSearchNames) {
-      var current = await _compatibilitySource.readCompatibilityPrivateState();
+      var current = await _readBoundCompatibilityPrivateState(journal);
       _validateCompatibilityState(journal, current);
       final present = current.savedSearches.any((value) => value.name == name);
       if (present) {
+        _requireJournalCompatibilityAuthority(journal);
         await _compatibilitySource.deleteSavedSearch(name);
-        current = await _compatibilitySource.readCompatibilityPrivateState();
+        current = await _readBoundCompatibilityPrivateState(journal);
         _validateCompatibilityState(journal, current);
         if (current.savedSearches.any((value) => value.name == name)) {
           throw const AtlasVaultPlaintextMigrationException();
@@ -1258,14 +1274,15 @@ final class AtlasVaultPlaintextMigrationCoordinator
     }
 
     for (final handle in journal.remoteTrackerHandles) {
-      var current = await _compatibilitySource.readCompatibilityPrivateState();
+      var current = await _readBoundCompatibilityPrivateState(journal);
       _validateCompatibilityState(journal, current);
       final present = current.trackerRecords.any(
         (value) => value.id == handle.recordId,
       );
       if (present) {
+        _requireJournalCompatibilityAuthority(journal);
         await _compatibilitySource.deleteTrackerRecord(handle.recordId);
-        current = await _compatibilitySource.readCompatibilityPrivateState();
+        current = await _readBoundCompatibilityPrivateState(journal);
         _validateCompatibilityState(journal, current);
         if (current.trackerRecords.any(
           (value) => value.id == handle.recordId,
@@ -1285,8 +1302,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       }
     }
 
-    final remaining = await _compatibilitySource
-        .readCompatibilityPrivateState();
+    final remaining = await _readBoundCompatibilityPrivateState(journal);
     _validateCompatibilityState(journal, remaining);
     if (remaining.savedSearches.isNotEmpty ||
         remaining.trackerRecords.isNotEmpty) {
@@ -1389,8 +1405,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<void> _verifyPlaintextAbsent(
     AtlasVaultPlaintextMigrationJournal journal,
   ) async {
-    final compatibility = await _compatibilitySource
-        .readCompatibilityPrivateState();
+    final compatibility = await _readBoundCompatibilityPrivateState(journal);
     if (compatibility.savedSearches.isNotEmpty ||
         compatibility.trackerRecords.isNotEmpty) {
       throw const AtlasVaultPlaintextMigrationException();
@@ -1440,8 +1455,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       throw const AtlasVaultPlaintextMigrationException();
     }
     await _verifyPreparedResources(journal);
-    final compatibility = await _compatibilitySource
-        .readCompatibilityPrivateState();
+    final compatibility = await _readBoundCompatibilityPrivateState(journal);
     if (compatibility.savedSearches.isNotEmpty ||
         compatibility.trackerRecords.isNotEmpty) {
       throw const AtlasVaultPlaintextMigrationException();
@@ -1716,6 +1730,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
         vaultId: journal.vaultId,
         key: ownedKey,
         store: store,
+        compatibilityAuthority: journal.compatibilityAuthority,
       );
       final expected = _MigrationInventory(
         savedSearches: journal.savedSearches,
@@ -1724,6 +1739,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
         remoteTrackerRecords: journal.remoteTrackerRecords,
         remoteSavedSearchNames: journal.remoteSavedSearchNames,
         remoteTrackerHandles: journal.remoteTrackerHandles,
+        compatibilityAuthority: journal.compatibilityAuthority,
         cachePrivateSha256: journal.cachePrivateSha256,
         localCachePrivatePresent: journal.cachePrivateSha256 != null,
         compatibilityPrivatePresent:
@@ -1746,6 +1762,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
     required String vaultId,
     required Uint8List key,
     required vault.AtlasVaultLocalStore store,
+    required String compatibilityAuthority,
   }) async {
     final savedSearches = <AtlasSavedSearch>[];
     final trackerRecords = <AtlasApplicationRecord>[];
@@ -1806,6 +1823,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       remoteTrackerRecords: const <AtlasApplicationRecord>[],
       remoteSavedSearchNames: const <String>[],
       remoteTrackerHandles: const <AtlasVaultRemoteTrackerHandle>[],
+      compatibilityAuthority: compatibilityAuthority,
       cachePrivateSha256: null,
       localCachePrivatePresent: false,
       compatibilityPrivatePresent: false,
@@ -1818,9 +1836,13 @@ final class AtlasVaultPlaintextMigrationCoordinator
       await _operationAdmission.drainAdmittedPlaintextOperations();
       final memory = await _inMemorySource.readPlaintextPrivateState();
       final cache = await _cacheSource.readPrivateStateForMigration();
-      _requireCompatibilityAuthority(cache);
+      final compatibilityAuthority = _currentCompatibilityAuthority();
+      _requireCacheCompatibilityAuthority(cache, compatibilityAuthority);
       final compatibility = await _compatibilitySource
           .readCompatibilityPrivateState();
+      if (_currentCompatibilityAuthority() != compatibilityAuthority) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
       final savedByName = <String, AtlasSavedSearch>{};
       final trackerByKey = <String, AtlasApplicationRecord>{};
       for (final source in <List<AtlasSavedSearch>>[
@@ -1902,6 +1924,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
         remoteTrackerHandles: remoteTrackerHandles,
         remoteSavedSearches: remoteSavedSearches,
         remoteTrackerRecords: remoteTrackerRecords,
+        compatibilityAuthority: compatibilityAuthority,
         cachePrivateSha256: cache.privateSha256,
         localCachePrivatePresent:
             cache.savedSearches.isNotEmpty || cache.trackerRecords.isNotEmpty,
@@ -1915,8 +1938,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
     }
   }
 
-  void _requireCompatibilityAuthority(
-    AtlasLocalCacheMigrationPrivateState cache, {
+  void _requireCacheCompatibilityAuthority(
+    AtlasLocalCacheMigrationPrivateState cache,
+    String compatibilityAuthority, {
     bool required = false,
   }) {
     if (!required &&
@@ -1925,14 +1949,41 @@ final class AtlasVaultPlaintextMigrationCoordinator
       return;
     }
     final cacheAuthority = cache.authorityBaseURL;
-    final compatibilityAuthority = AtlasAPIClient.normalizedBaseURL(
-      _compatibilitySource.authorityBaseURL.toString(),
-    );
     if (cacheAuthority == null ||
-        compatibilityAuthority == null ||
-        cacheAuthority != compatibilityAuthority) {
+        cacheAuthority.toString() != compatibilityAuthority) {
       throw const AtlasVaultPlaintextMigrationException();
     }
+  }
+
+  String _currentCompatibilityAuthority() {
+    try {
+      final normalized = AtlasAPIClient.normalizedBaseURL(
+        _compatibilitySource.authorityBaseURL.toString(),
+      );
+      if (normalized == null) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      return normalized.toString();
+    } catch (_) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  void _requireJournalCompatibilityAuthority(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) {
+    if (_currentCompatibilityAuthority() != journal.compatibilityAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  Future<AtlasVaultPlaintextPrivateState> _readBoundCompatibilityPrivateState(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    _requireJournalCompatibilityAuthority(journal);
+    final state = await _compatibilitySource.readCompatibilityPrivateState();
+    _requireJournalCompatibilityAuthority(journal);
+    return state;
   }
 
   Future<AtlasVaultPlaintextMigrationJournal> _replaceJournal(
@@ -2022,6 +2073,7 @@ final class _MigrationInventory {
     required List<AtlasApplicationRecord> remoteTrackerRecords,
     required List<String> remoteSavedSearchNames,
     required List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles,
+    required this.compatibilityAuthority,
     required this.cachePrivateSha256,
     required this.localCachePrivatePresent,
     required this.compatibilityPrivatePresent,
@@ -2041,7 +2093,9 @@ final class _MigrationInventory {
        ),
        remoteTrackerHandles = List<AtlasVaultRemoteTrackerHandle>.unmodifiable(
          remoteTrackerHandles,
-       );
+       ) {
+    _requiredCompatibilityAuthority(compatibilityAuthority);
+  }
 
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
@@ -2049,6 +2103,7 @@ final class _MigrationInventory {
   final List<AtlasApplicationRecord> remoteTrackerRecords;
   final List<String> remoteSavedSearchNames;
   final List<AtlasVaultRemoteTrackerHandle> remoteTrackerHandles;
+  final String compatibilityAuthority;
   final String? cachePrivateSha256;
   final bool localCachePrivatePresent;
   final bool compatibilityPrivatePresent;
@@ -2247,6 +2302,7 @@ bool _journalMatchesInventory(
           remoteTrackerRecords: journal.remoteTrackerRecords,
           remoteSavedSearchNames: journal.remoteSavedSearchNames,
           remoteTrackerHandles: journal.remoteTrackerHandles,
+          compatibilityAuthority: journal.compatibilityAuthority,
           cachePrivateSha256: journal.cachePrivateSha256,
           localCachePrivatePresent: journal.cachePrivateSha256 != null,
           compatibilityPrivatePresent:
@@ -2256,6 +2312,7 @@ bool _journalMatchesInventory(
         ),
         inventory,
       ) &&
+      journal.compatibilityAuthority == inventory.compatibilityAuthority &&
       journal.cachePrivateSha256 == inventory.cachePrivateSha256 &&
       _jsonEqual(
         journal.remoteSavedSearchNames,
@@ -2317,6 +2374,7 @@ bool _samePrivateInventory(
 
 bool _sameInventory(_MigrationInventory left, _MigrationInventory right) {
   return _samePrivateInventory(left, right) &&
+      left.compatibilityAuthority == right.compatibilityAuthority &&
       left.cachePrivateSha256 == right.cachePrivateSha256 &&
       left.localCachePrivatePresent == right.localCachePrivatePresent &&
       left.compatibilityPrivatePresent == right.compatibilityPrivatePresent &&
@@ -2405,6 +2463,19 @@ String _requiredText(Object? value, {bool allowEmpty = false}) {
       field: 'migration.value',
       allowEmpty: allowEmpty,
     );
+  } catch (_) {
+    throw const AtlasVaultPlaintextMigrationException();
+  }
+}
+
+String _requiredCompatibilityAuthority(Object? value) {
+  try {
+    final text = _requiredText(value);
+    final normalized = AtlasAPIClient.normalizedBaseURL(text);
+    if (normalized == null || normalized.toString() != text) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return text;
   } catch (_) {
     throw const AtlasVaultPlaintextMigrationException();
   }

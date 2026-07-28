@@ -103,11 +103,13 @@ private lists directly. It also carries the cache snapshot's normalized API
 authority in memory. A cache containing private values must match the current
 compatibility authority before any compatibility read, preparation, resume, or
 remote deletion. Corrupt, incomplete, ambiguous, or authority-mismatched cache
-content fails closed. Every public object and row must also survive a lossless
-decode and canonical re-encode through its production model. Missing or
-defaulted nested search, job, detail, health, update-run, or source fields
-therefore fail before inventory instead of being rewritten during private
-state removal.
+content fails closed. The raw cache JSON is recursively scanned for duplicate
+object keys before `jsonDecode`; decoded-key aliases such as Unicode escapes
+are duplicates too. Every public object and row must also survive a lossless
+decode and canonical re-encode through its production model. Ambiguous keys,
+missing or defaulted nested search, job, detail, health, update-run, or source
+fields therefore fail before inventory instead of being rewritten during
+private state removal.
 
 ## 15. Expired-Cache Migration Read
 
@@ -177,10 +179,14 @@ master key and purpose-bound AES-GCM associated data before disk persistence.
 
 The strict version-1 journal records non-semantic transaction IDs, canonical
 merged inventory, canonical original remote snapshots, remote deletion
-handles, resource hashes, progress lists, cache state, selection progress, and
-monotonic rollback intent/store-removal flags. The original snapshots remain
-separate from complementary optional values merged from memory or cache.
-Unknown or inconsistent fields fail closed.
+handles, the normalized compatibility authority, resource hashes, progress
+lists, cache state, selection progress, and monotonic rollback
+intent/store-removal flags. The original snapshots remain separate from
+complementary optional values merged from memory or cache. Every journal-era
+compatibility read is authority-checked before and after the asynchronous call,
+and every delete is checked immediately before dispatch. This binding remains
+required when the local cache is absent or public-only. Unknown, noncanonical,
+or inconsistent fields fail closed.
 
 ## 24. Journal Stages
 
@@ -391,7 +397,11 @@ reviewed encrypted payload cannot preserve. The final review correction
 persists canonical compatibility rows separately from merged encrypted
 records, validates finalization and resume against those original snapshots,
 and rejects any cached public row or nested object that cannot round-trip
-losslessly before migration side effects.
+losslessly before migration side effects. The next exact-head cycle binds the
+protected journal to the reviewed compatibility authority even without cached
+private rows and rejects recursive duplicate JSON keys before any cache
+rewrite; deterministic resume and escaped-key regressions cover both
+corrections.
 
 ## 54. Android Integration Evidence
 

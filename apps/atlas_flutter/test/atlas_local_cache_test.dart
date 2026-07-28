@@ -457,7 +457,116 @@ void main() {
         }
       },
     );
+
+    test(
+      'migration rejects duplicate JSON keys before rewriting public state',
+      () async {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureReadAt,
+        );
+        await store.write(_snapshot(savedAt: _fixtureSavedAt));
+        final originalText = await cacheFile.readAsString();
+        final original = Map<String, Object?>.from(
+          jsonDecode(originalText) as Map,
+        );
+        final privateState = await store.readPrivateStateForMigration();
+        final searchRequest = _testStringMap(original['search_request']);
+        final searchResponse = _testStringMap(original['search_response']);
+        final cachedAllJobs = original['cached_all_jobs']! as List;
+        final healthSummary = _testStringMap(original['health_summary']);
+        final cachedJobDetails = _testStringMap(original['cached_job_details']);
+        final cachedJobDetail = _testStringMap(cachedJobDetails.values.single);
+        final updateRuns = original['update_runs']! as List;
+        final sources = original['sources']! as List;
+        final candidates = <String>[
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: original,
+            key: 'schema_version',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: searchRequest,
+            key: 'limit',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: searchResponse,
+            key: 'total',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: _testStringMap(cachedAllJobs.single),
+            key: 'title',
+            encodedDuplicateKey: r'"\u0074itle"',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: healthSummary,
+            key: 'status',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: cachedJobDetail,
+            key: 'title',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: _testStringMap(updateRuns.single),
+            key: 'source_id',
+          ),
+          _withDuplicateJsonKey(
+            document: originalText,
+            object: _testStringMap(sources.single),
+            key: 'source_id',
+          ),
+        ];
+
+        for (final candidate in candidates) {
+          await cacheFile.writeAsString(candidate);
+          final before = await cacheFile.readAsBytes();
+
+          await expectLater(
+            store.readPrivateStateForMigration(),
+            throwsA(isA<AtlasLocalCacheMigrationException>()),
+          );
+          await expectLater(
+            store.removePrivateStateForMigration(
+              expectedPrivateSha256: privateState.privateSha256!,
+            ),
+            throwsA(isA<AtlasLocalCacheMigrationException>()),
+          );
+          expect(await cacheFile.readAsBytes(), orderedEquals(before));
+        }
+      },
+    );
   });
+}
+
+Map<String, Object?> _testStringMap(Object? value) {
+  return Map<String, Object?>.from(value! as Map);
+}
+
+String _withDuplicateJsonKey({
+  required String document,
+  required Map<String, Object?> object,
+  required String key,
+  String? encodedDuplicateKey,
+}) {
+  final encodedObject = jsonEncode(object);
+  final encodedValue = jsonEncode(object[key]);
+  final encodedPair = '${jsonEncode(key)}:$encodedValue';
+  final duplicatePair =
+      '$encodedPair,${encodedDuplicateKey ?? jsonEncode(key)}:$encodedValue';
+  final ambiguousObject = encodedObject.replaceFirst(
+    encodedPair,
+    duplicatePair,
+  );
+  if (ambiguousObject == encodedObject || !document.contains(encodedObject)) {
+    throw StateError('duplicate-key fixture construction failed');
+  }
+  return document.replaceFirst(encodedObject, ambiguousObject);
 }
 
 AtlasLocalCacheSnapshot _snapshot({

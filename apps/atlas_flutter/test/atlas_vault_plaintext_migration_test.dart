@@ -122,6 +122,49 @@ void main() {
   );
 
   test(
+    'commit resume binds compatibility authority when cache is public only',
+    () async {
+      final fixture = _MigrationFixture();
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        privateSha256: null,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      final verified = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+      );
+      expect(
+        verified.toJson()['compatibility_authority'],
+        'http://atlas.test:8765',
+      );
+      fixture.journal.bytes = verified
+          .transitionedTo(AtlasVaultPlaintextMigrationStage.commitInProgress)
+          .canonicalBytes();
+      fixture.compatibility.authorityBaseURL = Uri.parse(
+        'http://replacement-authority.test:8765',
+      );
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+      );
+
+      await expectLater(
+        fixture.coordinator.resume(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.compatibility.deleteSavedSearchCalls, 0);
+      expect(fixture.compatibility.deleteTrackerCalls, 0);
+      expect(fixture.cache.removeCalls, 0);
+      expect(fixture.selection.createCalls, 0);
+      expect(fixture.journal.bytes, isNotNull);
+    },
+  );
+
+  test(
     'legacy backend timestamps normalize before strict vault validation',
     () async {
       final fixture = _MigrationFixture();
@@ -605,6 +648,12 @@ void main() {
       ..['rollback_store_deleted'] = true;
     expect(
       () => AtlasVaultPlaintextMigrationJournal.fromJson(invalidRollback),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    final noncanonicalAuthority = Map<String, Object?>.from(journal.toJson())
+      ..['compatibility_authority'] = 'HTTP://ATLAS.TEST:8765/';
+    expect(
+      () => AtlasVaultPlaintextMigrationJournal.fromJson(noncanonicalAuthority),
       throwsA(isA<AtlasVaultPlaintextMigrationException>()),
     );
   });
