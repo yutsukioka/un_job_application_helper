@@ -617,7 +617,7 @@ void main() {
     final privatePersistence = _FakePrivateStatePersistence()
       ..enteredActivation = enteredActivation
       ..releaseActivation = releaseActivation;
-    void Function()? scheduledSearch;
+    _TestTimer? scheduledSearch;
     addTearDown(() {
       if (!releaseActivation.isCompleted) {
         releaseActivation.complete();
@@ -630,8 +630,9 @@ void main() {
       privateStatePersistence: privatePersistence,
       searchDebounceTimerFactory: (duration, callback) {
         expect(duration, const Duration(milliseconds: 350));
-        scheduledSearch = callback;
-        return _TestTimer();
+        final timer = _TestTimer(callback);
+        scheduledSearch = timer;
+        return timer;
       },
     );
     addTearDown(controller.dispose);
@@ -652,10 +653,69 @@ void main() {
     transport
       ..expectedSearchText = 'active vault query'
       ..enteredExpectedSearch = enteredActiveSearch;
-    scheduledSearch!();
+    scheduledSearch!.fire();
     await enteredActiveSearch.future;
 
     expect(transport.searchTexts.last, 'active vault query');
+  });
+
+  testWidgets('pending debounce does not run during private transitions', (
+    tester,
+  ) async {
+    final transport = _RecordingTransport();
+    final enteredActivation = Completer<void>();
+    final releaseActivation = Completer<void>();
+    final enteredDeactivation = Completer<void>();
+    final releaseDeactivation = Completer<void>();
+    final privatePersistence = _FakePrivateStatePersistence()
+      ..enteredActivation = enteredActivation
+      ..releaseActivation = releaseActivation
+      ..enteredDeactivation = enteredDeactivation
+      ..releaseDeactivation = releaseDeactivation;
+    _TestTimer? scheduledSearch;
+    addTearDown(() {
+      if (!releaseActivation.isCompleted) {
+        releaseActivation.complete();
+      }
+      if (!releaseDeactivation.isCompleted) {
+        releaseDeactivation.complete();
+      }
+    });
+    final controller = AtlasAppController(
+      initialBaseURL: Uri.parse('http://atlas.test:8765'),
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+      privateStatePersistence: privatePersistence,
+      searchDebounceTimerFactory: (duration, callback) {
+        expect(duration, const Duration(milliseconds: 350));
+        final timer = _TestTimer(callback);
+        scheduledSearch = timer;
+        return timer;
+      },
+    );
+    addTearDown(controller.dispose);
+    controller.connectionStatus = 'Connected';
+
+    controller.updateQuery('queued before activation');
+    final preActivationTimer = scheduledSearch!;
+    final activation = controller.activateExistingAtlasVault('vault-alpha');
+    await enteredActivation.future;
+    preActivationTimer.fire();
+    expect(transport.healthReadCount, 0);
+
+    releaseActivation.complete();
+    expect(await activation, AtlasVaultActivationResult.activated);
+    scheduledSearch = null;
+    controller.updateQuery('queued before deactivation');
+    final preDeactivationTimer = scheduledSearch!;
+    final deactivation = controller.deactivateAtlasVault();
+    await enteredDeactivation.future;
+    preDeactivationTimer.fire();
+    expect(transport.healthReadCount, 0);
+
+    releaseDeactivation.complete();
+    await deactivation;
+    await tester.pump();
   });
 
   test('controller reports save job failures', () async {
@@ -985,6 +1045,78 @@ void main() {
       expect(rawCache, isNot(contains(privateQuery)));
       expect(rawCache, isNot(contains('PRIVATE_ORGANIZATION')));
       expect((await store.read())?.searchRequest.text, publicQuery);
+    },
+  );
+
+  test(
+    'private search crossing deactivation cannot publish cache criteria',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_deactivation_search_fence_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      const privateQuery = 'DEACTIVATING_PRIVATE_QUERY';
+      const privateOrganization = 'DEACTIVATING_PRIVATE_ORGANIZATION';
+      final privateSearch = AtlasSavedSearch(
+        name: 'Encrypted transition search',
+        request: const AtlasSearchRequest(
+          text: privateQuery,
+          organizations: <String>[privateOrganization],
+        ),
+      );
+      final privatePersistence = _FakePrivateStatePersistence(
+        activationSnapshot: AtlasVaultPrivateStateSnapshot(
+          savedSearches: <AtlasSavedSearch>[privateSearch],
+          trackerRecords: const <AtlasApplicationRecord>[],
+        ),
+      );
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+        privateStateProtectionActive: () => privatePersistence.isActive,
+      );
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..expectedSearchText = privateQuery
+        ..enteredExpectedSearch = enteredSearch
+        ..releaseExpectedSearch = releaseSearch;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+        now: () => _cacheFixtureNow,
+      );
+      addTearDown(controller.dispose);
+      controller.connectionStatus = 'Connected';
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      final refresh = controller.runSavedSearch(privateSearch);
+      await enteredSearch.future;
+      await controller.deactivateAtlasVault();
+      releaseSearch.complete();
+      await refresh;
+
+      final rawCache = await store.file.readAsString();
+      expect(rawCache, isNot(contains(privateQuery)));
+      expect(rawCache, isNot(contains(privateOrganization)));
+      final persisted = await store.read();
+      expect(persisted?.searchRequest.text, isNull);
+      expect(persisted?.searchRequest.organizations, isEmpty);
     },
   );
 
@@ -1515,6 +1647,8 @@ final class _RecordingTransport implements AtlasTransport {
   Completer<void>? releaseCompatibilityTrackerRead;
   String? expectedSearchText;
   Completer<void>? enteredExpectedSearch;
+  Completer<void>? releaseExpectedSearch;
+  int healthReadCount = 0;
 
   void resetPrivateCounts() {
     savedSearchNames.clear();
@@ -1528,6 +1662,7 @@ final class _RecordingTransport implements AtlasTransport {
     switch (request.path) {
       case 'api/health':
         expect(request.method, 'GET');
+        healthReadCount += 1;
         return {
           'status': 'ok',
           'open_jobs': 128,
@@ -1543,6 +1678,9 @@ final class _RecordingTransport implements AtlasTransport {
         if (searchText == expectedSearchText &&
             !(enteredExpectedSearch?.isCompleted ?? true)) {
           enteredExpectedSearch!.complete();
+        }
+        if (searchText == expectedSearchText && releaseExpectedSearch != null) {
+          await releaseExpectedSearch!.future;
         }
         return {
           'total': 1,
@@ -1813,7 +1951,18 @@ final class _ParentCreateGatedDirectory implements Directory {
 }
 
 final class _TestTimer implements Timer {
+  _TestTimer(this._callback);
+
+  final void Function() _callback;
   bool _isActive = true;
+
+  void fire() {
+    if (!_isActive) {
+      return;
+    }
+    _isActive = false;
+    _callback();
+  }
 
   @override
   bool get isActive => _isActive;

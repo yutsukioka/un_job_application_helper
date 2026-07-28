@@ -274,7 +274,11 @@ committed public field. The controller separately retains the last committed
 unprotected public-search request. Active encrypted saved-search refreshes may
 update visible public results but cannot replace that cache request with their
 private text or filters. When no prior public request exists, active cache
-serialization uses the neutral public cache request.
+serialization uses the neutral public cache request. Public-search refreshes
+capture the protection state and authority generation before network awaits;
+only an unchanged unprotected authority may replace the committed public
+request. Cache serialization always uses that committed request or the neutral
+fallback, never an uncommitted current query.
 
 ## 43. Hard Plaintext Guard
 
@@ -331,7 +335,8 @@ AtlasVault activation does not disable public search, job detail, health,
 source, or update operations. Query debounce is suppressed while private
 activation or deactivation is in progress, then resumes during a stable active
 vault session. Active search refreshes retain the public-only cache rules in
-Section 42.
+Section 42. Starting either private transition cancels a pending debounce, and
+the timer callback rechecks transition state before starting any public work.
 
 ## 49. No Activation UI
 
@@ -385,6 +390,10 @@ Further exact-head regressions prove that a forged deleted flag cannot bypass
 record authentication, that a legitimate authenticated tombstone remains
 unprojected, and that query debounce stays blocked during activation but
 resumes after the active session becomes authoritative.
+The final controller-race regressions hold a private search across
+deactivation and prove its criteria never become the committed plaintext-cache
+request. They also fire timers admitted immediately before activation and
+deactivation, proving both transitions cancel or reject pending debounce work.
 
 ## 55. Verification
 

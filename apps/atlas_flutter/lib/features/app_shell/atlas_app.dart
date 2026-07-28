@@ -213,7 +213,7 @@ class AtlasAppController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
+    _cancelSearchDebounce();
     super.dispose();
   }
 
@@ -230,6 +230,7 @@ class AtlasAppController extends ChangeNotifier {
     _privateAuthorityGeneration += 1;
     final activationGeneration = _privateAuthorityGeneration;
     _privateActivationInProgress = true;
+    _cancelSearchDebounce();
     try {
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
@@ -254,7 +255,6 @@ class AtlasAppController extends ChangeNotifier {
         throw const AtlasVaultPrivateStateException();
       }
       _installPrivateSnapshot(snapshot);
-      _searchDebounce?.cancel();
       notifyListeners();
       return AtlasVaultActivationResult.activated;
     } catch (_) {
@@ -280,6 +280,7 @@ class AtlasAppController extends ChangeNotifier {
     }
     _privateAuthorityGeneration += 1;
     _privateDeactivationInProgress = true;
+    _cancelSearchDebounce();
     late final Future<void> operation;
     operation = _performPrivateDeactivation().whenComplete(() {
       if (identical(_privateDeactivationOperation, operation)) {
@@ -607,6 +608,8 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<int> _refreshSearch(AtlasAPIClient client) async {
+    final publicAuthorityGeneration = _privateAuthorityGeneration;
+    final mayPublishPublicRequest = !_privateStateProtectionActive;
     isSearching = true;
     notifyListeners();
     try {
@@ -630,7 +633,9 @@ class AtlasAppController extends ChangeNotifier {
           ? response.results.length
           : _cachedAllJobs.length;
       cacheSavedAt = _now();
-      if (!_privateStateProtectionActive) {
+      if (mayPublishPublicRequest &&
+          !_privateStateProtectionActive &&
+          _privateAuthorityGeneration == publicAuthorityGeneration) {
         _committedPublicSearchRequest = activeRequest;
       }
       return cachedJobCount;
@@ -796,9 +801,17 @@ class AtlasAppController extends ChangeNotifier {
     _searchDebounce = _searchDebounceTimerFactory(
       const Duration(milliseconds: 350),
       () {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+          return;
+        }
         refreshLocalSave();
       },
     );
+  }
+
+  void _cancelSearchDebounce() {
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
   }
 
   String _savedSearchSummary(AtlasSearchRequest request) {
@@ -1155,9 +1168,8 @@ class AtlasAppController extends ChangeNotifier {
     if (store == null || savedAt == null) {
       return;
     }
-    final searchRequest = _privateStateProtectionActive
-        ? _committedPublicSearchRequest ?? _cacheSearchRequest()
-        : _committedPublicSearchRequest ?? _currentSearchRequest();
+    final searchRequest =
+        _committedPublicSearchRequest ?? _cacheSearchRequest();
     var snapshot = AtlasLocalCacheSnapshot(
       schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
       baseURL: baseURL,
