@@ -32,6 +32,16 @@ enum AtlasVaultPlaintextMigrationStage {
   }
 }
 
+enum AtlasVaultPlaintextAuthorityState {
+  unresolved,
+  legacy,
+  migrationPending,
+  encryptedSelectedInactive,
+  encryptedActive,
+  recoveryRequired,
+  unsupported,
+}
+
 final class AtlasVaultPlaintextMigrationException implements Exception {
   const AtlasVaultPlaintextMigrationException();
 
@@ -86,12 +96,12 @@ final class AtlasVaultRemoteTrackerHandle {
 }
 
 final class AtlasVaultPlaintextMigrationSummary {
-  const AtlasVaultPlaintextMigrationSummary._({
+  const AtlasVaultPlaintextMigrationSummary({
     required this.savedSearchCount,
     required this.trackerRecordCount,
     required this.localCachePrivatePresent,
     required this.compatibilityPrivatePresent,
-    required this.stage,
+    this.stage,
   });
 
   final int savedSearchCount;
@@ -102,6 +112,32 @@ final class AtlasVaultPlaintextMigrationSummary {
 
   @override
   String toString() => 'AtlasVaultPlaintextMigrationSummary(<redacted>)';
+}
+
+abstract interface class AtlasVaultPlaintextMigrationPrivateAuthority {
+  bool get isEncryptedPrivateStateActive;
+
+  void hideLegacyPrivateState();
+
+  Future<bool> activateEncryptedPrivateState(String vaultId);
+
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState();
+}
+
+abstract interface class AtlasVaultPlaintextMigrationCoordinating {
+  Future<AtlasVaultPlaintextAuthorityState> inspectAuthority();
+
+  Future<AtlasVaultPlaintextMigrationSummary> inventory();
+
+  Future<AtlasVaultPlaintextMigrationSummary> prepare();
+
+  Future<void> discardPrepared();
+
+  Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate();
+
+  Future<AtlasVaultPlaintextMigrationSummary> resume();
+
+  Future<AtlasVaultPlaintextMigrationSummary> activateSelected();
 }
 
 abstract interface class AtlasVaultPlaintextStateSource {
@@ -402,12 +438,37 @@ final class AtlasVaultPlaintextMigrationJournal {
     return _copy(stage: next);
   }
 
+  AtlasVaultPlaintextMigrationJournal withCommitProgress({
+    List<String>? deletedSavedSearchNames,
+    List<String>? deletedTrackerRecordIds,
+    bool? cacheCleared,
+    bool? selectionCreated,
+    AtlasVaultPlaintextMigrationStage? stage,
+  }) {
+    if (stage != null &&
+        stage != this.stage &&
+        stage.index != this.stage.index + 1) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return _copy(
+      stage: stage,
+      deletedSavedSearchNames: deletedSavedSearchNames,
+      deletedTrackerRecordIds: deletedTrackerRecordIds,
+      cacheCleared: cacheCleared,
+      selectionCreated: selectionCreated,
+    );
+  }
+
   AtlasVaultPlaintextMigrationJournal _copy({
     AtlasVaultPlaintextMigrationStage? stage,
     String? vaultKeySha256,
     bool preserveVaultKeySha256 = true,
     String? storeSha256,
     bool preserveStoreSha256 = true,
+    List<String>? deletedSavedSearchNames,
+    List<String>? deletedTrackerRecordIds,
+    bool? cacheCleared,
+    bool? selectionCreated,
   }) {
     return AtlasVaultPlaintextMigrationJournal._(
       migrationId: migrationId,
@@ -425,10 +486,12 @@ final class AtlasVaultPlaintextMigrationJournal {
           ? this.vaultKeySha256
           : vaultKeySha256,
       storeSha256: preserveStoreSha256 ? this.storeSha256 : storeSha256,
-      deletedSavedSearchNames: deletedSavedSearchNames,
-      deletedTrackerRecordIds: deletedTrackerRecordIds,
-      cacheCleared: cacheCleared,
-      selectionCreated: selectionCreated,
+      deletedSavedSearchNames:
+          deletedSavedSearchNames ?? this.deletedSavedSearchNames,
+      deletedTrackerRecordIds:
+          deletedTrackerRecordIds ?? this.deletedTrackerRecordIds,
+      cacheCleared: cacheCleared ?? this.cacheCleared,
+      selectionCreated: selectionCreated ?? this.selectionCreated,
     );
   }
 
@@ -508,9 +571,27 @@ final class AtlasVaultPlaintextMigrationJournal {
             AtlasVaultPlaintextMigrationStage.commitInProgress.index) {
       throw const AtlasVaultPlaintextMigrationException();
     }
+    if ((deletedSavedSearchNames.isNotEmpty ||
+            deletedTrackerRecordIds.isNotEmpty) &&
+        stage.index <
+            AtlasVaultPlaintextMigrationStage.commitInProgress.index) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
     if (selectionCreated &&
         stage.index <
             AtlasVaultPlaintextMigrationStage.selectionCommitted.index) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (stage.index >=
+            AtlasVaultPlaintextMigrationStage.plaintextRemoved.index &&
+        (!cacheCleared ||
+            deletedSavedSearchNames.length != remoteSavedSearchNames.length ||
+            deletedTrackerRecordIds.length != remoteTrackerHandles.length)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (stage.index >=
+            AtlasVaultPlaintextMigrationStage.selectionCommitted.index &&
+        !selectionCreated) {
       throw const AtlasVaultPlaintextMigrationException();
     }
   }
@@ -519,7 +600,8 @@ final class AtlasVaultPlaintextMigrationJournal {
   String toString() => 'AtlasVaultPlaintextMigrationJournal(<redacted>)';
 }
 
-final class AtlasVaultPlaintextMigrationCoordinator {
+final class AtlasVaultPlaintextMigrationCoordinator
+    implements AtlasVaultPlaintextMigrationCoordinating {
   AtlasVaultPlaintextMigrationCoordinator({
     required AtlasVaultPlaintextStateSource inMemorySource,
     required AtlasVaultCompatibilityPrivateSource compatibilitySource,
@@ -528,6 +610,7 @@ final class AtlasVaultPlaintextMigrationCoordinator {
     required AtlasVaultSelectedVaultStore selectedVaultStore,
     required AtlasVaultMigrationSecureKeyStore secureKeyStore,
     required AtlasVaultLocalStoreIO localStoreIO,
+    required AtlasVaultPlaintextMigrationPrivateAuthority privateAuthority,
     DateTime Function()? now,
     String Function()? uuidProvider,
     Uint8List Function()? vaultKeyProvider,
@@ -547,6 +630,8 @@ final class AtlasVaultPlaintextMigrationCoordinator {
        _secureKeyStore = secureKeyStore,
        // ignore: prefer_initializing_formals
        _localStoreIO = localStoreIO,
+       // ignore: prefer_initializing_formals
+       _privateAuthority = privateAuthority,
        _now = now ?? DateTime.now,
        _uuidProvider = uuidProvider ?? _secureUuidV4,
        _vaultKeyProvider = vaultKeyProvider ?? _secureVaultKey,
@@ -561,6 +646,7 @@ final class AtlasVaultPlaintextMigrationCoordinator {
   final AtlasVaultSelectedVaultStore _selectedVaultStore;
   final AtlasVaultMigrationSecureKeyStore _secureKeyStore;
   final AtlasVaultLocalStoreIO _localStoreIO;
+  final AtlasVaultPlaintextMigrationPrivateAuthority _privateAuthority;
   final DateTime Function() _now;
   final String Function() _uuidProvider;
   final Uint8List Function() _vaultKeyProvider;
@@ -569,6 +655,48 @@ final class AtlasVaultPlaintextMigrationCoordinator {
   _MigrationInventory? _reviewedInventory;
   bool _operating = false;
 
+  @override
+  Future<AtlasVaultPlaintextAuthorityState> inspectAuthority() async {
+    try {
+      return await _serialized(() async {
+        final journalBytes = await _journalStore.read();
+        AtlasVaultPlaintextMigrationJournal? journal;
+        try {
+          if (journalBytes != null) {
+            journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+              journalBytes,
+            );
+          }
+        } finally {
+          _wipe(journalBytes);
+        }
+        final selected = await _selectedVaultStore.read();
+        if (journal != null) {
+          final selectionExpected =
+              journal.stage.index >=
+              AtlasVaultPlaintextMigrationStage.selectionCommitted.index;
+          if ((!selectionExpected && selected != null) ||
+              (selectionExpected && selected != journal.vaultId)) {
+            return AtlasVaultPlaintextAuthorityState.recoveryRequired;
+          }
+          return AtlasVaultPlaintextAuthorityState.migrationPending;
+        }
+        if (selected != null) {
+          return _privateAuthority.isEncryptedPrivateStateActive
+              ? AtlasVaultPlaintextAuthorityState.encryptedActive
+              : AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive;
+        }
+        if (_privateAuthority.isEncryptedPrivateStateActive) {
+          return AtlasVaultPlaintextAuthorityState.recoveryRequired;
+        }
+        return AtlasVaultPlaintextAuthorityState.legacy;
+      });
+    } catch (_) {
+      return AtlasVaultPlaintextAuthorityState.recoveryRequired;
+    }
+  }
+
+  @override
   Future<AtlasVaultPlaintextMigrationSummary> inventory() async {
     return _serialized(() async {
       final inventory = await _readInventory();
@@ -577,6 +705,7 @@ final class AtlasVaultPlaintextMigrationCoordinator {
     });
   }
 
+  @override
   Future<AtlasVaultPlaintextMigrationSummary> prepare() async {
     return _serialized(() async {
       try {
@@ -634,6 +763,7 @@ final class AtlasVaultPlaintextMigrationCoordinator {
     });
   }
 
+  @override
   Future<void> discardPrepared() async {
     await _serialized(() async {
       try {
@@ -715,6 +845,444 @@ final class AtlasVaultPlaintextMigrationCoordinator {
         throw const AtlasVaultPlaintextMigrationException();
       }
     });
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
+    return _serialized(() async {
+      try {
+        var journal = await _readJournalRequired();
+        if (journal.stage !=
+            AtlasVaultPlaintextMigrationStage.encryptedVerified) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        await _verifyPreparedResources(journal);
+        final current = await _readInventory();
+        if (!_journalMatchesInventory(journal, current)) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        journal = await _replaceJournal(
+          journal,
+          journal.transitionedTo(
+            AtlasVaultPlaintextMigrationStage.commitInProgress,
+          ),
+        );
+        _reviewedInventory = null;
+        _privateAuthority.hideLegacyPrivateState();
+        return await _continueFinalization(journal);
+      } on AtlasVaultPlaintextMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    });
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> resume() async {
+    return _serialized(() async {
+      try {
+        final journal = await _readJournalRequired();
+        switch (journal.stage) {
+          case AtlasVaultPlaintextMigrationStage.prepared:
+            if (await _selectedVaultStore.read() != null) {
+              throw const AtlasVaultPlaintextMigrationException();
+            }
+            return await _continuePreparation(journal);
+          case AtlasVaultPlaintextMigrationStage.encryptedVerified:
+            await _verifyPreparedResources(journal);
+            return _summaryFromJournal(journal);
+          case AtlasVaultPlaintextMigrationStage.commitInProgress:
+          case AtlasVaultPlaintextMigrationStage.plaintextRemoved:
+          case AtlasVaultPlaintextMigrationStage.selectionCommitted:
+          case AtlasVaultPlaintextMigrationStage.completionPending:
+            _privateAuthority.hideLegacyPrivateState();
+            return await _continueFinalization(journal);
+        }
+      } on AtlasVaultPlaintextMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    });
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> activateSelected() async {
+    return _serialized(() async {
+      try {
+        final journalBytes = await _journalStore.read();
+        try {
+          if (journalBytes != null) {
+            throw const AtlasVaultPlaintextMigrationException();
+          }
+        } finally {
+          _wipe(journalBytes);
+        }
+        final selected = await _selectedVaultStore.read();
+        if (selected == null) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        if (!_privateAuthority.isEncryptedPrivateStateActive &&
+            !await _privateAuthority.activateEncryptedPrivateState(selected)) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        if (!_privateAuthority.isEncryptedPrivateStateActive) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        final snapshot = await _privateAuthority.readEncryptedPrivateState();
+        return AtlasVaultPlaintextMigrationSummary(
+          savedSearchCount: snapshot.savedSearches.length,
+          trackerRecordCount: snapshot.trackerRecords.length,
+          localCachePrivatePresent: false,
+          compatibilityPrivatePresent: false,
+          stage: null,
+        );
+      } on AtlasVaultPlaintextMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    });
+  }
+
+  Future<AtlasVaultPlaintextMigrationSummary> _continueFinalization(
+    AtlasVaultPlaintextMigrationJournal initialJournal,
+  ) async {
+    var journal = initialJournal;
+    await _verifyPreparedResources(journal);
+
+    if (journal.stage == AtlasVaultPlaintextMigrationStage.commitInProgress) {
+      journal = await _removeCompatibilityPrivateState(journal);
+      journal = await _removeCachePrivateState(journal);
+      _privateAuthority.hideLegacyPrivateState();
+      await _verifyPlaintextAbsent(journal);
+      journal = await _replaceJournal(
+        journal,
+        journal.withCommitProgress(
+          stage: AtlasVaultPlaintextMigrationStage.plaintextRemoved,
+        ),
+      );
+    }
+
+    if (journal.stage == AtlasVaultPlaintextMigrationStage.plaintextRemoved) {
+      final selected = await _selectedVaultStore.read();
+      if (selected == null) {
+        await _selectedVaultStore.create(journal.vaultId);
+      } else if (selected != journal.vaultId) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      if (await _selectedVaultStore.read() != journal.vaultId) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      journal = await _replaceJournal(
+        journal,
+        journal.withCommitProgress(
+          selectionCreated: true,
+          stage: AtlasVaultPlaintextMigrationStage.selectionCommitted,
+        ),
+      );
+    }
+
+    if (journal.stage == AtlasVaultPlaintextMigrationStage.selectionCommitted) {
+      await _activateAndVerify(journal);
+      journal = await _replaceJournal(
+        journal,
+        journal.transitionedTo(
+          AtlasVaultPlaintextMigrationStage.completionPending,
+        ),
+      );
+    }
+
+    if (journal.stage == AtlasVaultPlaintextMigrationStage.completionPending) {
+      await _verifyCompletionState(journal);
+      final bytes = journal.canonicalBytes();
+      try {
+        try {
+          await _journalStore.delete(
+            expectedSha256: await vault.atlasVaultSha256Hex(bytes),
+          );
+        } catch (_) {
+          return _summaryFromJournal(journal);
+        }
+      } finally {
+        _wipe(bytes);
+      }
+      final restored = await _journalStore.read();
+      try {
+        if (restored != null) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+      } finally {
+        _wipe(restored);
+      }
+      return _completedSummary(journal);
+    }
+
+    throw const AtlasVaultPlaintextMigrationException();
+  }
+
+  Future<AtlasVaultPlaintextMigrationJournal> _removeCompatibilityPrivateState(
+    AtlasVaultPlaintextMigrationJournal initialJournal,
+  ) async {
+    var journal = initialJournal;
+    for (final name in journal.remoteSavedSearchNames) {
+      var current = await _compatibilitySource.readCompatibilityPrivateState();
+      _validateCompatibilityState(journal, current);
+      final present = current.savedSearches.any((value) => value.name == name);
+      if (present) {
+        await _compatibilitySource.deleteSavedSearch(name);
+        current = await _compatibilitySource.readCompatibilityPrivateState();
+        _validateCompatibilityState(journal, current);
+        if (current.savedSearches.any((value) => value.name == name)) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+      }
+      if (!journal.deletedSavedSearchNames.contains(name)) {
+        final completed = <String>[...journal.deletedSavedSearchNames, name]
+          ..sort();
+        journal = await _replaceJournal(
+          journal,
+          journal.withCommitProgress(deletedSavedSearchNames: completed),
+        );
+      }
+    }
+
+    for (final handle in journal.remoteTrackerHandles) {
+      var current = await _compatibilitySource.readCompatibilityPrivateState();
+      _validateCompatibilityState(journal, current);
+      final present = current.trackerRecords.any(
+        (value) => value.id == handle.recordId,
+      );
+      if (present) {
+        await _compatibilitySource.deleteTrackerRecord(handle.recordId);
+        current = await _compatibilitySource.readCompatibilityPrivateState();
+        _validateCompatibilityState(journal, current);
+        if (current.trackerRecords.any(
+          (value) => value.id == handle.recordId,
+        )) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+      }
+      if (!journal.deletedTrackerRecordIds.contains(handle.recordId)) {
+        final completed = <String>[
+          ...journal.deletedTrackerRecordIds,
+          handle.recordId,
+        ]..sort();
+        journal = await _replaceJournal(
+          journal,
+          journal.withCommitProgress(deletedTrackerRecordIds: completed),
+        );
+      }
+    }
+
+    final remaining = await _compatibilitySource
+        .readCompatibilityPrivateState();
+    _validateCompatibilityState(journal, remaining);
+    if (remaining.savedSearches.isNotEmpty ||
+        remaining.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return journal;
+  }
+
+  void _validateCompatibilityState(
+    AtlasVaultPlaintextMigrationJournal journal,
+    AtlasVaultPlaintextPrivateState state,
+  ) {
+    final expectedSearches = <String, AtlasSavedSearch>{
+      for (final value in journal.savedSearches) value.name: value,
+    };
+    final expectedSearchNames = journal.remoteSavedSearchNames.toSet();
+    for (final value in state.savedSearches) {
+      if (!expectedSearchNames.contains(value.name) ||
+          journal.deletedSavedSearchNames.contains(value.name)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      final expected = expectedSearches[value.name];
+      if (expected == null ||
+          !_jsonEqual(
+            _savedSearchJson(expected),
+            _savedSearchJson(_savedSearchFromJournal(_savedSearchJson(value))),
+          )) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    }
+
+    final handles = <String, AtlasVaultRemoteTrackerHandle>{
+      for (final value in journal.remoteTrackerHandles) value.recordId: value,
+    };
+    final expectedTrackers = <String, AtlasApplicationRecord>{
+      for (final value in journal.trackerRecords) value.jobKey: value,
+    };
+    for (final value in state.trackerRecords) {
+      final handle = handles[value.id];
+      if (handle == null ||
+          handle.jobKey != value.jobKey ||
+          journal.deletedTrackerRecordIds.contains(value.id)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      final expected = expectedTrackers[value.jobKey];
+      if (expected == null ||
+          !_jsonEqual(
+            _trackerJson(expected),
+            _trackerJson(_trackerFromJournal(_trackerJson(value))),
+          )) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    }
+  }
+
+  Future<AtlasVaultPlaintextMigrationJournal> _removeCachePrivateState(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    final current = await _cacheSource.readPrivateStateForMigration();
+    final privatePresent =
+        current.savedSearches.isNotEmpty || current.trackerRecords.isNotEmpty;
+    final expectedDigest = journal.cachePrivateSha256;
+    if (journal.cacheCleared) {
+      if ((expectedDigest != null && !current.cachePresent) ||
+          privatePresent ||
+          current.privateSha256 != null) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      return journal;
+    }
+    if (expectedDigest == null) {
+      if (privatePresent || current.privateSha256 != null) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    } else if (!current.cachePresent) {
+      throw const AtlasVaultPlaintextMigrationException();
+    } else if (privatePresent) {
+      if (current.privateSha256 != expectedDigest) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      await _cacheSource.removePrivateStateForMigration(
+        expectedPrivateSha256: expectedDigest,
+      );
+      final restored = await _cacheSource.readPrivateStateForMigration();
+      if (!restored.cachePresent ||
+          restored.privateSha256 != null ||
+          restored.savedSearches.isNotEmpty ||
+          restored.trackerRecords.isNotEmpty) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    } else if (current.privateSha256 != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return _replaceJournal(
+      journal,
+      journal.withCommitProgress(cacheCleared: true),
+    );
+  }
+
+  Future<void> _verifyPlaintextAbsent(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    final compatibility = await _compatibilitySource
+        .readCompatibilityPrivateState();
+    if (compatibility.savedSearches.isNotEmpty ||
+        compatibility.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final cache = await _cacheSource.readPrivateStateForMigration();
+    if ((journal.cachePrivateSha256 != null && !cache.cachePresent) ||
+        cache.privateSha256 != null ||
+        cache.savedSearches.isNotEmpty ||
+        cache.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final memory = await _inMemorySource.readPlaintextPrivateState();
+    if (memory.savedSearches.isNotEmpty || memory.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (await _selectedVaultStore.read() != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await _verifyPreparedResources(journal);
+  }
+
+  Future<void> _activateAndVerify(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    if (await _selectedVaultStore.read() != journal.vaultId) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (!_privateAuthority.isEncryptedPrivateStateActive &&
+        !await _privateAuthority.activateEncryptedPrivateState(
+          journal.vaultId,
+        )) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (!_privateAuthority.isEncryptedPrivateStateActive) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final snapshot = await _privateAuthority.readEncryptedPrivateState();
+    if (!await _privateStateMatchesJournal(snapshot, journal)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  Future<void> _verifyCompletionState(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    if (await _selectedVaultStore.read() != journal.vaultId) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await _verifyPreparedResources(journal);
+    final compatibility = await _compatibilitySource
+        .readCompatibilityPrivateState();
+    if (compatibility.savedSearches.isNotEmpty ||
+        compatibility.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final cache = await _cacheSource.readPrivateStateForMigration();
+    if ((journal.cachePrivateSha256 != null && !cache.cachePresent) ||
+        cache.privateSha256 != null ||
+        cache.savedSearches.isNotEmpty ||
+        cache.trackerRecords.isNotEmpty) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await _activateAndVerify(journal);
+  }
+
+  Future<bool> _privateStateMatchesJournal(
+    AtlasVaultPlaintextPrivateState state,
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    try {
+      final savedSearches = <AtlasSavedSearch>[
+        for (final value in state.savedSearches)
+          _savedSearchFromJournal(_savedSearchJson(value)),
+      ]..sort((left, right) => left.name.compareTo(right.name));
+      final trackerRecords = <AtlasApplicationRecord>[
+        for (final value in state.trackerRecords)
+          _trackerFromJournal(_trackerJson(value)),
+      ]..sort((left, right) => left.jobKey.compareTo(right.jobKey));
+      final digest = await _privateInventoryDigest(
+        savedSearches,
+        trackerRecords,
+      );
+      return digest == journal.inventorySha256 &&
+          _jsonEqual(
+            <Object?>[
+              for (final value in savedSearches) _savedSearchJson(value),
+            ],
+            <Object?>[
+              for (final value in journal.savedSearches)
+                _savedSearchJson(value),
+            ],
+          ) &&
+          _jsonEqual(
+            <Object?>[for (final value in trackerRecords) _trackerJson(value)],
+            <Object?>[
+              for (final value in journal.trackerRecords) _trackerJson(value),
+            ],
+          );
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<T> _serialized<T>(Future<T> Function() operation) async {
@@ -1164,7 +1732,7 @@ final class AtlasVaultPlaintextMigrationCoordinator {
   AtlasVaultPlaintextMigrationSummary _summaryFromJournal(
     AtlasVaultPlaintextMigrationJournal journal,
   ) {
-    return AtlasVaultPlaintextMigrationSummary._(
+    return AtlasVaultPlaintextMigrationSummary(
       savedSearchCount: journal.savedSearches.length,
       trackerRecordCount: journal.trackerRecords.length,
       localCachePrivatePresent: journal.cachePrivateSha256 != null,
@@ -1172,6 +1740,18 @@ final class AtlasVaultPlaintextMigrationCoordinator {
           journal.remoteSavedSearchNames.isNotEmpty ||
           journal.remoteTrackerHandles.isNotEmpty,
       stage: journal.stage,
+    );
+  }
+
+  AtlasVaultPlaintextMigrationSummary _completedSummary(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) {
+    return AtlasVaultPlaintextMigrationSummary(
+      savedSearchCount: journal.savedSearches.length,
+      trackerRecordCount: journal.trackerRecords.length,
+      localCachePrivatePresent: false,
+      compatibilityPrivatePresent: false,
+      stage: null,
     );
   }
 
@@ -1220,7 +1800,7 @@ final class _MigrationInventory {
   AtlasVaultPlaintextMigrationSummary summary({
     AtlasVaultPlaintextMigrationStage? stage,
   }) {
-    return AtlasVaultPlaintextMigrationSummary._(
+    return AtlasVaultPlaintextMigrationSummary(
       savedSearchCount: savedSearches.length,
       trackerRecordCount: trackerRecords.length,
       localCachePrivatePresent: localCachePrivatePresent,

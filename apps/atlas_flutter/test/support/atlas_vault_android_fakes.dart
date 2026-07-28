@@ -1,4 +1,5 @@
 import 'package:atlas/atlas_vault.dart';
+import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -55,4 +56,54 @@ Uint8List deterministicVaultKey() {
   return Uint8List.fromList(
     List<int>.generate(32, (index) => (index + 1) & 0xff),
   );
+}
+
+final class TestAtlasVaultPlaintextMigrationPrivateAuthority
+    implements AtlasVaultPlaintextMigrationPrivateAuthority {
+  TestAtlasVaultPlaintextMigrationPrivateAuthority({
+    required this.events,
+    required void Function() onHide,
+    required Future<AtlasVaultPlaintextPrivateState> Function()
+    readEncryptedState,
+  }) : // Keep public fake labels readable at call sites.
+       // ignore: prefer_initializing_formals
+       _onHide = onHide,
+       // ignore: prefer_initializing_formals
+       _readEncryptedState = readEncryptedState;
+
+  final List<String> events;
+  final void Function() _onHide;
+  final Future<AtlasVaultPlaintextPrivateState> Function() _readEncryptedState;
+
+  @override
+  bool isEncryptedPrivateStateActive = false;
+  int activateCalls = 0;
+  bool failAfterNextActivation = false;
+
+  @override
+  void hideLegacyPrivateState() {
+    _onHide();
+    events.add('private-authority.hide');
+  }
+
+  @override
+  Future<bool> activateEncryptedPrivateState(String vaultId) async {
+    activateCalls += 1;
+    isEncryptedPrivateStateActive = true;
+    events.add('private-authority.activate');
+    if (failAfterNextActivation) {
+      failAfterNextActivation = false;
+      throw StateError('interrupted');
+    }
+    return true;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() {
+    return _readEncryptedState();
+  }
+
+  @override
+  String toString() =>
+      'TestAtlasVaultPlaintextMigrationPrivateAuthority(<redacted>)';
 }

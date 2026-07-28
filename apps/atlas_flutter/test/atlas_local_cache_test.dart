@@ -205,6 +205,7 @@ void main() {
       expect(await store.read(), isNull);
       final migrationState = await store.readPrivateStateForMigration();
 
+      expect(migrationState.cachePresent, isTrue);
       expect(migrationState.savedSearches.single.name, 'Search 1');
       expect(
         migrationState.trackerRecords.single.jobKey,
@@ -228,12 +229,28 @@ void main() {
         );
 
         final restored = await store.read();
+        final migrationRestored = await store.readPrivateStateForMigration();
         expect(restored, isNotNull);
+        expect(migrationRestored.cachePresent, isTrue);
         expect(restored!.containsPrivateState, isFalse);
         expect(restored.searchResponse.results.single.title, 'Cached Analyst');
         expect(restored.cachedJobDetails, hasLength(1));
         expect(restored.updateRuns, hasLength(1));
         expect(restored.sources, hasLength(1));
+      },
+    );
+
+    test(
+      'migration distinguishes an absent cache from a scrubbed cache',
+      () async {
+        final store = AtlasLocalCacheStore(file: cacheFile);
+
+        final migrationState = await store.readPrivateStateForMigration();
+
+        expect(migrationState.cachePresent, isFalse);
+        expect(migrationState.privateSha256, isNull);
+        expect(migrationState.savedSearches, isEmpty);
+        expect(migrationState.trackerRecords, isEmpty);
       },
     );
 

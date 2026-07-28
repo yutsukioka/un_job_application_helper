@@ -111,11 +111,26 @@ class AtlasAppController extends ChangeNotifier {
   bool _privateDeactivationInProgress = false;
   Future<void>? _privateDeactivationOperation;
   Future<void>? _cacheWriteOperation;
+  AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
 
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
         _privateDeactivationInProgress ||
+        (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
+            false) ||
         (_privateStatePersistence?.isActive ?? false);
+  }
+
+  AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
+      _plaintextMigrationContext;
+
+  void attachPlaintextMigrationContext(
+    AtlasVaultPlaintextMigrationContext context,
+  ) {
+    if (_plaintextMigrationContext != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    _plaintextMigrationContext = context;
   }
 
   void clearConnectionMessage() {
@@ -320,6 +335,19 @@ class AtlasAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> bootstrapPrivateAuthorityAndLoadPersistedCache() async {
+    final context = _plaintextMigrationContext;
+    if (context == null) {
+      await loadPersistedCache();
+      return;
+    }
+    await context.owner.bootstrapAuthority();
+    if (context.owner.blocksLegacyPrivateAuthority) {
+      _hideLegacyPrivateStateForMigration();
+    }
+    await loadPersistedCache();
+  }
+
   Future<void> clearPersistedCache() async {
     final store = await _ensureLocalCacheStore();
     await store?.clear();
@@ -513,7 +541,9 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        if (_privateStateProtectionActive ||
+            _privateActivationInProgress ||
+            _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
@@ -553,7 +583,9 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        if (_privateStateProtectionActive ||
+            _privateActivationInProgress ||
+            _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
@@ -723,7 +755,9 @@ class AtlasAppController extends ChangeNotifier {
       }
       return;
     }
-    if (_privateActivationInProgress || _privateDeactivationInProgress) {
+    if (_privateStateProtectionActive ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
       return;
     }
     try {
@@ -1239,6 +1273,14 @@ class AtlasAppController extends ChangeNotifier {
       snapshot.trackerRecords,
     );
     _syncSavedSearchSequence();
+  }
+
+  void _hideLegacyPrivateStateForMigration() {
+    _privateAuthorityGeneration += 1;
+    savedSearches = const <AtlasSavedSearch>[];
+    trackerRecords = const <AtlasApplicationRecord>[];
+    _syncSavedSearchSequence();
+    notifyListeners();
   }
 
   bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
@@ -1898,18 +1940,27 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   AtlasMobileTab _selectedTab = AtlasMobileTab.search;
   late final AtlasAppController _controller;
   late final bool _ownsController;
+  AtlasVaultPlaintextMigrationPresentationOwner? _ownedMigrationOwner;
 
   @override
   void initState() {
     super.initState();
-    _controller =
-        widget.controller ??
-        AtlasAppController(localCacheStoreFactory: _defaultCacheStore);
-    _ownsController = widget.controller == null;
+    final suppliedController = widget.controller;
+    if (suppliedController != null) {
+      _controller = suppliedController;
+      _ownsController = false;
+    } else {
+      final assembly = _buildDefaultControllerAssembly();
+      _controller = assembly.controller;
+      _ownedMigrationOwner = assembly.migrationOwner;
+      _ownsController = true;
+    }
     if (_ownsController) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          unawaited(_controller.loadPersistedCache());
+          unawaited(
+            _controller.bootstrapPrivateAuthorityAndLoadPersistedCache(),
+          );
         }
       });
     }
@@ -1918,6 +1969,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   @override
   void dispose() {
     if (_ownsController) {
+      _ownedMigrationOwner?.dispose();
       _controller.dispose();
     }
     super.dispose();
@@ -2006,6 +2058,172 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => AtlasFilterSheet(controller: _controller),
+    );
+  }
+}
+
+final class _AtlasDefaultControllerAssembly {
+  const _AtlasDefaultControllerAssembly({
+    required this.controller,
+    this.migrationOwner,
+  });
+
+  final AtlasAppController controller;
+  final AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
+}
+
+_AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
+  if (!Platform.isAndroid) {
+    return _AtlasDefaultControllerAssembly(
+      controller: AtlasAppController(
+        localCacheStoreFactory: _defaultCacheStore,
+      ),
+    );
+  }
+
+  final keyStore = AtlasAndroidVaultSecureKeyStore();
+  final localStore = AtlasAndroidVaultLocalStoreIO();
+  final runtime = AtlasVaultPrivateStateRuntime(
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+  );
+  final controller = AtlasAppController(
+    localCacheStoreFactory: _defaultCacheStore,
+    privateStatePersistence: runtime,
+  );
+  final coordinator = AtlasVaultPlaintextMigrationCoordinator(
+    inMemorySource: _AtlasControllerPlaintextMigrationSource(controller),
+    compatibilitySource: _AtlasControllerCompatibilityMigrationSource(
+      controller,
+    ),
+    cacheSource: _AtlasControllerCacheMigrationSource(controller),
+    journalStore: AtlasAndroidProtectedMigrationJournalStore(),
+    selectedVaultStore: AtlasAndroidSelectedVaultStore(),
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    privateAuthority: _AtlasControllerMigrationPrivateAuthority(
+      controller: controller,
+      runtime: runtime,
+    ),
+  );
+  final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+    coordinator: coordinator,
+  );
+  controller.attachPlaintextMigrationContext(
+    AtlasVaultPlaintextMigrationContext(owner: owner),
+  );
+  return _AtlasDefaultControllerAssembly(
+    controller: controller,
+    migrationOwner: owner,
+  );
+}
+
+final class _AtlasControllerPlaintextMigrationSource
+    implements AtlasVaultPlaintextStateSource {
+  const _AtlasControllerPlaintextMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState() async {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: controller.savedSearches,
+      trackerRecords: controller.trackerRecords,
+    );
+  }
+}
+
+final class _AtlasControllerCompatibilityMigrationSource
+    implements AtlasVaultCompatibilityPrivateSource {
+  const _AtlasControllerCompatibilityMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  AtlasAPIClient get _client => controller._clientFactory(controller.baseURL);
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState>
+  readCompatibilityPrivateState() async {
+    final client = _client;
+    final savedSearches = await client.savedSearches();
+    final trackerRecords = await client.trackerRecords();
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: savedSearches,
+      trackerRecords: trackerRecords,
+    );
+  }
+
+  @override
+  Future<bool> deleteSavedSearch(String name) {
+    return _client.deleteSavedSearch(name);
+  }
+
+  @override
+  Future<bool> deleteTrackerRecord(String recordId) {
+    return _client.deleteTrackerRecord(recordId);
+  }
+}
+
+final class _AtlasControllerCacheMigrationSource
+    implements AtlasLocalCacheMigrationSource {
+  const _AtlasControllerCacheMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  @override
+  Future<AtlasLocalCacheMigrationPrivateState>
+  readPrivateStateForMigration() async {
+    final store = await controller._ensureLocalCacheStore();
+    if (store == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return store.readPrivateStateForMigration();
+  }
+
+  @override
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) async {
+    final store = await controller._ensureLocalCacheStore();
+    if (store == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await store.removePrivateStateForMigration(
+      expectedPrivateSha256: expectedPrivateSha256,
+    );
+  }
+}
+
+final class _AtlasControllerMigrationPrivateAuthority
+    implements AtlasVaultPlaintextMigrationPrivateAuthority {
+  const _AtlasControllerMigrationPrivateAuthority({
+    required this.controller,
+    required this.runtime,
+  });
+
+  final AtlasAppController controller;
+  final AtlasVaultPrivateStateRuntime runtime;
+
+  @override
+  bool get isEncryptedPrivateStateActive => runtime.isActive;
+
+  @override
+  void hideLegacyPrivateState() {
+    controller._hideLegacyPrivateStateForMigration();
+  }
+
+  @override
+  Future<bool> activateEncryptedPrivateState(String vaultId) async {
+    return await controller.activateExistingAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() async {
+    final snapshot = await runtime.read();
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: snapshot.savedSearches,
+      trackerRecords: snapshot.trackerRecords,
     );
   }
 }
@@ -5000,6 +5218,14 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
         children: [
           const _SettingsHeader(),
           const SizedBox(height: 22),
+          if (controller.plaintextMigrationContext case final context?) ...[
+            _SettingsSection(
+              title: 'AtlasVault',
+              children: <Widget>[
+                AtlasVaultPlaintextMigrationPanel(owner: context.owner),
+              ],
+            ),
+          ],
           _SettingsSection(
             title: 'Server',
             children: [

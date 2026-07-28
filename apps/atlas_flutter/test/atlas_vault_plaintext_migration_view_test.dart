@@ -1,5 +1,6 @@
+import 'dart:async';
+
 import 'package:atlas/atlas_vault_android.dart';
-import 'package:atlas/src/atlas_vault/plaintext_migration_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -44,6 +45,64 @@ void main() {
       expect(owner.toString(), isNot(contains('PRIVATE_QUERY')));
     },
   );
+
+  test('selected encrypted authority requires explicit activation', () async {
+    final coordinator = _FakeMigrationCoordinator(
+      authorityState:
+          AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive,
+    );
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+
+    await owner.bootstrapAuthority();
+
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.activationRequired,
+    );
+    expect(coordinator.calls, <String>['inspect-authority']);
+
+    await owner.activateEncryptedPrivateData();
+
+    expect(coordinator.calls, <String>[
+      'inspect-authority',
+      'activate-selected',
+    ]);
+    expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.active);
+  });
+
+  test('late retained inventory cannot republish after hide', () async {
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final coordinator = _FakeMigrationCoordinator(
+      inventoryEntered: entered,
+      releaseInventory: release,
+    );
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+
+    final first = owner.reviewInventory();
+    await entered.future;
+    final coalesced = owner.reviewInventory();
+    expect(identical(first, coalesced), isTrue);
+    await expectLater(
+      owner.prepareEncryptedMigration(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    owner.hide();
+    release.complete();
+    await first;
+
+    expect(coordinator.calls, <String>['inventory']);
+    expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.hidden);
+    expect(owner.savedSearchCount, 0);
+    expect(owner.trackerRecordCount, 0);
+  });
 
   testWidgets('inventory and both migration confirmations are explicit', (
     tester,
@@ -141,10 +200,14 @@ final class _FakeMigrationCoordinator
     implements AtlasVaultPlaintextMigrationCoordinating {
   _FakeMigrationCoordinator({
     this.authorityState = AtlasVaultPlaintextAuthorityState.legacy,
+    this.inventoryEntered,
+    this.releaseInventory,
   });
 
   final List<String> calls = <String>[];
   AtlasVaultPlaintextAuthorityState authorityState;
+  final Completer<void>? inventoryEntered;
+  final Completer<void>? releaseInventory;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
 
@@ -177,6 +240,8 @@ final class _FakeMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextMigrationSummary> inventory() async {
     calls.add('inventory');
+    inventoryEntered?.complete();
+    await releaseInventory?.future;
     return _inventorySummary;
   }
 
@@ -197,7 +262,7 @@ final class _FakeMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
     calls.add('finalize');
     authorityState = AtlasVaultPlaintextAuthorityState.encryptedActive;
-    return _stageSummary(AtlasVaultPlaintextMigrationStage.completionPending);
+    return _inventorySummary;
   }
 
   @override
@@ -210,6 +275,6 @@ final class _FakeMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationSummary> activateSelected() async {
     calls.add('activate-selected');
     authorityState = AtlasVaultPlaintextAuthorityState.encryptedActive;
-    return _stageSummary(AtlasVaultPlaintextMigrationStage.completionPending);
+    return _inventorySummary;
   }
 }

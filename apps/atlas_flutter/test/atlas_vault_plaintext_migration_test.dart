@@ -6,6 +6,8 @@ import 'package:atlas/atlas_vault.dart' as vault;
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/atlas_vault_android_fakes.dart';
+
 void main() {
   test('construction invokes no migration dependency', () {
     final fixture = _MigrationFixture();
@@ -301,6 +303,27 @@ void main() {
     expect(fixture.cache.removeCalls, 0);
   });
 
+  test(
+    'resume maps asynchronous dependency failures to fixed errors',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      final verified = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+      );
+      fixture.journal.bytes = verified
+          .transitionedTo(AtlasVaultPlaintextMigrationStage.commitInProgress)
+          .canonicalBytes();
+      fixture.compatibility.failReads = true;
+
+      await expectLater(
+        fixture.coordinator.resume(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+    },
+  );
+
   test('strict journal rejects unknown fields and backward stages', () async {
     final fixture = _MigrationFixture();
     await fixture.coordinator.inventory();
@@ -330,7 +353,7 @@ void main() {
 
       final result = await fixture.coordinator.finalizeAndActivate();
 
-      expect(result.stage, AtlasVaultPlaintextMigrationStage.completionPending);
+      expect(result.stage, isNull);
       expect(fixture.compatibility.state.savedSearches, isEmpty);
       expect(fixture.compatibility.state.trackerRecords, isEmpty);
       expect(fixture.cache.state.savedSearches, isEmpty);
@@ -431,6 +454,30 @@ void main() {
         'Unexpected remote search',
       );
       expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.selection.value, isNull);
+      expect(fixture.journal.bytes, isNotNull);
+    },
+  );
+
+  test(
+    'unexpected cache disappearance after preparation fails closed',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        privateSha256: null,
+        cachePresent: false,
+      );
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.cache.removeCalls, 0);
       expect(fixture.selection.value, isNull);
       expect(fixture.journal.bytes, isNotNull);
     },
@@ -565,10 +612,20 @@ final class _MigrationFixture {
   late final _SelectedVaultStore selection = _SelectedVaultStore(events);
   late final _SecureKeyStore keyStore = _SecureKeyStore(events);
   late final _LocalStoreIO localStore = _LocalStoreIO(events);
-  late final _PrivateAuthority privateAuthority = _PrivateAuthority(
-    events: events,
-    memory: memory,
-  );
+  late final TestAtlasVaultPlaintextMigrationPrivateAuthority privateAuthority =
+      TestAtlasVaultPlaintextMigrationPrivateAuthority(
+        events: events,
+        onHide: () {
+          memory.state = AtlasVaultPlaintextPrivateState(
+            savedSearches: const <AtlasSavedSearch>[],
+            trackerRecords: const <AtlasApplicationRecord>[],
+          );
+        },
+        readEncryptedState: () async => AtlasVaultPlaintextPrivateState(
+          savedSearches: <AtlasSavedSearch>[_savedSearch()],
+          trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+        ),
+      );
   final _ids = _SequenceIds(<String>[
     '11111111-1111-4111-8111-111111111111',
     '22222222-2222-4222-8222-222222222222',
@@ -820,46 +877,6 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
       throw StateError('mismatch');
     }
     value = null;
-  }
-}
-
-final class _PrivateAuthority
-    implements AtlasVaultPlaintextMigrationPrivateAuthority {
-  _PrivateAuthority({required this.events, required this.memory});
-
-  final List<String> events;
-  final _MemorySource memory;
-  bool isEncryptedPrivateStateActive = false;
-  int activateCalls = 0;
-  bool failAfterNextActivation = false;
-
-  @override
-  void hideLegacyPrivateState() {
-    memory.state = AtlasVaultPlaintextPrivateState(
-      savedSearches: const <AtlasSavedSearch>[],
-      trackerRecords: const <AtlasApplicationRecord>[],
-    );
-    events.add('private-authority.hide');
-  }
-
-  @override
-  Future<bool> activateEncryptedPrivateState(String vaultId) async {
-    activateCalls += 1;
-    isEncryptedPrivateStateActive = true;
-    events.add('private-authority.activate');
-    if (failAfterNextActivation) {
-      failAfterNextActivation = false;
-      throw StateError('interrupted');
-    }
-    return true;
-  }
-
-  @override
-  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() async {
-    return AtlasVaultPlaintextPrivateState(
-      savedSearches: <AtlasSavedSearch>[_savedSearch()],
-      trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
-    );
   }
 }
 

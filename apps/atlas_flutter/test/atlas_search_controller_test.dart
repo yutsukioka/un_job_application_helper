@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
-import 'package:atlas/src/atlas_vault/plaintext_migration_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -1813,6 +1812,38 @@ void main() {
       expect(controller.trackerRecords, isEmpty);
     },
   );
+
+  test('migration context attaches once without starting authority work', () {
+    final firstCoordinator = _ControllerMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+    );
+    final secondCoordinator = _ControllerMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+    );
+    final firstOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: firstCoordinator,
+    );
+    final secondOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: secondCoordinator,
+    );
+    final controller = AtlasAppController();
+    addTearDown(firstOwner.dispose);
+    addTearDown(secondOwner.dispose);
+    addTearDown(controller.dispose);
+
+    controller.attachPlaintextMigrationContext(
+      AtlasVaultPlaintextMigrationContext(owner: firstOwner),
+    );
+
+    expect(firstCoordinator.calls, isEmpty);
+    expect(
+      () => controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: secondOwner),
+      ),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    expect(secondCoordinator.calls, isEmpty);
+  });
 }
 
 final class _ControllerMigrationCoordinator

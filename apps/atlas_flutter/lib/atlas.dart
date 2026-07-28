@@ -1143,6 +1143,7 @@ final class AtlasLocalCacheMigrationPrivateState {
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
     required this.privateSha256,
+    this.cachePresent = true,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
@@ -1151,6 +1152,7 @@ final class AtlasLocalCacheMigrationPrivateState {
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
   final String? privateSha256;
+  final bool cachePresent;
 
   @override
   String toString() => 'AtlasLocalCacheMigrationPrivateState(<redacted>)';
@@ -1241,6 +1243,7 @@ final class AtlasLocalCacheStore {
           savedSearches: const <AtlasSavedSearch>[],
           trackerRecords: const <AtlasApplicationRecord>[],
           privateSha256: null,
+          cachePresent: false,
         );
       }
       final value = await _readStrictMigrationCache();
