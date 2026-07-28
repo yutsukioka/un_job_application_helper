@@ -201,6 +201,59 @@ void main() {
   });
 
   test(
+    'journal-created interruption resumes without duplicate journal',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      fixture.journal.failAfterNextCreate = true;
+
+      await expectLater(
+        fixture.coordinator.prepare(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.journal.bytes, isNotNull);
+      expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.localStore.store, isNull);
+
+      final resumed = await fixture.coordinator.resumePreparation();
+
+      expect(
+        resumed.stage,
+        AtlasVaultPlaintextMigrationStage.encryptedVerified,
+      );
+      expect(fixture.journal.createCalls, 1);
+      expect(fixture.keyStore.createCalls, 1);
+      expect(fixture.localStore.createCalls, 1);
+    },
+  );
+
+  test('store-created interruption adopts verified store on resume', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    fixture.localStore.failAfterNextCreate = true;
+
+    await expectLater(
+      fixture.coordinator.prepare(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    expect(fixture.localStore.store, isNotNull);
+    final interruptedJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    expect(
+      interruptedJournal.stage,
+      AtlasVaultPlaintextMigrationStage.prepared,
+    );
+    expect(interruptedJournal.storeSha256, isNull);
+
+    final resumed = await fixture.coordinator.resumePreparation();
+
+    expect(resumed.stage, AtlasVaultPlaintextMigrationStage.encryptedVerified);
+    expect(fixture.localStore.createCalls, 1);
+    expect(fixture.keyStore.createCalls, 1);
+  });
+
+  test(
     'pre-commit rollback removes staged resources and journal last',
     () async {
       final fixture = _MigrationFixture();
@@ -225,6 +278,28 @@ void main() {
       expect(fixture.compatibility.state.savedSearches, hasLength(1));
     },
   );
+
+  test('rollback is unavailable after the point of no return', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    final verified = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    fixture.journal.bytes = verified
+        .transitionedTo(AtlasVaultPlaintextMigrationStage.commitInProgress)
+        .canonicalBytes();
+
+    await expectLater(
+      fixture.coordinator.discardPrepared(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    expect(fixture.journal.bytes, isNotNull);
+    expect(fixture.localStore.store, isNotNull);
+    expect(fixture.keyStore.keys, isNotEmpty);
+    expect(fixture.cache.removeCalls, 0);
+  });
 
   test('strict journal rejects unknown fields and backward stages', () async {
     final fixture = _MigrationFixture();
@@ -420,6 +495,7 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
 
   final List<String> events;
   Uint8List? bytes;
+  bool failAfterNextCreate = false;
   int readCalls = 0;
   int createCalls = 0;
   int replaceCalls = 0;
@@ -439,6 +515,10 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
     }
     bytes = Uint8List.fromList(canonicalBytes);
     events.add('journal.create');
+    if (failAfterNextCreate) {
+      failAfterNextCreate = false;
+      throw StateError('interrupted');
+    }
   }
 
   @override
@@ -561,6 +641,7 @@ final class _LocalStoreIO implements AtlasVaultLocalStoreIO {
 
   final List<String> events;
   vault.AtlasVaultLocalStore? store;
+  bool failAfterNextCreate = false;
   int createCalls = 0;
   int readCalls = 0;
   int replaceCalls = 0;
@@ -582,6 +663,10 @@ final class _LocalStoreIO implements AtlasVaultLocalStoreIO {
     }
     store = value;
     events.add('local-store.create');
+    if (failAfterNextCreate) {
+      failAfterNextCreate = false;
+      throw StateError('interrupted');
+    }
   }
 
   @override
