@@ -75,6 +75,14 @@ The journal is cleared last.
 At `commit_in_progress` or later, discard fails fixed. Resume revalidates the
 journal and resources and continues only unfinished idempotent steps.
 
+While migration is preparing, prepared, finalizing, resumable, completion
+pending, or unresolved, ordinary public operations may continue but their
+persisted-cache writes are suppressed. They never reuse the post-activation
+public-only cache path, so the reviewed plaintext cache bytes and digest remain
+unchanged until explicit rollback or verified removal. Explicit cache clearing
+is suppressed by the same boundary, and migration-specific reads drain any
+cache write admitted before preparation before hashing authoritative state.
+
 ## 13. In-Memory Inventory
 
 The coordinator reads copies of the controller saved-search and tracker lists.

@@ -64,6 +64,20 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     };
   }
 
+  bool get blocksPersistedCacheWrites {
+    return switch (status) {
+      AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable ||
+      AtlasVaultPlaintextMigrationPresentationStatus.inventorying ||
+      AtlasVaultPlaintextMigrationPresentationStatus.inventoryReady ||
+      AtlasVaultPlaintextMigrationPresentationStatus.activationRequired ||
+      AtlasVaultPlaintextMigrationPresentationStatus.activating ||
+      AtlasVaultPlaintextMigrationPresentationStatus.active ||
+      AtlasVaultPlaintextMigrationPresentationStatus.failed ||
+      AtlasVaultPlaintextMigrationPresentationStatus.conflictDetected => false,
+      _ => true,
+    };
+  }
+
   bool get isBusy {
     return switch (status) {
       AtlasVaultPlaintextMigrationPresentationStatus.inventorying ||

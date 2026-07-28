@@ -1813,6 +1813,82 @@ void main() {
     },
   );
 
+  test(
+    'prepared migration suppresses public cache writes without stripping private state',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_prepared_migration_cache_write_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      final seedStore = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _cacheFixtureNow,
+      );
+      await seedStore.write(_privateCacheSnapshot());
+      final initialBytes = await cacheFile.readAsBytes();
+      final initialPrivateState = await seedStore
+          .readPrivateStateForMigration();
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStoreFactory: ({privateStateProtectionActive}) async {
+          return AtlasLocalCacheStore(
+            file: cacheFile,
+            now: () => _cacheFixtureNow,
+            privateStateProtectionActive: privateStateProtectionActive,
+          );
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await migrationOwner.reviewInventory();
+      await migrationOwner.prepareEncryptedMigration();
+
+      await controller.refreshLocalSave();
+
+      expect(transport.searchBodies, isNotEmpty);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+      final preservedPrivateState = await seedStore
+          .readPrivateStateForMigration();
+      expect(
+        preservedPrivateState.privateSha256,
+        initialPrivateState.privateSha256,
+      );
+      expect(
+        preservedPrivateState.savedSearches.single.name,
+        'Legacy private search',
+      );
+      expect(preservedPrivateState.trackerRecords.single.id, 'legacy-record');
+
+      await controller.clearPersistedCache();
+
+      expect(
+        controller.connectionMessage,
+        'Local cache changes are unavailable during AtlasVault migration.',
+      );
+      expect(await cacheFile.exists(), isTrue);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+    },
+  );
+
   test('migration context attaches once without starting authority work', () {
     final firstCoordinator = _ControllerMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.legacy,

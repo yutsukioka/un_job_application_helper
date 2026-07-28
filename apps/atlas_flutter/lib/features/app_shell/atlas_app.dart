@@ -121,6 +121,11 @@ class AtlasAppController extends ChangeNotifier {
         (_privateStatePersistence?.isActive ?? false);
   }
 
+  bool get _plaintextMigrationBlocksPersistedCacheWrites {
+    return _plaintextMigrationContext?.owner.blocksPersistedCacheWrites ??
+        false;
+  }
+
   AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
       _plaintextMigrationContext;
 
@@ -349,6 +354,12 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> clearPersistedCache() async {
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      connectionMessage =
+          'Local cache changes are unavailable during AtlasVault migration.';
+      notifyListeners();
+      return;
+    }
     final store = await _ensureLocalCacheStore();
     await store?.clear();
     results = const [];
@@ -1218,9 +1229,14 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _performPersistedCacheWrite() async {
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
+    }
     final store = await _ensureLocalCacheStore();
     final savedAt = cacheSavedAt;
-    if (store == null || savedAt == null) {
+    if (store == null ||
+        savedAt == null ||
+        _plaintextMigrationBlocksPersistedCacheWrites) {
       return;
     }
     final searchRequest =
@@ -1248,8 +1264,14 @@ class AtlasAppController extends ChangeNotifier {
       sources: sources,
       operationalDataLoadedAt: operationalDataLoadedAt,
     );
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
+    }
     if (_privateStateProtectionActive) {
       snapshot = snapshot.withoutPrivateState();
+    }
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
     }
     await store.write(snapshot);
   }
@@ -1265,6 +1287,18 @@ class AtlasAppController extends ChangeNotifier {
       // Activation preflight re-reads the authoritative cache state.
     }
     _requireCurrentPrivateActivation(activationGeneration);
+  }
+
+  Future<void> _drainCacheWriteForMigration() async {
+    final operation = _cacheWriteOperation;
+    if (operation == null) {
+      return;
+    }
+    try {
+      await operation;
+    } catch (_) {
+      // Migration re-reads the authoritative cache after the admitted write.
+    }
   }
 
   void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
@@ -2173,6 +2207,7 @@ final class _AtlasControllerCacheMigrationSource
   @override
   Future<AtlasLocalCacheMigrationPrivateState>
   readPrivateStateForMigration() async {
+    await controller._drainCacheWriteForMigration();
     final store = await controller._ensureLocalCacheStore();
     if (store == null) {
       throw const AtlasVaultPlaintextMigrationException();
@@ -2184,6 +2219,7 @@ final class _AtlasControllerCacheMigrationSource
   Future<void> removePrivateStateForMigration({
     required String expectedPrivateSha256,
   }) async {
+    await controller._drainCacheWriteForMigration();
     final store = await controller._ensureLocalCacheStore();
     if (store == null) {
       throw const AtlasVaultPlaintextMigrationException();
