@@ -100,6 +100,8 @@ class AtlasAppController extends ChangeNotifier {
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
   final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
   final DateTime Function() _now;
+  int _privateAuthorityGeneration = 0;
+  bool _privateActivationInProgress = false;
 
   bool get _privateStateProtectionActive {
     return _privateStatePersistence?.isActive ?? false;
@@ -209,17 +211,21 @@ class AtlasAppController extends ChangeNotifier {
     String vaultId,
   ) async {
     final persistence = _privateStatePersistence;
-    if (persistence == null || persistence.isActive) {
+    if (persistence == null ||
+        persistence.isActive ||
+        _privateActivationInProgress) {
       return AtlasVaultActivationResult.failed;
     }
-    if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
-      return AtlasVaultActivationResult.migrationRequired;
-    }
-    final cacheStore = await _ensureLocalCacheStore();
-    if (await cacheStore?.containsPersistedPrivateState() ?? false) {
-      return AtlasVaultActivationResult.migrationRequired;
-    }
+    _privateAuthorityGeneration += 1;
+    _privateActivationInProgress = true;
     try {
+      if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
+        return AtlasVaultActivationResult.migrationRequired;
+      }
+      final cacheStore = await _ensureLocalCacheStore();
+      if (await cacheStore?.containsPersistedPrivateState() ?? false) {
+        return AtlasVaultActivationResult.migrationRequired;
+      }
       final result = await persistence.activateExisting(vaultId);
       if (result != AtlasVaultActivationResult.activated) {
         return result;
@@ -243,10 +249,13 @@ class AtlasAppController extends ChangeNotifier {
       _syncSavedSearchSequence();
       notifyListeners();
       return AtlasVaultActivationResult.failed;
+    } finally {
+      _privateActivationInProgress = false;
     }
   }
 
   Future<void> deactivateAtlasVault() async {
+    _privateAuthorityGeneration += 1;
     try {
       await _privateStatePersistence?.deactivate();
     } finally {
@@ -451,6 +460,7 @@ class AtlasAppController extends ChangeNotifier {
     final request = _currentSearchRequest();
     final name = _nextSavedSearchName();
     final summary = _savedSearchSummary(request);
+    final privateAuthorityGeneration = _privateAuthorityGeneration;
     try {
       final persistence = _privateStatePersistence;
       if (persistence?.isActive ?? false) {
@@ -462,12 +472,18 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
+        if (_privateActivationInProgress) {
+          throw const AtlasVaultPrivateStateException();
+        }
         final client = _clientFactory(baseURL);
         final savedSearch = await client.saveSearch(
           name: name,
           request: request,
           summary: summary,
         );
+        if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
+          throw const AtlasVaultPrivateStateException();
+        }
         _upsertSavedSearch(savedSearch);
       }
       await _writePersistedCache();
@@ -484,6 +500,7 @@ class AtlasAppController extends ChangeNotifier {
   Future<void> saveJob(JobSearchResult job) async {
     connectionMessage = null;
     notifyListeners();
+    final privateAuthorityGeneration = _privateAuthorityGeneration;
     try {
       final persistence = _privateStatePersistence;
       if (persistence?.isActive ?? false) {
@@ -495,8 +512,14 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
+        if (_privateActivationInProgress) {
+          throw const AtlasVaultPrivateStateException();
+        }
         final client = _clientFactory(baseURL);
         final record = await client.saveJob(job.jobKey);
+        if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
+          throw const AtlasVaultPrivateStateException();
+        }
         _upsertTrackerRecord(record);
       }
       await _writePersistedCache();
@@ -1090,6 +1113,12 @@ class AtlasAppController extends ChangeNotifier {
       snapshot.trackerRecords,
     );
     _syncSavedSearchSequence();
+  }
+
+  bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
+    return !_privateActivationInProgress &&
+        !_privateStateProtectionActive &&
+        _privateAuthorityGeneration == authorityGeneration;
   }
 
   void _upsertSavedSearch(AtlasSavedSearch savedSearch) {

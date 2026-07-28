@@ -7,6 +7,7 @@ import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.AtomicFile
@@ -16,7 +17,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -173,7 +174,7 @@ internal class AtlasVaultAndroidStorage(
         val vaultKey = suppliedKey.copyOf()
         try {
             val file = keyFile(vaultId, createParent = true)
-            if (file.exists()) {
+            if (atomicFileExists(file, keysRoot(create = false))) {
                 throw StorageFailure()
             }
             val cipher = Cipher.getInstance(AES_GCM)
@@ -219,7 +220,7 @@ internal class AtlasVaultAndroidStorage(
 
     private fun loadVaultKey(vaultId: String): ByteArray? {
         val file = keyFile(vaultId, createParent = false)
-        if (!file.exists()) {
+        if (!atomicFileExists(file, keysRoot(create = false))) {
             return null
         }
         val envelopeBytes = readBoundedFile(file, MAX_KEY_ENVELOPE_BYTES)
@@ -268,27 +269,25 @@ internal class AtlasVaultAndroidStorage(
 
     private fun containsVaultKey(vaultId: String): Boolean {
         val file = keyFile(vaultId, createParent = false)
-        if (!file.exists()) {
-            return false
-        }
-        ensureSafeExistingFile(file, keysRoot(create = false))
-        return true
+        return atomicFileExists(file, keysRoot(create = false))
     }
 
     private fun deleteVaultKey(vaultId: String) {
         val file = keyFile(vaultId, createParent = false)
-        if (!file.exists()) {
+        val root = keysRoot(create = false)
+        if (!atomicFileExists(file, root)) {
             return
         }
-        ensureSafeExistingFile(file, keysRoot(create = false))
-        if (!file.delete()) {
+        ensureSafeAtomicState(file, root)
+        AtomicFile(file).delete()
+        if (atomicFileExists(file, root)) {
             throw StorageFailure()
         }
     }
 
     private fun readLocalStore(vaultId: String): ByteArray? {
         val file = localStoreFile(vaultId, createParent = false)
-        if (!file.exists()) {
+        if (!atomicFileExists(file, vaultDirectory(vaultId, create = false))) {
             return null
         }
         val bytes = readBoundedFile(file, MAX_STORE_BYTES)
@@ -305,7 +304,7 @@ internal class AtlasVaultAndroidStorage(
         try {
             validateCanonicalLocalStore(bytes, vaultId)
             val file = localStoreFile(vaultId, createParent = true)
-            if (file.exists()) {
+            if (atomicFileExists(file, vaultDirectory(vaultId, create = false))) {
                 throw StorageFailure()
             }
             atomicWrite(file, bytes, createOnly = true)
@@ -350,11 +349,13 @@ internal class AtlasVaultAndroidStorage(
 
     private fun deleteLocalStore(vaultId: String) {
         val file = localStoreFile(vaultId, createParent = false)
-        if (!file.exists()) {
+        val root = vaultDirectory(vaultId, create = false)
+        if (!atomicFileExists(file, root)) {
             return
         }
-        ensureSafeExistingFile(file, vaultDirectory(vaultId, create = false))
-        if (!file.delete()) {
+        ensureSafeAtomicState(file, root)
+        AtomicFile(file).delete()
+        if (atomicFileExists(file, root)) {
             throw StorageFailure()
         }
     }
@@ -400,8 +401,9 @@ internal class AtlasVaultAndroidStorage(
     }
 
     private fun atomicWrite(file: File, bytes: ByteArray, createOnly: Boolean) {
-        ensureContained(file, atlasVaultRoot(create = true))
-        if (createOnly && file.exists()) {
+        val root = atlasVaultRoot(create = true)
+        ensureContained(file, root)
+        if (createOnly && atomicFileExists(file, root)) {
             throw StorageFailure()
         }
         val atomicFile = AtomicFile(file)
@@ -433,12 +435,19 @@ internal class AtlasVaultAndroidStorage(
 
     private fun readBoundedFile(file: File, maximum: Int): ByteArray {
         val root = atlasVaultRoot(create = false)
+        ensureSafeAtomicState(file, root)
+        val input = try {
+            AtomicFile(file).openRead()
+        } catch (_: FileNotFoundException) {
+            throw StorageFailure()
+        }
         ensureSafeExistingFile(file, root)
         val length = file.length()
         if (length <= 0 || length > maximum.toLong()) {
+            input.close()
             throw StorageFailure()
         }
-        val bytes = FileInputStream(file).use { input ->
+        val bytes = input.use {
             val output = ByteArrayOutputStream(minOf(length.toInt(), 8192))
             val buffer = ByteArray(8192)
             var total = 0
@@ -465,6 +474,38 @@ internal class AtlasVaultAndroidStorage(
             throw StorageFailure()
         }
         return bytes
+    }
+
+    private fun atomicFileExists(file: File, root: File): Boolean {
+        ensureSafeAtomicState(file, root)
+        return try {
+            AtomicFile(file).openRead().use { }
+            ensureSafeExistingFile(file, root)
+            true
+        } catch (_: FileNotFoundException) {
+            false
+        }
+    }
+
+    private fun ensureSafeAtomicState(file: File, root: File) {
+        for (candidate in listOf(
+            file,
+            File("${file.path}.bak"),
+            File("${file.path}.new"),
+        )) {
+            ensureContained(candidate, root)
+            val status = try {
+                Os.lstat(candidate.absolutePath)
+            } catch (error: ErrnoException) {
+                if (error.errno == OsConstants.ENOENT) {
+                    continue
+                }
+                throw StorageFailure()
+            }
+            if (!OsConstants.S_ISREG(status.st_mode)) {
+                throw StorageFailure()
+            }
+        }
     }
 
     private fun getOrCreateMasterKey(): SecretKey {

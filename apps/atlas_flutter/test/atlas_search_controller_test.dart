@@ -905,6 +905,74 @@ void main() {
     },
   );
 
+  test(
+    'activation rejects an in-flight compatibility saved-search result',
+    () async {
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveSearch = entered
+        ..releaseCompatibilitySaveSearch = release;
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+
+      final compatibilitySave = controller.saveCurrentSearch();
+      await entered.future;
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+      release.complete();
+      await compatibilitySave;
+
+      expect(privatePersistence.isActive, isTrue);
+      expect(transport.savedSearchNames, <String>['Search 1']);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.connectionMessage, startsWith('Save search failed:'));
+    },
+  );
+
+  test(
+    'activation rejects an in-flight compatibility tracker result',
+    () async {
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveJob = entered
+        ..releaseCompatibilitySaveJob = release;
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+
+      final compatibilitySave = controller.saveJob(
+        JobSearchResult.fromJson(_jobJson),
+      );
+      await entered.future;
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+      release.complete();
+      await compatibilitySave;
+
+      expect(privatePersistence.isActive, isTrue);
+      expect(transport.savedJobKeys, <String>['undp_oracle_hcm:34063']);
+      expect(controller.trackerRecords, isEmpty);
+      expect(controller.connectionMessage, startsWith('Save job failed:'));
+    },
+  );
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(
@@ -1034,6 +1102,10 @@ final class _RecordingTransport implements AtlasTransport {
   int trackerReadCount = 0;
   int updateReadCount = 0;
   int sourceReadCount = 0;
+  Completer<void>? enteredCompatibilitySaveSearch;
+  Completer<void>? releaseCompatibilitySaveSearch;
+  Completer<void>? enteredCompatibilitySaveJob;
+  Completer<void>? releaseCompatibilitySaveJob;
 
   void resetPrivateCounts() {
     savedSearchNames.clear();
@@ -1069,6 +1141,10 @@ final class _RecordingTransport implements AtlasTransport {
         };
       case 'api/saved-searches':
         if (request.method == 'POST') {
+          enteredCompatibilitySaveSearch?.complete();
+          if (releaseCompatibilitySaveSearch != null) {
+            await releaseCompatibilitySaveSearch!.future;
+          }
           final name = request.jsonBody?['name'] as String? ?? '';
           savedSearchNames.add(name);
           final savedSearch = {
@@ -1112,6 +1188,10 @@ final class _RecordingTransport implements AtlasTransport {
           ],
         };
       case 'api/tracker/jobs/undp_oracle_hcm%3A34063':
+        enteredCompatibilitySaveJob?.complete();
+        if (releaseCompatibilitySaveJob != null) {
+          await releaseCompatibilitySaveJob!.future;
+        }
         savedJobKeys.add('undp_oracle_hcm:34063');
         return {
           'id': 'undp_oracle_hcm-34063',

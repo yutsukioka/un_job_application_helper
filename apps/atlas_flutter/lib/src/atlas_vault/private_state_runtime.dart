@@ -221,6 +221,8 @@ final class AtlasVaultPrivateStateRuntime
       envelope: envelope,
       existing: existing,
       updatedAt: timestamp,
+      currentLogicalMetadata: (hydrated) =>
+          hydrated.savedSearchMetadata[value.name],
       verify: (hydrated) {
         final committed = hydrated.savedSearchMetadata[value.name];
         final projected = hydrated.snapshot.savedSearches
@@ -253,6 +255,8 @@ final class AtlasVaultPrivateStateRuntime
       envelope: envelope,
       existing: existing,
       updatedAt: timestamp,
+      currentLogicalMetadata: (hydrated) =>
+          hydrated.trackerMetadata[value.jobKey],
       verify: (hydrated) {
         final committed = hydrated.trackerMetadata[value.jobKey];
         final projected = hydrated.snapshot.trackerRecords
@@ -270,6 +274,8 @@ final class AtlasVaultPrivateStateRuntime
     required vault.AtlasVaultPayloadEnvelope envelope,
     required _PrivateRecordMetadata? existing,
     required String updatedAt,
+    required _PrivateRecordMetadata? Function(_HydratedPrivateState hydrated)
+    currentLogicalMetadata,
     required bool Function(_HydratedPrivateState hydrated) verify,
   }) async {
     Uint8List? nonce;
@@ -284,6 +290,9 @@ final class AtlasVaultPrivateStateRuntime
         vaultKey: session.vaultKey,
         store: current,
       );
+      if (existing == null && currentLogicalMetadata(currentHydrated) != null) {
+        throw const AtlasVaultPrivateStateException();
+      }
       final currentMetadata = existing == null
           ? null
           : _metadataForRecordId(currentHydrated, existing.record.id);

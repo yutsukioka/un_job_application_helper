@@ -58,4 +58,15 @@ void main() {
     expect(storage, isNot(contains('API 23')));
     expect(storage, isNot(contains('software-key fallback')));
   });
+
+  test('native reads and deletes use AtomicFile recovery semantics', () {
+    final storage = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+
+    expect(storage, contains('AtomicFile(file).openRead()'));
+    expect(storage, contains('AtomicFile(file).delete()'));
+    expect(storage, isNot(contains('FileInputStream(file)')));
+  });
 }

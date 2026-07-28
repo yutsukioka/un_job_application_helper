@@ -356,6 +356,124 @@ void main() {
     expect(storeIO.store!.records, isEmpty);
   });
 
+  test(
+    'concurrent saved-search create is rejected before corrupting the store',
+    () async {
+      final storeIO = _FakeLocalStoreIO(store: _emptyStore());
+      final firstIdentifiers = <String>[
+        '10000000-0000-4000-8000-000000000031',
+        '20000000-0000-4000-8000-000000000031',
+      ];
+      final secondIdentifiers = <String>[
+        '10000000-0000-4000-8000-000000000032',
+        '20000000-0000-4000-8000-000000000032',
+      ];
+      final first = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: storeIO,
+        uuidProvider: () => firstIdentifiers.removeAt(0),
+        now: () => DateTime.parse(_timestamp),
+        nonceProvider: () => Uint8List.fromList(List<int>.filled(12, 31)),
+      );
+      final stale = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: storeIO,
+        uuidProvider: () => secondIdentifiers.removeAt(0),
+        now: () => DateTime.parse(_timestamp),
+        nonceProvider: () => Uint8List.fromList(List<int>.filled(12, 32)),
+      );
+      await first.activateExisting(_vaultId);
+      await stale.activateExisting(_vaultId);
+      await first.saveSearch(
+        AtlasSavedSearch(
+          name: 'Concurrent search',
+          request: const AtlasSearchRequest(text: 'first'),
+        ),
+      );
+      final committedBytes = storeIO.store!.canonicalBytes();
+      final replaceCount = storeIO.calls
+          .where((call) => call == 'replace')
+          .length;
+
+      await expectLater(
+        stale.saveSearch(
+          AtlasSavedSearch(
+            name: 'Concurrent search',
+            request: const AtlasSearchRequest(text: 'stale'),
+          ),
+        ),
+        throwsA(isA<AtlasVaultPrivateStateException>()),
+      );
+
+      expect(
+        storeIO.calls.where((call) => call == 'replace').length,
+        replaceCount,
+      );
+      expect(storeIO.store!.canonicalBytes(), orderedEquals(committedBytes));
+      expect(storeIO.store!.records, hasLength(1));
+    },
+  );
+
+  test(
+    'concurrent tracker create is rejected before corrupting the store',
+    () async {
+      final storeIO = _FakeLocalStoreIO(store: _emptyStore());
+      final firstIdentifiers = <String>[
+        '10000000-0000-4000-8000-000000000033',
+        '20000000-0000-4000-8000-000000000033',
+      ];
+      final secondIdentifiers = <String>[
+        '10000000-0000-4000-8000-000000000034',
+        '20000000-0000-4000-8000-000000000034',
+      ];
+      final first = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: storeIO,
+        uuidProvider: () => firstIdentifiers.removeAt(0),
+        now: () => DateTime.parse(_timestamp),
+        nonceProvider: () => Uint8List.fromList(List<int>.filled(12, 33)),
+      );
+      final stale = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: storeIO,
+        uuidProvider: () => secondIdentifiers.removeAt(0),
+        now: () => DateTime.parse(_timestamp),
+        nonceProvider: () => Uint8List.fromList(List<int>.filled(12, 34)),
+      );
+      await first.activateExisting(_vaultId);
+      await stale.activateExisting(_vaultId);
+      await first.saveTrackerRecord(
+        AtlasApplicationRecord(
+          id: '',
+          jobKey: 'undp:concurrent',
+          status: 'saved',
+        ),
+      );
+      final committedBytes = storeIO.store!.canonicalBytes();
+      final replaceCount = storeIO.calls
+          .where((call) => call == 'replace')
+          .length;
+
+      await expectLater(
+        stale.saveTrackerRecord(
+          AtlasApplicationRecord(
+            id: '',
+            jobKey: 'undp:concurrent',
+            status: 'applied',
+          ),
+        ),
+        throwsA(isA<AtlasVaultPrivateStateException>()),
+      );
+
+      expect(
+        storeIO.calls.where((call) => call == 'replace').length,
+        replaceCount,
+      );
+      expect(storeIO.store!.canonicalBytes(), orderedEquals(committedBytes));
+      expect(storeIO.store!.records, hasLength(1));
+    },
+  );
+
   test('deactivation drains mutation and clears session authority', () async {
     final enteredReplace = Completer<void>();
     final releaseReplace = Completer<void>();

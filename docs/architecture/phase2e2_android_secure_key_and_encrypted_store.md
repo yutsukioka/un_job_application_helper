@@ -137,14 +137,16 @@ the MethodChannel.
 
 Key creation rejects an existing envelope, writes atomically, reads the
 envelope back, unwraps it, and compares the restored key in constant time.
-Temporary plaintext key copies are wiped best effort.
+Existence checks first enter `AtomicFile.openRead()` recovery so a committed
+backup from an interrupted write cannot be mistaken for absence. Temporary
+plaintext key copies are wiped best effort.
 
 ## 24. Key Load and Deletion
 
 Load returns null only for absence and otherwise returns exactly 32 copied
 bytes. Corrupt or invalidated keys fail with a fixed redacted error. Deletion
-removes only the requested wrapped envelope and does not delete the master
-key.
+uses `AtomicFile.delete()` to remove only the requested base, new, or backup
+envelope and does not delete the master key.
 
 ## 25. No-Backup Local-Store Path
 
@@ -157,19 +159,23 @@ application no-backup directory. Managed path segments are checked with
 
 Creation requires a nonempty bounded canonical store for the requested vault,
 rejects an existing destination, uses Android `AtomicFile`, flushes the file
-descriptor, and verifies read-back bytes.
+descriptor, and verifies read-back bytes. Reads and create-only decisions use
+`AtomicFile.openRead()` first so an interrupted prior write recovers its
+committed state before absence is decided.
 
 ## 27. CAS Replace
 
 Replacement requires an existing store and the lowercase SHA-256 digest of its
 current bytes. A stale digest fails before the atomic write and is never
-silently retried.
+silently retried. The digest is calculated from the state recovered through
+the same `AtomicFile` abstraction.
 
 ## 28. Store Read-Back
 
 Every read is bounded to 128 MiB, rejects zero-length and non-regular files,
 strictly validates the local-store envelope, requires canonical bytes, and
-checks the metadata vault ID.
+checks the metadata vault ID. Base, legacy backup, and new-file artifacts are
+validated before `AtomicFile.openRead()` restores interrupted state.
 
 ## 29. Path Containment
 
@@ -233,7 +239,9 @@ parent revision.
 Each active save becomes one encrypted record create or update using the
 Phase 2E-1 record crypto. Timestamps, UUIDs, and nonces are injectable for
 deterministic tests; production nonces use cryptographically secure
-randomness.
+randomness. A stale runtime rehydrates the current store and rejects a
+concurrent logical-name or job-key create before UUID generation, encryption,
+or CAS replacement, so duplicate private records are never committed.
 
 ## 40. Unchanged-Record Preservation
 
@@ -265,7 +273,10 @@ creating a temporary file or modifying the destination.
 
 While active, saved-search and tracker private reads and writes make zero
 compatibility endpoint calls. Encrypted failures do not fall back to those
-endpoints.
+endpoints. A controller authority generation fences activation against
+compatibility mutations: results already in flight before activation are
+discarded, and no new compatibility mutation starts while activation is in
+progress.
 
 ## 45. Legacy Inactive Compatibility
 
@@ -323,7 +334,9 @@ and a real Android storage integration.
 Checkpoint B preserves a separate red commit before runtime wiring. Its green
 gate covers activation, migration preflight, encrypted mutations, endpoint
 suppression, cache guarding, private-draft/public-request separation,
-deactivation, and real Android integration.
+deactivation, and real Android integration. Exact-head Codex review added
+deterministic regressions for interrupted `AtomicFile` recovery, stale-runtime
+logical creates, and in-flight compatibility saves crossing activation.
 
 ## 55. Verification
 
