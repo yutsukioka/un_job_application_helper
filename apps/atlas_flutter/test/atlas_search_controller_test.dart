@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
+import 'package:atlas/src/atlas_vault/plaintext_migration_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -1758,6 +1759,121 @@ void main() {
     expect(transport.savedJobKeys, ['undp_oracle_hcm:34063']);
     expect(controller.isJobSaved('undp_oracle_hcm:34063'), isTrue);
   });
+
+  test(
+    'migration authority bootstraps before private cache and endpoint reads',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_authority_bootstrap_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(migrationCoordinator.calls, <String>['inspect-authority']);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+      expect(controller.connectionStatus, 'Offline (cached)');
+
+      await controller.testConnection(Uri.parse('http://atlas.test:8765'));
+      await controller.saveCurrentSearch();
+
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(transport.savedSearchNames, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+}
+
+final class _ControllerMigrationCoordinator
+    implements AtlasVaultPlaintextMigrationCoordinating {
+  _ControllerMigrationCoordinator({required this.authorityState});
+
+  final List<String> calls = <String>[];
+  AtlasVaultPlaintextAuthorityState authorityState;
+
+  AtlasVaultPlaintextMigrationSummary _summary({
+    AtlasVaultPlaintextMigrationStage? stage,
+  }) {
+    return AtlasVaultPlaintextMigrationSummary(
+      savedSearchCount: 1,
+      trackerRecordCount: 1,
+      localCachePrivatePresent: true,
+      compatibilityPrivatePresent: true,
+      stage: stage,
+    );
+  }
+
+  @override
+  Future<AtlasVaultPlaintextAuthorityState> inspectAuthority() async {
+    calls.add('inspect-authority');
+    return authorityState;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> inventory() async {
+    calls.add('inventory');
+    return _summary();
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> prepare() async {
+    calls.add('prepare');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.encryptedVerified);
+  }
+
+  @override
+  Future<void> discardPrepared() async {
+    calls.add('discard');
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
+    calls.add('finalize');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.completionPending);
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> resume() async {
+    calls.add('resume');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.commitInProgress);
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> activateSelected() async {
+    calls.add('activate-selected');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.completionPending);
+  }
 }
 
 final class _RecordingTransport implements AtlasTransport {

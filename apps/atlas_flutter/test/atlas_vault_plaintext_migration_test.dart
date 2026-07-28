@@ -320,6 +320,184 @@ void main() {
       throwsA(isA<AtlasVaultPlaintextMigrationException>()),
     );
   });
+
+  test(
+    'finalization removes plaintext before selection and clears journal last',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final result = await fixture.coordinator.finalizeAndActivate();
+
+      expect(result.stage, AtlasVaultPlaintextMigrationStage.completionPending);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.compatibility.state.trackerRecords, isEmpty);
+      expect(fixture.cache.state.savedSearches, isEmpty);
+      expect(fixture.cache.state.trackerRecords, isEmpty);
+      expect(fixture.memory.state.savedSearches, isEmpty);
+      expect(fixture.memory.state.trackerRecords, isEmpty);
+      expect(fixture.selection.value, isNotNull);
+      expect(fixture.privateAuthority.isEncryptedPrivateStateActive, isTrue);
+      expect(fixture.journal.bytes, isNull);
+      expect(
+        fixture.events.indexOf('selection.create'),
+        greaterThan(fixture.events.indexOf('cache.remove')),
+      );
+      expect(
+        fixture.events.indexOf('private-authority.activate'),
+        greaterThan(fixture.events.indexOf('selection.create')),
+      );
+      expect(fixture.events.last, 'journal.delete');
+    },
+  );
+
+  test(
+    'selected encrypted authority activates only after explicit call',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      await fixture.coordinator.finalizeAndActivate();
+      fixture.privateAuthority.isEncryptedPrivateStateActive = false;
+
+      expect(
+        await fixture.coordinator.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive,
+      );
+      expect(fixture.privateAuthority.activateCalls, 1);
+
+      await fixture.coordinator.activateSelected();
+
+      expect(fixture.privateAuthority.activateCalls, 2);
+      expect(fixture.privateAuthority.isEncryptedPrivateStateActive, isTrue);
+    },
+  );
+
+  test(
+    'resume journals an already deleted saved search exactly once',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.compatibility.failAfterNextSavedSearchDelete = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.selection.value, isNull);
+
+      await fixture.coordinator.resume();
+
+      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.compatibility.state.trackerRecords, isEmpty);
+      expect(fixture.cache.state.savedSearches, isEmpty);
+      expect(fixture.selection.value, isNotNull);
+      expect(fixture.journal.bytes, isNull);
+    },
+  );
+
+  test(
+    'unknown remote record after commit is preserved and fails closed',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.compatibility.failAfterNextSavedSearchDelete = true;
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          AtlasSavedSearch(
+            name: 'Unexpected remote search',
+            request: const AtlasSearchRequest(text: 'unexpected'),
+          ),
+        ],
+        trackerRecords: fixture.compatibility.state.trackerRecords,
+      );
+
+      await expectLater(
+        fixture.coordinator.resume(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(
+        fixture.compatibility.state.savedSearches.single.name,
+        'Unexpected remote search',
+      );
+      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.selection.value, isNull);
+      expect(fixture.journal.bytes, isNotNull);
+    },
+  );
+
+  test('selected-vault create interruption is adopted on resume', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    fixture.selection.failAfterNextCreate = true;
+
+    await expectLater(
+      fixture.coordinator.finalizeAndActivate(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    expect(fixture.selection.value, isNotNull);
+    expect(fixture.privateAuthority.activateCalls, 0);
+
+    await fixture.coordinator.resume();
+
+    expect(fixture.selection.createCalls, 1);
+    expect(fixture.privateAuthority.activateCalls, 1);
+    expect(fixture.journal.bytes, isNull);
+  });
+
+  test(
+    'runtime activation interruption resumes without dual authority',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.privateAuthority.failAfterNextActivation = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.privateAuthority.isEncryptedPrivateStateActive, isTrue);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.cache.state.savedSearches, isEmpty);
+
+      await fixture.coordinator.resume();
+
+      expect(fixture.privateAuthority.activateCalls, 1);
+      expect(fixture.journal.bytes, isNull);
+      expect(fixture.selection.value, isNotNull);
+    },
+  );
+
+  test('journal clear failure remains resumable completion pending', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    fixture.journal.failNextDelete = true;
+
+    final pending = await fixture.coordinator.finalizeAndActivate();
+
+    expect(pending.stage, AtlasVaultPlaintextMigrationStage.completionPending);
+    expect(fixture.journal.bytes, isNotNull);
+    expect(fixture.privateAuthority.isEncryptedPrivateStateActive, isTrue);
+    expect(fixture.compatibility.state.savedSearches, isEmpty);
+
+    await fixture.coordinator.resume();
+
+    expect(fixture.journal.bytes, isNull);
+    expect(fixture.selection.value, isNotNull);
+  });
 }
 
 AtlasSavedSearch _savedSearch({String requestText = 'PRIVATE_QUERY'}) {
@@ -369,6 +547,7 @@ final class _MigrationFixture {
       selectedVaultStore: selection,
       secureKeyStore: keyStore,
       localStoreIO: localStore,
+      privateAuthority: privateAuthority,
       now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
       uuidProvider: _ids.call,
       vaultKeyProvider: () =>
@@ -381,11 +560,15 @@ final class _MigrationFixture {
   final events = <String>[];
   final memory = _MemorySource();
   final compatibility = _CompatibilitySource();
-  final cache = _CacheSource();
+  late final _CacheSource cache = _CacheSource(events);
   late final _JournalStore journal = _JournalStore(events);
-  final selection = _SelectedVaultStore();
+  late final _SelectedVaultStore selection = _SelectedVaultStore(events);
   late final _SecureKeyStore keyStore = _SecureKeyStore(events);
   late final _LocalStoreIO localStore = _LocalStoreIO(events);
+  late final _PrivateAuthority privateAuthority = _PrivateAuthority(
+    events: events,
+    memory: memory,
+  );
   final _ids = _SequenceIds(<String>[
     '11111111-1111-4111-8111-111111111111',
     '22222222-2222-4222-8222-222222222222',
@@ -438,6 +621,7 @@ final class _CompatibilitySource
     trackerRecords: const <AtlasApplicationRecord>[],
   );
   bool failReads = false;
+  bool failAfterNextSavedSearchDelete = false;
   int readCalls = 0;
   int deleteSavedSearchCalls = 0;
   int deleteTrackerCalls = 0;
@@ -455,17 +639,48 @@ final class _CompatibilitySource
   @override
   Future<bool> deleteSavedSearch(String name) async {
     deleteSavedSearchCalls += 1;
-    return false;
+    final existing = state.savedSearches
+        .where((value) => value.name == name)
+        .toList(growable: false);
+    if (existing.isEmpty) {
+      return false;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    if (failAfterNextSavedSearchDelete) {
+      failAfterNextSavedSearchDelete = false;
+      throw StateError('interrupted');
+    }
+    return true;
   }
 
   @override
   Future<bool> deleteTrackerRecord(String recordId) async {
     deleteTrackerCalls += 1;
-    return false;
+    final existing = state.trackerRecords
+        .where((value) => value.id == recordId)
+        .toList(growable: false);
+    if (existing.isEmpty) {
+      return false;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != recordId)
+          .toList(growable: false),
+    );
+    return true;
   }
 }
 
 final class _CacheSource implements AtlasLocalCacheMigrationSource {
+  _CacheSource(this.events);
+
+  final List<String> events;
   AtlasLocalCacheMigrationPrivateState state =
       AtlasLocalCacheMigrationPrivateState(
         savedSearches: const <AtlasSavedSearch>[],
@@ -487,6 +702,12 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
     required String expectedPrivateSha256,
   }) async {
     removeCalls += 1;
+    events.add('cache.remove');
+    state = AtlasLocalCacheMigrationPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+      privateSha256: null,
+    );
   }
 }
 
@@ -496,6 +717,7 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
   final List<String> events;
   Uint8List? bytes;
   bool failAfterNextCreate = false;
+  bool failNextDelete = false;
   int readCalls = 0;
   int createCalls = 0;
   int replaceCalls = 0;
@@ -552,16 +774,24 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
     if (await vault.atlasVaultSha256Hex(current) != expectedSha256) {
       throw StateError('stale');
     }
+    if (failNextDelete) {
+      failNextDelete = false;
+      throw StateError('interrupted');
+    }
     bytes = null;
     events.add('journal.delete');
   }
 }
 
 final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
+  _SelectedVaultStore(this.events);
+
+  final List<String> events;
   String? value;
   int readCalls = 0;
   int createCalls = 0;
   int clearCalls = 0;
+  bool failAfterNextCreate = false;
 
   @override
   Future<String?> read() async {
@@ -576,6 +806,11 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
       throw StateError('duplicate');
     }
     value = vaultId;
+    events.add('selection.create');
+    if (failAfterNextCreate) {
+      failAfterNextCreate = false;
+      throw StateError('interrupted');
+    }
   }
 
   @override
@@ -585,6 +820,46 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
       throw StateError('mismatch');
     }
     value = null;
+  }
+}
+
+final class _PrivateAuthority
+    implements AtlasVaultPlaintextMigrationPrivateAuthority {
+  _PrivateAuthority({required this.events, required this.memory});
+
+  final List<String> events;
+  final _MemorySource memory;
+  bool isEncryptedPrivateStateActive = false;
+  int activateCalls = 0;
+  bool failAfterNextActivation = false;
+
+  @override
+  void hideLegacyPrivateState() {
+    memory.state = AtlasVaultPlaintextPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+    );
+    events.add('private-authority.hide');
+  }
+
+  @override
+  Future<bool> activateEncryptedPrivateState(String vaultId) async {
+    activateCalls += 1;
+    isEncryptedPrivateStateActive = true;
+    events.add('private-authority.activate');
+    if (failAfterNextActivation) {
+      failAfterNextActivation = false;
+      throw StateError('interrupted');
+    }
+    return true;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() async {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: <AtlasSavedSearch>[_savedSearch()],
+      trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+    );
   }
 }
 

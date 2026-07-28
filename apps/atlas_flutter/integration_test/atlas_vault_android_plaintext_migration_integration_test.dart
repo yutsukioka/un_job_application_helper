@@ -21,13 +21,8 @@ void main() {
           .padLeft(12, '0')
           .substring(0, 12);
       final identifiers = <String>[
-        _uuid('10000000', suffix),
-        _uuid('20000000', suffix),
-        _uuid('30000000', suffix),
-        _uuid('40000000', suffix),
-        _uuid('50000000', suffix),
-        _uuid('60000000', suffix),
-        _uuid('70000000', suffix),
+        for (var index = 1; index <= 16; index += 1)
+          _uuid(index.toString().padLeft(8, '0'), suffix),
       ];
       final search = AtlasSavedSearch(
         name: 'Migration fixture',
@@ -72,24 +67,41 @@ void main() {
       final selectedStore = AtlasAndroidSelectedVaultStore();
       final memory = _MemorySource(plaintext);
       final compatibility = _CompatibilitySource(plaintext);
-      final coordinator = AtlasVaultPlaintextMigrationCoordinator(
-        inMemorySource: memory,
-        compatibilitySource: compatibility,
-        cacheSource: AtlasLocalCacheMigrationStoreSource(cacheStore),
-        journalStore: journalStore,
-        selectedVaultStore: selectedStore,
-        secureKeyStore: keyStore,
-        localStoreIO: localStore,
-        now: () => DateTime.utc(2026, 7, 29, 2, 3, 4),
-        uuidProvider: () => identifiers.removeAt(0),
-        vaultKeyProvider: () =>
-            Uint8List.fromList(List<int>.generate(32, (index) => index + 1)),
-        nonceProvider: () =>
-            Uint8List.fromList(List<int>.generate(12, (index) => index + 11)),
-      );
+      final runtimes = <AtlasVaultPrivateStateRuntime>[];
+      AtlasVaultPlaintextMigrationCoordinator buildCoordinator() {
+        final runtime = AtlasVaultPrivateStateRuntime(
+          secureKeyStore: keyStore,
+          localStoreIO: localStore,
+        );
+        runtimes.add(runtime);
+        return AtlasVaultPlaintextMigrationCoordinator(
+          inMemorySource: memory,
+          compatibilitySource: compatibility,
+          cacheSource: AtlasLocalCacheMigrationStoreSource(cacheStore),
+          journalStore: journalStore,
+          selectedVaultStore: selectedStore,
+          secureKeyStore: keyStore,
+          localStoreIO: localStore,
+          privateAuthority: _IntegrationPrivateAuthority(
+            memory: memory,
+            runtime: runtime,
+          ),
+          now: () => DateTime.utc(2026, 7, 29, 2, 3, 4),
+          uuidProvider: () => identifiers.removeAt(0),
+          vaultKeyProvider: () =>
+              Uint8List.fromList(List<int>.generate(32, (index) => index + 1)),
+          nonceProvider: () =>
+              Uint8List.fromList(List<int>.generate(12, (index) => index + 11)),
+        );
+      }
+
+      final coordinator = buildCoordinator();
 
       String? stagedVaultId;
       addTearDown(() async {
+        for (final runtime in runtimes) {
+          await runtime.deactivate();
+        }
         final journalBytes = await journalStore.read();
         if (journalBytes != null) {
           try {
@@ -211,8 +223,55 @@ void main() {
       );
       expect(compatibility.deleteCalls, 0);
       expect(memory.state.trackerRecords.single.notes, noteSentinel);
+
+      await coordinator.inventory();
+      await coordinator.prepare();
+      final finalJournalBytes = await journalStore.read();
+      expect(finalJournalBytes, isNotNull);
+      final finalJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        finalJournalBytes!,
+      );
+      finalJournalBytes.fillRange(0, finalJournalBytes.length, 0);
+      stagedVaultId = finalJournal.vaultId;
+
+      await coordinator.finalizeAndActivate();
+
+      expect(compatibility.state.savedSearches, isEmpty);
+      expect(compatibility.state.trackerRecords, isEmpty);
+      expect(
+        (await cacheStore.readPrivateStateForMigration()).privateSha256,
+        isNull,
+      );
+      expect(await selectedStore.read(), finalJournal.vaultId);
+      expect(await journalStore.read(), isNull);
+      expect(runtimes.first.isActive, isTrue);
+      expect(
+        (await runtimes.first.read()).savedSearches.single.name,
+        search.name,
+      );
+      expect(
+        (await runtimes.first.read()).trackerRecords.single.jobKey,
+        tracker.jobKey,
+      );
+
+      await runtimes.first.deactivate();
+      final compatibilityReadCount = compatibility.readCalls;
+      final relaunched = buildCoordinator();
+      expect(
+        await relaunched.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive,
+      );
+      expect(compatibility.readCalls, compatibilityReadCount);
+      await relaunched.activateSelected();
+      expect(runtimes.last.isActive, isTrue);
+      expect(
+        (await runtimes.last.read()).savedSearches.single.name,
+        search.name,
+      );
+      expect(compatibility.readCalls, compatibilityReadCount);
       tester.printToConsole(
-        'AtlasVault Android migration preparation and rollback passed.',
+        'AtlasVault Android migration preparation, rollback, finalization, '
+        'and explicit relaunch activation passed.',
       );
     },
   );
@@ -249,7 +308,7 @@ AtlasLocalCacheSnapshot _snapshot({
 final class _MemorySource implements AtlasVaultPlaintextStateSource {
   _MemorySource(this.state);
 
-  final AtlasVaultPlaintextPrivateState state;
+  AtlasVaultPlaintextPrivateState state;
 
   @override
   Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState() async {
@@ -261,24 +320,74 @@ final class _CompatibilitySource
     implements AtlasVaultCompatibilityPrivateSource {
   _CompatibilitySource(this.state);
 
-  final AtlasVaultPlaintextPrivateState state;
+  AtlasVaultPlaintextPrivateState state;
   int deleteCalls = 0;
+  int readCalls = 0;
 
   @override
   Future<AtlasVaultPlaintextPrivateState>
   readCompatibilityPrivateState() async {
+    readCalls += 1;
     return state;
   }
 
   @override
   Future<bool> deleteSavedSearch(String name) async {
     deleteCalls += 1;
-    return false;
+    final found = state.savedSearches.any((value) => value.name == name);
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    return found;
   }
 
   @override
   Future<bool> deleteTrackerRecord(String recordId) async {
     deleteCalls += 1;
-    return false;
+    final found = state.trackerRecords.any((value) => value.id == recordId);
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != recordId)
+          .toList(growable: false),
+    );
+    return found;
+  }
+}
+
+final class _IntegrationPrivateAuthority
+    implements AtlasVaultPlaintextMigrationPrivateAuthority {
+  _IntegrationPrivateAuthority({required this.memory, required this.runtime});
+
+  final _MemorySource memory;
+  final AtlasVaultPrivateStateRuntime runtime;
+
+  @override
+  bool get isEncryptedPrivateStateActive => runtime.isActive;
+
+  @override
+  void hideLegacyPrivateState() {
+    memory.state = AtlasVaultPlaintextPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+    );
+  }
+
+  @override
+  Future<bool> activateEncryptedPrivateState(String vaultId) async {
+    return await runtime.activateExisting(vaultId) ==
+        AtlasVaultActivationResult.activated;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() async {
+    final snapshot = await runtime.read();
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: snapshot.savedSearches,
+      trackerRecords: snapshot.trackerRecords,
+    );
   }
 }
