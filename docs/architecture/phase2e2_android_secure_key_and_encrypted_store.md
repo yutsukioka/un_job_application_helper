@@ -268,14 +268,18 @@ the flag clears only in the retained operation's completion callback.
 While AtlasVault is active, controller cache writes explicitly transform
 snapshots to remove saved searches and tracker records while preserving every
 committed public field. The controller separately retains the last committed
-public-search request, so a private saved-search draft cannot enter the public
-cache while a debounced public search is still pending.
+unprotected public-search request. Active encrypted saved-search refreshes may
+update visible public results but cannot replace that cache request with their
+private text or filters. When no prior public request exists, active cache
+serialization uses the neutral public cache request.
 
 ## 43. Hard Plaintext Guard
 
 The local-cache store receives an injected active-protection policy. If active
-and given a snapshot containing private state, it throws a fixed error before
-creating a temporary file or modifying the destination.
+and given a snapshot containing private state, it throws a fixed error. The
+policy is rechecked after asynchronous directory creation, isolate encoding,
+and temporary-file flush. A newly prohibited write removes its temporary file
+and never replaces the destination.
 
 ## 44. Compatibility Endpoint Suppression
 
@@ -290,6 +294,10 @@ replace the encrypted projection after activation completes.
 Compatibility reads, writes, and cache publication also remain fenced for the
 entire retained deactivation operation, including the interval after the
 runtime reports inactive but before its admitted mutation has drained.
+The controller separately retains and serializes cache writes. Activation
+marks protection active synchronously, drains the admitted cache write, then
+rechecks its authority before inspecting persisted plaintext or beginning
+secure activation.
 
 ## 45. Legacy Inactive Compatibility
 
@@ -362,6 +370,11 @@ compatibility writes, and private cache publication remain blocked until the
 drain-and-clear sequence completes. The same test attempts a compatibility
 write re-entrantly from the empty-state listener notification and proves that
 the retained deactivation fence still rejects it.
+Additional review regressions prove that active saved-search criteria never
+replace the retained public cache request and that activation waits for a
+deterministically gated plaintext cache write. The gated write observes the
+new protection state, removes its temporary file, and finishes before
+activation preflight proceeds.
 
 ## 55. Verification
 

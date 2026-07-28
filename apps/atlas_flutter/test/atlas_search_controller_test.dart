@@ -881,6 +881,64 @@ void main() {
   );
 
   test(
+    'active saved-search refresh preserves the last public cache request',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_active_search_request_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      const publicQuery = 'PUBLIC_MANUAL_QUERY';
+      const privateQuery = 'ENCRYPTED_PRIVATE_QUERY';
+      final privateSearch = AtlasSavedSearch(
+        name: 'Encrypted private search',
+        request: const AtlasSearchRequest(
+          text: privateQuery,
+          organizations: <String>['PRIVATE_ORGANIZATION'],
+        ),
+      );
+      final privatePersistence = _FakePrivateStatePersistence(
+        activationSnapshot: AtlasVaultPrivateStateSnapshot(
+          savedSearches: <AtlasSavedSearch>[privateSearch],
+          trackerRecords: const <AtlasApplicationRecord>[],
+        ),
+      );
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+        privateStateProtectionActive: () => privatePersistence.isActive,
+      );
+      final transport = _RecordingTransport();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+        now: () => _cacheFixtureNow,
+      );
+      addTearDown(controller.dispose);
+      controller.updateQuery(publicQuery);
+      await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+      expect((await store.read())?.searchRequest.text, publicQuery);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      await controller.runSavedSearch(privateSearch);
+
+      final rawCache = await store.file.readAsString();
+      expect(rawCache, isNot(contains(privateQuery)));
+      expect(rawCache, isNot(contains('PRIVATE_ORGANIZATION')));
+      expect((await store.read())?.searchRequest.text, publicQuery);
+    },
+  );
+
+  test(
     'active refresh preserves public endpoints and suppresses private reads',
     () async {
       final transport = _RecordingTransport();
@@ -1232,6 +1290,73 @@ void main() {
     },
   );
 
+  test(
+    'activation drains an admitted plaintext cache write before preflight',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_activation_cache_fence_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final backingFile = File(
+        '${tempDir.path}/not-created/atlas-local-cache.json',
+      );
+      final enteredWrite = Completer<void>();
+      final releaseWrite = Completer<void>();
+      addTearDown(() {
+        if (!releaseWrite.isCompleted) {
+          releaseWrite.complete();
+        }
+      });
+      var protectionActive = false;
+      final store = AtlasLocalCacheStore(
+        file: _ParentCreateGatedFile(
+          backingFile,
+          entered: enteredWrite,
+          release: releaseWrite,
+        ),
+        now: () => _cacheFixtureNow,
+        privateStateProtectionActive: () => protectionActive,
+      );
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _RecordingTransport()),
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+        now: () => _cacheFixtureNow,
+      );
+      addTearDown(controller.dispose);
+      controller.cacheSavedAt = _cacheFixtureNow;
+
+      final compatibilitySave = controller.saveCurrentSearch();
+      await enteredWrite.future;
+      expect(controller.savedSearches, isNotEmpty);
+      controller.savedSearches = const <AtlasSavedSearch>[];
+      protectionActive = true;
+
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await Future<void>(() {});
+      AtlasVaultActivationResult? activationResult;
+      try {
+        expect(privatePersistence.calls, isEmpty);
+      } finally {
+        if (!releaseWrite.isCompleted) {
+          releaseWrite.complete();
+        }
+        await compatibilitySave;
+        activationResult = await activation;
+      }
+      expect(activationResult, AtlasVaultActivationResult.activated);
+      expect(await backingFile.exists(), isFalse);
+      expect(await File('${backingFile.path}.tmp').exists(), isFalse);
+    },
+  );
+
   testWidgets('search submits query and renders refreshed result rows', (
     tester,
   ) async {
@@ -1566,6 +1691,67 @@ final class _FakePrivateStatePersistence
       trackerRecords: <AtlasApplicationRecord>[value, ...remaining],
     );
     return _snapshot;
+  }
+}
+
+final class _ParentCreateGatedFile implements File {
+  _ParentCreateGatedFile(
+    this._delegate, {
+    required this.entered,
+    required this.release,
+  });
+
+  final File _delegate;
+  final Completer<void> entered;
+  final Completer<void> release;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Directory get parent {
+    return _ParentCreateGatedDirectory(
+      _delegate.parent,
+      entered: entered,
+      release: release,
+    );
+  }
+
+  @override
+  Future<bool> exists() => Future<bool>.value(false);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
+}
+
+final class _ParentCreateGatedDirectory implements Directory {
+  _ParentCreateGatedDirectory(
+    this._delegate, {
+    required this.entered,
+    required this.release,
+  });
+
+  final Directory _delegate;
+  final Completer<void> entered;
+  final Completer<void> release;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Future<Directory> create({bool recursive = false}) async {
+    if (!entered.isCompleted) {
+      entered.complete();
+    }
+    await release.future;
+    return _delegate.create(recursive: recursive);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
   }
 }
 

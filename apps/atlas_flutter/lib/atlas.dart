@@ -1152,15 +1152,27 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
-    if (_privateStateProtectionActive() && snapshot.containsPrivateState) {
-      throw const AtlasPrivateStatePlaintextWriteBlocked();
-    }
-    await file.parent.create(recursive: true);
     final temporaryFile = File('${file.path}.tmp');
-    final snapshotJson = snapshot.toJson();
-    final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
-    await temporaryFile.writeAsString(encoded, flush: true);
-    await temporaryFile.rename(file.path);
+    _requirePlaintextWriteAllowed(snapshot);
+    try {
+      await file.parent.create(recursive: true);
+      _requirePlaintextWriteAllowed(snapshot);
+      final snapshotJson = snapshot.toJson();
+      final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
+      _requirePlaintextWriteAllowed(snapshot);
+      await temporaryFile.writeAsString(encoded, flush: true);
+      _requirePlaintextWriteAllowed(snapshot);
+      await temporaryFile.rename(file.path);
+    } catch (_) {
+      try {
+        if (await temporaryFile.exists()) {
+          await temporaryFile.delete();
+        }
+      } catch (_) {
+        // The fixed write failure remains authoritative.
+      }
+      rethrow;
+    }
   }
 
   Future<void> clear() async {
@@ -1187,6 +1199,12 @@ final class AtlasLocalCacheStore {
           _persistedPrivateListIsPresent(value['tracker_records']);
     } catch (_) {
       return true;
+    }
+  }
+
+  void _requirePlaintextWriteAllowed(AtlasLocalCacheSnapshot snapshot) {
+    if (_privateStateProtectionActive() && snapshot.containsPrivateState) {
+      throw const AtlasPrivateStatePlaintextWriteBlocked();
     }
   }
 }

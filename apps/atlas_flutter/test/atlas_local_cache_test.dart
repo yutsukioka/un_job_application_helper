@@ -167,6 +167,30 @@ void main() {
         expect(restored.trackerRecords, isEmpty);
       },
     );
+
+    test(
+      'protection transition during write blocks before cache commit',
+      () async {
+        final nestedFile = File(
+          '${tempDir.path}/not-created/atlas-local-cache.json',
+        );
+        var protectionActive = false;
+        final store = AtlasLocalCacheStore(
+          file: nestedFile,
+          privateStateProtectionActive: () => protectionActive,
+        );
+
+        final write = store.write(_snapshot(savedAt: _fixtureSavedAt));
+        protectionActive = true;
+
+        await expectLater(
+          write,
+          throwsA(isA<AtlasPrivateStatePlaintextWriteBlocked>()),
+        );
+        expect(await nestedFile.exists(), isFalse);
+        expect(await File('${nestedFile.path}.tmp').exists(), isFalse);
+      },
+    );
   });
 }
 

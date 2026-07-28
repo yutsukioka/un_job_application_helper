@@ -104,6 +104,7 @@ class AtlasAppController extends ChangeNotifier {
   bool _privateActivationInProgress = false;
   bool _privateDeactivationInProgress = false;
   Future<void>? _privateDeactivationOperation;
+  Future<void>? _cacheWriteOperation;
 
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
@@ -228,6 +229,7 @@ class AtlasAppController extends ChangeNotifier {
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
       }
+      await _drainCacheWriteForActivation(activationGeneration);
       final cacheStore = await _ensureLocalCacheStore();
       _requireCurrentPrivateActivation(activationGeneration);
       final containsPersistedPrivateState =
@@ -623,7 +625,9 @@ class AtlasAppController extends ChangeNotifier {
           ? response.results.length
           : _cachedAllJobs.length;
       cacheSavedAt = _now();
-      _committedPublicSearchRequest = activeRequest;
+      if (!_privateStateProtectionActive) {
+        _committedPublicSearchRequest = activeRequest;
+      }
       return cachedJobCount;
     } finally {
       isSearching = false;
@@ -1113,21 +1117,43 @@ class AtlasAppController extends ChangeNotifier {
     return _localCacheStore;
   }
 
-  Future<void> _writePersistedCache() async {
+  Future<void> _writePersistedCache() {
+    final previous = _cacheWriteOperation;
+    late final Future<void> operation;
+    Future<void> run() async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {
+          // A later explicit write is independent from the previous failure.
+        }
+      }
+      await _performPersistedCacheWrite();
+    }
+
+    operation = run().whenComplete(() {
+      if (identical(_cacheWriteOperation, operation)) {
+        _cacheWriteOperation = null;
+      }
+    });
+    _cacheWriteOperation = operation;
+    return operation;
+  }
+
+  Future<void> _performPersistedCacheWrite() async {
     final store = await _ensureLocalCacheStore();
     final savedAt = cacheSavedAt;
     if (store == null || savedAt == null) {
       return;
     }
+    final searchRequest = _privateStateProtectionActive
+        ? _committedPublicSearchRequest ?? _cacheSearchRequest()
+        : _committedPublicSearchRequest ?? _currentSearchRequest();
     var snapshot = AtlasLocalCacheSnapshot(
       schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
       baseURL: baseURL,
       savedAt: savedAt,
-      searchRequest:
-          _committedPublicSearchRequest ??
-          (_privateStateProtectionActive
-              ? _cacheSearchRequest()
-              : _currentSearchRequest()),
+      searchRequest: searchRequest,
       searchResponse: AtlasSearchResponse(
         total: total,
         limit: results.length,
@@ -1150,6 +1176,19 @@ class AtlasAppController extends ChangeNotifier {
       snapshot = snapshot.withoutPrivateState();
     }
     await store.write(snapshot);
+  }
+
+  Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
+    final operation = _cacheWriteOperation;
+    if (operation == null) {
+      return;
+    }
+    try {
+      await operation;
+    } catch (_) {
+      // Activation preflight re-reads the authoritative cache state.
+    }
+    _requireCurrentPrivateActivation(activationGeneration);
   }
 
   void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
