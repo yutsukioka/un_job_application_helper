@@ -191,6 +191,82 @@ void main() {
         expect(await File('${nestedFile.path}.tmp').exists(), isFalse);
       },
     );
+
+    test('migration reads expired private state strictly', () async {
+      final expiredNow = _fixtureSavedAt
+          .add(AtlasLocalCacheSnapshot.retainFor)
+          .add(const Duration(days: 30));
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => expiredNow,
+      );
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
+
+      expect(await store.read(), isNull);
+      final migrationState = await store.readPrivateStateForMigration();
+
+      expect(migrationState.savedSearches.single.name, 'Search 1');
+      expect(
+        migrationState.trackerRecords.single.jobKey,
+        'undp_oracle_hcm:34063',
+      );
+      expect(migrationState.privateSha256, matches(RegExp(r'^[0-9a-f]{64}$')));
+    });
+
+    test(
+      'migration removal verifies digest and preserves public state',
+      () async {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureReadAt,
+        );
+        await store.write(_snapshot(savedAt: _fixtureSavedAt));
+        final migrationState = await store.readPrivateStateForMigration();
+
+        await store.removePrivateStateForMigration(
+          expectedPrivateSha256: migrationState.privateSha256!,
+        );
+
+        final restored = await store.read();
+        expect(restored, isNotNull);
+        expect(restored!.containsPrivateState, isFalse);
+        expect(restored.searchResponse.results.single.title, 'Cached Analyst');
+        expect(restored.cachedJobDetails, hasLength(1));
+        expect(restored.updateRuns, hasLength(1));
+        expect(restored.sources, hasLength(1));
+      },
+    );
+
+    test('migration digest mismatch performs no cache write', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
+      final before = await cacheFile.readAsBytes();
+
+      await expectLater(
+        store.removePrivateStateForMigration(expectedPrivateSha256: '0' * 64),
+        throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+
+      expect(await cacheFile.readAsBytes(), orderedEquals(before));
+    });
+
+    test(
+      'migration read rejects malformed cache instead of treating it empty',
+      () async {
+        await cacheFile.writeAsString(
+          '{"schema_version":1,"saved_searches":{}}',
+        );
+        final store = AtlasLocalCacheStore(file: cacheFile);
+
+        await expectLater(
+          store.readPrivateStateForMigration(),
+          throwsA(isA<AtlasLocalCacheMigrationException>()),
+        );
+      },
+    );
   });
 }
 

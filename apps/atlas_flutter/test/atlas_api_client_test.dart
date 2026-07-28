@@ -194,7 +194,49 @@ void main() {
       expect(transport.requests[4].jsonBody?['summary'], 'Text: finance');
       expect(transport.requests[4].jsonBody?['request'], isA<Map>());
     });
+
+    test(
+      'migration delete handles are path encoded and errors redact them',
+      () async {
+        final transport = _FailingDeleteTransport();
+        final client = AtlasAPIClient(
+          baseURL: Uri.parse('http://127.0.0.1:8765'),
+          transport: transport,
+        );
+
+        await expectLater(
+          client.deleteSavedSearch('private/name'),
+          throwsA(isA<AtlasAPIException>()),
+        );
+        await expectLater(
+          client.deleteTrackerRecord('private tracker id'),
+          throwsA(isA<AtlasAPIException>()),
+        );
+
+        expect(transport.requests.map((request) => request.path), <String>[
+          'api/saved-searches/private%2Fname',
+          'api/tracker/private%20tracker%20id',
+        ]);
+        for (final error in transport.errors) {
+          expect(error.toString(), isNot(contains('private')));
+          expect(error.toString(), isNot(contains('tracker')));
+        }
+      },
+    );
   });
+}
+
+final class _FailingDeleteTransport implements AtlasTransport {
+  final requests = <AtlasRequest>[];
+  final errors = <Object>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    requests.add(request);
+    const error = AtlasAPIException.invalidResponse();
+    errors.add(error);
+    throw error;
+  }
 }
 
 final class RecordingAtlasTransport implements AtlasTransport {
