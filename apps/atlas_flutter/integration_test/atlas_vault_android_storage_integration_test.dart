@@ -28,7 +28,13 @@ void main() {
     expect(capabilities.secureBoundaryAvailable, isTrue);
     expect(capabilities.aesGcmKeystoreAvailable, isTrue);
     expect(capabilities.noBackupStorageAvailable, isTrue);
-    expect(capabilities.apiLevel, greaterThanOrEqualTo(23));
+    expect(capabilities.apiLevel, greaterThanOrEqualTo(24));
+    tester.printToConsole(
+      'AtlasVault Android capabilities: '
+      'api=${capabilities.apiLevel}, '
+      'hardwareBacked=${capabilities.hardwareBacked}, '
+      'strongBoxBacked=${capabilities.strongBoxBacked}',
+    );
 
     await keyStore.createVaultKey(vaultId, key);
     await expectLater(

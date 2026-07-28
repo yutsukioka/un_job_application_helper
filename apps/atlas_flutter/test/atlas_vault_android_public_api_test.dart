@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault_android.dart';
@@ -37,5 +38,24 @@ void main() {
   test('secure-key protocol uses defensive byte-list results', () {
     Future<Uint8List?> Function(String)? load;
     expect(load, isNull);
+  });
+
+  test('Android API floor is explicit and has no legacy override', () {
+    final gradle = File('android/app/build.gradle.kts').readAsStringSync();
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final manifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+    final storage = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+
+    expect(gradle, contains('minSdk = 24'));
+    expect(gradle, isNot(contains('minSdk = 23')));
+    expect(pubspec, contains('integration_test:'));
+    expect(manifest, isNot(contains('tools:overrideLibrary')));
+    expect(storage, isNot(contains('API 23')));
+    expect(storage, isNot(contains('software-key fallback')));
   });
 }
