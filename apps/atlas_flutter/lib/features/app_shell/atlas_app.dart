@@ -2,16 +2,22 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
-typedef AtlasCacheStoreFactory = Future<AtlasLocalCacheStore?> Function();
+typedef AtlasCacheStoreFactory =
+    Future<AtlasLocalCacheStore?> Function({
+      bool Function()? privateStateProtectionActive,
+    });
 
 const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 
-Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
+Future<AtlasLocalCacheStore?> _defaultCacheStore({
+  bool Function()? privateStateProtectionActive,
+}) async {
   try {
     if (Platform.isAndroid) {
       // coverage:ignore-start
@@ -21,6 +27,7 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
       if (directoryPath != null && directoryPath.trim().isNotEmpty) {
         return AtlasLocalCacheStore(
           file: File('${directoryPath.trim()}/atlas-local-cache-v1.json'),
+          privateStateProtectionActive: privateStateProtectionActive,
         );
       }
       // coverage:ignore-end
@@ -33,6 +40,7 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore() async {
   );
   return AtlasLocalCacheStore(
     file: File('${fallbackDirectory.path}/atlas-local-cache-v1.json'),
+    privateStateProtectionActive: privateStateProtectionActive,
   );
 }
 
@@ -42,7 +50,9 @@ class AtlasAppController extends ChangeNotifier {
     AtlasClientFactory? clientFactory,
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
+    AtlasVaultPrivateStatePersistence? privateStatePersistence,
     DateTime Function()? now,
+    Timer Function(Duration, void Function())? searchDebounceTimerFactory,
   }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
        _clientFactory =
            clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL)),
@@ -51,7 +61,13 @@ class AtlasAppController extends ChangeNotifier {
        _localCacheStore = localCacheStore,
        // ignore: prefer_initializing_formals
        _localCacheStoreFactory = localCacheStoreFactory,
-       _now = now ?? DateTime.now;
+       // Keep the compatibility constructor side-effect free.
+       // ignore: prefer_initializing_formals
+       _privateStatePersistence = privateStatePersistence,
+       _now = now ?? DateTime.now,
+       _searchDebounceTimerFactory =
+           searchDebounceTimerFactory ??
+           ((duration, callback) => Timer(duration, callback));
 
   Uri baseURL;
   final AtlasClientFactory _clientFactory;
@@ -73,6 +89,7 @@ class AtlasAppController extends ChangeNotifier {
   List<JobSearchResult> _cachedAllJobs = const [];
   Map<String, AtlasJobDetail> _cachedJobDetails =
       const <String, AtlasJobDetail>{};
+  AtlasSearchRequest? _committedPublicSearchRequest;
   AtlasHealthSummary? healthSummary;
   Map<String, Map<String, int>> facets = const {};
   Map<String, Map<String, String>> facetLabels = const {};
@@ -82,10 +99,24 @@ class AtlasAppController extends ChangeNotifier {
   DateTime? cacheSavedAt;
   DateTime? operationalDataLoadedAt;
   Timer? _searchDebounce;
+  bool _searchRefreshPendingAfterPrivateTransition = false;
   int _savedSearchSequence = 0;
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
+  final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
   final DateTime Function() _now;
+  final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
+  int _privateAuthorityGeneration = 0;
+  bool _privateActivationInProgress = false;
+  bool _privateDeactivationInProgress = false;
+  Future<void>? _privateDeactivationOperation;
+  Future<void>? _cacheWriteOperation;
+
+  bool get _privateStateProtectionActive {
+    return _privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        (_privateStatePersistence?.isActive ?? false);
+  }
 
   void clearConnectionMessage() {
     if (connectionMessage == null) {
@@ -183,8 +214,97 @@ class AtlasAppController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
+    _searchRefreshPendingAfterPrivateTransition = false;
+    _cancelSearchDebounce();
     super.dispose();
+  }
+
+  Future<AtlasVaultActivationResult> activateExistingAtlasVault(
+    String vaultId,
+  ) async {
+    final persistence = _privateStatePersistence;
+    if (persistence == null ||
+        persistence.isActive ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
+      return AtlasVaultActivationResult.failed;
+    }
+    _privateAuthorityGeneration += 1;
+    final activationGeneration = _privateAuthorityGeneration;
+    _privateActivationInProgress = true;
+    _cancelSearchDebounce(rescheduleAfterTransition: true);
+    try {
+      if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
+        return AtlasVaultActivationResult.migrationRequired;
+      }
+      await _drainCacheWriteForActivation(activationGeneration);
+      final cacheStore = await _ensureLocalCacheStore();
+      _requireCurrentPrivateActivation(activationGeneration);
+      final containsPersistedPrivateState =
+          await cacheStore?.containsPersistedPrivateState() ?? false;
+      _requireCurrentPrivateActivation(activationGeneration);
+      if (containsPersistedPrivateState) {
+        return AtlasVaultActivationResult.migrationRequired;
+      }
+      final result = await persistence.activateExisting(vaultId);
+      _requireCurrentPrivateActivation(activationGeneration);
+      if (result != AtlasVaultActivationResult.activated) {
+        return result;
+      }
+      final snapshot = await persistence.read();
+      _requireCurrentPrivateActivation(activationGeneration);
+      if (!persistence.isActive) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      _installPrivateSnapshot(snapshot);
+      notifyListeners();
+      return AtlasVaultActivationResult.activated;
+    } catch (_) {
+      try {
+        await persistence.deactivate();
+      } catch (_) {
+        // The fixed failed result remains authoritative.
+      }
+      savedSearches = const <AtlasSavedSearch>[];
+      trackerRecords = const <AtlasApplicationRecord>[];
+      _syncSavedSearchSequence();
+      notifyListeners();
+      return AtlasVaultActivationResult.failed;
+    } finally {
+      _privateActivationInProgress = false;
+      _resumeSearchDebounceAfterPrivateTransition();
+    }
+  }
+
+  Future<void> deactivateAtlasVault() {
+    final existing = _privateDeactivationOperation;
+    if (existing != null) {
+      return existing;
+    }
+    _privateAuthorityGeneration += 1;
+    _privateDeactivationInProgress = true;
+    _cancelSearchDebounce(rescheduleAfterTransition: true);
+    late final Future<void> operation;
+    operation = _performPrivateDeactivation().whenComplete(() {
+      if (identical(_privateDeactivationOperation, operation)) {
+        _privateDeactivationInProgress = false;
+        _privateDeactivationOperation = null;
+        _resumeSearchDebounceAfterPrivateTransition();
+      }
+    });
+    _privateDeactivationOperation = operation;
+    return operation;
+  }
+
+  Future<void> _performPrivateDeactivation() async {
+    try {
+      await _privateStatePersistence?.deactivate();
+    } finally {
+      savedSearches = const <AtlasSavedSearch>[];
+      trackerRecords = const <AtlasApplicationRecord>[];
+      _syncSavedSearchSequence();
+      notifyListeners();
+    }
   }
 
   Future<void> loadPersistedCache() async {
@@ -204,12 +324,15 @@ class AtlasAppController extends ChangeNotifier {
     final store = await _ensureLocalCacheStore();
     await store?.clear();
     results = const [];
-    savedSearches = const [];
     updateRuns = const [];
     sources = const [];
-    trackerRecords = const [];
+    if (!_privateStateProtectionActive) {
+      savedSearches = const [];
+      trackerRecords = const [];
+    }
     _cachedAllJobs = const [];
     _cachedJobDetails = const <String, AtlasJobDetail>{};
+    _committedPublicSearchRequest = null;
     healthSummary = null;
     facets = const {};
     facetLabels = const {};
@@ -378,17 +501,35 @@ class AtlasAppController extends ChangeNotifier {
     final request = _currentSearchRequest();
     final name = _nextSavedSearchName();
     final summary = _savedSearchSummary(request);
+    final privateAuthorityGeneration = _privateAuthorityGeneration;
     try {
-      final client = _clientFactory(baseURL);
-      final savedSearch = await client.saveSearch(
-        name: name,
-        request: request,
-        summary: summary,
-      );
-      _upsertSavedSearch(savedSearch);
+      final persistence = _privateStatePersistence;
+      if (persistence?.isActive ?? false) {
+        final snapshot = await persistence!.saveSearch(
+          AtlasSavedSearch(name: name, description: summary, request: request),
+        );
+        if (!persistence.isActive) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        _installPrivateSnapshot(snapshot);
+      } else {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        final client = _clientFactory(baseURL);
+        final savedSearch = await client.saveSearch(
+          name: name,
+          request: request,
+          summary: summary,
+        );
+        if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        _upsertSavedSearch(savedSearch);
+      }
       await _writePersistedCache();
       connectionStatus = 'Connected';
-      connectionMessage = 'Saved ${savedSearch.name} locally.';
+      connectionMessage = 'Saved $name locally.';
     } catch (error) {
       connectionMessage = 'Save search failed: $error';
     } finally {
@@ -400,10 +541,28 @@ class AtlasAppController extends ChangeNotifier {
   Future<void> saveJob(JobSearchResult job) async {
     connectionMessage = null;
     notifyListeners();
+    final privateAuthorityGeneration = _privateAuthorityGeneration;
     try {
-      final client = _clientFactory(baseURL);
-      final record = await client.saveJob(job.jobKey);
-      _upsertTrackerRecord(record);
+      final persistence = _privateStatePersistence;
+      if (persistence?.isActive ?? false) {
+        final snapshot = await persistence!.saveTrackerRecord(
+          AtlasApplicationRecord(id: '', jobKey: job.jobKey, status: 'saved'),
+        );
+        if (!persistence.isActive) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        _installPrivateSnapshot(snapshot);
+      } else {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        final client = _clientFactory(baseURL);
+        final record = await client.saveJob(job.jobKey);
+        if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        _upsertTrackerRecord(record);
+      }
       await _writePersistedCache();
       connectionStatus = 'Connected';
       connectionMessage = 'Saved job locally.';
@@ -453,6 +612,8 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<int> _refreshSearch(AtlasAPIClient client) async {
+    final publicAuthorityGeneration = _privateAuthorityGeneration;
+    final mayPublishPublicRequest = !_privateStateProtectionActive;
     isSearching = true;
     notifyListeners();
     try {
@@ -476,6 +637,11 @@ class AtlasAppController extends ChangeNotifier {
           ? response.results.length
           : _cachedAllJobs.length;
       cacheSavedAt = _now();
+      if (mayPublishPublicRequest &&
+          !_privateStateProtectionActive &&
+          _privateAuthorityGeneration == publicAuthorityGeneration) {
+        _committedPublicSearchRequest = activeRequest;
+      }
       return cachedJobCount;
     } finally {
       isSearching = false;
@@ -543,8 +709,29 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _loadSavedSearches(AtlasAPIClient client) async {
+    final persistence = _privateStatePersistence;
+    final authorityGeneration = _privateAuthorityGeneration;
+    if (persistence?.isActive ?? false) {
+      try {
+        final snapshot = await persistence!.read();
+        if (!_mayAcceptPrivateRead(persistence, authorityGeneration)) {
+          return;
+        }
+        _installPrivateSnapshot(snapshot);
+      } catch (_) {
+        // The last committed encrypted projection remains authoritative.
+      }
+      return;
+    }
+    if (_privateActivationInProgress || _privateDeactivationInProgress) {
+      return;
+    }
     try {
-      savedSearches = List.unmodifiable(await client.savedSearches());
+      final compatibilitySearches = await client.savedSearches();
+      if (!_mayAcceptCompatibilityMutation(authorityGeneration)) {
+        return;
+      }
+      savedSearches = List.unmodifiable(compatibilitySearches);
       _syncSavedSearchSequence();
     } catch (_) {
       // Saved-search persistence is not required for health/search success.
@@ -562,10 +749,16 @@ class AtlasAppController extends ChangeNotifier {
     } catch (_) {
       // Source-health summaries are best-effort and should not block Search.
     }
-    try {
-      trackerRecords = List.unmodifiable(await client.trackerRecords());
-    } catch (_) {
-      // Saved-job persistence is independent from Search refresh.
+    final authorityGeneration = _privateAuthorityGeneration;
+    if (!_privateStateProtectionActive && !_privateActivationInProgress) {
+      try {
+        final compatibilityRecords = await client.trackerRecords();
+        if (_mayAcceptCompatibilityMutation(authorityGeneration)) {
+          trackerRecords = List.unmodifiable(compatibilityRecords);
+        }
+      } catch (_) {
+        // Saved-job persistence is independent from Search refresh.
+      }
     }
     operationalDataLoadedAt = _now();
   }
@@ -604,12 +797,42 @@ class AtlasAppController extends ChangeNotifier {
 
   void _scheduleSearchIfReady() {
     _searchDebounce?.cancel();
-    if (cacheSavedAt == null && connectionStatus != 'Connected') {
+    if (_privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        (cacheSavedAt == null && connectionStatus != 'Connected')) {
+      if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        _searchRefreshPendingAfterPrivateTransition = true;
+      }
       return;
     }
-    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
-      refreshLocalSave();
-    });
+    _searchDebounce = _searchDebounceTimerFactory(
+      const Duration(milliseconds: 350),
+      () {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+          _searchRefreshPendingAfterPrivateTransition = true;
+          return;
+        }
+        refreshLocalSave();
+      },
+    );
+  }
+
+  void _cancelSearchDebounce({bool rescheduleAfterTransition = false}) {
+    if (rescheduleAfterTransition && (_searchDebounce?.isActive ?? false)) {
+      _searchRefreshPendingAfterPrivateTransition = true;
+    }
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
+  }
+
+  void _resumeSearchDebounceAfterPrivateTransition() {
+    if (!_searchRefreshPendingAfterPrivateTransition ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
+      return;
+    }
+    _searchRefreshPendingAfterPrivateTransition = false;
+    _scheduleSearchIfReady();
   }
 
   String _savedSearchSummary(AtlasSearchRequest request) {
@@ -896,6 +1119,7 @@ class AtlasAppController extends ChangeNotifier {
 
   void _applyCacheSnapshot(AtlasLocalCacheSnapshot snapshot) {
     baseURL = snapshot.baseURL;
+    _committedPublicSearchRequest = snapshot.searchRequest;
     query = snapshot.searchRequest.text ?? '';
     filters = _filtersFromRequest(snapshot.searchRequest);
     sortOrder = SortOrder.fromAPIValue(snapshot.searchRequest.sort);
@@ -906,8 +1130,10 @@ class AtlasAppController extends ChangeNotifier {
     } else {
       _applyLocalSearch();
     }
-    savedSearches = List.unmodifiable(snapshot.savedSearches);
-    trackerRecords = List.unmodifiable(snapshot.trackerRecords);
+    if (!_privateStateProtectionActive) {
+      savedSearches = List.unmodifiable(snapshot.savedSearches);
+      trackerRecords = List.unmodifiable(snapshot.trackerRecords);
+    }
     _cachedJobDetails = Map.unmodifiable(snapshot.cachedJobDetails);
     updateRuns = List.unmodifiable(snapshot.updateRuns);
     sources = List.unmodifiable(snapshot.sources);
@@ -928,21 +1154,48 @@ class AtlasAppController extends ChangeNotifier {
     if (factory == null) {
       return null;
     }
-    _localCacheStore = await factory();
+    _localCacheStore = await factory(
+      privateStateProtectionActive: () => _privateStateProtectionActive,
+    );
     return _localCacheStore;
   }
 
-  Future<void> _writePersistedCache() async {
+  Future<void> _writePersistedCache() {
+    final previous = _cacheWriteOperation;
+    late final Future<void> operation;
+    Future<void> run() async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {
+          // A later explicit write is independent from the previous failure.
+        }
+      }
+      await _performPersistedCacheWrite();
+    }
+
+    operation = run().whenComplete(() {
+      if (identical(_cacheWriteOperation, operation)) {
+        _cacheWriteOperation = null;
+      }
+    });
+    _cacheWriteOperation = operation;
+    return operation;
+  }
+
+  Future<void> _performPersistedCacheWrite() async {
     final store = await _ensureLocalCacheStore();
     final savedAt = cacheSavedAt;
     if (store == null || savedAt == null) {
       return;
     }
-    final snapshot = AtlasLocalCacheSnapshot(
+    final searchRequest =
+        _committedPublicSearchRequest ?? _cacheSearchRequest();
+    var snapshot = AtlasLocalCacheSnapshot(
       schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
       baseURL: baseURL,
       savedAt: savedAt,
-      searchRequest: _currentSearchRequest(),
+      searchRequest: searchRequest,
       searchResponse: AtlasSearchResponse(
         total: total,
         limit: results.length,
@@ -961,7 +1214,56 @@ class AtlasAppController extends ChangeNotifier {
       sources: sources,
       operationalDataLoadedAt: operationalDataLoadedAt,
     );
+    if (_privateStateProtectionActive) {
+      snapshot = snapshot.withoutPrivateState();
+    }
     await store.write(snapshot);
+  }
+
+  Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
+    final operation = _cacheWriteOperation;
+    if (operation == null) {
+      return;
+    }
+    try {
+      await operation;
+    } catch (_) {
+      // Activation preflight re-reads the authoritative cache state.
+    }
+    _requireCurrentPrivateActivation(activationGeneration);
+  }
+
+  void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
+    savedSearches = List<AtlasSavedSearch>.unmodifiable(snapshot.savedSearches);
+    trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+      snapshot.trackerRecords,
+    );
+    _syncSavedSearchSequence();
+  }
+
+  bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
+    return !_privateActivationInProgress &&
+        !_privateDeactivationInProgress &&
+        !_privateStateProtectionActive &&
+        _privateAuthorityGeneration == authorityGeneration;
+  }
+
+  bool _mayAcceptPrivateRead(
+    AtlasVaultPrivateStatePersistence persistence,
+    int authorityGeneration,
+  ) {
+    return !_privateActivationInProgress &&
+        !_privateDeactivationInProgress &&
+        persistence.isActive &&
+        _privateAuthorityGeneration == authorityGeneration;
+  }
+
+  void _requireCurrentPrivateActivation(int authorityGeneration) {
+    if (!_privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        _privateAuthorityGeneration != authorityGeneration) {
+      throw const AtlasVaultPrivateStateException();
+    }
   }
 
   void _upsertSavedSearch(AtlasSavedSearch savedSearch) {

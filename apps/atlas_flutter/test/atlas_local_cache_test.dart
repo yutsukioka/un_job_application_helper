@@ -98,6 +98,99 @@ void main() {
       expect(await File('${cacheFile.path}.tmp').exists(), isFalse);
       expect(await store.read(), isNull);
     });
+
+    test('private-state detection and public-only copy are immutable', () {
+      final snapshot = _snapshot(savedAt: _fixtureSavedAt);
+
+      final publicOnly = snapshot.withoutPrivateState();
+
+      expect(snapshot.containsPrivateState, isTrue);
+      expect(publicOnly.containsPrivateState, isFalse);
+      expect(publicOnly.savedSearches, isEmpty);
+      expect(publicOnly.trackerRecords, isEmpty);
+      expect(snapshot.savedSearches, hasLength(1));
+      expect(snapshot.trackerRecords, hasLength(1));
+      expect(publicOnly.baseURL, snapshot.baseURL);
+      expect(publicOnly.savedAt, snapshot.savedAt);
+      expect(
+        publicOnly.searchRequest.toJson(),
+        snapshot.searchRequest.toJson(),
+      );
+      expect(
+        publicOnly.searchResponse.toJson(),
+        snapshot.searchResponse.toJson(),
+      );
+      expect(publicOnly.cachedAllJobs, snapshot.cachedAllJobs);
+      expect(publicOnly.cachedJobDetails, snapshot.cachedJobDetails);
+      expect(publicOnly.updateRuns, snapshot.updateRuns);
+      expect(publicOnly.sources, snapshot.sources);
+    });
+
+    test(
+      'active plaintext guard rejects before file or temporary mutation',
+      () async {
+        const original = '{"public":"unchanged"}';
+        await cacheFile.writeAsString(original);
+        final temporaryFile = File('${cacheFile.path}.tmp');
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          privateStateProtectionActive: () => true,
+        );
+
+        await expectLater(
+          store.write(_snapshot(savedAt: _fixtureSavedAt)),
+          throwsA(isA<AtlasPrivateStatePlaintextWriteBlocked>()),
+        );
+
+        expect(await cacheFile.readAsString(), original);
+        expect(await temporaryFile.exists(), isFalse);
+      },
+    );
+
+    test(
+      'active plaintext guard accepts an explicit public-only copy',
+      () async {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureReadAt,
+          privateStateProtectionActive: () => true,
+        );
+
+        await store.write(
+          _snapshot(savedAt: _fixtureSavedAt).withoutPrivateState(),
+        );
+        final restored = await store.read();
+
+        expect(restored, isNotNull);
+        expect(restored!.containsPrivateState, isFalse);
+        expect(restored.savedSearches, isEmpty);
+        expect(restored.trackerRecords, isEmpty);
+      },
+    );
+
+    test(
+      'protection transition during write blocks before cache commit',
+      () async {
+        final nestedFile = File(
+          '${tempDir.path}/not-created/atlas-local-cache.json',
+        );
+        var protectionActive = false;
+        final store = AtlasLocalCacheStore(
+          file: nestedFile,
+          privateStateProtectionActive: () => protectionActive,
+        );
+
+        final write = store.write(_snapshot(savedAt: _fixtureSavedAt));
+        protectionActive = true;
+
+        await expectLater(
+          write,
+          throwsA(isA<AtlasPrivateStatePlaintextWriteBlocked>()),
+        );
+        expect(await nestedFile.exists(), isFalse);
+        expect(await File('${nestedFile.path}.tmp').exists(), isFalse);
+      },
+    );
   });
 }
 

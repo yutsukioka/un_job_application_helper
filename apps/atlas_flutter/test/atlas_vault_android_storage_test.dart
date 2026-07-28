@@ -1,0 +1,171 @@
+import 'package:atlas/atlas_vault_android.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'support/atlas_vault_android_fakes.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late AtlasVaultAndroidMethodCallRecorder recorder;
+
+  setUp(() {
+    recorder = AtlasVaultAndroidMethodCallRecorder(
+      channelName: atlasVaultAndroidMethodChannelName,
+    )..install();
+  });
+
+  tearDown(() {
+    recorder.uninstall();
+  });
+
+  test('construction performs no platform call', () {
+    AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('capabilities use the exact method and fixed response keys', () async {
+    recorder.handler = (call) async {
+      expect(call.method, 'capabilities');
+      expect(call.arguments, isNull);
+      return <String, Object?>{
+        'api_level': 35,
+        'secure_boundary_available': true,
+        'aes_gcm_keystore_available': true,
+        'hardware_backed': false,
+        'strongbox_backed': false,
+        'no_backup_storage_available': true,
+      };
+    };
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    final capabilities = await storage.capabilities();
+
+    expect(capabilities.apiLevel, 35);
+    expect(capabilities.secureBoundaryAvailable, isTrue);
+    expect(capabilities.aesGcmKeystoreAvailable, isTrue);
+    expect(capabilities.hardwareBacked, isFalse);
+    expect(capabilities.strongBoxBacked, isFalse);
+    expect(capabilities.noBackupStorageAvailable, isTrue);
+  });
+
+  test('invalid vault IDs cause no platform call', () async {
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    for (final vaultId in <String>[
+      '',
+      '.',
+      '..',
+      'contains space',
+      'contains/slash',
+      'saved_search',
+      'SAVED_JOB',
+      'application_note',
+      'profile_snippet',
+      'draft_metadata',
+      'x' * 97,
+    ]) {
+      await expectLater(
+        storage.containsVaultKey(vaultId),
+        throwsA(isA<AtlasVaultAndroidStorageException>()),
+      );
+    }
+
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('create validates a 32-byte key and uses create-only method', () async {
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+    final key = deterministicVaultKey();
+    recorder.handler = (call) async {
+      expect(call.method, 'createVaultKey');
+      final arguments = call.arguments! as Map<Object?, Object?>;
+      expect(arguments.keys, <Object?>['vault_id', 'vault_key']);
+      expect(arguments['vault_id'], 'vault-alpha');
+      expect(arguments['vault_key'], orderedEquals(key));
+      return null;
+    };
+
+    await storage.createVaultKey('vault-alpha', key);
+
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'createVaultKey',
+    ]);
+  });
+
+  test('invalid key length is rejected before the platform call', () async {
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    await expectLater(
+      storage.createVaultKey('vault-alpha', Uint8List(31)),
+      throwsA(isA<AtlasVaultAndroidStorageException>()),
+    );
+
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('load returns a defensive copy and uses exact arguments', () async {
+    final platformKey = deterministicVaultKey();
+    recorder.handler = (call) async {
+      expect(call.method, 'loadVaultKey');
+      expect(call.arguments, <String, Object?>{'vault_id': 'vault-alpha'});
+      return platformKey;
+    };
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    final loaded = await storage.loadVaultKey('vault-alpha');
+
+    expect(loaded, orderedEquals(platformKey));
+    expect(identical(loaded, platformKey), isFalse);
+    loaded![0] ^= 0xff;
+    expect(platformKey.first, 1);
+  });
+
+  test(
+    'contains and delete use exact methods and delete is repeatable',
+    () async {
+      recorder.handler = (call) async {
+        if (call.method == 'containsVaultKey') {
+          return true;
+        }
+        return null;
+      };
+      final storage = AtlasAndroidVaultSecureKeyStore(
+        channel: recorder.channel,
+      );
+
+      expect(await storage.containsVaultKey('vault-alpha'), isTrue);
+      await storage.deleteVaultKey('vault-alpha');
+      await storage.deleteVaultKey('vault-alpha');
+
+      expect(recorder.calls.map((call) => call.method), <String>[
+        'containsVaultKey',
+        'deleteVaultKey',
+        'deleteVaultKey',
+      ]);
+    },
+  );
+
+  test('platform errors are fixed and redact platform details', () async {
+    recorder.handler = (_) async {
+      throw PlatformException(
+        code: 'native-secret',
+        message: '/private/path/FAKE_PRIVATE_VALUE',
+      );
+    };
+    final storage = AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+
+    Object? failure;
+    try {
+      await storage.loadVaultKey('vault-alpha');
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure, isA<AtlasVaultAndroidStorageException>());
+    expect(failure.toString(), 'AtlasVault Android storage operation failed.');
+    expect(failure.toString(), isNot(contains('native-secret')));
+    expect(failure.toString(), isNot(contains('/private/path')));
+  });
+}

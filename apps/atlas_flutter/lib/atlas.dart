@@ -1055,6 +1055,26 @@ final class AtlasLocalCacheSnapshot {
   final List<AtlasSourceSummary> sources;
   final DateTime? operationalDataLoadedAt;
 
+  bool get containsPrivateState {
+    return savedSearches.isNotEmpty || trackerRecords.isNotEmpty;
+  }
+
+  AtlasLocalCacheSnapshot withoutPrivateState() {
+    return AtlasLocalCacheSnapshot(
+      schemaVersion: schemaVersion,
+      baseURL: baseURL,
+      savedAt: savedAt,
+      searchRequest: searchRequest,
+      searchResponse: searchResponse,
+      cachedAllJobs: cachedAllJobs,
+      healthSummary: healthSummary,
+      cachedJobDetails: cachedJobDetails,
+      updateRuns: updateRuns,
+      sources: sources,
+      operationalDataLoadedAt: operationalDataLoadedAt,
+    );
+  }
+
   bool isStale({DateTime? now}) {
     return (now ?? DateTime.now()).difference(savedAt) > staleAfter;
   }
@@ -1098,12 +1118,25 @@ Map<String, AtlasJobDetail> _cachedJobDetailsFromJson(Object? json) {
   };
 }
 
+final class AtlasPrivateStatePlaintextWriteBlocked implements Exception {
+  const AtlasPrivateStatePlaintextWriteBlocked();
+
+  @override
+  String toString() => 'Private plaintext cache write blocked.';
+}
+
 final class AtlasLocalCacheStore {
-  AtlasLocalCacheStore({required this.file, DateTime Function()? now})
-    : _now = now ?? DateTime.now;
+  AtlasLocalCacheStore({
+    required this.file,
+    DateTime Function()? now,
+    bool Function()? privateStateProtectionActive,
+  }) : _now = now ?? DateTime.now,
+       _privateStateProtectionActive =
+           privateStateProtectionActive ?? _privateStateProtectionDisabled;
 
   final File file;
   final DateTime Function() _now;
+  final bool Function() _privateStateProtectionActive;
 
   Future<AtlasLocalCacheSnapshot?> read() async {
     try {
@@ -1119,12 +1152,27 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
-    await file.parent.create(recursive: true);
     final temporaryFile = File('${file.path}.tmp');
-    final snapshotJson = snapshot.toJson();
-    final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
-    await temporaryFile.writeAsString(encoded, flush: true);
-    await temporaryFile.rename(file.path);
+    _requirePlaintextWriteAllowed(snapshot);
+    try {
+      await file.parent.create(recursive: true);
+      _requirePlaintextWriteAllowed(snapshot);
+      final snapshotJson = snapshot.toJson();
+      final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
+      _requirePlaintextWriteAllowed(snapshot);
+      await temporaryFile.writeAsString(encoded, flush: true);
+      _requirePlaintextWriteAllowed(snapshot);
+      await temporaryFile.rename(file.path);
+    } catch (_) {
+      try {
+        if (await temporaryFile.exists()) {
+          await temporaryFile.delete();
+        }
+      } catch (_) {
+        // The fixed write failure remains authoritative.
+      }
+      rethrow;
+    }
   }
 
   Future<void> clear() async {
@@ -1136,6 +1184,38 @@ final class AtlasLocalCacheStore {
       await temporaryFile.delete();
     }
   }
+
+  Future<bool> containsPersistedPrivateState() async {
+    try {
+      if (!await file.exists()) {
+        return false;
+      }
+      final decoded = jsonDecode(await file.readAsString());
+      final value = _map(decoded);
+      if (value == null) {
+        return true;
+      }
+      return _persistedPrivateListIsPresent(value['saved_searches']) ||
+          _persistedPrivateListIsPresent(value['tracker_records']);
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _requirePlaintextWriteAllowed(AtlasLocalCacheSnapshot snapshot) {
+    if (_privateStateProtectionActive() && snapshot.containsPrivateState) {
+      throw const AtlasPrivateStatePlaintextWriteBlocked();
+    }
+  }
+}
+
+bool _privateStateProtectionDisabled() => false;
+
+bool _persistedPrivateListIsPresent(Object? value) {
+  if (value == null) {
+    return false;
+  }
+  return value is! List<Object?> || value.isNotEmpty;
 }
 
 AtlasLocalCacheSnapshot? _decodeLocalCacheSnapshot(
