@@ -1143,6 +1143,7 @@ final class AtlasLocalCacheMigrationPrivateState {
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
     required this.privateSha256,
+    this.authorityBaseURL,
     this.cachePresent = true,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
@@ -1152,6 +1153,7 @@ final class AtlasLocalCacheMigrationPrivateState {
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
   final String? privateSha256;
+  final Uri? authorityBaseURL;
   final bool cachePresent;
 
   @override
@@ -1416,6 +1418,9 @@ final class AtlasLocalCacheStore {
         savedSearches: savedSearches,
         trackerRecords: trackerRecords,
         privateSha256: digest,
+        authorityBaseURL: AtlasAPIClient.normalizedBaseURL(
+          value['base_url']! as String,
+        ),
       );
     } catch (_) {
       throw const AtlasLocalCacheMigrationException();
@@ -1624,10 +1629,14 @@ String? _migrationOptionalUtcSeconds(Object? value, {required String field}) {
             microseconds) {
       throw const AtlasLocalCacheMigrationException();
     }
-    if (match.group(8) != 'Z' &&
-        (int.parse(match.group(10)!) > 23 ||
-            int.parse(match.group(11)!) > 59)) {
-      throw const AtlasLocalCacheMigrationException();
+    if (match.group(8) != 'Z') {
+      final offsetHour = int.parse(match.group(10)!);
+      final offsetMinute = int.parse(match.group(11)!);
+      if (offsetHour > 14 ||
+          offsetMinute > 59 ||
+          (offsetHour == 14 && offsetMinute != 0)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
     }
     final parsed = DateTime.tryParse(text);
     if (parsed == null || !parsed.isUtc) {
@@ -2698,6 +2707,13 @@ final class AtlasAPIClient {
     ).map(_map).nonNulls.map(AtlasSavedSearch.fromJson).toList();
   }
 
+  Future<List<AtlasSavedSearch>> savedSearchesForPlaintextMigration() async {
+    return _strictPlaintextMigrationList(
+      const AtlasRequest(method: 'GET', path: 'api/saved-searches'),
+      _strictMigrationSavedSearch,
+    );
+  }
+
   Future<AtlasSavedSearch> saveSearch({
     required String name,
     required AtlasSearchRequest request,
@@ -2746,6 +2762,14 @@ final class AtlasAPIClient {
     ).map(_map).nonNulls.map(AtlasApplicationRecord.fromJson).toList();
   }
 
+  Future<List<AtlasApplicationRecord>>
+  trackerRecordsForPlaintextMigration() async {
+    return _strictPlaintextMigrationList(
+      const AtlasRequest(method: 'GET', path: 'api/tracker'),
+      _strictMigrationTrackerRecord,
+    );
+  }
+
   Future<bool> deleteTrackerRecord(String id) async {
     final json = await _requestMap(
       AtlasRequest(
@@ -2781,6 +2805,23 @@ final class AtlasAPIClient {
       throw const AtlasAPIException.invalidResponse();
     }
     return map;
+  }
+
+  Future<List<T>> _strictPlaintextMigrationList<T>(
+    AtlasRequest request,
+    T Function(Object?) decode,
+  ) async {
+    try {
+      final response = await _transport.send(request);
+      if (response is! List) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      return List<T>.unmodifiable(<T>[
+        for (final item in response) decode(item),
+      ]);
+    } catch (_) {
+      throw const AtlasAPIException.invalidResponse();
+    }
   }
 }
 

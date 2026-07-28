@@ -325,6 +325,9 @@ final class _CompatibilitySource
   int readCalls = 0;
 
   @override
+  Uri get authorityBaseURL => Uri.parse('http://127.0.0.1:8765');
+
+  @override
   Future<AtlasVaultPlaintextPrivateState>
   readCompatibilityPrivateState() async {
     readCalls += 1;

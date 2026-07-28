@@ -157,6 +157,8 @@ abstract interface class AtlasVaultPlaintextStateSource {
 }
 
 abstract interface class AtlasVaultCompatibilityPrivateSource {
+  Uri get authorityBaseURL;
+
   Future<AtlasVaultPlaintextPrivateState> readCompatibilityPrivateState();
 
   Future<bool> deleteSavedSearch(String name);
@@ -1166,6 +1168,19 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationJournal> _removeCompatibilityPrivateState(
     AtlasVaultPlaintextMigrationJournal initialJournal,
   ) async {
+    if (initialJournal.cachePrivateSha256 != null) {
+      final cache = await _cacheSource.readPrivateStateForMigration();
+      final cachePrivateAbsent =
+          cache.privateSha256 == null &&
+          cache.savedSearches.isEmpty &&
+          cache.trackerRecords.isEmpty;
+      if (!cache.cachePresent ||
+          (!cachePrivateAbsent &&
+              cache.privateSha256 != initialJournal.cachePrivateSha256)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      _requireCompatibilityAuthority(cache, required: true);
+    }
     var journal = initialJournal;
     for (final name in journal.remoteSavedSearchNames) {
       var current = await _compatibilitySource.readCompatibilityPrivateState();
@@ -1746,6 +1761,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       await _operationAdmission.drainAdmittedPlaintextOperations();
       final memory = await _inMemorySource.readPlaintextPrivateState();
       final cache = await _cacheSource.readPrivateStateForMigration();
+      _requireCompatibilityAuthority(cache);
       final compatibility = await _compatibilitySource
           .readCompatibilityPrivateState();
       final savedByName = <String, AtlasSavedSearch>{};
@@ -1826,6 +1842,26 @@ final class AtlasVaultPlaintextMigrationCoordinator
         sha256: digest,
       );
     } catch (_) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  void _requireCompatibilityAuthority(
+    AtlasLocalCacheMigrationPrivateState cache, {
+    bool required = false,
+  }) {
+    if (!required &&
+        cache.savedSearches.isEmpty &&
+        cache.trackerRecords.isEmpty) {
+      return;
+    }
+    final cacheAuthority = cache.authorityBaseURL;
+    final compatibilityAuthority = AtlasAPIClient.normalizedBaseURL(
+      _compatibilitySource.authorityBaseURL.toString(),
+    );
+    if (cacheAuthority == null ||
+        compatibilityAuthority == null ||
+        cacheAuthority != compatibilityAuthority) {
       throw const AtlasVaultPlaintextMigrationException();
     }
   }
@@ -2319,10 +2355,14 @@ String? _normalizeLegacyUtc(String? value) {
             microseconds) {
       throw const AtlasVaultPlaintextMigrationException();
     }
-    if (match.group(8) != 'Z' &&
-        (int.parse(match.group(10)!) > 23 ||
-            int.parse(match.group(11)!) > 59)) {
-      throw const AtlasVaultPlaintextMigrationException();
+    if (match.group(8) != 'Z') {
+      final offsetHour = int.parse(match.group(10)!);
+      final offsetMinute = int.parse(match.group(11)!);
+      if (offsetHour > 14 ||
+          offsetMinute > 59 ||
+          (offsetHour == 14 && offsetMinute != 0)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
     }
     final parsed = DateTime.tryParse(value);
     if (parsed == null || !parsed.isUtc) {

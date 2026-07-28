@@ -68,6 +68,60 @@ void main() {
   );
 
   test(
+    'cache authority mismatch fails before compatibility inventory access',
+    () async {
+      final fixture = _MigrationFixture();
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: <AtlasSavedSearch>[_savedSearch()],
+        trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+        privateSha256: '1' * 64,
+        authorityBaseURL: Uri.parse('http://cached-authority.test:8765'),
+      );
+      fixture.compatibility.authorityBaseURL = Uri.parse(
+        'http://current-authority.test:8765',
+      );
+
+      await expectLater(
+        fixture.coordinator.inventory(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.compatibility.readCalls, 0);
+      expect(fixture.journal.createCalls, 0);
+      expect(fixture.keyStore.createCalls, 0);
+      expect(fixture.localStore.createCalls, 0);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 0);
+      expect(fixture.compatibility.deleteTrackerCalls, 0);
+    },
+  );
+
+  test(
+    'prepared migration rejects changed compatibility authority before deletion',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      final compatibilityReads = fixture.compatibility.readCalls;
+      fixture.compatibility.authorityBaseURL = Uri.parse(
+        'http://changed-authority.test:8765',
+      );
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.compatibility.readCalls, compatibilityReads);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 0);
+      expect(fixture.compatibility.deleteTrackerCalls, 0);
+      expect(fixture.cache.removeCalls, 0);
+      expect(fixture.selection.createCalls, 0);
+      expect(fixture.cache.state.savedSearches, isNotEmpty);
+      expect(fixture.cache.state.trackerRecords, isNotEmpty);
+    },
+  );
+
+  test(
     'legacy backend timestamps normalize before strict vault validation',
     () async {
       final fixture = _MigrationFixture();
@@ -81,7 +135,7 @@ void main() {
         trackerRecords: <AtlasApplicationRecord>[
           _trackerRecord(
             appliedAt: '2026-07-03T03:04:05.500000+00:00',
-            updatedAt: '2026-07-04T13:05:06.999999+09:00',
+            updatedAt: '2026-07-04T18:05:06.999999+14:00',
           ),
         ],
       );
@@ -91,6 +145,7 @@ void main() {
         savedSearches: state.savedSearches,
         trackerRecords: state.trackerRecords,
         privateSha256: '1' * 64,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       );
 
       await fixture.coordinator.inventory();
@@ -111,6 +166,8 @@ void main() {
       '2026-07-01T01:02:03',
       '2026-02-30T01:02:03+00:00',
       '2026-07-01T01:02:03+24:00',
+      '2026-07-01T01:02:03+14:01',
+      '2026-07-01T01:02:03-15:00',
     ]) {
       final fixture = _MigrationFixture();
       final invalid = _savedSearch(createdAt: timestamp);
@@ -124,6 +181,7 @@ void main() {
         savedSearches: state.savedSearches,
         trackerRecords: state.trackerRecords,
         privateSha256: '1' * 64,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       );
 
       await expectLater(
@@ -144,6 +202,7 @@ void main() {
       ],
       trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
       privateSha256: '1' * 64,
+      authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
 
     await expectLater(
@@ -539,6 +598,39 @@ void main() {
   );
 
   test(
+    'resume adopts an acknowledged cache scrub with its authority intact',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.cache.failAfterNextRemove = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.cache.state.cachePresent, isTrue);
+      expect(fixture.cache.state.privateSha256, isNull);
+      expect(
+        fixture.cache.state.authorityBaseURL,
+        Uri.parse('http://atlas.test:8765'),
+      );
+      expect(fixture.selection.createCalls, 0);
+      final savedSearchDeletes = fixture.compatibility.deleteSavedSearchCalls;
+      final trackerDeletes = fixture.compatibility.deleteTrackerCalls;
+
+      final summary = await fixture.coordinator.resume();
+
+      expect(summary.stage, isNull);
+      expect(fixture.compatibility.deleteSavedSearchCalls, savedSearchDeletes);
+      expect(fixture.compatibility.deleteTrackerCalls, trackerDeletes);
+      expect(fixture.selection.createCalls, 1);
+      expect(fixture.journal.bytes, isNull);
+    },
+  );
+
+  test(
     'selected encrypted authority activates only after explicit call',
     () async {
       final fixture = _MigrationFixture();
@@ -784,6 +876,7 @@ final class _MigrationFixture {
       savedSearches: state.savedSearches,
       trackerRecords: state.trackerRecords,
       privateSha256: '1' * 64,
+      authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
     coordinator = AtlasVaultPlaintextMigrationCoordinator(
       inMemorySource: memory,
@@ -902,6 +995,9 @@ final class _MemorySource implements AtlasVaultPlaintextStateSource {
 
 final class _CompatibilitySource
     implements AtlasVaultCompatibilityPrivateSource {
+  @override
+  Uri authorityBaseURL = Uri.parse('http://atlas.test:8765');
+
   AtlasVaultPlaintextPrivateState state = AtlasVaultPlaintextPrivateState(
     savedSearches: const <AtlasSavedSearch>[],
     trackerRecords: const <AtlasApplicationRecord>[],
@@ -972,9 +1068,11 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
         savedSearches: const <AtlasSavedSearch>[],
         trackerRecords: const <AtlasApplicationRecord>[],
         privateSha256: null,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       );
   int readCalls = 0;
   int removeCalls = 0;
+  bool failAfterNextRemove = false;
 
   @override
   Future<AtlasLocalCacheMigrationPrivateState>
@@ -989,11 +1087,17 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
   }) async {
     removeCalls += 1;
     events.add('cache.remove');
+    final authorityBaseURL = state.authorityBaseURL;
     state = AtlasLocalCacheMigrationPrivateState(
       savedSearches: const <AtlasSavedSearch>[],
       trackerRecords: const <AtlasApplicationRecord>[],
       privateSha256: null,
+      authorityBaseURL: authorityBaseURL,
     );
+    if (failAfterNextRemove) {
+      failAfterNextRemove = false;
+      throw StateError('interrupted after cache scrub');
+    }
   }
 }
 

@@ -206,6 +206,10 @@ void main() {
       final migrationState = await store.readPrivateStateForMigration();
 
       expect(migrationState.cachePresent, isTrue);
+      expect(
+        migrationState.authorityBaseURL,
+        Uri.parse('http://atlas.test:8765'),
+      );
       expect(migrationState.savedSearches.single.name, 'Search 1');
       expect(
         migrationState.trackerRecords.single.jobKey,
@@ -284,6 +288,58 @@ void main() {
       await expectLater(
         store.readPrivateStateForMigration(),
         throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+    });
+
+    test('migration enforces the ISO-8601 maximum UTC offset', () async {
+      for (final timestamp in <String>[
+        '2026-07-01T01:02:03+14:01',
+        '2026-07-01T01:02:03-15:00',
+      ]) {
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          now: () => _fixtureReadAt,
+        );
+        await store.write(
+          _snapshot(
+            savedAt: _fixtureSavedAt,
+            savedSearches: <AtlasSavedSearch>[
+              AtlasSavedSearch(
+                name: 'Search 1',
+                request: const AtlasSearchRequest(text: 'analyst'),
+                createdAt: timestamp,
+              ),
+            ],
+          ),
+        );
+
+        await expectLater(
+          store.readPrivateStateForMigration(),
+          throwsA(isA<AtlasLocalCacheMigrationException>()),
+        );
+      }
+
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
+      await store.write(
+        _snapshot(
+          savedAt: _fixtureSavedAt,
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Search 1',
+              request: const AtlasSearchRequest(text: 'analyst'),
+              createdAt: '2026-07-01T14:02:03+14:00',
+            ),
+          ],
+        ),
+      );
+
+      final migrationState = await store.readPrivateStateForMigration();
+      expect(
+        migrationState.savedSearches.single.createdAt,
+        '2026-07-01T00:02:03Z',
       );
     });
 

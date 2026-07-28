@@ -223,7 +223,106 @@ void main() {
         }
       },
     );
+
+    test(
+      'migration compatibility inventory requires complete raw rows',
+      () async {
+        final validSavedSearch = <String, Object?>{
+          'name': 'Private search',
+          'description': null,
+          'request': const AtlasSearchRequest(text: 'private').toJson(),
+          'created_at': '2026-07-01T00:00:00Z',
+          'updated_at': '2026-07-02T00:00:00Z',
+        };
+        final validTracker = <String, Object?>{
+          'id': 'tracker-1',
+          'job_key': 'source:private-job',
+          'status': 'saved',
+          'notes': null,
+          'applied_at': null,
+          'updated_at': '2026-07-02T00:00:00Z',
+        };
+        final validClient = AtlasAPIClient(
+          transport: _MigrationInventoryTransport(
+            savedSearches: <Object?>[validSavedSearch],
+            trackerRecords: <Object?>[validTracker],
+          ),
+        );
+
+        expect(
+          (await validClient.savedSearchesForPlaintextMigration()).single.name,
+          'Private search',
+        );
+        expect(
+          (await validClient.trackerRecordsForPlaintextMigration()).single.id,
+          'tracker-1',
+        );
+
+        for (final malformed in <Object?>[
+          <String, Object?>{'not': 'a list'},
+          <Object?>[validSavedSearch, 'dropped private row'],
+          <Object?>[
+            <String, Object?>{...validSavedSearch}..remove('name'),
+          ],
+          <Object?>[
+            <String, Object?>{...validSavedSearch, 'unknown': 'private'},
+          ],
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: malformed,
+              trackerRecords: const <Object?>[],
+            ),
+          );
+          await expectLater(
+            client.savedSearchesForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+
+        for (final malformed in <Object?>[
+          <String, Object?>{'not': 'a list'},
+          <Object?>[validTracker, 7],
+          <Object?>[
+            <String, Object?>{...validTracker}..remove('job_key'),
+          ],
+          <Object?>[
+            <String, Object?>{...validTracker, 'unknown': 'private'},
+          ],
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: const <Object?>[],
+              trackerRecords: malformed,
+            ),
+          );
+          await expectLater(
+            client.trackerRecordsForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+      },
+    );
   });
+}
+
+final class _MigrationInventoryTransport implements AtlasTransport {
+  const _MigrationInventoryTransport({
+    required this.savedSearches,
+    required this.trackerRecords,
+  });
+
+  final Object? savedSearches;
+  final Object? trackerRecords;
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    return switch (request.path) {
+      'api/saved-searches' => savedSearches,
+      'api/tracker' => trackerRecords,
+      _ => throw const AtlasAPIException.invalidResponse(),
+    };
+  }
 }
 
 final class _FailingDeleteTransport implements AtlasTransport {

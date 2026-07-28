@@ -2242,11 +2242,14 @@ final class _AtlasControllerCompatibilityMigrationSource
   AtlasAPIClient get _client => controller._clientFactory(controller.baseURL);
 
   @override
+  Uri get authorityBaseURL => controller.baseURL;
+
+  @override
   Future<AtlasVaultPlaintextPrivateState>
   readCompatibilityPrivateState() async {
     final client = _client;
-    final savedSearches = await client.savedSearches();
-    final trackerRecords = await client.trackerRecords();
+    final savedSearches = await client.savedSearchesForPlaintextMigration();
+    final trackerRecords = await client.trackerRecordsForPlaintextMigration();
     return AtlasVaultPlaintextPrivateState(
       savedSearches: savedSearches,
       trackerRecords: trackerRecords,

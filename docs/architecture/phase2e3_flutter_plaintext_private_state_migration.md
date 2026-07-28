@@ -99,8 +99,11 @@ Inventory does not clear or mutate controller state.
 ## 14. Persisted-Cache Inventory
 
 The migration-specific cache reader strictly decodes the full schema and reads
-private lists directly. Corrupt, incomplete, or ambiguous cache content fails
-closed.
+private lists directly. It also carries the cache snapshot's normalized API
+authority in memory. A cache containing private values must match the current
+compatibility authority before any compatibility read, preparation, resume, or
+remote deletion. Corrupt, incomplete, ambiguous, or authority-mismatched cache
+content fails closed.
 
 ## 15. Expired-Cache Migration Read
 
@@ -111,18 +114,23 @@ separately from an existing public-only cache.
 ## 16. Compatibility Saved-Search Inventory
 
 The migration-only adapter explicitly reads the complete compatibility
-saved-search list. Ordinary controller reads remain blocked while migration is
-pending. Legacy API and cache timestamps are accepted only as valid,
-timezone-bearing ISO-8601 values, then normalized to UTC seconds before strict
-AtlasVault journal and payload validation. This covers the backend's
-fractional `+00:00` values without relaxing the encrypted format.
+saved-search list through an exact-schema raw-response decoder. A non-list
+response, non-object row, missing field, unknown field, or invalid nested
+request fails the complete inventory instead of being dropped or defaulted.
+Ordinary controller reads remain blocked while migration is pending. Legacy
+API and cache timestamps are accepted only as valid, timezone-bearing
+ISO-8601 values with offsets bounded to `-14:00...+14:00`, then normalized to
+UTC seconds before strict AtlasVault journal and payload validation. This
+covers the backend's fractional `+00:00` values without relaxing the encrypted
+format.
 
 ## 17. Compatibility Tracker Inventory
 
 The migration-only adapter explicitly reads the complete compatibility
-tracker list and records the remote ID-to-job-key deletion handles internally.
-Tracker timestamps use the same bounded legacy normalization; timezone-free,
-impossible-calendar, and invalid-offset values fail closed.
+tracker list with the same exact raw-response policy and records the remote
+ID-to-job-key deletion handles internally. Tracker timestamps use the same
+bounded legacy normalization; timezone-free, impossible-calendar, and
+out-of-range offset values fail closed.
 
 ## 18. Deterministic Deduplication
 
@@ -323,8 +331,9 @@ specific user action.
 
 ## 49. No Backend Route Change
 
-The phase reuses the reviewed compatibility list and delete methods. No Python
-route, API schema, or service implementation changes.
+The phase reuses the reviewed compatibility list and delete routes while the
+migration path applies stricter response decoding than ordinary compatibility
+UI reads. No Python route, API schema, or service implementation changes.
 
 ## 50. No iOS Interoperability
 
@@ -358,7 +367,10 @@ explicit clearing after an asynchronous gate crossing, retained clear draining
 before inventory, complete controller cleanup for an admitted legacy clear,
 draining every admitted compatibility mutation before the first inventory
 source read, and normalization of valid legacy backend timestamps before
-strict journal and encrypted-payload validation.
+strict journal and encrypted-payload validation. The final Codex cycles bind
+expired-cache private values to their cached compatibility authority, reject
+lossy compatibility inventory decoding, and enforce the ISO-8601 maximum UTC
+offset before migration side effects.
 
 ## 54. Android Integration Evidence
 
