@@ -718,6 +718,142 @@ void main() {
     await tester.pump();
   });
 
+  test(
+    'query entered during activation is scheduled after it stabilizes',
+    () async {
+      final transport = _RecordingTransport();
+      final enteredActivation = Completer<void>();
+      final releaseActivation = Completer<void>();
+      final enteredSearch = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence()
+        ..enteredActivation = enteredActivation
+        ..releaseActivation = releaseActivation;
+      _TestTimer? scheduledSearch;
+      var scheduleCount = 0;
+      addTearDown(() {
+        if (!releaseActivation.isCompleted) {
+          releaseActivation.complete();
+        }
+      });
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+        searchDebounceTimerFactory: (duration, callback) {
+          expect(duration, const Duration(milliseconds: 350));
+          scheduleCount += 1;
+          final timer = _TestTimer(callback);
+          scheduledSearch = timer;
+          return timer;
+        },
+      );
+      addTearDown(controller.dispose);
+      controller.connectionStatus = 'Connected';
+      final refreshCompleted = Completer<void>();
+      void observeRefreshCompletion() {
+        if (enteredSearch.isCompleted &&
+            !controller.isRefreshingLocalSave &&
+            !refreshCompleted.isCompleted) {
+          refreshCompleted.complete();
+        }
+      }
+
+      controller.addListener(observeRefreshCompletion);
+      addTearDown(() => controller.removeListener(observeRefreshCompletion));
+
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await enteredActivation.future;
+      controller.updateQuery('query entered during activation');
+      expect(scheduledSearch, isNull);
+      expect(scheduleCount, 0);
+
+      transport
+        ..expectedSearchText = 'query entered during activation'
+        ..enteredExpectedSearch = enteredSearch;
+      releaseActivation.complete();
+      expect(await activation, AtlasVaultActivationResult.activated);
+      expect(scheduledSearch, isNotNull);
+      expect(scheduleCount, 1);
+
+      scheduledSearch!.fire();
+      await enteredSearch.future;
+      observeRefreshCompletion();
+      await refreshCompleted.future;
+    },
+  );
+
+  test(
+    'query entered during deactivation is scheduled after it stabilizes',
+    () async {
+      final transport = _RecordingTransport();
+      final enteredDeactivation = Completer<void>();
+      final releaseDeactivation = Completer<void>();
+      final enteredSearch = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence();
+      _TestTimer? scheduledSearch;
+      var scheduleCount = 0;
+      addTearDown(() {
+        if (!releaseDeactivation.isCompleted) {
+          releaseDeactivation.complete();
+        }
+      });
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+        searchDebounceTimerFactory: (duration, callback) {
+          expect(duration, const Duration(milliseconds: 350));
+          scheduleCount += 1;
+          final timer = _TestTimer(callback);
+          scheduledSearch = timer;
+          return timer;
+        },
+      );
+      addTearDown(controller.dispose);
+      controller.connectionStatus = 'Connected';
+      final refreshCompleted = Completer<void>();
+      void observeRefreshCompletion() {
+        if (enteredSearch.isCompleted &&
+            !controller.isRefreshingLocalSave &&
+            !refreshCompleted.isCompleted) {
+          refreshCompleted.complete();
+        }
+      }
+
+      controller.addListener(observeRefreshCompletion);
+      addTearDown(() => controller.removeListener(observeRefreshCompletion));
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+      privatePersistence
+        ..enteredDeactivation = enteredDeactivation
+        ..releaseDeactivation = releaseDeactivation;
+      scheduledSearch = null;
+
+      final deactivation = controller.deactivateAtlasVault();
+      await enteredDeactivation.future;
+      controller.updateQuery('query entered during deactivation');
+      expect(scheduledSearch, isNull);
+      expect(scheduleCount, 0);
+
+      transport
+        ..expectedSearchText = 'query entered during deactivation'
+        ..enteredExpectedSearch = enteredSearch;
+      releaseDeactivation.complete();
+      await deactivation;
+      expect(scheduledSearch, isNotNull);
+      expect(scheduleCount, 1);
+
+      scheduledSearch!.fire();
+      await enteredSearch.future;
+      observeRefreshCompletion();
+      await refreshCompleted.future;
+    },
+  );
+
   test('controller reports save job failures', () async {
     final controller = AtlasAppController(
       clientFactory: (baseURL) =>

@@ -99,6 +99,7 @@ class AtlasAppController extends ChangeNotifier {
   DateTime? cacheSavedAt;
   DateTime? operationalDataLoadedAt;
   Timer? _searchDebounce;
+  bool _searchRefreshPendingAfterPrivateTransition = false;
   int _savedSearchSequence = 0;
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
@@ -213,6 +214,7 @@ class AtlasAppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _searchRefreshPendingAfterPrivateTransition = false;
     _cancelSearchDebounce();
     super.dispose();
   }
@@ -230,7 +232,7 @@ class AtlasAppController extends ChangeNotifier {
     _privateAuthorityGeneration += 1;
     final activationGeneration = _privateAuthorityGeneration;
     _privateActivationInProgress = true;
-    _cancelSearchDebounce();
+    _cancelSearchDebounce(rescheduleAfterTransition: true);
     try {
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
@@ -270,6 +272,7 @@ class AtlasAppController extends ChangeNotifier {
       return AtlasVaultActivationResult.failed;
     } finally {
       _privateActivationInProgress = false;
+      _resumeSearchDebounceAfterPrivateTransition();
     }
   }
 
@@ -280,12 +283,13 @@ class AtlasAppController extends ChangeNotifier {
     }
     _privateAuthorityGeneration += 1;
     _privateDeactivationInProgress = true;
-    _cancelSearchDebounce();
+    _cancelSearchDebounce(rescheduleAfterTransition: true);
     late final Future<void> operation;
     operation = _performPrivateDeactivation().whenComplete(() {
       if (identical(_privateDeactivationOperation, operation)) {
         _privateDeactivationInProgress = false;
         _privateDeactivationOperation = null;
+        _resumeSearchDebounceAfterPrivateTransition();
       }
     });
     _privateDeactivationOperation = operation;
@@ -796,12 +800,16 @@ class AtlasAppController extends ChangeNotifier {
     if (_privateActivationInProgress ||
         _privateDeactivationInProgress ||
         (cacheSavedAt == null && connectionStatus != 'Connected')) {
+      if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        _searchRefreshPendingAfterPrivateTransition = true;
+      }
       return;
     }
     _searchDebounce = _searchDebounceTimerFactory(
       const Duration(milliseconds: 350),
       () {
         if (_privateActivationInProgress || _privateDeactivationInProgress) {
+          _searchRefreshPendingAfterPrivateTransition = true;
           return;
         }
         refreshLocalSave();
@@ -809,9 +817,22 @@ class AtlasAppController extends ChangeNotifier {
     );
   }
 
-  void _cancelSearchDebounce() {
+  void _cancelSearchDebounce({bool rescheduleAfterTransition = false}) {
+    if (rescheduleAfterTransition && (_searchDebounce?.isActive ?? false)) {
+      _searchRefreshPendingAfterPrivateTransition = true;
+    }
     _searchDebounce?.cancel();
     _searchDebounce = null;
+  }
+
+  void _resumeSearchDebounceAfterPrivateTransition() {
+    if (!_searchRefreshPendingAfterPrivateTransition ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
+      return;
+    }
+    _searchRefreshPendingAfterPrivateTransition = false;
+    _scheduleSearchIfReady();
   }
 
   String _savedSearchSummary(AtlasSearchRequest request) {

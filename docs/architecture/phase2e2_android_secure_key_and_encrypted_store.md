@@ -337,6 +337,11 @@ activation or deactivation is in progress, then resumes during a stable active
 vault session. Active search refreshes retain the public-only cache rules in
 Section 42. Starting either private transition cancels a pending debounce, and
 the timer callback rechecks transition state before starting any public work.
+If a query change or previously admitted timer is suppressed by a transition,
+one pending-refresh marker is retained. The final stable activation or
+deactivation completion consumes that marker and restores the historical
+debounce exactly once; overlapping transitions defer the resume until both
+transition flags are clear.
 
 ## 49. No Activation UI
 
@@ -394,6 +399,9 @@ The final controller-race regressions hold a private search across
 deactivation and prove its criteria never become the committed plaintext-cache
 request. They also fire timers admitted immediately before activation and
 deactivation, proving both transitions cancel or reject pending debounce work.
+The final debounce-continuity regressions enter new queries while activation
+and deactivation are held behind deterministic gates, then prove the stable
+completion reschedules each query once without starting work during the gate.
 
 ## 55. Verification
 
