@@ -1139,6 +1139,99 @@ void main() {
     expect(controller.trackerRecords, isEmpty);
   });
 
+  test(
+    'deactivation keeps compatibility and cache fenced until completion',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_deactivation_fence_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final enteredDeactivation = Completer<void>();
+      final releaseDeactivation = Completer<void>();
+      final privatePersistence =
+          _FakePrivateStatePersistence(
+              activationSnapshot: AtlasVaultPrivateStateSnapshot(
+                savedSearches: <AtlasSavedSearch>[
+                  AtlasSavedSearch(
+                    name: 'ENCRYPTED_PRIVATE_NAME',
+                    request: const AtlasSearchRequest(text: 'encrypted'),
+                  ),
+                ],
+                trackerRecords: <AtlasApplicationRecord>[
+                  AtlasApplicationRecord(
+                    id: 'encrypted-record',
+                    jobKey: 'undp:encrypted',
+                    status: 'saved',
+                  ),
+                ],
+              ),
+            )
+            ..enteredDeactivation = enteredDeactivation
+            ..releaseDeactivation = releaseDeactivation;
+      final transport = _RecordingTransport();
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        privateStatePersistence: privatePersistence,
+        now: () => _cacheFixtureNow,
+      );
+      addTearDown(controller.dispose);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      final deactivation = controller.deactivateAtlasVault();
+      await enteredDeactivation.future;
+      expect(privatePersistence.isActive, isFalse);
+
+      var listenerAttemptedCompatibilityWrite = false;
+      Future<void>? listenerCompatibilityWrite;
+      controller.addListener(() {
+        if (listenerAttemptedCompatibilityWrite ||
+            controller.savedSearches.isNotEmpty) {
+          return;
+        }
+        listenerAttemptedCompatibilityWrite = true;
+        listenerCompatibilityWrite = controller.saveCurrentSearch();
+      });
+
+      await controller.saveCurrentSearch();
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+
+      expect(transport.savedSearchNames, isEmpty);
+      expect(transport.savedJobKeys, isEmpty);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      final cached = await store.read();
+      expect(cached, isNotNull);
+      expect(cached!.containsPrivateState, isFalse);
+      expect(
+        await store.file.readAsString(),
+        isNot(contains('ENCRYPTED_PRIVATE_NAME')),
+      );
+
+      releaseDeactivation.complete();
+      await deactivation;
+      await listenerCompatibilityWrite;
+      expect(listenerAttemptedCompatibilityWrite, isTrue);
+      expect(transport.savedSearchNames, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
   testWidgets('search submits query and renders refreshed result rows', (
     tester,
   ) async {
@@ -1404,6 +1497,8 @@ final class _FakePrivateStatePersistence
   Completer<void>? releaseSave;
   Completer<void>? enteredActivation;
   Completer<void>? releaseActivation;
+  Completer<void>? enteredDeactivation;
+  Completer<void>? releaseDeactivation;
 
   @override
   bool isActive = false;
@@ -1423,6 +1518,10 @@ final class _FakePrivateStatePersistence
   Future<void> deactivate() async {
     calls.add('deactivate');
     isActive = false;
+    enteredDeactivation?.complete();
+    if (releaseDeactivation != null) {
+      await releaseDeactivation!.future;
+    }
   }
 
   @override

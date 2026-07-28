@@ -102,9 +102,13 @@ class AtlasAppController extends ChangeNotifier {
   final DateTime Function() _now;
   int _privateAuthorityGeneration = 0;
   bool _privateActivationInProgress = false;
+  bool _privateDeactivationInProgress = false;
+  Future<void>? _privateDeactivationOperation;
 
   bool get _privateStateProtectionActive {
-    return _privateStatePersistence?.isActive ?? false;
+    return _privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        (_privateStatePersistence?.isActive ?? false);
   }
 
   void clearConnectionMessage() {
@@ -213,7 +217,8 @@ class AtlasAppController extends ChangeNotifier {
     final persistence = _privateStatePersistence;
     if (persistence == null ||
         persistence.isActive ||
-        _privateActivationInProgress) {
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
       return AtlasVaultActivationResult.failed;
     }
     _privateAuthorityGeneration += 1;
@@ -261,8 +266,25 @@ class AtlasAppController extends ChangeNotifier {
     }
   }
 
-  Future<void> deactivateAtlasVault() async {
+  Future<void> deactivateAtlasVault() {
+    final existing = _privateDeactivationOperation;
+    if (existing != null) {
+      return existing;
+    }
     _privateAuthorityGeneration += 1;
+    _privateDeactivationInProgress = true;
+    late final Future<void> operation;
+    operation = _performPrivateDeactivation().whenComplete(() {
+      if (identical(_privateDeactivationOperation, operation)) {
+        _privateDeactivationInProgress = false;
+        _privateDeactivationOperation = null;
+      }
+    });
+    _privateDeactivationOperation = operation;
+    return operation;
+  }
+
+  Future<void> _performPrivateDeactivation() async {
     try {
       await _privateStatePersistence?.deactivate();
     } finally {
@@ -479,7 +501,7 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress) {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
@@ -519,7 +541,7 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress) {
+        if (_privateActivationInProgress || _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
@@ -683,7 +705,7 @@ class AtlasAppController extends ChangeNotifier {
       }
       return;
     }
-    if (_privateActivationInProgress) {
+    if (_privateActivationInProgress || _privateDeactivationInProgress) {
       return;
     }
     try {
@@ -1140,6 +1162,7 @@ class AtlasAppController extends ChangeNotifier {
 
   bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
     return !_privateActivationInProgress &&
+        !_privateDeactivationInProgress &&
         !_privateStateProtectionActive &&
         _privateAuthorityGeneration == authorityGeneration;
   }
@@ -1149,12 +1172,14 @@ class AtlasAppController extends ChangeNotifier {
     int authorityGeneration,
   ) {
     return !_privateActivationInProgress &&
+        !_privateDeactivationInProgress &&
         persistence.isActive &&
         _privateAuthorityGeneration == authorityGeneration;
   }
 
   void _requireCurrentPrivateActivation(int authorityGeneration) {
     if (!_privateActivationInProgress ||
+        _privateDeactivationInProgress ||
         _privateAuthorityGeneration != authorityGeneration) {
       throw const AtlasVaultPrivateStateException();
     }

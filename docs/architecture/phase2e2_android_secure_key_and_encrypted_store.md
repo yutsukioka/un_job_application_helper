@@ -257,7 +257,11 @@ store order.
 
 The active vault key exists only in the runtime session. Deactivation cancels
 and drains mutation work, wipes the mutable key buffer best effort, clears
-metadata mappings, and clears projected private lists.
+metadata mappings, and clears projected private lists. The controller retains
+one deactivation operation and keeps its private-protection flag active until
+the runtime drain and controller clearing both complete. Listener notification
+of the empty private projection occurs while that protection is still active;
+the flag clears only in the retained operation's completion callback.
 
 ## 42. Public-Only Cache
 
@@ -283,6 +287,9 @@ discarded, and no new compatibility mutation starts while activation is in
 progress. The same generation fence is rechecked after compatibility
 saved-search and tracker reads, so a read admitted before activation cannot
 replace the encrypted projection after activation completes.
+Compatibility reads, writes, and cache publication also remain fenced for the
+entire retained deactivation operation, including the interval after the
+runtime reports inactive but before its admitted mutation has drained.
 
 ## 45. Legacy Inactive Compatibility
 
@@ -349,7 +356,12 @@ logical creates, in-flight compatibility saves crossing activation,
 deactivation superseding an in-flight activation, and compatibility reads
 finishing after encrypted activation. A direct-runtime regression separately
 proves that deactivation invalidates a suspended runtime activation before it
-can reinstall a key or hydrated state.
+can reinstall a key or hydrated state. A controller regression holds
+deactivation behind a retained mutation and proves compatibility reads,
+compatibility writes, and private cache publication remain blocked until the
+drain-and-clear sequence completes. The same test attempts a compatibility
+write re-entrantly from the empty-state listener notification and proves that
+the retained deactivation fence still rejects it.
 
 ## 55. Verification
 
