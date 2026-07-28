@@ -276,7 +276,9 @@ compatibility endpoint calls. Encrypted failures do not fall back to those
 endpoints. A controller authority generation fences activation against
 compatibility mutations: results already in flight before activation are
 discarded, and no new compatibility mutation starts while activation is in
-progress.
+progress. The same generation fence is rechecked after compatibility
+saved-search and tracker reads, so a read admitted before activation cannot
+replace the encrypted projection after activation completes.
 
 ## 45. Legacy Inactive Compatibility
 
@@ -289,7 +291,10 @@ modes.
 Explicit deactivation drains active mutation work, wipes key material best
 effort, clears mappings and private projections, leaves wrapped keys and the
 encrypted store intact, and returns to inactive mode without loading legacy
-plaintext.
+plaintext. Activation captures its authority generation and rechecks it after
+every asynchronous preflight, secure activation, and private-state read. A
+deactivation that supersedes any of those awaits therefore forces the late
+activation to fail and deactivate instead of restoring private authority.
 
 ## 47. Real Android Private-State Integration
 
@@ -336,7 +341,9 @@ gate covers activation, migration preflight, encrypted mutations, endpoint
 suppression, cache guarding, private-draft/public-request separation,
 deactivation, and real Android integration. Exact-head Codex review added
 deterministic regressions for interrupted `AtomicFile` recovery, stale-runtime
-logical creates, and in-flight compatibility saves crossing activation.
+logical creates, in-flight compatibility saves crossing activation,
+deactivation superseding an in-flight activation, and compatibility reads
+finishing after encrypted activation.
 
 ## 55. Verification
 

@@ -973,6 +973,140 @@ void main() {
     },
   );
 
+  test('deactivation fences a late activation completion', () async {
+    final enteredActivation = Completer<void>();
+    final releaseActivation = Completer<void>();
+    final privatePersistence =
+        _FakePrivateStatePersistence(
+            activationSnapshot: AtlasVaultPrivateStateSnapshot(
+              savedSearches: <AtlasSavedSearch>[
+                AtlasSavedSearch(
+                  name: 'Encrypted search',
+                  request: const AtlasSearchRequest(text: 'encrypted'),
+                ),
+              ],
+              trackerRecords: const <AtlasApplicationRecord>[],
+            ),
+          )
+          ..enteredActivation = enteredActivation
+          ..releaseActivation = releaseActivation;
+    final controller = AtlasAppController(
+      privateStatePersistence: privatePersistence,
+    );
+    addTearDown(controller.dispose);
+
+    final activation = controller.activateExistingAtlasVault('vault-alpha');
+    await enteredActivation.future;
+    await controller.deactivateAtlasVault();
+    expect(controller.savedSearches, isEmpty);
+
+    releaseActivation.complete();
+
+    expect(await activation, AtlasVaultActivationResult.failed);
+    expect(privatePersistence.isActive, isFalse);
+    expect(controller.savedSearches, isEmpty);
+    expect(controller.trackerRecords, isEmpty);
+  });
+
+  test(
+    'activation rejects an in-flight compatibility saved-search read',
+    () async {
+      final enteredRead = Completer<void>();
+      final releaseRead = Completer<void>();
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySavedSearchRead = enteredRead
+        ..releaseCompatibilitySavedSearchRead = releaseRead
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Compatibility search',
+          'request': const <String, Object?>{},
+          'created_at': '2026-07-02T00:00:00Z',
+        });
+      final privatePersistence = _FakePrivateStatePersistence(
+        activationSnapshot: AtlasVaultPrivateStateSnapshot(
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Encrypted search',
+              request: const AtlasSearchRequest(text: 'encrypted'),
+            ),
+          ],
+          trackerRecords: const <AtlasApplicationRecord>[],
+        ),
+      );
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+
+      final compatibilityRead = controller.testConnection(
+        Uri.parse('http://atlas.test:8765'),
+      );
+      await enteredRead.future;
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+      releaseRead.complete();
+      await compatibilityRead;
+
+      expect(privatePersistence.isActive, isTrue);
+      expect(controller.savedSearches.map((value) => value.name), <String>[
+        'Encrypted search',
+      ]);
+    },
+  );
+
+  test('activation rejects an in-flight compatibility tracker read', () async {
+    final enteredRead = Completer<void>();
+    final releaseRead = Completer<void>();
+    final transport = _RecordingTransport()
+      ..enteredCompatibilityTrackerRead = enteredRead
+      ..releaseCompatibilityTrackerRead = releaseRead
+      ..trackerStore.add(<String, Object?>{
+        'id': 'compatibility-record',
+        'job_key': 'undp:compatibility',
+        'status': 'saved',
+        'updated_at': '2026-07-02T00:00:00Z',
+      });
+    final privatePersistence = _FakePrivateStatePersistence(
+      activationSnapshot: AtlasVaultPrivateStateSnapshot(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: <AtlasApplicationRecord>[
+          AtlasApplicationRecord(
+            id: 'encrypted-record',
+            jobKey: 'undp:encrypted',
+            status: 'saved',
+          ),
+        ],
+      ),
+    );
+    final controller = AtlasAppController(
+      initialBaseURL: Uri.parse('http://atlas.test:8765'),
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+      privateStatePersistence: privatePersistence,
+    );
+    addTearDown(controller.dispose);
+
+    final compatibilityRead = controller.testConnection(
+      Uri.parse('http://atlas.test:8765'),
+    );
+    await enteredRead.future;
+    expect(
+      await controller.activateExistingAtlasVault('vault-alpha'),
+      AtlasVaultActivationResult.activated,
+    );
+    releaseRead.complete();
+    await compatibilityRead;
+
+    expect(privatePersistence.isActive, isTrue);
+    expect(controller.trackerRecords.map((value) => value.jobKey), <String>[
+      'undp:encrypted',
+    ]);
+  });
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(
@@ -1098,6 +1232,7 @@ final class _RecordingTransport implements AtlasTransport {
   final savedJobKeys = <String>[];
   final detailRequests = <String>[];
   final savedSearchStore = <Map<String, Object?>>[];
+  final trackerStore = <Map<String, Object?>>[];
   int savedSearchReadCount = 0;
   int trackerReadCount = 0;
   int updateReadCount = 0;
@@ -1106,6 +1241,10 @@ final class _RecordingTransport implements AtlasTransport {
   Completer<void>? releaseCompatibilitySaveSearch;
   Completer<void>? enteredCompatibilitySaveJob;
   Completer<void>? releaseCompatibilitySaveJob;
+  Completer<void>? enteredCompatibilitySavedSearchRead;
+  Completer<void>? releaseCompatibilitySavedSearchRead;
+  Completer<void>? enteredCompatibilityTrackerRead;
+  Completer<void>? releaseCompatibilityTrackerRead;
 
   void resetPrivateCounts() {
     savedSearchNames.clear();
@@ -1159,6 +1298,10 @@ final class _RecordingTransport implements AtlasTransport {
         }
         expect(request.method, 'GET');
         savedSearchReadCount += 1;
+        enteredCompatibilitySavedSearchRead?.complete();
+        if (releaseCompatibilitySavedSearchRead != null) {
+          await releaseCompatibilitySavedSearchRead!.future;
+        }
         return savedSearchStore;
       case 'api/job-detail':
         detailRequests.add(request.queryParameters['job_key'] ?? '');
@@ -1201,7 +1344,11 @@ final class _RecordingTransport implements AtlasTransport {
         };
       case 'api/tracker':
         trackerReadCount += 1;
-        return <Object?>[];
+        enteredCompatibilityTrackerRead?.complete();
+        if (releaseCompatibilityTrackerRead != null) {
+          await releaseCompatibilityTrackerRead!.future;
+        }
+        return trackerStore;
       case 'api/updates':
         updateReadCount += 1;
         return {
@@ -1255,6 +1402,8 @@ final class _FakePrivateStatePersistence
   AtlasVaultPrivateStateSnapshot _snapshot;
   Completer<void>? enteredSave;
   Completer<void>? releaseSave;
+  Completer<void>? enteredActivation;
+  Completer<void>? releaseActivation;
 
   @override
   bool isActive = false;
@@ -1262,6 +1411,10 @@ final class _FakePrivateStatePersistence
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
     calls.add('activate');
+    enteredActivation?.complete();
+    if (releaseActivation != null) {
+      await releaseActivation!.future;
+    }
     isActive = true;
     return AtlasVaultActivationResult.activated;
   }
@@ -1270,10 +1423,6 @@ final class _FakePrivateStatePersistence
   Future<void> deactivate() async {
     calls.add('deactivate');
     isActive = false;
-    _snapshot = AtlasVaultPrivateStateSnapshot(
-      savedSearches: const <AtlasSavedSearch>[],
-      trackerRecords: const <AtlasApplicationRecord>[],
-    );
   }
 
   @override

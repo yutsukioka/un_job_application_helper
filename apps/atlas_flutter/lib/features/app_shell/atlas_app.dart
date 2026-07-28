@@ -217,20 +217,27 @@ class AtlasAppController extends ChangeNotifier {
       return AtlasVaultActivationResult.failed;
     }
     _privateAuthorityGeneration += 1;
+    final activationGeneration = _privateAuthorityGeneration;
     _privateActivationInProgress = true;
     try {
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
       }
       final cacheStore = await _ensureLocalCacheStore();
-      if (await cacheStore?.containsPersistedPrivateState() ?? false) {
+      _requireCurrentPrivateActivation(activationGeneration);
+      final containsPersistedPrivateState =
+          await cacheStore?.containsPersistedPrivateState() ?? false;
+      _requireCurrentPrivateActivation(activationGeneration);
+      if (containsPersistedPrivateState) {
         return AtlasVaultActivationResult.migrationRequired;
       }
       final result = await persistence.activateExisting(vaultId);
+      _requireCurrentPrivateActivation(activationGeneration);
       if (result != AtlasVaultActivationResult.activated) {
         return result;
       }
       final snapshot = await persistence.read();
+      _requireCurrentPrivateActivation(activationGeneration);
       if (!persistence.isActive) {
         throw const AtlasVaultPrivateStateException();
       }
@@ -663,16 +670,28 @@ class AtlasAppController extends ChangeNotifier {
 
   Future<void> _loadSavedSearches(AtlasAPIClient client) async {
     final persistence = _privateStatePersistence;
+    final authorityGeneration = _privateAuthorityGeneration;
     if (persistence?.isActive ?? false) {
       try {
-        _installPrivateSnapshot(await persistence!.read());
+        final snapshot = await persistence!.read();
+        if (!_mayAcceptPrivateRead(persistence, authorityGeneration)) {
+          return;
+        }
+        _installPrivateSnapshot(snapshot);
       } catch (_) {
         // The last committed encrypted projection remains authoritative.
       }
       return;
     }
+    if (_privateActivationInProgress) {
+      return;
+    }
     try {
-      savedSearches = List.unmodifiable(await client.savedSearches());
+      final compatibilitySearches = await client.savedSearches();
+      if (!_mayAcceptCompatibilityMutation(authorityGeneration)) {
+        return;
+      }
+      savedSearches = List.unmodifiable(compatibilitySearches);
       _syncSavedSearchSequence();
     } catch (_) {
       // Saved-search persistence is not required for health/search success.
@@ -690,9 +709,13 @@ class AtlasAppController extends ChangeNotifier {
     } catch (_) {
       // Source-health summaries are best-effort and should not block Search.
     }
-    if (!_privateStateProtectionActive) {
+    final authorityGeneration = _privateAuthorityGeneration;
+    if (!_privateStateProtectionActive && !_privateActivationInProgress) {
       try {
-        trackerRecords = List.unmodifiable(await client.trackerRecords());
+        final compatibilityRecords = await client.trackerRecords();
+        if (_mayAcceptCompatibilityMutation(authorityGeneration)) {
+          trackerRecords = List.unmodifiable(compatibilityRecords);
+        }
       } catch (_) {
         // Saved-job persistence is independent from Search refresh.
       }
@@ -1119,6 +1142,22 @@ class AtlasAppController extends ChangeNotifier {
     return !_privateActivationInProgress &&
         !_privateStateProtectionActive &&
         _privateAuthorityGeneration == authorityGeneration;
+  }
+
+  bool _mayAcceptPrivateRead(
+    AtlasVaultPrivateStatePersistence persistence,
+    int authorityGeneration,
+  ) {
+    return !_privateActivationInProgress &&
+        persistence.isActive &&
+        _privateAuthorityGeneration == authorityGeneration;
+  }
+
+  void _requireCurrentPrivateActivation(int authorityGeneration) {
+    if (!_privateActivationInProgress ||
+        _privateAuthorityGeneration != authorityGeneration) {
+      throw const AtlasVaultPrivateStateException();
+    }
   }
 
   void _upsertSavedSearch(AtlasSavedSearch savedSearch) {
