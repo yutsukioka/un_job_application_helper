@@ -31,16 +31,16 @@ void main() {
           text: searchSentinel,
           organizations: <String>['UNICEF'],
         ),
-        createdAt: '2026-07-29T01:00:00Z',
-        updatedAt: '2026-07-29T01:01:00Z',
+        createdAt: '2026-07-29T01:00:00.123456+00:00',
+        updatedAt: '2026-07-29T01:01:00.654321+00:00',
       );
       final tracker = AtlasApplicationRecord(
         id: 'migration-remote-$suffix',
         jobKey: 'fixture:$suffix',
         status: 'saved',
         notes: noteSentinel,
-        appliedAt: '2026-07-29T01:02:00Z',
-        updatedAt: '2026-07-29T01:03:00Z',
+        appliedAt: '2026-07-29T01:02:00.123456+00:00',
+        updatedAt: '2026-07-29T01:03:00.654321+00:00',
       );
       final plaintext = AtlasVaultPlaintextPrivateState(
         savedSearches: <AtlasSavedSearch>[search],

@@ -67,6 +67,75 @@ void main() {
     },
   );
 
+  test(
+    'legacy backend timestamps normalize before strict vault validation',
+    () async {
+      final fixture = _MigrationFixture();
+      final state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          _savedSearch(
+            createdAt: '2026-07-01T01:02:03.456789+00:00',
+            updatedAt: '2026-07-02T02:03:04.125Z',
+          ),
+        ],
+        trackerRecords: <AtlasApplicationRecord>[
+          _trackerRecord(
+            appliedAt: '2026-07-03T03:04:05.500000+00:00',
+            updatedAt: '2026-07-04T13:05:06.999999+09:00',
+          ),
+        ],
+      );
+      fixture.memory.state = state;
+      fixture.compatibility.state = state;
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: state.trackerRecords,
+        privateSha256: '1' * 64,
+      );
+
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+      );
+      expect(journal.savedSearches.single.createdAt, '2026-07-01T01:02:03Z');
+      expect(journal.savedSearches.single.updatedAt, '2026-07-02T02:03:04Z');
+      expect(journal.trackerRecords.single.appliedAt, '2026-07-03T03:04:05Z');
+      expect(journal.trackerRecords.single.updatedAt, '2026-07-04T04:05:06Z');
+    },
+  );
+
+  test('legacy timestamp normalization rejects ambiguous values', () async {
+    for (final timestamp in <String>[
+      '2026-07-01T01:02:03',
+      '2026-02-30T01:02:03+00:00',
+      '2026-07-01T01:02:03+24:00',
+    ]) {
+      final fixture = _MigrationFixture();
+      final invalid = _savedSearch(createdAt: timestamp);
+      final state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[invalid],
+        trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+      );
+      fixture.memory.state = state;
+      fixture.compatibility.state = state;
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: state.trackerRecords,
+        privateSha256: '1' * 64,
+      );
+
+      await expectLater(
+        fixture.coordinator.inventory(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.journal.createCalls, 0);
+      expect(fixture.keyStore.createCalls, 0);
+      expect(fixture.localStore.createCalls, 0);
+    }
+  });
+
   test('saved-search conflicts fail before migration side effects', () async {
     final fixture = _MigrationFixture();
     fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
@@ -669,7 +738,11 @@ void main() {
   );
 }
 
-AtlasSavedSearch _savedSearch({String requestText = 'PRIVATE_QUERY'}) {
+AtlasSavedSearch _savedSearch({
+  String requestText = 'PRIVATE_QUERY',
+  String createdAt = '2026-07-01T00:00:00Z',
+  String updatedAt = '2026-07-02T00:00:00Z',
+}) {
   return AtlasSavedSearch(
     name: 'UN roles',
     description: 'private description',
@@ -679,19 +752,23 @@ AtlasSavedSearch _savedSearch({String requestText = 'PRIVATE_QUERY'}) {
       countriesISO3: const <String>['JPN'],
       limit: 50,
     ),
-    createdAt: '2026-07-01T00:00:00Z',
-    updatedAt: '2026-07-02T00:00:00Z',
+    createdAt: createdAt,
+    updatedAt: updatedAt,
   );
 }
 
-AtlasApplicationRecord _trackerRecord({String status = 'saved'}) {
+AtlasApplicationRecord _trackerRecord({
+  String status = 'saved',
+  String appliedAt = '2026-07-03T00:00:00Z',
+  String updatedAt = '2026-07-04T00:00:00Z',
+}) {
   return AtlasApplicationRecord(
     id: 'tracker-record-1',
     jobKey: 'unicef:private-job',
     status: status,
     notes: 'tracker-private-notes',
-    appliedAt: '2026-07-03T00:00:00Z',
-    updatedAt: '2026-07-04T00:00:00Z',
+    appliedAt: appliedAt,
+    updatedAt: updatedAt,
   );
 }
 

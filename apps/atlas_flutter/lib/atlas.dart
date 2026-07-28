@@ -1579,7 +1579,70 @@ String? _migrationOptionalUtcSeconds(Object? value, {required String field}) {
   if (value == null) {
     return null;
   }
-  return vault_strict.requireAtlasVaultUtcSeconds(value, field: field);
+  try {
+    final text = vault_strict.requireAtlasVaultString(
+      value,
+      field: field,
+      allowEmpty: false,
+    );
+    final match = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})T'
+      r'(\d{2}):(\d{2}):(\d{2})'
+      r'(?:\.(\d{1,6}))?'
+      r'(Z|([+-])(\d{2}):(\d{2}))$',
+    ).firstMatch(text);
+    if (match == null) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final hour = int.parse(match.group(4)!);
+    final minute = int.parse(match.group(5)!);
+    final second = int.parse(match.group(6)!);
+    final fraction = (match.group(7) ?? '').padRight(6, '0');
+    final microseconds = fraction.isEmpty ? 0 : int.parse(fraction);
+    final wallClock = DateTime.utc(
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      second,
+      microseconds ~/ Duration.microsecondsPerMillisecond,
+      microseconds % Duration.microsecondsPerMillisecond,
+    );
+    if (year == 0 ||
+        wallClock.year != year ||
+        wallClock.month != month ||
+        wallClock.day != day ||
+        wallClock.hour != hour ||
+        wallClock.minute != minute ||
+        wallClock.second != second ||
+        wallClock.millisecond * Duration.microsecondsPerMillisecond +
+                wallClock.microsecond !=
+            microseconds) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (match.group(8) != 'Z' &&
+        (int.parse(match.group(10)!) > 23 ||
+            int.parse(match.group(11)!) > 59)) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final parsed = DateTime.tryParse(text);
+    if (parsed == null || !parsed.isUtc) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final utc = parsed.toUtc();
+    String two(int number) => number.toString().padLeft(2, '0');
+    final normalized =
+        '${utc.year.toString().padLeft(4, '0')}-'
+        '${two(utc.month)}-${two(utc.day)}T'
+        '${two(utc.hour)}:${two(utc.minute)}:${two(utc.second)}Z';
+    return vault_strict.requireAtlasVaultUtcSeconds(normalized, field: field);
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
 }
 
 bool _migrationJsonEquals(Object? left, Object? right) {

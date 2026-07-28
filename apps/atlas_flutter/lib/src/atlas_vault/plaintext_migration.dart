@@ -2084,8 +2084,8 @@ Map<String, Object?> _savedSearchJson(AtlasSavedSearch value) {
     'request': vault.AtlasSearchRequest.fromJson(
       value.request.toJson(),
     ).toJson(),
-    'created_at': value.createdAt,
-    'updated_at': value.updatedAt,
+    'created_at': _normalizeLegacyUtc(value.createdAt),
+    'updated_at': _normalizeLegacyUtc(value.updatedAt),
   };
 }
 
@@ -2095,8 +2095,8 @@ Map<String, Object?> _trackerJson(AtlasApplicationRecord value) {
     'job_key': value.jobKey,
     'status': value.status,
     'notes': value.notes,
-    'applied_at': value.appliedAt,
-    'updated_at': value.updatedAt,
+    'applied_at': _normalizeLegacyUtc(value.appliedAt),
+    'updated_at': _normalizeLegacyUtc(value.updatedAt),
   };
 }
 
@@ -2270,6 +2270,67 @@ String? _optionalUtc(Object? value) {
   }
   try {
     return requireAtlasVaultUtcSeconds(value, field: 'migration.timestamp');
+  } catch (_) {
+    throw const AtlasVaultPlaintextMigrationException();
+  }
+}
+
+String? _normalizeLegacyUtc(String? value) {
+  if (value == null) {
+    return null;
+  }
+  try {
+    final match = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2})T'
+      r'(\d{2}):(\d{2}):(\d{2})'
+      r'(?:\.(\d{1,6}))?'
+      r'(Z|([+-])(\d{2}):(\d{2}))$',
+    ).firstMatch(value);
+    if (match == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final hour = int.parse(match.group(4)!);
+    final minute = int.parse(match.group(5)!);
+    final second = int.parse(match.group(6)!);
+    final fraction = (match.group(7) ?? '').padRight(6, '0');
+    final microseconds = fraction.isEmpty ? 0 : int.parse(fraction);
+    final wallClock = DateTime.utc(
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      second,
+      microseconds ~/ Duration.microsecondsPerMillisecond,
+      microseconds % Duration.microsecondsPerMillisecond,
+    );
+    if (year == 0 ||
+        wallClock.year != year ||
+        wallClock.month != month ||
+        wallClock.day != day ||
+        wallClock.hour != hour ||
+        wallClock.minute != minute ||
+        wallClock.second != second ||
+        wallClock.millisecond * Duration.microsecondsPerMillisecond +
+                wallClock.microsecond !=
+            microseconds) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (match.group(8) != 'Z' &&
+        (int.parse(match.group(10)!) > 23 ||
+            int.parse(match.group(11)!) > 59)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null || !parsed.isUtc) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final normalized = _utcSeconds(parsed);
+    requireAtlasVaultUtcSeconds(normalized, field: 'migration.timestamp');
+    return normalized;
   } catch (_) {
     throw const AtlasVaultPlaintextMigrationException();
   }

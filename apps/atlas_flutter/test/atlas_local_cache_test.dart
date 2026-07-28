@@ -214,6 +214,79 @@ void main() {
       expect(migrationState.privateSha256, matches(RegExp(r'^[0-9a-f]{64}$')));
     });
 
+    test('migration canonicalizes valid legacy backend timestamps', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
+      await store.write(
+        _snapshot(
+          savedAt: _fixtureSavedAt,
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Search 1',
+              description: 'Cached saved search',
+              request: const AtlasSearchRequest(text: 'analyst'),
+              createdAt: '2026-07-01T01:02:03.456789+00:00',
+              updatedAt: '2026-07-02T02:03:04.125Z',
+            ),
+          ],
+          trackerRecords: <AtlasApplicationRecord>[
+            AtlasApplicationRecord(
+              id: 'undp_oracle_hcm-34063',
+              jobKey: 'undp_oracle_hcm:34063',
+              status: 'saved',
+              appliedAt: '2026-07-03T03:04:05.500000+00:00',
+              updatedAt: '2026-07-04T04:05:06.999999Z',
+            ),
+          ],
+        ),
+      );
+
+      final migrationState = await store.readPrivateStateForMigration();
+
+      expect(
+        migrationState.savedSearches.single.createdAt,
+        '2026-07-01T01:02:03Z',
+      );
+      expect(
+        migrationState.savedSearches.single.updatedAt,
+        '2026-07-02T02:03:04Z',
+      );
+      expect(
+        migrationState.trackerRecords.single.appliedAt,
+        '2026-07-03T03:04:05Z',
+      );
+      expect(
+        migrationState.trackerRecords.single.updatedAt,
+        '2026-07-04T04:05:06Z',
+      );
+    });
+
+    test('migration rejects ambiguous legacy backend timestamps', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+      );
+      await store.write(
+        _snapshot(
+          savedAt: _fixtureSavedAt,
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Search 1',
+              request: const AtlasSearchRequest(text: 'analyst'),
+              createdAt: '2026-07-01T01:02:03',
+            ),
+          ],
+        ),
+      );
+
+      await expectLater(
+        store.readPrivateStateForMigration(),
+        throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+    });
+
     test(
       'migration removal verifies digest and preserves public state',
       () async {
@@ -287,7 +360,11 @@ void main() {
   });
 }
 
-AtlasLocalCacheSnapshot _snapshot({required DateTime savedAt}) {
+AtlasLocalCacheSnapshot _snapshot({
+  required DateTime savedAt,
+  List<AtlasSavedSearch>? savedSearches,
+  List<AtlasApplicationRecord>? trackerRecords,
+}) {
   return AtlasLocalCacheSnapshot(
     schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
     baseURL: Uri.parse('http://atlas.test:8765'),
@@ -331,20 +408,24 @@ AtlasLocalCacheSnapshot _snapshot({required DateTime savedAt}) {
       enabledSources: 12,
       lastSyncAt: '2026-07-02T02:38:47Z',
     ),
-    savedSearches: [
-      AtlasSavedSearch(
-        name: 'Search 1',
-        description: 'Cached saved search',
-        request: const AtlasSearchRequest(text: 'analyst'),
-      ),
-    ],
-    trackerRecords: [
-      AtlasApplicationRecord(
-        id: 'undp_oracle_hcm-34063',
-        jobKey: 'undp_oracle_hcm:34063',
-        status: 'saved',
-      ),
-    ],
+    savedSearches:
+        savedSearches ??
+        [
+          AtlasSavedSearch(
+            name: 'Search 1',
+            description: 'Cached saved search',
+            request: const AtlasSearchRequest(text: 'analyst'),
+          ),
+        ],
+    trackerRecords:
+        trackerRecords ??
+        [
+          AtlasApplicationRecord(
+            id: 'undp_oracle_hcm-34063',
+            jobKey: 'undp_oracle_hcm:34063',
+            status: 'saved',
+          ),
+        ],
     updateRuns: [
       AtlasSourceRun(
         sourceID: 'undp_oracle_hcm',

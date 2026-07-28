@@ -112,12 +112,17 @@ separately from an existing public-only cache.
 
 The migration-only adapter explicitly reads the complete compatibility
 saved-search list. Ordinary controller reads remain blocked while migration is
-pending.
+pending. Legacy API and cache timestamps are accepted only as valid,
+timezone-bearing ISO-8601 values, then normalized to UTC seconds before strict
+AtlasVault journal and payload validation. This covers the backend's
+fractional `+00:00` values without relaxing the encrypted format.
 
 ## 17. Compatibility Tracker Inventory
 
 The migration-only adapter explicitly reads the complete compatibility
 tracker list and records the remote ID-to-job-key deletion handles internally.
+Tracker timestamps use the same bounded legacy normalization; timezone-free,
+impossible-calendar, and invalid-offset values fail closed.
 
 ## 18. Deterministic Deduplication
 
@@ -129,7 +134,9 @@ or filter semantics.
 
 Different values for one logical key, duplicate remote handles, malformed
 records, an unknown remote record after commit, or a changed expected record
-halts migration without deleting the conflicting value.
+halts migration without deleting the conflicting value. Timestamp
+normalization happens before cross-source comparison so equivalent backend and
+canonical UTC representations deduplicate deterministically.
 
 ## 20. Inventory Digest
 
@@ -349,8 +356,9 @@ authoritative reclassification after a failed explicit Resume. Later
 exact-head cycles added pre-commit cache byte preservation, suppression of
 explicit clearing after an asynchronous gate crossing, retained clear draining
 before inventory, complete controller cleanup for an admitted legacy clear,
-and draining every admitted compatibility mutation before the first inventory
-source read.
+draining every admitted compatibility mutation before the first inventory
+source read, and normalization of valid legacy backend timestamps before
+strict journal and encrypted-payload validation.
 
 ## 54. Android Integration Evidence
 
