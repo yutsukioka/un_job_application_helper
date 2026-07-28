@@ -75,8 +75,10 @@ final class AtlasVaultPrivateStateRuntime
   final Uint8List Function() _nonceProvider;
 
   bool _active = false;
+  bool _activating = false;
   bool _deactivating = false;
   int _generation = 0;
+  int _activationGeneration = 0;
   String? _vaultId;
   Uint8List? _vaultKey;
   AtlasVaultPrivateStateSnapshot _snapshot = AtlasVaultPrivateStateSnapshot(
@@ -94,17 +96,22 @@ final class AtlasVaultPrivateStateRuntime
 
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
-    if (_active || _deactivating) {
+    if (_active || _activating || _deactivating) {
       return AtlasVaultActivationResult.failed;
     }
+    _activationGeneration += 1;
+    final activationGeneration = _activationGeneration;
+    _activating = true;
     Uint8List? candidateKey;
     try {
       validateAtlasVaultAndroidVaultIdInternal(vaultId);
       candidateKey = await _secureKeyStore.loadVaultKey(vaultId);
+      _requireCurrentActivation(activationGeneration);
       if (candidateKey == null || candidateKey.length != 32) {
         return AtlasVaultActivationResult.failed;
       }
       final store = await _localStoreIO.read(vaultId);
+      _requireCurrentActivation(activationGeneration);
       if (store == null || store.vaultMetadata.vaultId != vaultId) {
         return AtlasVaultActivationResult.failed;
       }
@@ -113,6 +120,7 @@ final class AtlasVaultPrivateStateRuntime
         vaultKey: candidateKey,
         store: store,
       );
+      _requireCurrentActivation(activationGeneration);
 
       _generation += 1;
       _vaultId = vaultId;
@@ -121,9 +129,14 @@ final class AtlasVaultPrivateStateRuntime
       _active = true;
       return AtlasVaultActivationResult.activated;
     } catch (_) {
-      _clearSession();
+      if (_activationGeneration == activationGeneration) {
+        _clearSession();
+      }
       return AtlasVaultActivationResult.failed;
     } finally {
+      if (_activationGeneration == activationGeneration) {
+        _activating = false;
+      }
       _wipe(candidateKey);
     }
   }
@@ -152,6 +165,8 @@ final class AtlasVaultPrivateStateRuntime
 
   @override
   Future<void> deactivate() async {
+    _activationGeneration += 1;
+    _activating = false;
     if (_deactivating) {
       await _mutationTail;
       return;
@@ -601,6 +616,14 @@ final class AtlasVaultPrivateStateRuntime
 
   void _requireActive() {
     if (!isActive || _vaultId == null || _vaultKey == null) {
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
+  void _requireCurrentActivation(int activationGeneration) {
+    if (!_activating ||
+        _deactivating ||
+        _activationGeneration != activationGeneration) {
       throw const AtlasVaultPrivateStateException();
     }
   }

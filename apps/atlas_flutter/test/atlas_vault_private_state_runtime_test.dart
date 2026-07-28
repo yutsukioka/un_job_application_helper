@@ -120,6 +120,35 @@ void main() {
     },
   );
 
+  test('deactivation supersedes a direct runtime activation', () async {
+    final enteredLoad = Completer<void>();
+    final releaseLoad = Completer<void>();
+    final runtime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: _FakeSecureKeyStore(
+        key: _vaultKey(),
+        enteredLoad: enteredLoad,
+        releaseLoad: releaseLoad,
+      ),
+      localStoreIO: _FakeLocalStoreIO(store: _emptyStore()),
+    );
+
+    final activation = runtime.activateExisting(_vaultId);
+    await enteredLoad.future;
+    await runtime.deactivate();
+    expect(runtime.isActive, isFalse);
+
+    expect(
+      await runtime.activateExisting(_vaultId),
+      AtlasVaultActivationResult.activated,
+    );
+
+    releaseLoad.complete();
+
+    expect(await activation, AtlasVaultActivationResult.failed);
+    expect(runtime.isActive, isTrue);
+    expect((await runtime.read()).savedSearches, isEmpty);
+  });
+
   test(
     'corrupt supported ciphertext fails activation without authority',
     () async {
@@ -532,10 +561,12 @@ void main() {
 }
 
 final class _FakeSecureKeyStore implements AtlasVaultSecureKeyStore {
-  _FakeSecureKeyStore({Uint8List? key})
+  _FakeSecureKeyStore({Uint8List? key, this.enteredLoad, this.releaseLoad})
     : _key = key == null ? null : Uint8List.fromList(key);
 
   Uint8List? _key;
+  final Completer<void>? enteredLoad;
+  final Completer<void>? releaseLoad;
   final List<String> calls = <String>[];
 
   @override
@@ -562,6 +593,12 @@ final class _FakeSecureKeyStore implements AtlasVaultSecureKeyStore {
   @override
   Future<Uint8List?> loadVaultKey(String vaultId) async {
     calls.add('load');
+    if (enteredLoad != null && !enteredLoad!.isCompleted) {
+      enteredLoad!.complete();
+      if (releaseLoad != null) {
+        await releaseLoad!.future;
+      }
+    }
     return _key == null ? null : Uint8List.fromList(_key!);
   }
 }

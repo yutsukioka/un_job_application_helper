@@ -203,7 +203,11 @@ deactivation, and the real private-state integration journey.
 ## 33. Explicit Activation
 
 Construction performs no I/O. A caller must explicitly activate a validated
-existing vault ID; this phase adds no automatic or UI-driven activation.
+existing vault ID; this phase adds no automatic or UI-driven activation. The
+runtime owns a separate activation generation that is captured before its
+first secure-key or store await. Deactivation invalidates that generation
+immediately, so a late key load, store read, or hydration completion cannot
+restore runtime authority after deactivation returns.
 
 ## 34. Migration-Required Preflight
 
@@ -343,7 +347,9 @@ deactivation, and real Android integration. Exact-head Codex review added
 deterministic regressions for interrupted `AtomicFile` recovery, stale-runtime
 logical creates, in-flight compatibility saves crossing activation,
 deactivation superseding an in-flight activation, and compatibility reads
-finishing after encrypted activation.
+finishing after encrypted activation. A direct-runtime regression separately
+proves that deactivation invalidates a suspended runtime activation before it
+can reinstall a key or hydrated state.
 
 ## 55. Verification
 
