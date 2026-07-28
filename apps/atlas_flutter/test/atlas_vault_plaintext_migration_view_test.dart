@@ -194,6 +194,64 @@ void main() {
       expect(find.text('Discard Prepared Migration'), findsNothing);
     },
   );
+
+  testWidgets('post-commit finalization failure exposes explicit resume', (
+    tester,
+  ) async {
+    final coordinator = _FakeMigrationCoordinator()..failFinalize = true;
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+    await owner.reviewInventory();
+    await owner.prepareEncryptedMigration();
+
+    await owner.finalizeMigration();
+
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+    );
+    expect(coordinator.calls, <String>[
+      'inventory',
+      'prepare',
+      'finalize',
+      'inspect-authority',
+    ]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultPlaintextMigrationPanel(owner: owner)),
+      ),
+    );
+    expect(find.text('Resume Migration'), findsOneWidget);
+    expect(find.textContaining('requires recovery'), findsNothing);
+  });
+
+  test('completed rollback resume returns owner to legacy authority', () async {
+    final coordinator = _FakeMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+    )..resumeCompletesLegacy = true;
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+    await owner.bootstrapAuthority();
+
+    await owner.resumeMigration();
+
+    expect(coordinator.calls, <String>[
+      'inspect-authority',
+      'resume',
+      'inspect-authority',
+    ]);
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+    );
+    expect(owner.savedSearchCount, 0);
+    expect(owner.trackerRecordCount, 0);
+    expect(owner.blocksLegacyPrivateAuthority, isFalse);
+  });
 }
 
 final class _FakeMigrationCoordinator
@@ -210,6 +268,8 @@ final class _FakeMigrationCoordinator
   final Completer<void>? releaseInventory;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
+  bool failFinalize = false;
+  bool resumeCompletesLegacy = false;
 
   AtlasVaultPlaintextMigrationSummary get _inventorySummary =>
       const AtlasVaultPlaintextMigrationSummary(
@@ -261,6 +321,10 @@ final class _FakeMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
     calls.add('finalize');
+    if (failFinalize) {
+      authorityState = AtlasVaultPlaintextAuthorityState.migrationPending;
+      throw const AtlasVaultPlaintextMigrationException();
+    }
     authorityState = AtlasVaultPlaintextAuthorityState.encryptedActive;
     return _inventorySummary;
   }
@@ -268,6 +332,10 @@ final class _FakeMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextMigrationSummary> resume() async {
     calls.add('resume');
+    if (resumeCompletesLegacy) {
+      authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+      return _inventorySummary;
+    }
     return _stageSummary(resumeStage);
   }
 

@@ -64,8 +64,11 @@ private operations before requesting that transition.
 ## 11. Rollback Boundary
 
 Rollback is accepted only for `prepared` and `encrypted_verified`. It verifies
-that plaintext and selection are unchanged, verifies staged hashes, deletes
-the exact staged store and key, and clears the journal last.
+that plaintext and selection are unchanged and verifies staged hashes. The
+journal persists rollback intent before store deletion and persists verified
+store absence before key deletion. Retries adopt an already-absent exact
+resource and never recreate a store or key that the user chose to discard.
+The journal is cleared last.
 
 ## 12. Resume-Only Boundary
 
@@ -132,7 +135,8 @@ master key and purpose-bound AES-GCM associated data before disk persistence.
 
 The strict version-1 journal records non-semantic transaction IDs, canonical
 inventory, remote deletion handles, resource hashes, progress lists, cache
-state, and selection progress. Unknown or inconsistent fields fail closed.
+state, selection progress, and monotonic rollback intent/store-removal flags.
+Unknown or inconsistent fields fail closed.
 
 ## 24. Journal Stages
 
@@ -172,7 +176,9 @@ inventory before the journal enters `encrypted_verified`.
 
 Prepared rollback removes only hash-verified staged resources. It performs no
 compatibility delete, no cache rewrite, no selection operation, and no private
-runtime activation.
+runtime activation. A process interruption after store or key deletion resumes
+the persisted rollback operation; generic preparation resume cannot reconstruct
+discarded resources.
 
 ## 31. Compatibility Saved-Search Deletion
 
@@ -214,7 +220,9 @@ decrypted inventory are verified again.
 
 Selection is created only after the journal reaches `plaintext_removed`.
 Creation is followed by exact read-back, then a journal transition to
-`selection_committed`.
+`selection_committed`. If create succeeds but its response or journal update is
+lost, bootstrap treats only the exact journal vault ID as resumable; unrelated
+selection remains a fixed recovery failure.
 
 ## 38. Runtime Activation
 
@@ -225,20 +233,26 @@ activated inventory must match the journal.
 ## 39. Journal-Clear-Last Completion
 
 Selection, store, plaintext absence, and active runtime state are reverified.
-The exact journal is then deleted by digest and absence is read back. No other
-resource is removed during completion.
+The exact journal is then deleted by digest and absence is read back. If delete
+reports failure but read-back proves absence, completion succeeds; an exact
+remaining journal is completion-pending, while mismatched state fails closed.
+No other resource is removed during completion.
 
 ## 40. Completion-Pending Behavior
 
 If journal deletion is uncertain, encrypted authority and selection remain.
 The owner publishes `completionPending`, blocks legacy operations, and offers
-only explicit Resume.
+only explicit Resume. Any other post-commit finalization failure is classified
+through authoritative journal/selection state and exposes Resume rather than
+an actionless recovery state.
 
 ## 41. Interruption Recovery
 
 Resume adopts only exact expected resources and persisted progress. It handles
 key, store, deletion, cache, selection, activation, and journal-clear
-interruptions without repeating completed destructive operations.
+interruptions without repeating completed destructive operations. Rollback
+resume separately adopts acknowledged staged-store and staged-key deletion and
+returns the owner to legacy authority after clearing the journal.
 
 ## 42. Authority Bootstrap
 
@@ -310,7 +324,9 @@ the Android preparation/rollback journey green before Checkpoint B began.
 owner, confirmations, authority bootstrap, finalization, resume, selection,
 and activation behavior. The implementation adds deterministic interruption,
 cache-disappearance, retained-operation, restart-activation, and fixed
-asynchronous error-redaction regressions.
+asynchronous error-redaction regressions. Exact-head Codex review added
+regressions for post-commit Resume availability, interrupted exact selection,
+journal-delete read-back, and persisted pre-commit rollback progress.
 
 ## 54. Android Integration Evidence
 

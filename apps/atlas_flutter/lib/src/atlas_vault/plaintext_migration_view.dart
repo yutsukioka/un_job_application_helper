@@ -196,8 +196,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         if (!_isCurrent(revision)) {
           return;
         }
-        status =
-            AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
+        status = await _statusAfterMigrationFailure(revision);
       }
       notifyListeners();
     });
@@ -213,15 +212,18 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
           return;
         }
         _installSummary(summary);
-        status = switch (summary.stage) {
-          AtlasVaultPlaintextMigrationStage.prepared ||
-          AtlasVaultPlaintextMigrationStage.encryptedVerified =>
-            AtlasVaultPlaintextMigrationPresentationStatus.prepared,
-          AtlasVaultPlaintextMigrationStage.completionPending =>
-            AtlasVaultPlaintextMigrationPresentationStatus.completionPending,
-          null => AtlasVaultPlaintextMigrationPresentationStatus.active,
-          _ => AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
-        };
+        if (summary.stage == null) {
+          status = await _statusAfterJournalCompletion(revision);
+        } else {
+          status = switch (summary.stage) {
+            AtlasVaultPlaintextMigrationStage.prepared ||
+            AtlasVaultPlaintextMigrationStage.encryptedVerified =>
+              AtlasVaultPlaintextMigrationPresentationStatus.prepared,
+            AtlasVaultPlaintextMigrationStage.completionPending =>
+              AtlasVaultPlaintextMigrationPresentationStatus.completionPending,
+            _ => AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+          };
+        }
       } catch (_) {
         if (!_isCurrent(revision)) {
           return;
@@ -303,6 +305,34 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
       return switch (authority) {
         AtlasVaultPlaintextAuthorityState.legacy =>
           AtlasVaultPlaintextMigrationPresentationStatus.failed,
+        AtlasVaultPlaintextAuthorityState.migrationPending =>
+          AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+        AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive =>
+          AtlasVaultPlaintextMigrationPresentationStatus.activationRequired,
+        AtlasVaultPlaintextAuthorityState.encryptedActive =>
+          AtlasVaultPlaintextMigrationPresentationStatus.active,
+        AtlasVaultPlaintextAuthorityState.unsupported =>
+          AtlasVaultPlaintextMigrationPresentationStatus.unsupported,
+        _ => AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
+      };
+    } catch (_) {
+      return AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
+    }
+  }
+
+  Future<AtlasVaultPlaintextMigrationPresentationStatus>
+  _statusAfterJournalCompletion(int revision) async {
+    try {
+      final authority = await _coordinator.inspectAuthority();
+      if (!_isCurrent(revision)) {
+        return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+      }
+      if (authority == AtlasVaultPlaintextAuthorityState.legacy) {
+        _clearSummary();
+      }
+      return switch (authority) {
+        AtlasVaultPlaintextAuthorityState.legacy =>
+          AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
         AtlasVaultPlaintextAuthorityState.migrationPending =>
           AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
         AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive =>

@@ -261,14 +261,17 @@ void main() {
       final fixture = _MigrationFixture();
       await fixture.coordinator.inventory();
       await fixture.coordinator.prepare();
+      final rollbackEventOffset = fixture.events.length;
 
       await fixture.coordinator.discardPrepared();
 
       expect(fixture.localStore.store, isNull);
       expect(fixture.keyStore.keys, isEmpty);
       expect(fixture.journal.bytes, isNull);
-      expect(fixture.events.takeLast(3), <String>[
+      expect(fixture.events.skip(rollbackEventOffset), <String>[
+        'journal.replace',
         'local-store.delete',
+        'journal.replace',
         'key-store.delete',
         'journal.delete',
       ]);
@@ -278,6 +281,66 @@ void main() {
       expect(fixture.memory.state.savedSearches, hasLength(1));
       expect(fixture.cache.state.savedSearches, hasLength(1));
       expect(fixture.compatibility.state.savedSearches, hasLength(1));
+    },
+  );
+
+  test(
+    'rollback resumes after staged store deletion without recreating resources',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.localStore.failAfterNextDelete = true;
+
+      await expectLater(
+        fixture.coordinator.discardPrepared(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.localStore.store, isNull);
+      expect(fixture.keyStore.keys, isNotEmpty);
+      expect(fixture.journal.bytes, isNotNull);
+      final createCalls = fixture.localStore.createCalls;
+
+      final resumed = await fixture.coordinator.resume();
+
+      expect(resumed.stage, isNull);
+      expect(fixture.localStore.createCalls, createCalls);
+      expect(fixture.localStore.store, isNull);
+      expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.journal.bytes, isNull);
+      expect(
+        await fixture.coordinator.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.legacy,
+      );
+    },
+  );
+
+  test(
+    'rollback resumes after staged key deletion without recreating resources',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.keyStore.failAfterNextDelete = true;
+
+      await expectLater(
+        fixture.coordinator.discardPrepared(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(fixture.localStore.store, isNull);
+      expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.journal.bytes, isNotNull);
+      final keyCreateCalls = fixture.keyStore.createCalls;
+      final storeCreateCalls = fixture.localStore.createCalls;
+
+      final resumed = await fixture.coordinator.resume();
+
+      expect(resumed.stage, isNull);
+      expect(fixture.keyStore.createCalls, keyCreateCalls);
+      expect(fixture.localStore.createCalls, storeCreateCalls);
+      expect(fixture.localStore.store, isNull);
+      expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.journal.bytes, isNull);
     },
   );
 
@@ -340,6 +403,13 @@ void main() {
     );
     expect(
       () => journal.transitionedTo(AtlasVaultPlaintextMigrationStage.prepared),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    final invalidRollback = Map<String, Object?>.from(journal.toJson())
+      ..['rollback_started'] = false
+      ..['rollback_store_deleted'] = true;
+    expect(
+      () => AtlasVaultPlaintextMigrationJournal.fromJson(invalidRollback),
       throwsA(isA<AtlasVaultPlaintextMigrationException>()),
     );
   });
@@ -495,6 +565,17 @@ void main() {
     );
     expect(fixture.selection.value, isNotNull);
     expect(fixture.privateAuthority.activateCalls, 0);
+    expect(
+      await fixture.coordinator.inspectAuthority(),
+      AtlasVaultPlaintextAuthorityState.migrationPending,
+    );
+    final exactSelection = fixture.selection.value!;
+    fixture.selection.value = '99999999-9999-4999-8999-999999999999';
+    expect(
+      await fixture.coordinator.inspectAuthority(),
+      AtlasVaultPlaintextAuthorityState.recoveryRequired,
+    );
+    fixture.selection.value = exactSelection;
 
     await fixture.coordinator.resume();
 
@@ -545,6 +626,23 @@ void main() {
     expect(fixture.journal.bytes, isNull);
     expect(fixture.selection.value, isNotNull);
   });
+
+  test(
+    'acknowledged journal clear with lost response completes immediately',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.journal.failAfterNextDelete = true;
+
+      final completed = await fixture.coordinator.finalizeAndActivate();
+
+      expect(completed.stage, isNull);
+      expect(fixture.journal.bytes, isNull);
+      expect(fixture.selection.value, isNotNull);
+      expect(fixture.privateAuthority.isEncryptedPrivateStateActive, isTrue);
+    },
+  );
 }
 
 AtlasSavedSearch _savedSearch({String requestText = 'PRIVATE_QUERY'}) {
@@ -775,6 +873,7 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
   Uint8List? bytes;
   bool failAfterNextCreate = false;
   bool failNextDelete = false;
+  bool failAfterNextDelete = false;
   int readCalls = 0;
   int createCalls = 0;
   int replaceCalls = 0;
@@ -837,6 +936,10 @@ final class _JournalStore implements AtlasVaultProtectedMigrationJournalStore {
     }
     bytes = null;
     events.add('journal.delete');
+    if (failAfterNextDelete) {
+      failAfterNextDelete = false;
+      throw StateError('interrupted');
+    }
   }
 }
 
@@ -886,6 +989,7 @@ final class _SecureKeyStore implements AtlasVaultSecureKeyStore {
   final List<String> events;
   final keys = <String, Uint8List>{};
   bool failAfterNextCreate = false;
+  bool failAfterNextDelete = false;
   int createCalls = 0;
   int loadCalls = 0;
   int containsCalls = 0;
@@ -925,6 +1029,10 @@ final class _SecureKeyStore implements AtlasVaultSecureKeyStore {
     deleteCalls += 1;
     keys.remove(vaultId);
     events.add('key-store.delete');
+    if (failAfterNextDelete) {
+      failAfterNextDelete = false;
+      throw StateError('interrupted');
+    }
   }
 }
 
@@ -934,6 +1042,7 @@ final class _LocalStoreIO implements AtlasVaultLocalStoreIO {
   final List<String> events;
   vault.AtlasVaultLocalStore? store;
   bool failAfterNextCreate = false;
+  bool failAfterNextDelete = false;
   int createCalls = 0;
   int readCalls = 0;
   int replaceCalls = 0;
@@ -976,6 +1085,10 @@ final class _LocalStoreIO implements AtlasVaultLocalStoreIO {
     deleteCalls += 1;
     store = null;
     events.add('local-store.delete');
+    if (failAfterNextDelete) {
+      failAfterNextDelete = false;
+      throw StateError('interrupted');
+    }
   }
 }
 
@@ -992,12 +1105,5 @@ final class _SequenceIds {
     final value = values[index];
     index += 1;
     return value;
-  }
-}
-
-extension<T> on Iterable<T> {
-  List<T> takeLast(int count) {
-    final values = toList(growable: false);
-    return values.sublist(values.length - count);
   }
 }

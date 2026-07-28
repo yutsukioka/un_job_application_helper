@@ -237,6 +237,8 @@ final class AtlasVaultPlaintextMigrationJournal {
     required List<String> deletedTrackerRecordIds,
     required this.cacheCleared,
     required this.selectionCreated,
+    required this.rollbackStarted,
+    required this.rollbackStoreDeleted,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
@@ -276,6 +278,8 @@ final class AtlasVaultPlaintextMigrationJournal {
   final List<String> deletedTrackerRecordIds;
   final bool cacheCleared;
   final bool selectionCreated;
+  final bool rollbackStarted;
+  final bool rollbackStoreDeleted;
 
   factory AtlasVaultPlaintextMigrationJournal._prepared({
     required String migrationId,
@@ -302,6 +306,8 @@ final class AtlasVaultPlaintextMigrationJournal {
       deletedTrackerRecordIds: const <String>[],
       cacheCleared: false,
       selectionCreated: false,
+      rollbackStarted: false,
+      rollbackStoreDeleted: false,
     );
   }
 
@@ -346,6 +352,8 @@ final class AtlasVaultPlaintextMigrationJournal {
         'deleted_tracker_record_ids',
         'cache_cleared',
         'selection_created',
+        'rollback_started',
+        'rollback_store_deleted',
       });
       if (value['format'] != format ||
           requireAtlasVaultInt(value['version'], field: 'migration.version') !=
@@ -409,6 +417,14 @@ final class AtlasVaultPlaintextMigrationJournal {
           value['selection_created'],
           field: 'migration.selection_created',
         ),
+        rollbackStarted: requireAtlasVaultBool(
+          value['rollback_started'],
+          field: 'migration.rollback_started',
+        ),
+        rollbackStoreDeleted: requireAtlasVaultBool(
+          value['rollback_store_deleted'],
+          field: 'migration.rollback_store_deleted',
+        ),
       );
     } catch (_) {
       throw const AtlasVaultPlaintextMigrationException();
@@ -432,10 +448,29 @@ final class AtlasVaultPlaintextMigrationJournal {
   AtlasVaultPlaintextMigrationJournal transitionedTo(
     AtlasVaultPlaintextMigrationStage next,
   ) {
-    if (next.index != stage.index + 1) {
+    if (rollbackStarted || next.index != stage.index + 1) {
       throw const AtlasVaultPlaintextMigrationException();
     }
     return _copy(stage: next);
+  }
+
+  AtlasVaultPlaintextMigrationJournal withRollbackProgress({
+    bool? rollbackStarted,
+    bool? rollbackStoreDeleted,
+  }) {
+    final nextStarted = rollbackStarted ?? this.rollbackStarted;
+    final nextStoreDeleted = rollbackStoreDeleted ?? this.rollbackStoreDeleted;
+    if ((this.rollbackStarted && !nextStarted) ||
+        (this.rollbackStoreDeleted && !nextStoreDeleted) ||
+        (!nextStarted && nextStoreDeleted) ||
+        stage.index >=
+            AtlasVaultPlaintextMigrationStage.commitInProgress.index) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return _copy(
+      rollbackStarted: nextStarted,
+      rollbackStoreDeleted: nextStoreDeleted,
+    );
   }
 
   AtlasVaultPlaintextMigrationJournal withCommitProgress({
@@ -469,6 +504,8 @@ final class AtlasVaultPlaintextMigrationJournal {
     List<String>? deletedTrackerRecordIds,
     bool? cacheCleared,
     bool? selectionCreated,
+    bool? rollbackStarted,
+    bool? rollbackStoreDeleted,
   }) {
     return AtlasVaultPlaintextMigrationJournal._(
       migrationId: migrationId,
@@ -492,6 +529,8 @@ final class AtlasVaultPlaintextMigrationJournal {
           deletedTrackerRecordIds ?? this.deletedTrackerRecordIds,
       cacheCleared: cacheCleared ?? this.cacheCleared,
       selectionCreated: selectionCreated ?? this.selectionCreated,
+      rollbackStarted: rollbackStarted ?? this.rollbackStarted,
+      rollbackStoreDeleted: rollbackStoreDeleted ?? this.rollbackStoreDeleted,
     );
   }
 
@@ -521,6 +560,8 @@ final class AtlasVaultPlaintextMigrationJournal {
     'deleted_tracker_record_ids': List<String>.from(deletedTrackerRecordIds),
     'cache_cleared': cacheCleared,
     'selection_created': selectionCreated,
+    'rollback_started': rollbackStarted,
+    'rollback_store_deleted': rollbackStoreDeleted,
   };
 
   Uint8List canonicalBytes() => encodeCanonicalJson(toJson());
@@ -580,6 +621,18 @@ final class AtlasVaultPlaintextMigrationJournal {
     if (selectionCreated &&
         stage.index <
             AtlasVaultPlaintextMigrationStage.selectionCommitted.index) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (rollbackStoreDeleted && !rollbackStarted) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (rollbackStarted &&
+        (stage.index >=
+                AtlasVaultPlaintextMigrationStage.commitInProgress.index ||
+            deletedSavedSearchNames.isNotEmpty ||
+            deletedTrackerRecordIds.isNotEmpty ||
+            cacheCleared ||
+            selectionCreated)) {
       throw const AtlasVaultPlaintextMigrationException();
     }
     if (stage.index >=
@@ -672,11 +725,19 @@ final class AtlasVaultPlaintextMigrationCoordinator
         }
         final selected = await _selectedVaultStore.read();
         if (journal != null) {
-          final selectionExpected =
+          final selectionRequired =
               journal.stage.index >=
               AtlasVaultPlaintextMigrationStage.selectionCommitted.index;
-          if ((!selectionExpected && selected != null) ||
-              (selectionExpected && selected != journal.vaultId)) {
+          final interruptedSelectionMayExist =
+              journal.stage ==
+              AtlasVaultPlaintextMigrationStage.plaintextRemoved;
+          if ((selectionRequired && selected != journal.vaultId) ||
+              (!selectionRequired &&
+                  !interruptedSelectionMayExist &&
+                  selected != null) ||
+              (interruptedSelectionMayExist &&
+                  selected != null &&
+                  selected != journal.vaultId)) {
             return AtlasVaultPlaintextAuthorityState.recoveryRequired;
           }
           return AtlasVaultPlaintextAuthorityState.migrationPending;
@@ -745,6 +806,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
     return _serialized(() async {
       try {
         final journal = await _readJournalRequired();
+        if (journal.rollbackStarted) {
+          return await _continueRollback(journal);
+        }
         if (journal.stage ==
             AtlasVaultPlaintextMigrationStage.encryptedVerified) {
           await _verifyPreparedResources(journal);
@@ -767,7 +831,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<void> discardPrepared() async {
     await _serialized(() async {
       try {
-        final journal = await _readJournalRequired();
+        var journal = await _readJournalRequired();
         if (journal.stage != AtlasVaultPlaintextMigrationStage.prepared &&
             journal.stage !=
                 AtlasVaultPlaintextMigrationStage.encryptedVerified) {
@@ -780,65 +844,49 @@ final class AtlasVaultPlaintextMigrationCoordinator
             await _selectedVaultStore.read() != null) {
           throw const AtlasVaultPlaintextMigrationException();
         }
-        final before = await _readInventory();
-        if (!_journalMatchesInventory(journal, before)) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
-
-        final store = await _localStoreIO.read(journal.vaultId);
-        if (store != null) {
-          await _verifyStore(journal: journal, store: store);
-          await _localStoreIO.delete(journal.vaultId);
-          if (await _localStoreIO.read(journal.vaultId) != null) {
+        if (!journal.rollbackStarted) {
+          final before = await _readInventory();
+          if (!_journalMatchesInventory(journal, before)) {
             throw const AtlasVaultPlaintextMigrationException();
           }
-        } else if (journal.storeSha256 != null) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
 
-        final key = await _secureKeyStore.loadVaultKey(journal.vaultId);
-        try {
-          if (key != null) {
-            if (key.length != 32) {
+          String? keyDigest;
+          final key = await _secureKeyStore.loadVaultKey(journal.vaultId);
+          try {
+            if (key != null) {
+              if (key.length != 32) {
+                throw const AtlasVaultPlaintextMigrationException();
+              }
+              keyDigest = await vault.atlasVaultSha256Hex(key);
+              if (journal.vaultKeySha256 != null &&
+                  journal.vaultKeySha256 != keyDigest) {
+                throw const AtlasVaultPlaintextMigrationException();
+              }
+            } else if (journal.vaultKeySha256 != null) {
               throw const AtlasVaultPlaintextMigrationException();
             }
-            final digest = await vault.atlasVaultSha256Hex(key);
-            if (journal.vaultKeySha256 != null &&
-                journal.vaultKeySha256 != digest) {
-              throw const AtlasVaultPlaintextMigrationException();
-            }
-            await _secureKeyStore.deleteVaultKey(journal.vaultId);
-            if (await _secureKeyStore.containsVaultKey(journal.vaultId)) {
-              throw const AtlasVaultPlaintextMigrationException();
-            }
-          } else if (journal.vaultKeySha256 != null) {
+          } finally {
+            _wipe(key);
+          }
+
+          String? storeDigest;
+          final store = await _localStoreIO.read(journal.vaultId);
+          if (store != null) {
+            storeDigest = await _verifyStore(journal: journal, store: store);
+          } else if (journal.storeSha256 != null) {
             throw const AtlasVaultPlaintextMigrationException();
           }
-        } finally {
-          _wipe(key);
+
+          final intent = journal
+              .withResourceHashes(
+                vaultKeySha256: keyDigest,
+                storeSha256: storeDigest,
+              )
+              .withRollbackProgress(rollbackStarted: true);
+          journal = await _replaceJournal(journal, intent);
         }
 
-        final journalBytes = journal.canonicalBytes();
-        try {
-          await _journalStore.delete(
-            expectedSha256: await vault.atlasVaultSha256Hex(journalBytes),
-          );
-        } finally {
-          _wipe(journalBytes);
-        }
-        final lateJournal = await _journalStore.read();
-        try {
-          if (lateJournal != null) {
-            throw const AtlasVaultPlaintextMigrationException();
-          }
-        } finally {
-          _wipe(lateJournal);
-        }
-        final after = await _readInventory();
-        if (!_sameInventory(before, after)) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
-        _reviewedInventory = after;
+        await _continueRollback(journal);
       } on AtlasVaultPlaintextMigrationException {
         rethrow;
       } catch (_) {
@@ -847,13 +895,101 @@ final class AtlasVaultPlaintextMigrationCoordinator
     });
   }
 
+  Future<AtlasVaultPlaintextMigrationSummary> _continueRollback(
+    AtlasVaultPlaintextMigrationJournal initialJournal,
+  ) async {
+    var journal = initialJournal;
+    if (!journal.rollbackStarted ||
+        journal.stage.index >=
+            AtlasVaultPlaintextMigrationStage.commitInProgress.index ||
+        await _selectedVaultStore.read() != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+
+    if (!journal.rollbackStoreDeleted) {
+      final store = await _localStoreIO.read(journal.vaultId);
+      if (store != null) {
+        await _verifyStore(journal: journal, store: store);
+        await _localStoreIO.delete(journal.vaultId);
+      }
+      if (await _localStoreIO.read(journal.vaultId) != null) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      journal = await _replaceJournal(
+        journal,
+        journal.withRollbackProgress(rollbackStoreDeleted: true),
+      );
+    } else if (await _localStoreIO.read(journal.vaultId) != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+
+    final key = await _secureKeyStore.loadVaultKey(journal.vaultId);
+    try {
+      if (key != null) {
+        if (key.length != 32) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        final digest = await vault.atlasVaultSha256Hex(key);
+        if (journal.vaultKeySha256 != null &&
+            journal.vaultKeySha256 != digest) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        await _secureKeyStore.deleteVaultKey(journal.vaultId);
+      }
+      if (await _secureKeyStore.containsVaultKey(journal.vaultId)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    } finally {
+      _wipe(key);
+    }
+
+    if (!await _deleteJournalWithReadBack(journal)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final after = await _readInventory();
+    _reviewedInventory = after;
+    return after.summary();
+  }
+
+  Future<bool> _deleteJournalWithReadBack(
+    AtlasVaultPlaintextMigrationJournal journal,
+  ) async {
+    final journalBytes = journal.canonicalBytes();
+    late final String expectedSha256;
+    var deleteFailed = false;
+    try {
+      expectedSha256 = await vault.atlasVaultSha256Hex(journalBytes);
+      try {
+        await _journalStore.delete(expectedSha256: expectedSha256);
+      } catch (_) {
+        deleteFailed = true;
+      }
+    } finally {
+      _wipe(journalBytes);
+    }
+    final restored = await _journalStore.read();
+    try {
+      if (restored == null) {
+        return true;
+      }
+      if (await vault.atlasVaultSha256Hex(restored) != expectedSha256 ||
+          !deleteFailed) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      return false;
+    } finally {
+      _wipe(restored);
+    }
+  }
+
   @override
   Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
     return _serialized(() async {
       try {
         var journal = await _readJournalRequired();
         if (journal.stage !=
-            AtlasVaultPlaintextMigrationStage.encryptedVerified) {
+                AtlasVaultPlaintextMigrationStage.encryptedVerified ||
+            journal.rollbackStarted) {
           throw const AtlasVaultPlaintextMigrationException();
         }
         await _verifyPreparedResources(journal);
@@ -885,11 +1021,17 @@ final class AtlasVaultPlaintextMigrationCoordinator
         final journal = await _readJournalRequired();
         switch (journal.stage) {
           case AtlasVaultPlaintextMigrationStage.prepared:
+            if (journal.rollbackStarted) {
+              return await _continueRollback(journal);
+            }
             if (await _selectedVaultStore.read() != null) {
               throw const AtlasVaultPlaintextMigrationException();
             }
             return await _continuePreparation(journal);
           case AtlasVaultPlaintextMigrationStage.encryptedVerified:
+            if (journal.rollbackStarted) {
+              return await _continueRollback(journal);
+            }
             await _verifyPreparedResources(journal);
             return _summaryFromJournal(journal);
           case AtlasVaultPlaintextMigrationStage.commitInProgress:
@@ -996,25 +1138,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
 
     if (journal.stage == AtlasVaultPlaintextMigrationStage.completionPending) {
       await _verifyCompletionState(journal);
-      final bytes = journal.canonicalBytes();
-      try {
-        try {
-          await _journalStore.delete(
-            expectedSha256: await vault.atlasVaultSha256Hex(bytes),
-          );
-        } catch (_) {
-          return _summaryFromJournal(journal);
-        }
-      } finally {
-        _wipe(bytes);
-      }
-      final restored = await _journalStore.read();
-      try {
-        if (restored != null) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
-      } finally {
-        _wipe(restored);
+      if (!await _deleteJournalWithReadBack(journal)) {
+        return _summaryFromJournal(journal);
       }
       return _completedSummary(journal);
     }
