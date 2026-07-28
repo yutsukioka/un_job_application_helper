@@ -96,6 +96,43 @@ void main() {
   );
 
   test(
+    'in-memory private state from another compatibility authority fails closed',
+    () async {
+      final fixture = _MigrationFixture();
+      fixture.memory.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          AtlasSavedSearch(
+            name: 'Tested authority search',
+            request: const AtlasSearchRequest(
+              text: 'TESTED_AUTHORITY_PRIVATE_QUERY',
+            ),
+          ),
+        ],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        authorityBaseURL: Uri.parse('http://tested-authority.test:8765'),
+      );
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        privateSha256: null,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+
+      await expectLater(
+        fixture.coordinator.inventory(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.compatibility.readCalls, 0);
+      expect(fixture.journal.createCalls, 0);
+      expect(fixture.keyStore.createCalls, 0);
+      expect(fixture.localStore.createCalls, 0);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 0);
+      expect(fixture.compatibility.deleteTrackerCalls, 0);
+    },
+  );
+
+  test(
     'prepared migration rejects changed compatibility authority before deletion',
     () async {
       final fixture = _MigrationFixture();
@@ -181,6 +218,7 @@ void main() {
             updatedAt: '2026-07-04T18:05:06.999999+14:00',
           ),
         ],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       );
       fixture.memory.state = state;
       fixture.compatibility.state = state;
@@ -217,6 +255,7 @@ void main() {
       final state = AtlasVaultPlaintextPrivateState(
         savedSearches: <AtlasSavedSearch>[invalid],
         trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       );
       fixture.memory.state = state;
       fixture.compatibility.state = state;
@@ -961,6 +1000,7 @@ final class _MigrationFixture {
     final state = AtlasVaultPlaintextPrivateState(
       savedSearches: <AtlasSavedSearch>[_savedSearch()],
       trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+      authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
     memory.state = state;
     compatibility.state = state;

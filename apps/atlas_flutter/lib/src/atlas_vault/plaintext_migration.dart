@@ -53,6 +53,7 @@ final class AtlasVaultPlaintextPrivateState {
   AtlasVaultPlaintextPrivateState({
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
+    this.authorityBaseURL,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
        trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
          trackerRecords,
@@ -60,6 +61,7 @@ final class AtlasVaultPlaintextPrivateState {
 
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
+  final Uri? authorityBaseURL;
 
   @override
   String toString() => 'AtlasVaultPlaintextPrivateState(<redacted>)';
@@ -1842,6 +1844,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final cache = await _cacheSource.readPrivateStateForMigration();
       final compatibilityAuthority = _currentCompatibilityAuthority();
       _requireCacheCompatibilityAuthority(cache, compatibilityAuthority);
+      _requireInMemoryCompatibilityAuthority(memory, compatibilityAuthority);
       final compatibility = await _compatibilitySource
           .readCompatibilityPrivateState();
       if (_currentCompatibilityAuthority() != compatibilityAuthority) {
@@ -1955,6 +1958,23 @@ final class AtlasVaultPlaintextMigrationCoordinator
     final cacheAuthority = cache.authorityBaseURL;
     if (cacheAuthority == null ||
         cacheAuthority.toString() != compatibilityAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  void _requireInMemoryCompatibilityAuthority(
+    AtlasVaultPlaintextPrivateState memory,
+    String compatibilityAuthority,
+  ) {
+    if (memory.savedSearches.isEmpty && memory.trackerRecords.isEmpty) {
+      return;
+    }
+    final authority = memory.authorityBaseURL;
+    if (authority == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    final normalized = AtlasAPIClient.normalizedBaseURL(authority.toString());
+    if (normalized == null || normalized.toString() != compatibilityAuthority) {
       throw const AtlasVaultPlaintextMigrationException();
     }
   }

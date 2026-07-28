@@ -837,7 +837,11 @@ final class _RecoveryMemorySource implements AtlasVaultPlaintextStateSource {
 
   @override
   Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState() async {
-    return state;
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords,
+      authorityBaseURL: Uri.parse('http://127.0.0.1:8765'),
+    );
   }
 }
 

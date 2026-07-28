@@ -94,6 +94,13 @@ rejected once preparation publishes its blocking state.
 ## 13. In-Memory Inventory
 
 The coordinator reads copies of the controller saved-search and tracker lists.
+Each nonempty legacy projection carries the normalized compatibility authority
+that produced it. Saved-search and tracker projections must agree, and that
+authority must match the compatibility source before the coordinator reads or
+merges remote rows. A candidate-server connection test therefore cannot leak
+its private rows into migration for the currently configured server.
+Compatibility mutations reject a mismatched family authority, and public cache
+writes omit a mismatched private projection instead of relabeling it.
 Inventory does not clear or mutate controller state.
 
 ## 14. Persisted-Cache Inventory
@@ -233,7 +240,11 @@ in a blocking `restoringLegacy` state while the controller drains admitted
 plaintext work and reinstalls the preserved strict cache private snapshot.
 Only then may the owner publish legacy authority. A restart therefore does not
 present empty saved-search and tracker lists while claiming rollback is ready,
-and restoration requires no compatibility-network refresh.
+and a cache containing private state requires no compatibility-network
+refresh. When no private cache state exists, the controller instead performs
+both strict migration-only compatibility reads against the unchanged,
+generation-bound authority and installs their results atomically before
+publishing legacy readiness. A failed or stale read installs nothing.
 
 ## 31. Compatibility Saved-Search Deletion
 
@@ -413,7 +424,12 @@ rewrite; deterministic resume and escaped-key regressions cover both
 corrections. The subsequent restart-and-rollback correction keeps legacy
 authority blocked until the preserved strict cache snapshot is restored,
 proves the restore requires no compatibility request, and fails closed rather
-than publishing an empty legacy-ready presentation.
+than publishing an empty legacy-ready presentation. The following exact-head
+cycle binds the in-memory projection to its actual compatibility authority, so
+records loaded by a candidate-server connection test cannot merge into another
+server's migration. It also restores remote-only legacy records through strict
+migration reads when no private cache snapshot exists, while retaining the
+cache-backed zero-network rollback path.
 
 ## 54. Android Integration Evidence
 
