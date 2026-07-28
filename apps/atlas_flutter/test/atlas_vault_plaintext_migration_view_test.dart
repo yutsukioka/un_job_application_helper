@@ -195,6 +195,93 @@ void main() {
     },
   );
 
+  test(
+    'restart rollback restores legacy state before publishing authority',
+    () async {
+      final restoreEntered = Completer<void>();
+      final releaseRestore = Completer<void>();
+      addTearDown(() {
+        if (!releaseRestore.isCompleted) {
+          releaseRestore.complete();
+        }
+      });
+      final coordinator = _FakeMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final restorer = _FakeLegacyPrivateStateRestorer(
+        entered: restoreEntered,
+        release: releaseRestore,
+      );
+      final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: coordinator,
+        legacyPrivateStateRestorer: restorer,
+      );
+      addTearDown(owner.dispose);
+      await owner.bootstrapAuthority();
+      await owner.resumeMigration();
+      expect(
+        owner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.prepared,
+      );
+
+      final discard = owner.discardPreparedMigration();
+      await restoreEntered.future;
+
+      expect(restorer.calls, <String>['restore']);
+      expect(
+        owner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy,
+      );
+      expect(owner.blocksLegacyPrivateAuthority, isTrue);
+
+      releaseRestore.complete();
+      await discard;
+
+      expect(
+        owner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(owner.blocksLegacyPrivateAuthority, isFalse);
+      expect(coordinator.calls, <String>[
+        'inspect-authority',
+        'resume',
+        'discard',
+        'inspect-authority',
+      ]);
+    },
+  );
+
+  test(
+    'rollback restoration failure never publishes legacy authority',
+    () async {
+      final coordinator = _FakeMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final restorer = _FakeLegacyPrivateStateRestorer(fail: true);
+      final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: coordinator,
+        legacyPrivateStateRestorer: restorer,
+      );
+      addTearDown(owner.dispose);
+      await owner.bootstrapAuthority();
+      await owner.resumeMigration();
+
+      await owner.discardPreparedMigration();
+
+      expect(restorer.calls, <String>['restore']);
+      expect(
+        owner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.failed,
+      );
+      expect(
+        owner.status,
+        isNot(AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable),
+      );
+      expect(owner.savedSearchCount, 0);
+      expect(owner.trackerRecordCount, 0);
+    },
+  );
+
   testWidgets('post-commit finalization failure exposes explicit resume', (
     tester,
   ) async {
@@ -231,8 +318,10 @@ void main() {
     final coordinator = _FakeMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
     )..resumeCompletesLegacy = true;
+    final restorer = _FakeLegacyPrivateStateRestorer();
     final owner = AtlasVaultPlaintextMigrationPresentationOwner(
       coordinator: coordinator,
+      legacyPrivateStateRestorer: restorer,
     );
     addTearDown(owner.dispose);
     await owner.bootstrapAuthority();
@@ -248,6 +337,7 @@ void main() {
       owner.status,
       AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
     );
+    expect(restorer.calls, <String>['restore']);
     expect(owner.savedSearchCount, 0);
     expect(owner.trackerRecordCount, 0);
     expect(owner.blocksLegacyPrivateAuthority, isFalse);
@@ -313,6 +403,30 @@ void main() {
     expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.active);
     expect(owner.blocksLegacyPrivateAuthority, isTrue);
   });
+}
+
+final class _FakeLegacyPrivateStateRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  _FakeLegacyPrivateStateRestorer({
+    this.entered,
+    this.release,
+    this.fail = false,
+  });
+
+  final Completer<void>? entered;
+  final Completer<void>? release;
+  final bool fail;
+  final List<String> calls = <String>[];
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback() async {
+    calls.add('restore');
+    entered?.complete();
+    await release?.future;
+    if (fail) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
 }
 
 final class _FakeMigrationCoordinator

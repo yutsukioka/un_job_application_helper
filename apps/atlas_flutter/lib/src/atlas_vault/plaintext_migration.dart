@@ -144,6 +144,10 @@ abstract interface class AtlasVaultPlaintextMigrationOperationAdmission {
   Future<void> drainAdmittedPlaintextOperations();
 }
 
+abstract interface class AtlasVaultLegacyPrivateStateRestoring {
+  Future<void> restoreLegacyPrivateStateAfterRollback();
+}
+
 final class _NoopMigrationOperationAdmission
     implements AtlasVaultPlaintextMigrationOperationAdmission {
   const _NoopMigrationOperationAdmission();

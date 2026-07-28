@@ -1814,6 +1814,71 @@ void main() {
   );
 
   test(
+    'restart rollback restores preserved private cache without network reads',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_rollback_restore_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+        legacyPrivateStateRestorer: controller,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(migrationOwner.dispose);
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+
+      await migrationOwner.resumeMigration();
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.prepared,
+      );
+      await migrationOwner.discardPreparedMigration();
+
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(controller.savedSearches.single.name, 'Legacy private search');
+      expect(controller.trackerRecords.single.id, 'legacy-record');
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, <String>[
+        'inspect-authority',
+        'resume',
+        'discard',
+        'inspect-authority',
+      ]);
+    },
+  );
+
+  test(
     'prepared migration suppresses public cache writes without stripping private state',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(
@@ -2138,6 +2203,8 @@ final class _ControllerMigrationCoordinator
 
   final List<String> calls = <String>[];
   AtlasVaultPlaintextAuthorityState authorityState;
+  AtlasVaultPlaintextMigrationStage resumeStage =
+      AtlasVaultPlaintextMigrationStage.commitInProgress;
 
   AtlasVaultPlaintextMigrationSummary _summary({
     AtlasVaultPlaintextMigrationStage? stage,
@@ -2172,6 +2239,7 @@ final class _ControllerMigrationCoordinator
   @override
   Future<void> discardPrepared() async {
     calls.add('discard');
+    authorityState = AtlasVaultPlaintextAuthorityState.legacy;
   }
 
   @override
@@ -2183,7 +2251,7 @@ final class _ControllerMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextMigrationSummary> resume() async {
     calls.add('resume');
-    return _summary(stage: AtlasVaultPlaintextMigrationStage.commitInProgress);
+    return _summary(stage: resumeStage);
   }
 
   @override

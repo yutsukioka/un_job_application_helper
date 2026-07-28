@@ -228,7 +228,12 @@ Prepared rollback removes only hash-verified staged resources. It performs no
 compatibility delete, no cache rewrite, no selection operation, and no private
 runtime activation. A process interruption after store or key deletion resumes
 the persisted rollback operation; generic preparation resume cannot reconstruct
-discarded resources.
+discarded resources. After rollback is read back as complete, the owner remains
+in a blocking `restoringLegacy` state while the controller drains admitted
+plaintext work and reinstalls the preserved strict cache private snapshot.
+Only then may the owner publish legacy authority. A restart therefore does not
+present empty saved-search and tracker lists while claiming rollback is ready,
+and restoration requires no compatibility-network refresh.
 
 ## 31. Compatibility Saved-Search Deletion
 
@@ -305,7 +310,11 @@ Resume adopts only exact expected resources and persisted progress. It handles
 key, store, deletion, cache, selection, activation, and journal-clear
 interruptions without repeating completed destructive operations. Rollback
 resume separately adopts acknowledged staged-store and staged-key deletion and
-returns the owner to legacy authority after clearing the journal.
+returns the owner to legacy authority after clearing the journal and restoring
+the preserved local private snapshot. Owner revision, controller authority
+generation, runtime activity, and cache authority are rechecked around the
+asynchronous read so a hide or superseding transition cannot republish stale
+private state.
 
 ## 42. Authority Bootstrap
 
@@ -401,7 +410,10 @@ losslessly before migration side effects. The next exact-head cycle binds the
 protected journal to the reviewed compatibility authority even without cached
 private rows and rejects recursive duplicate JSON keys before any cache
 rewrite; deterministic resume and escaped-key regressions cover both
-corrections.
+corrections. The subsequent restart-and-rollback correction keeps legacy
+authority blocked until the preserved strict cache snapshot is restored,
+proves the restore requires no compatibility request, and fails closed rather
+than publishing an empty legacy-ready presentation.
 
 ## 54. Android Integration Evidence
 

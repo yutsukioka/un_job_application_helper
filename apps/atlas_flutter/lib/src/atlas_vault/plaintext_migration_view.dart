@@ -9,6 +9,7 @@ enum AtlasVaultPlaintextMigrationPresentationStatus {
   inventoryReady,
   preparing,
   prepared,
+  restoringLegacy,
   finalizing,
   resumeRequired,
   completionPending,
@@ -34,11 +35,16 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     extends ChangeNotifier {
   AtlasVaultPlaintextMigrationPresentationOwner({
     required AtlasVaultPlaintextMigrationCoordinating coordinator,
+    AtlasVaultLegacyPrivateStateRestoring? legacyPrivateStateRestorer,
   }) : // Keep the public constructor label descriptive.
        // ignore: prefer_initializing_formals
-       _coordinator = coordinator;
+       _coordinator = coordinator,
+       _legacyPrivateStateRestorer =
+           legacyPrivateStateRestorer ??
+           const _UnavailableLegacyPrivateStateRestorer();
 
   final AtlasVaultPlaintextMigrationCoordinating _coordinator;
+  final AtlasVaultLegacyPrivateStateRestoring _legacyPrivateStateRestorer;
 
   AtlasVaultPlaintextMigrationPresentationStatus status =
       AtlasVaultPlaintextMigrationPresentationStatus.hidden;
@@ -82,6 +88,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     return switch (status) {
       AtlasVaultPlaintextMigrationPresentationStatus.inventorying ||
       AtlasVaultPlaintextMigrationPresentationStatus.preparing ||
+      AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy ||
       AtlasVaultPlaintextMigrationPresentationStatus.finalizing ||
       AtlasVaultPlaintextMigrationPresentationStatus.activating => true,
       _ => false,
@@ -178,8 +185,14 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         if (!_isCurrent(revision)) {
           return;
         }
-        _clearSummary();
-        status = AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable;
+        final authority = await _coordinator.inspectAuthority();
+        if (!_isCurrent(revision)) {
+          return;
+        }
+        if (authority != AtlasVaultPlaintextAuthorityState.legacy) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        status = await _restoreLegacyPrivateState(revision);
       } catch (_) {
         if (!_isCurrent(revision)) {
           return;
@@ -341,7 +354,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
       }
       if (authority == AtlasVaultPlaintextAuthorityState.legacy) {
-        _clearSummary();
+        return _restoreLegacyPrivateState(revision);
       }
       return switch (authority) {
         AtlasVaultPlaintextAuthorityState.legacy =>
@@ -359,6 +372,22 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     } catch (_) {
       return AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
     }
+  }
+
+  Future<AtlasVaultPlaintextMigrationPresentationStatus>
+  _restoreLegacyPrivateState(int revision) async {
+    if (!_isCurrent(revision)) {
+      return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+    }
+    _clearSummary();
+    status = AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy;
+    notifyListeners();
+    await _legacyPrivateStateRestorer.restoreLegacyPrivateStateAfterRollback();
+    if (!_isCurrent(revision)) {
+      return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+    }
+    _clearSummary();
+    return AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable;
   }
 
   void _installSummary(AtlasVaultPlaintextMigrationSummary summary) {
@@ -442,6 +471,8 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
         ];
       case AtlasVaultPlaintextMigrationPresentationStatus.preparing:
         return const <Widget>[Text('Preparing encrypted copy...')];
+      case AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy:
+        return const <Widget>[Text('Restoring legacy private data...')];
       case AtlasVaultPlaintextMigrationPresentationStatus.prepared:
         return <Widget>[
           ..._counts(),
@@ -569,5 +600,15 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
     if (confirmed == true) {
       await owner.finalizeMigration();
     }
+  }
+}
+
+final class _UnavailableLegacyPrivateStateRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  const _UnavailableLegacyPrivateStateRestorer();
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback() {
+    return Future<void>.error(const AtlasVaultPlaintextMigrationException());
   }
 }

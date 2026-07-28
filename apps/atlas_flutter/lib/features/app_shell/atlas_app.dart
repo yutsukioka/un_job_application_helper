@@ -45,7 +45,9 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
 }
 
 class AtlasAppController extends ChangeNotifier
-    implements AtlasVaultPlaintextMigrationOperationAdmission {
+    implements
+        AtlasVaultPlaintextMigrationOperationAdmission,
+        AtlasVaultLegacyPrivateStateRestoring {
   AtlasAppController({
     Uri? initialBaseURL,
     AtlasClientFactory? clientFactory,
@@ -353,6 +355,36 @@ class AtlasAppController extends ChangeNotifier
       _hideLegacyPrivateStateForMigration();
     }
     await loadPersistedCache();
+  }
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback() async {
+    final restorationGeneration = ++_privateAuthorityGeneration;
+    _requireCurrentLegacyRollbackRestoration(restorationGeneration);
+    await drainAdmittedPlaintextOperations();
+    _requireCurrentLegacyRollbackRestoration(restorationGeneration);
+    if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
+      return;
+    }
+    final store = await _ensureLocalCacheStore();
+    _requireCurrentLegacyRollbackRestoration(restorationGeneration);
+    if (store == null) {
+      return;
+    }
+    final restored = await store.readPrivateStateForMigration();
+    _requireCurrentLegacyRollbackRestoration(restorationGeneration);
+    if (!restored.cachePresent) {
+      return;
+    }
+    if (restored.authorityBaseURL != baseURL) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    savedSearches = List<AtlasSavedSearch>.unmodifiable(restored.savedSearches);
+    trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+      restored.trackerRecords,
+    );
+    _syncSavedSearchSequence();
+    notifyListeners();
   }
 
   Future<void> clearPersistedCache() async {
@@ -1382,6 +1414,19 @@ class AtlasAppController extends ChangeNotifier
     notifyListeners();
   }
 
+  void _requireCurrentLegacyRollbackRestoration(int generation) {
+    final context = _plaintextMigrationContext;
+    if (generation != _privateAuthorityGeneration ||
+        context == null ||
+        context.owner.status !=
+            AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        (_privateStatePersistence?.isActive ?? false)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
   bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
     return !_privateActivationInProgress &&
         !_privateDeactivationInProgress &&
@@ -2208,6 +2253,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   );
   final owner = AtlasVaultPlaintextMigrationPresentationOwner(
     coordinator: coordinator,
+    legacyPrivateStateRestorer: controller,
   );
   controller.attachPlaintextMigrationContext(
     AtlasVaultPlaintextMigrationContext(owner: owner),
