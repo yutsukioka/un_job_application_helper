@@ -608,6 +608,56 @@ void main() {
     },
   );
 
+  testWidgets('query debounce resumes after private activation completes', (
+    tester,
+  ) async {
+    final transport = _RecordingTransport();
+    final enteredActivation = Completer<void>();
+    final releaseActivation = Completer<void>();
+    final privatePersistence = _FakePrivateStatePersistence()
+      ..enteredActivation = enteredActivation
+      ..releaseActivation = releaseActivation;
+    void Function()? scheduledSearch;
+    addTearDown(() {
+      if (!releaseActivation.isCompleted) {
+        releaseActivation.complete();
+      }
+    });
+    final controller = AtlasAppController(
+      initialBaseURL: Uri.parse('http://atlas.test:8765'),
+      clientFactory: (baseURL) =>
+          AtlasAPIClient(baseURL: baseURL, transport: transport),
+      privateStatePersistence: privatePersistence,
+      searchDebounceTimerFactory: (duration, callback) {
+        expect(duration, const Duration(milliseconds: 350));
+        scheduledSearch = callback;
+        return _TestTimer();
+      },
+    );
+    addTearDown(controller.dispose);
+    controller.connectionStatus = 'Connected';
+
+    final activation = controller.activateExistingAtlasVault('vault-alpha');
+    await enteredActivation.future;
+    controller.updateQuery('blocked during activation');
+    await tester.pump();
+    expect(scheduledSearch, isNull);
+    expect(transport.searchTexts, isEmpty);
+
+    releaseActivation.complete();
+    expect(await activation, AtlasVaultActivationResult.activated);
+    controller.updateQuery('active vault query');
+    expect(scheduledSearch, isNotNull);
+    final enteredActiveSearch = Completer<void>();
+    transport
+      ..expectedSearchText = 'active vault query'
+      ..enteredExpectedSearch = enteredActiveSearch;
+    scheduledSearch!();
+    await enteredActiveSearch.future;
+
+    expect(transport.searchTexts.last, 'active vault query');
+  });
+
   test('controller reports save job failures', () async {
     final controller = AtlasAppController(
       clientFactory: (baseURL) =>
@@ -1463,6 +1513,8 @@ final class _RecordingTransport implements AtlasTransport {
   Completer<void>? releaseCompatibilitySavedSearchRead;
   Completer<void>? enteredCompatibilityTrackerRead;
   Completer<void>? releaseCompatibilityTrackerRead;
+  String? expectedSearchText;
+  Completer<void>? enteredExpectedSearch;
 
   void resetPrivateCounts() {
     savedSearchNames.clear();
@@ -1485,8 +1537,13 @@ final class _RecordingTransport implements AtlasTransport {
       case 'api/search':
         expect(request.method, 'POST');
         searchBodies.add(request.jsonBody ?? const <String, Object?>{});
-        searchTexts.add(request.jsonBody?['text'] as String?);
+        final searchText = request.jsonBody?['text'] as String?;
+        searchTexts.add(searchText);
         searchSorts.add(request.jsonBody?['sort'] as String?);
+        if (searchText == expectedSearchText &&
+            !(enteredExpectedSearch?.isCompleted ?? true)) {
+          enteredExpectedSearch!.complete();
+        }
         return {
           'total': 1,
           'limit': request.jsonBody?['limit'] ?? 50,
@@ -1752,6 +1809,21 @@ final class _ParentCreateGatedDirectory implements Directory {
   @override
   dynamic noSuchMethod(Invocation invocation) {
     return super.noSuchMethod(invocation);
+  }
+}
+
+final class _TestTimer implements Timer {
+  bool _isActive = true;
+
+  @override
+  bool get isActive => _isActive;
+
+  @override
+  int get tick => 0;
+
+  @override
+  void cancel() {
+    _isActive = false;
   }
 }
 

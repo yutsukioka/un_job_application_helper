@@ -419,9 +419,6 @@ final class AtlasVaultPrivateStateRuntime
     final trackerMetadata = <String, _PrivateRecordMetadata>{};
 
     for (final record in store.records) {
-      if (record.deleted) {
-        continue;
-      }
       Uint8List? plaintext;
       try {
         plaintext = await vault.openAtlasVaultRecord(
@@ -429,6 +426,9 @@ final class AtlasVaultPrivateStateRuntime
           vaultId: vaultId,
           record: record,
         );
+        if (record.deleted) {
+          continue;
+        }
         final envelope = vault.AtlasVaultPayloadEnvelope.decodeJson(
           utf8.decode(plaintext, allowMalformed: false),
         );

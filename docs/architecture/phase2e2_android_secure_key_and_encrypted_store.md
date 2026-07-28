@@ -230,7 +230,10 @@ record IDs, revisions, key IDs, ciphertext, or paths.
 
 Active tracker records map to encrypted AtlasVault `saved_job` payloads.
 Other encrypted private families remain preserved in the store but unexposed
-by this runtime.
+by this runtime. Hydration opens and authenticates every encrypted record,
+including tombstones, before excluding deleted records from the active
+projection. A plaintext change to the AAD-bound deleted flag therefore fails
+activation instead of silently hiding a record.
 
 ## 38. Record Identity
 
@@ -325,7 +328,10 @@ compatibility calls, deactivates, and cleans up.
 ## 48. Public Endpoint Continuity
 
 AtlasVault activation does not disable public search, job detail, health,
-source, or update operations.
+source, or update operations. Query debounce is suppressed while private
+activation or deactivation is in progress, then resumes during a stable active
+vault session. Active search refreshes retain the public-only cache rules in
+Section 42.
 
 ## 49. No Activation UI
 
@@ -375,6 +381,10 @@ replace the retained public cache request and that activation waits for a
 deterministically gated plaintext cache write. The gated write observes the
 new protection state, removes its temporary file, and finishes before
 activation preflight proceeds.
+Further exact-head regressions prove that a forged deleted flag cannot bypass
+record authentication, that a legitimate authenticated tombstone remains
+unprojected, and that query debounce stays blocked during activation but
+resumes after the active session becomes authoritative.
 
 ## 55. Verification
 

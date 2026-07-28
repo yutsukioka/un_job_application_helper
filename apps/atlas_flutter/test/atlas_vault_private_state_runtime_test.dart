@@ -183,6 +183,46 @@ void main() {
     },
   );
 
+  test('activation authenticates tombstones before excluding them', () async {
+    final activeRecord = await _savedSearchRecord(
+      name: 'Authenticated deletion target',
+      query: 'private query',
+      recordId: '10000000-0000-4000-8000-000000000008',
+      revision: '20000000-0000-4000-8000-000000000008',
+    );
+    final tamperedJson = activeRecord.toJson();
+    tamperedJson['deleted'] = true;
+    final tamperedRuntime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+      localStoreIO: _FakeLocalStoreIO(
+        store: _store(<vault.AtlasVaultEncryptedRecord>[
+          vault.AtlasVaultEncryptedRecord.fromJson(tamperedJson),
+        ]),
+      ),
+    );
+
+    expect(
+      await tamperedRuntime.activateExisting(_vaultId),
+      AtlasVaultActivationResult.failed,
+    );
+    expect(tamperedRuntime.isActive, isFalse);
+
+    final authenticatedRuntime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+      localStoreIO: _FakeLocalStoreIO(
+        store: _store(<vault.AtlasVaultEncryptedRecord>[
+          await _tombstoneRecord(),
+        ]),
+      ),
+    );
+    expect(
+      await authenticatedRuntime.activateExisting(_vaultId),
+      AtlasVaultActivationResult.activated,
+    );
+    expect((await authenticatedRuntime.read()).savedSearches, isEmpty);
+    expect((await authenticatedRuntime.read()).trackerRecords, isEmpty);
+  });
+
   test('duplicate active names and tracker keys fail closed', () async {
     final duplicateSearchStore = _store(<vault.AtlasVaultEncryptedRecord>[
       await _savedSearchRecord(
@@ -769,6 +809,25 @@ Future<vault.AtlasVaultEncryptedRecord> _applicationNoteRecord() {
       'client_created_at': _timestamp,
       'client_updated_at': _timestamp,
     }),
+  );
+}
+
+Future<vault.AtlasVaultEncryptedRecord> _tombstoneRecord() async {
+  final template = vault.AtlasVaultEncryptedRecord.fromJson(<String, Object?>{
+    'id': '10000000-0000-4000-8000-000000000009',
+    'schema_version': 1,
+    'revision': '20000000-0000-4000-8000-000000000009',
+    'parent_revision': '20000000-0000-4000-8000-000000000008',
+    'deleted': true,
+    'key_id': _keyId,
+    'nonce': base64Encode(Uint8List(12)..fillRange(0, 12, 9)),
+    'ciphertext': base64Encode(Uint8List(16)),
+  });
+  return vault.sealAtlasVaultRecord(
+    plaintext: Uint8List(0),
+    vaultKey: _vaultKey(),
+    vaultId: _vaultId,
+    record: template,
   );
 }
 

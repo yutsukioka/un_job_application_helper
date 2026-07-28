@@ -52,6 +52,7 @@ class AtlasAppController extends ChangeNotifier {
     AtlasCacheStoreFactory? localCacheStoreFactory,
     AtlasVaultPrivateStatePersistence? privateStatePersistence,
     DateTime Function()? now,
+    Timer Function(Duration, void Function())? searchDebounceTimerFactory,
   }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
        _clientFactory =
            clientFactory ?? ((baseURL) => AtlasAPIClient(baseURL: baseURL)),
@@ -63,7 +64,10 @@ class AtlasAppController extends ChangeNotifier {
        // Keep the compatibility constructor side-effect free.
        // ignore: prefer_initializing_formals
        _privateStatePersistence = privateStatePersistence,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now,
+       _searchDebounceTimerFactory =
+           searchDebounceTimerFactory ??
+           ((duration, callback) => Timer(duration, callback));
 
   Uri baseURL;
   final AtlasClientFactory _clientFactory;
@@ -100,6 +104,7 @@ class AtlasAppController extends ChangeNotifier {
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
   final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
   final DateTime Function() _now;
+  final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
   int _privateAuthorityGeneration = 0;
   bool _privateActivationInProgress = false;
   bool _privateDeactivationInProgress = false;
@@ -783,13 +788,17 @@ class AtlasAppController extends ChangeNotifier {
 
   void _scheduleSearchIfReady() {
     _searchDebounce?.cancel();
-    if (_privateStateProtectionActive ||
+    if (_privateActivationInProgress ||
+        _privateDeactivationInProgress ||
         (cacheSavedAt == null && connectionStatus != 'Connected')) {
       return;
     }
-    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
-      refreshLocalSave();
-    });
+    _searchDebounce = _searchDebounceTimerFactory(
+      const Duration(milliseconds: 350),
+      () {
+        refreshLocalSave();
+      },
+    );
   }
 
   String _savedSearchSummary(AtlasSearchRequest request) {
