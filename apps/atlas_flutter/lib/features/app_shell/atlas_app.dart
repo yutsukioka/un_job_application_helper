@@ -44,7 +44,8 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
   );
 }
 
-class AtlasAppController extends ChangeNotifier {
+class AtlasAppController extends ChangeNotifier
+    implements AtlasVaultPlaintextMigrationOperationAdmission {
   AtlasAppController({
     Uri? initialBaseURL,
     AtlasClientFactory? clientFactory,
@@ -110,7 +111,8 @@ class AtlasAppController extends ChangeNotifier {
   bool _privateActivationInProgress = false;
   bool _privateDeactivationInProgress = false;
   Future<void>? _privateDeactivationOperation;
-  Future<void>? _cacheWriteOperation;
+  Future<void>? _cacheMutationOperation;
+  Future<void>? _compatibilityPrivateMutationOperation;
   AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
 
   bool get _privateStateProtectionActive {
@@ -355,33 +357,47 @@ class AtlasAppController extends ChangeNotifier {
 
   Future<void> clearPersistedCache() async {
     if (_plaintextMigrationBlocksPersistedCacheWrites) {
-      connectionMessage =
-          'Local cache changes are unavailable during AtlasVault migration.';
-      notifyListeners();
+      _publishPersistedCacheMigrationBlock();
       return;
     }
-    final store = await _ensureLocalCacheStore();
-    await store?.clear();
-    results = const [];
-    updateRuns = const [];
-    sources = const [];
-    if (!_privateStateProtectionActive) {
-      savedSearches = const [];
-      trackerRecords = const [];
-    }
-    _cachedAllJobs = const [];
-    _cachedJobDetails = const <String, AtlasJobDetail>{};
-    _committedPublicSearchRequest = null;
-    healthSummary = null;
-    facets = const {};
-    facetLabels = const {};
-    unclassifiedCount = 0;
-    total = 0;
-    cachedJobCount = 0;
-    cacheSavedAt = null;
-    operationalDataLoadedAt = null;
-    connectionStatus = 'Not connected';
-    connectionMessage = 'Local cache cleared.';
+    await _retainCacheMutation(() async {
+      if (_plaintextMigrationBlocksPersistedCacheWrites) {
+        _publishPersistedCacheMigrationBlock();
+        return;
+      }
+      final store = await _ensureLocalCacheStore();
+      if (_plaintextMigrationBlocksPersistedCacheWrites) {
+        _publishPersistedCacheMigrationBlock();
+        return;
+      }
+      await store?.clear();
+      results = const [];
+      updateRuns = const [];
+      sources = const [];
+      if (!_privateStateProtectionActive) {
+        savedSearches = const [];
+        trackerRecords = const [];
+      }
+      _cachedAllJobs = const [];
+      _cachedJobDetails = const <String, AtlasJobDetail>{};
+      _committedPublicSearchRequest = null;
+      healthSummary = null;
+      facets = const {};
+      facetLabels = const {};
+      unclassifiedCount = 0;
+      total = 0;
+      cachedJobCount = 0;
+      cacheSavedAt = null;
+      operationalDataLoadedAt = null;
+      connectionStatus = 'Not connected';
+      connectionMessage = 'Local cache cleared.';
+      notifyListeners();
+    });
+  }
+
+  void _publishPersistedCacheMigrationBlock() {
+    connectionMessage =
+        'Local cache changes are unavailable during AtlasVault migration.';
     notifyListeners();
   }
 
@@ -558,10 +574,9 @@ class AtlasAppController extends ChangeNotifier {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
-        final savedSearch = await client.saveSearch(
-          name: name,
-          request: request,
-          summary: summary,
+        final savedSearch = await _retainCompatibilityPrivateMutation(
+          () =>
+              client.saveSearch(name: name, request: request, summary: summary),
         );
         if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
           throw const AtlasVaultPrivateStateException();
@@ -600,7 +615,9 @@ class AtlasAppController extends ChangeNotifier {
           throw const AtlasVaultPrivateStateException();
         }
         final client = _clientFactory(baseURL);
-        final record = await client.saveJob(job.jobKey);
+        final record = await _retainCompatibilityPrivateMutation(
+          () => client.saveJob(job.jobKey),
+        );
         if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
           throw const AtlasVaultPrivateStateException();
         }
@@ -1206,26 +1223,52 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _writePersistedCache() {
-    final previous = _cacheWriteOperation;
+    return _retainCacheMutation(_performPersistedCacheWrite);
+  }
+
+  Future<void> _retainCacheMutation(Future<void> Function() body) {
+    final previous = _cacheMutationOperation;
     late final Future<void> operation;
     Future<void> run() async {
       if (previous != null) {
         try {
           await previous;
         } catch (_) {
-          // A later explicit write is independent from the previous failure.
+          // A later explicit cache mutation is independent from this failure.
         }
       }
-      await _performPersistedCacheWrite();
+      await body();
     }
 
     operation = run().whenComplete(() {
-      if (identical(_cacheWriteOperation, operation)) {
-        _cacheWriteOperation = null;
+      if (identical(_cacheMutationOperation, operation)) {
+        _cacheMutationOperation = null;
       }
     });
-    _cacheWriteOperation = operation;
+    _cacheMutationOperation = operation;
     return operation;
+  }
+
+  Future<T> _retainCompatibilityPrivateMutation<T>(Future<T> Function() body) {
+    final previous = _compatibilityPrivateMutationOperation;
+    late final Future<void> retained;
+    Future<T> run() async {
+      if (previous != null) {
+        await previous;
+      }
+      return body();
+    }
+
+    final result = run();
+    retained = result
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() {
+          if (identical(_compatibilityPrivateMutationOperation, retained)) {
+            _compatibilityPrivateMutationOperation = null;
+          }
+        });
+    _compatibilityPrivateMutationOperation = retained;
+    return result;
   }
 
   Future<void> _performPersistedCacheWrite() async {
@@ -1277,7 +1320,7 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
-    final operation = _cacheWriteOperation;
+    final operation = _cacheMutationOperation;
     if (operation == null) {
       return;
     }
@@ -1290,7 +1333,7 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _drainCacheWriteForMigration() async {
-    final operation = _cacheWriteOperation;
+    final operation = _cacheMutationOperation;
     if (operation == null) {
       return;
     }
@@ -1298,6 +1341,27 @@ class AtlasAppController extends ChangeNotifier {
       await operation;
     } catch (_) {
       // Migration re-reads the authoritative cache after the admitted write.
+    }
+  }
+
+  @override
+  Future<void> drainAdmittedPlaintextOperations() async {
+    while (true) {
+      final compatibility = _compatibilityPrivateMutationOperation;
+      final cache = _cacheMutationOperation;
+      if (compatibility == null && cache == null) {
+        return;
+      }
+      if (compatibility != null) {
+        await compatibility;
+      }
+      if (cache != null) {
+        try {
+          await cache;
+        } catch (_) {
+          // Migration re-reads every plaintext source after admitted work.
+        }
+      }
     }
   }
 
@@ -2131,6 +2195,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       controller,
     ),
     cacheSource: _AtlasControllerCacheMigrationSource(controller),
+    operationAdmission: controller,
     journalStore: AtlasAndroidProtectedMigrationJournalStore(),
     selectedVaultStore: AtlasAndroidSelectedVaultStore(),
     secureKeyStore: keyStore,

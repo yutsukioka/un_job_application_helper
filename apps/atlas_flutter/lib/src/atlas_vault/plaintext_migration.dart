@@ -140,6 +140,18 @@ abstract interface class AtlasVaultPlaintextMigrationCoordinating {
   Future<AtlasVaultPlaintextMigrationSummary> activateSelected();
 }
 
+abstract interface class AtlasVaultPlaintextMigrationOperationAdmission {
+  Future<void> drainAdmittedPlaintextOperations();
+}
+
+final class _NoopMigrationOperationAdmission
+    implements AtlasVaultPlaintextMigrationOperationAdmission {
+  const _NoopMigrationOperationAdmission();
+
+  @override
+  Future<void> drainAdmittedPlaintextOperations() async {}
+}
+
 abstract interface class AtlasVaultPlaintextStateSource {
   Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState();
 }
@@ -659,6 +671,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
     required AtlasVaultPlaintextStateSource inMemorySource,
     required AtlasVaultCompatibilityPrivateSource compatibilitySource,
     required AtlasLocalCacheMigrationSource cacheSource,
+    AtlasVaultPlaintextMigrationOperationAdmission? operationAdmission,
     required AtlasVaultProtectedMigrationJournalStore journalStore,
     required AtlasVaultSelectedVaultStore selectedVaultStore,
     required AtlasVaultMigrationSecureKeyStore secureKeyStore,
@@ -675,6 +688,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
        _compatibilitySource = compatibilitySource,
        // ignore: prefer_initializing_formals
        _cacheSource = cacheSource,
+       _operationAdmission =
+           operationAdmission ?? const _NoopMigrationOperationAdmission(),
        // ignore: prefer_initializing_formals
        _journalStore = journalStore,
        // ignore: prefer_initializing_formals
@@ -695,6 +710,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   final AtlasVaultPlaintextStateSource _inMemorySource;
   final AtlasVaultCompatibilityPrivateSource _compatibilitySource;
   final AtlasLocalCacheMigrationSource _cacheSource;
+  final AtlasVaultPlaintextMigrationOperationAdmission _operationAdmission;
   final AtlasVaultProtectedMigrationJournalStore _journalStore;
   final AtlasVaultSelectedVaultStore _selectedVaultStore;
   final AtlasVaultMigrationSecureKeyStore _secureKeyStore;
@@ -1727,6 +1743,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
 
   Future<_MigrationInventory> _readInventory() async {
     try {
+      await _operationAdmission.drainAdmittedPlaintextOperations();
       final memory = await _inMemorySource.readPlaintextPrivateState();
       final cache = await _cacheSource.readPrivateStateForMigration();
       final compatibility = await _compatibilitySource

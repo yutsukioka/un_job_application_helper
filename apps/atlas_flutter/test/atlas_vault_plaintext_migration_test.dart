@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -16,6 +17,29 @@ void main() {
 
     expect(fixture.totalDependencyCalls, 0);
   });
+
+  test(
+    'inventory waits for admitted plaintext operations before reading sources',
+    () async {
+      final fixture = _MigrationFixture();
+      fixture.admission.holdNextDrain();
+
+      final inventory = fixture.coordinator.inventory();
+      await fixture.admission.entered;
+
+      expect(fixture.memory.readCalls, 0);
+      expect(fixture.cache.readCalls, 0);
+      expect(fixture.compatibility.readCalls, 0);
+
+      fixture.admission.release();
+      await inventory;
+
+      expect(fixture.admission.drainCalls, 1);
+      expect(fixture.memory.readCalls, 1);
+      expect(fixture.cache.readCalls, 1);
+      expect(fixture.compatibility.readCalls, 1);
+    },
+  );
 
   test(
     'inventory reads four sources and deduplicates identical values',
@@ -688,6 +712,7 @@ final class _MigrationFixture {
       inMemorySource: memory,
       compatibilitySource: compatibility,
       cacheSource: cache,
+      operationAdmission: admission,
       journalStore: journal,
       selectedVaultStore: selection,
       secureKeyStore: keyStore,
@@ -703,6 +728,7 @@ final class _MigrationFixture {
   }
 
   final events = <String>[];
+  final admission = _OperationAdmission();
   final memory = _MemorySource();
   final compatibility = _CompatibilitySource();
   late final _CacheSource cache = _CacheSource(events);
@@ -737,7 +763,8 @@ final class _MigrationFixture {
   late final AtlasVaultPlaintextMigrationCoordinator coordinator;
 
   int get totalDependencyCalls {
-    return memory.readCalls +
+    return admission.drainCalls +
+        memory.readCalls +
         compatibility.readCalls +
         compatibility.deleteSavedSearchCalls +
         compatibility.deleteTrackerCalls +
@@ -752,6 +779,33 @@ final class _MigrationFixture {
         selection.clearCalls +
         keyStore.totalCalls +
         localStore.totalCalls;
+  }
+}
+
+final class _OperationAdmission
+    implements AtlasVaultPlaintextMigrationOperationAdmission {
+  int drainCalls = 0;
+  Completer<void>? _entered;
+  Completer<void>? _release;
+
+  Future<void> get entered => _entered?.future ?? Future<void>.value();
+
+  void holdNextDrain() {
+    _entered = Completer<void>();
+    _release = Completer<void>();
+  }
+
+  void release() {
+    _release?.complete();
+  }
+
+  @override
+  Future<void> drainAdmittedPlaintextOperations() async {
+    drainCalls += 1;
+    _entered?.complete();
+    await (_release?.future ?? Future<void>.value());
+    _entered = null;
+    _release = null;
   }
 }
 

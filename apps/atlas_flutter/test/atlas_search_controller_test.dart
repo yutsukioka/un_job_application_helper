@@ -1889,6 +1889,188 @@ void main() {
     },
   );
 
+  test(
+    'cache clear rechecks migration blocking after async store resolution',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_clear_recheck_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      final seedStore = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _cacheFixtureNow,
+      );
+      await seedStore.write(_privateCacheSnapshot());
+      final initialBytes = await cacheFile.readAsBytes();
+      final enteredFactory = Completer<void>();
+      final releaseFactory = Completer<void>();
+      addTearDown(() {
+        if (!releaseFactory.isCompleted) {
+          releaseFactory.complete();
+        }
+      });
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        localCacheStoreFactory: ({privateStateProtectionActive}) async {
+          enteredFactory.complete();
+          await releaseFactory.future;
+          return AtlasLocalCacheStore(
+            file: cacheFile,
+            now: () => _cacheFixtureNow,
+            privateStateProtectionActive: privateStateProtectionActive,
+          );
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+      await migrationOwner.bootstrapAuthority();
+      await migrationOwner.reviewInventory();
+
+      final clear = controller.clearPersistedCache();
+      await enteredFactory.future;
+      await migrationOwner.prepareEncryptedMigration();
+      releaseFactory.complete();
+      await clear;
+
+      expect(
+        controller.connectionMessage,
+        'Local cache changes are unavailable during AtlasVault migration.',
+      );
+      expect(await cacheFile.exists(), isTrue);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+    },
+  );
+
+  test(
+    'migration admission drains a previously admitted cache clear',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_clear_drain_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      await cacheFile.writeAsString('public cache');
+      final enteredDelete = Completer<void>();
+      final releaseDelete = Completer<void>();
+      addTearDown(() {
+        if (!releaseDelete.isCompleted) {
+          releaseDelete.complete();
+        }
+      });
+      final controller = AtlasAppController(
+        localCacheStore: AtlasLocalCacheStore(
+          file: _DeleteGatedFile(
+            cacheFile,
+            entered: enteredDelete,
+            release: releaseDelete,
+          ),
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      final clear = controller.clearPersistedCache();
+      await enteredDelete.future;
+      var drainCompleted = false;
+      final drain = controller.drainAdmittedPlaintextOperations().whenComplete(
+        () => drainCompleted = true,
+      );
+      await Future<void>(() {});
+
+      expect(drainCompleted, isFalse);
+
+      releaseDelete.complete();
+      await clear;
+      await drain;
+
+      expect(drainCompleted, isTrue);
+      expect(await cacheFile.exists(), isFalse);
+    },
+  );
+
+  test(
+    'migration admission drains all admitted compatibility writes before reads',
+    () async {
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      final enteredTracker = Completer<void>();
+      final releaseTracker = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+        if (!releaseTracker.isCompleted) {
+          releaseTracker.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveSearch = enteredSearch
+        ..releaseCompatibilitySaveSearch = releaseSearch
+        ..enteredCompatibilitySaveJob = enteredTracker
+        ..releaseCompatibilitySaveJob = releaseTracker;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      final savedSearch = controller.saveCurrentSearch();
+      await enteredSearch.future;
+      final savedTracker = controller.saveJob(
+        JobSearchResult.fromJson(_jobJson),
+      );
+      var drainCompleted = false;
+      final drain = controller.drainAdmittedPlaintextOperations().whenComplete(
+        () => drainCompleted = true,
+      );
+      await Future<void>(() {});
+      expect(drainCompleted, isFalse);
+
+      releaseSearch.complete();
+      await enteredTracker.future;
+      await Future<void>(() {});
+      expect(drainCompleted, isFalse);
+
+      releaseTracker.complete();
+      await drain;
+      await savedSearch;
+      await savedTracker;
+
+      final compatibilityClient = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+      expect(
+        (await compatibilityClient.savedSearches()).map((value) => value.name),
+        <String>['Search 1'],
+      );
+      expect(
+        (await compatibilityClient.trackerRecords()).map(
+          (value) => value.jobKey,
+        ),
+        <String>['undp_oracle_hcm:34063'],
+      );
+    },
+  );
+
   test('migration context attaches once without starting authority work', () {
     final firstCoordinator = _ControllerMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.legacy,
@@ -2108,12 +2290,16 @@ final class _RecordingTransport implements AtlasTransport {
           await releaseCompatibilitySaveJob!.future;
         }
         savedJobKeys.add('undp_oracle_hcm:34063');
-        return {
+        final record = <String, Object?>{
           'id': 'undp_oracle_hcm-34063',
           'job_key': 'undp_oracle_hcm:34063',
           'status': 'saved',
           'updated_at': '2026-07-02T00:00:00Z',
         };
+        trackerStore
+          ..removeWhere((existing) => existing['id'] == 'undp_oracle_hcm-34063')
+          ..insert(0, record);
+        return record;
       case 'api/tracker':
         trackerReadCount += 1;
         enteredCompatibilityTrackerRead?.complete();
@@ -2273,6 +2459,38 @@ final class _ParentCreateGatedFile implements File {
 
   @override
   Future<bool> exists() => Future<bool>.value(false);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
+}
+
+final class _DeleteGatedFile implements File {
+  _DeleteGatedFile(
+    this._delegate, {
+    required this.entered,
+    required this.release,
+  });
+
+  final File _delegate;
+  final Completer<void> entered;
+  final Completer<void> release;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Future<bool> exists() => _delegate.exists();
+
+  @override
+  Future<FileSystemEntity> delete({bool recursive = false}) async {
+    if (!entered.isCompleted) {
+      entered.complete();
+    }
+    await release.future;
+    return _delegate.delete(recursive: recursive);
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) {

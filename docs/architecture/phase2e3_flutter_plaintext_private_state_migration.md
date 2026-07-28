@@ -80,8 +80,14 @@ pending, or unresolved, ordinary public operations may continue but their
 persisted-cache writes are suppressed. They never reuse the post-activation
 public-only cache path, so the reviewed plaintext cache bytes and digest remain
 unchanged until explicit rollback or verified removal. Explicit cache clearing
-is suppressed by the same boundary, and migration-specific reads drain any
-cache write admitted before preparation before hashing authoritative state.
+is suppressed by the same boundary and rechecks the gate immediately before
+deletion. Cache writes and clears are one retained mutation stream, and
+compatibility saved-search and tracker writes are a second retained stream.
+The production coordinator drains both streams before reading any in-memory,
+cache, or compatibility value. An already-admitted clear includes its disk and
+in-memory clearing before the drain completes; a clear or compatibility write
+that has not yet been admitted is rejected once preparation publishes its
+blocking state.
 
 ## 13. In-Memory Inventory
 
@@ -337,7 +343,11 @@ cache-disappearance, retained-operation, restart-activation, and fixed
 asynchronous error-redaction regressions. Exact-head Codex review added
 regressions for post-commit Resume availability, interrupted exact selection,
 journal-delete read-back, persisted pre-commit rollback progress, and
-authoritative reclassification after a failed explicit Resume.
+authoritative reclassification after a failed explicit Resume. Later
+exact-head cycles added pre-commit cache byte preservation, suppression of
+explicit clearing after an asynchronous gate crossing, retained clear draining
+before inventory, and draining every admitted compatibility mutation before
+the first inventory source read.
 
 ## 54. Android Integration Evidence
 
