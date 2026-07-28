@@ -1445,6 +1445,23 @@ Future<void> _deleteMigrationTemporaryFile(File file) async {
 }
 
 AtlasSavedSearch _strictMigrationSavedSearch(Object? source) {
+  return _strictMigrationSavedSearchWithRequest(
+    source,
+    _strictMigrationVaultSearchRequest,
+  );
+}
+
+AtlasSavedSearch _strictMigrationCompatibilitySavedSearch(Object? source) {
+  return _strictMigrationSavedSearchWithRequest(
+    source,
+    _strictMigrationCompatibilitySearchRequest,
+  );
+}
+
+AtlasSavedSearch _strictMigrationSavedSearchWithRequest(
+  Object? source,
+  AtlasSearchRequest Function(Object?) decodeRequest,
+) {
   final value = _migrationStringMap(source);
   _requireMigrationExactKeys(value, const <String>{
     'name',
@@ -1462,9 +1479,7 @@ AtlasSavedSearch _strictMigrationSavedSearch(Object? source) {
     value['description'],
     field: 'migration.saved_search.description',
   );
-  final request = vault_payloads.AtlasSearchRequest.fromJson(
-    _migrationStringMap(value['request']),
-  );
+  final request = decodeRequest(value['request']);
   final createdAt = _migrationOptionalUtcSeconds(
     value['created_at'],
     field: 'migration.saved_search.created_at',
@@ -1476,10 +1491,209 @@ AtlasSavedSearch _strictMigrationSavedSearch(Object? source) {
   return AtlasSavedSearch(
     name: name,
     description: description,
-    request: AtlasSearchRequest.fromJson(request.toJson()),
+    request: request,
     createdAt: createdAt,
     updatedAt: updatedAt,
   );
+}
+
+AtlasSearchRequest _strictMigrationVaultSearchRequest(Object? source) {
+  final request = vault_payloads.AtlasSearchRequest.fromJson(
+    _migrationStringMap(source),
+  );
+  return AtlasSearchRequest.fromJson(request.toJson());
+}
+
+AtlasSearchRequest _strictMigrationCompatibilitySearchRequest(Object? source) {
+  try {
+    final value = _migrationStringMap(source);
+    _requireMigrationExactKeys(value, const <String>{
+      'text',
+      'status',
+      'organizations',
+      'source_ids',
+      'ats_families',
+      'cities',
+      'countries_iso3',
+      'regions',
+      'location_types',
+      'national_international',
+      'contract_categories',
+      'grade_systems',
+      'grade_families',
+      'grade_codes',
+      'ccog_codes',
+      'ccog_families',
+      'occupational_family_codes',
+      'occupational_medium_codes',
+      'mandate_network_codes',
+      'mandate_family_codes',
+      'capability_tags',
+      'contract_groups',
+      'seniority_groups',
+      'work_modalities',
+      'volunteer_kinds',
+      'unv_categories',
+      'unv_volunteer_types',
+      'closing_date_from',
+      'closing_date_to',
+      'posted_date_from',
+      'posted_date_to',
+      'min_location_confidence',
+      'min_grade_confidence',
+      'include_low_confidence',
+      'exclude_expired_open',
+      'limit',
+      'offset',
+      'sort',
+    });
+
+    for (final key in const <String>[
+      'ats_families',
+      'regions',
+      'contract_categories',
+      'grade_systems',
+      'grade_families',
+      'ccog_codes',
+      'occupational_family_codes',
+      'occupational_medium_codes',
+      'mandate_network_codes',
+      'mandate_family_codes',
+    ]) {
+      if (_migrationStringList(
+        value[key],
+        field: 'migration.request.$key',
+      ).isNotEmpty) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    }
+    final locationTypes = _migrationStringList(
+      value['location_types'],
+      field: 'migration.request.location_types',
+    );
+    if (!_migrationStringListEquals(locationTypes, const <String>[
+      'primary',
+      'duty_station',
+      'outposted',
+    ])) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    if (value['closing_date_from'] != null ||
+        value['posted_date_from'] != null ||
+        value['posted_date_to'] != null) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    _requireMigrationDefaultDouble(
+      value['min_location_confidence'],
+      expected: 0.7,
+    );
+    _requireMigrationDefaultDouble(
+      value['min_grade_confidence'],
+      expected: 0.7,
+    );
+    if (vault_strict.requireAtlasVaultBool(
+          value['exclude_expired_open'],
+          field: 'migration.request.exclude_expired_open',
+        ) !=
+        true) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+
+    final text = _migrationOptionalString(
+      value['text'],
+      field: 'migration.request.text',
+    );
+    final closingDateTo = _migrationOptionalDate(
+      value['closing_date_to'],
+      field: 'migration.request.closing_date_to',
+    );
+    final request =
+        vault_payloads.AtlasSearchRequest.fromJson(<String, Object?>{
+          'text': ?text,
+          'status': _migrationStringList(
+            value['status'],
+            field: 'migration.request.status',
+          ),
+          'organizations': _migrationStringList(
+            value['organizations'],
+            field: 'migration.request.organizations',
+          ),
+          'source_ids': _migrationStringList(
+            value['source_ids'],
+            field: 'migration.request.source_ids',
+          ),
+          'cities': _migrationStringList(
+            value['cities'],
+            field: 'migration.request.cities',
+          ),
+          'countries_iso3': _migrationStringList(
+            value['countries_iso3'],
+            field: 'migration.request.countries_iso3',
+          ),
+          'national_international': _migrationStringList(
+            value['national_international'],
+            field: 'migration.request.national_international',
+          ),
+          'grade_codes': _migrationStringList(
+            value['grade_codes'],
+            field: 'migration.request.grade_codes',
+          ),
+          'ccog_families': _migrationStringList(
+            value['ccog_families'],
+            field: 'migration.request.ccog_families',
+          ),
+          'capability_tags': _migrationStringList(
+            value['capability_tags'],
+            field: 'migration.request.capability_tags',
+          ),
+          'contract_groups': _migrationStringList(
+            value['contract_groups'],
+            field: 'migration.request.contract_groups',
+          ),
+          'seniority_groups': _migrationStringList(
+            value['seniority_groups'],
+            field: 'migration.request.seniority_groups',
+          ),
+          'work_modalities': _migrationStringList(
+            value['work_modalities'],
+            field: 'migration.request.work_modalities',
+          ),
+          'volunteer_kinds': _migrationStringList(
+            value['volunteer_kinds'],
+            field: 'migration.request.volunteer_kinds',
+          ),
+          'unv_categories': _migrationStringList(
+            value['unv_categories'],
+            field: 'migration.request.unv_categories',
+          ),
+          'unv_volunteer_types': _migrationStringList(
+            value['unv_volunteer_types'],
+            field: 'migration.request.unv_volunteer_types',
+          ),
+          'closing_date_to': ?closingDateTo,
+          'include_low_confidence': vault_strict.requireAtlasVaultBool(
+            value['include_low_confidence'],
+            field: 'migration.request.include_low_confidence',
+          ),
+          'include_facets': true,
+          'limit': vault_strict.requireAtlasVaultInt(
+            value['limit'],
+            field: 'migration.request.limit',
+          ),
+          'offset': vault_strict.requireAtlasVaultInt(
+            value['offset'],
+            field: 'migration.request.offset',
+          ),
+          'sort': vault_strict.requireAtlasVaultString(
+            value['sort'],
+            field: 'migration.request.sort',
+            allowEmpty: false,
+          ),
+        });
+    return AtlasSearchRequest.fromJson(request.toJson());
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
 }
 
 AtlasApplicationRecord _strictMigrationTrackerRecord(Object? source) {
@@ -1578,6 +1792,35 @@ String? _migrationOptionalString(Object? value, {required String field}) {
     return null;
   }
   return vault_strict.requireAtlasVaultString(value, field: field);
+}
+
+String? _migrationOptionalDate(Object? value, {required String field}) {
+  if (value == null) {
+    return null;
+  }
+  return vault_strict.requireAtlasVaultDate(value, field: field);
+}
+
+List<String> _migrationStringList(Object? value, {required String field}) {
+  return vault_strict.requireAtlasVaultStringList(value, field: field);
+}
+
+bool _migrationStringListEquals(List<String> left, List<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void _requireMigrationDefaultDouble(Object? value, {required double expected}) {
+  if (value is! double || !value.isFinite || value != expected) {
+    throw const AtlasLocalCacheMigrationException();
+  }
 }
 
 String? _migrationOptionalUtcSeconds(Object? value, {required String field}) {
@@ -2710,7 +2953,7 @@ final class AtlasAPIClient {
   Future<List<AtlasSavedSearch>> savedSearchesForPlaintextMigration() async {
     return _strictPlaintextMigrationList(
       const AtlasRequest(method: 'GET', path: 'api/saved-searches'),
-      _strictMigrationSavedSearch,
+      _strictMigrationCompatibilitySavedSearch,
     );
   }
 

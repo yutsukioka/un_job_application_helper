@@ -230,7 +230,7 @@ void main() {
         final validSavedSearch = <String, Object?>{
           'name': 'Private search',
           'description': null,
-          'request': const AtlasSearchRequest(text: 'private').toJson(),
+          'request': _compatibilityVacancySearchRequest(),
           'created_at': '2026-07-01T00:00:00Z',
           'updated_at': '2026-07-02T00:00:00Z',
         };
@@ -249,10 +249,17 @@ void main() {
           ),
         );
 
-        expect(
-          (await validClient.savedSearchesForPlaintextMigration()).single.name,
-          'Private search',
-        );
+        final savedSearch =
+            (await validClient.savedSearchesForPlaintextMigration()).single;
+        expect(savedSearch.name, 'Private search');
+        expect(savedSearch.request.text, 'private');
+        expect(savedSearch.request.organizations, <String>['UN']);
+        expect(savedSearch.request.sourceIDs, <String>['source-1']);
+        expect(savedSearch.request.countriesISO3, <String>['JPN']);
+        expect(savedSearch.request.gradeCodes, <String>['P3']);
+        expect(savedSearch.request.workModalities, <String>['remote']);
+        expect(savedSearch.request.closingDateTo, '2026-12-31');
+        expect(savedSearch.request.includeFacets, isTrue);
         expect(
           (await validClient.trackerRecordsForPlaintextMigration()).single.id,
           'tracker-1',
@@ -271,6 +278,37 @@ void main() {
           final client = AtlasAPIClient(
             transport: _MigrationInventoryTransport(
               savedSearches: malformed,
+              trackerRecords: const <Object?>[],
+            ),
+          );
+          await expectLater(
+            client.savedSearchesForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+
+        for (final malformedRequest in <Map<String, Object?>>[
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'include_facets': true,
+          },
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'regions': <String>['Asia'],
+          },
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'min_location_confidence': 1,
+          },
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: <Object?>[
+                <String, Object?>{
+                  ...validSavedSearch,
+                  'request': malformedRequest,
+                },
+              ],
               trackerRecords: const <Object?>[],
             ),
           );
@@ -304,6 +342,49 @@ void main() {
       },
     );
   });
+}
+
+Map<String, Object?> _compatibilityVacancySearchRequest() {
+  return <String, Object?>{
+    'text': 'private',
+    'status': <String>['open'],
+    'organizations': <String>['UN'],
+    'source_ids': <String>['source-1'],
+    'ats_families': <String>[],
+    'cities': <String>['Tokyo'],
+    'countries_iso3': <String>['JPN'],
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': <String>['international'],
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': <String>['P3'],
+    'ccog_codes': <String>[],
+    'ccog_families': <String>['IT'],
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': <String>['data'],
+    'contract_groups': <String>['staff'],
+    'seniority_groups': <String>['mid'],
+    'work_modalities': <String>['remote'],
+    'volunteer_kinds': <String>[],
+    'unv_categories': <String>[],
+    'unv_volunteer_types': <String>[],
+    'closing_date_from': null,
+    'closing_date_to': '2026-12-31',
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': false,
+    'exclude_expired_open': true,
+    'limit': 50,
+    'offset': 0,
+    'sort': 'closing_date_asc',
+  };
 }
 
 final class _MigrationInventoryTransport implements AtlasTransport {

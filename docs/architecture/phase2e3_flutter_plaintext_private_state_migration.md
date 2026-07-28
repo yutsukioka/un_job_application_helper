@@ -117,6 +117,13 @@ The migration-only adapter explicitly reads the complete compatibility
 saved-search list through an exact-schema raw-response decoder. A non-list
 response, non-object row, missing field, unknown field, or invalid nested
 request fails the complete inventory instead of being dropped or defaulted.
+The nested decoder matches the compatibility endpoint's complete
+`VacancySearchRequest` serialization rather than the narrower AtlasVault
+request JSON. Every criterion represented by the reviewed AtlasVault payload
+is mapped explicitly. Compatibility-only criteria must equal their current
+no-op defaults; a non-default value fails migration instead of being silently
+discarded. The endpoint's intentionally absent `include_facets` value maps to
+the historical saved-search default of `true`.
 Ordinary controller reads remain blocked while migration is pending. Legacy
 API and cache timestamps are accepted only as valid, timezone-bearing
 ISO-8601 values with offsets bounded to `-14:00...+14:00`, then normalized to
@@ -370,7 +377,10 @@ source read, and normalization of valid legacy backend timestamps before
 strict journal and encrypted-payload validation. The final Codex cycles bind
 expired-cache private values to their cached compatibility authority, reject
 lossy compatibility inventory decoding, and enforce the ISO-8601 maximum UTC
-offset before migration side effects.
+offset before migration side effects. The subsequent exact-head correction
+locks the strict compatibility decoder to the backend's complete
+`VacancySearchRequest` shape and rejects any non-default criterion that the
+reviewed encrypted payload cannot preserve.
 
 ## 54. Android Integration Evidence
 
