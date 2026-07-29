@@ -9,6 +9,7 @@ enum AtlasVaultPlaintextMigrationPresentationStatus {
   inventoryReady,
   preparing,
   prepared,
+  discarding,
   restoringLegacy,
   finalizing,
   resumeRequired,
@@ -89,6 +90,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     return switch (status) {
       AtlasVaultPlaintextMigrationPresentationStatus.inventorying ||
       AtlasVaultPlaintextMigrationPresentationStatus.preparing ||
+      AtlasVaultPlaintextMigrationPresentationStatus.discarding ||
       AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy ||
       AtlasVaultPlaintextMigrationPresentationStatus.finalizing ||
       AtlasVaultPlaintextMigrationPresentationStatus.activating => true,
@@ -218,7 +220,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         return;
       }
       _preparedRollbackAvailable = false;
-      status = AtlasVaultPlaintextMigrationPresentationStatus.preparing;
+      status = AtlasVaultPlaintextMigrationPresentationStatus.discarding;
       if (_isCurrent(revision)) {
         notifyListeners();
       }
@@ -561,6 +563,8 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
         ];
       case AtlasVaultPlaintextMigrationPresentationStatus.preparing:
         return const <Widget>[Text('Preparing encrypted copy...')];
+      case AtlasVaultPlaintextMigrationPresentationStatus.discarding:
+        return const <Widget>[Text('Discarding prepared migration...')];
       case AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy:
         return const <Widget>[Text('Restoring legacy private data...')];
       case AtlasVaultPlaintextMigrationPresentationStatus.prepared:

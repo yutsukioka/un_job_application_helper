@@ -248,8 +248,11 @@ publishing legacy readiness. A failed or stale read installs nothing. The
 coordinator separately inspects rollback availability from the protected
 journal. The owner exposes Discard after an interrupted preparation only when
 the journal remains at `prepared` or `encrypted_verified`, no plaintext
-deletion or cache clearing is recorded, and no selected vault exists.
-Post-commit journals never expose Discard. If rollback completes but legacy
+deletion or cache clearing is recorded, and no selected vault exists. While
+the explicit discard operation is pending, the owner publishes a blocking
+`discarding` state and fixed rollback-specific progress text rather than
+reusing encrypted-copy preparation presentation. Post-commit journals never
+expose Discard. If rollback completes but legacy
 projection restoration fails, the owner remains `recoveryRequired`; it does
 not reopen compatibility mutations or persisted private-cache writes.
 

@@ -195,6 +195,54 @@ void main() {
     },
   );
 
+  testWidgets('discard publishes a rollback-specific busy state', (
+    tester,
+  ) async {
+    final discardEntered = Completer<void>();
+    final releaseDiscard = Completer<void>();
+    addTearDown(() {
+      if (!releaseDiscard.isCompleted) {
+        releaseDiscard.complete();
+      }
+    });
+    final coordinator = _FakeMigrationCoordinator(
+      discardEntered: discardEntered,
+      releaseDiscard: releaseDiscard,
+    );
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+      legacyPrivateStateRestorer: _FakeLegacyPrivateStateRestorer(),
+    );
+    addTearDown(owner.dispose);
+    await owner.reviewInventory();
+    await owner.prepareEncryptedMigration();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultPlaintextMigrationPanel(owner: owner)),
+      ),
+    );
+
+    final discard = owner.discardPreparedMigration();
+    await discardEntered.future;
+    await tester.pump();
+
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.discarding,
+    );
+    expect(find.text('Discarding prepared migration...'), findsOneWidget);
+    expect(find.text('Preparing encrypted copy...'), findsNothing);
+    expect(owner.blocksLegacyPrivateAuthority, isTrue);
+
+    releaseDiscard.complete();
+    await discard;
+    await tester.pump();
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+    );
+  });
+
   test(
     'restart rollback restores legacy state before publishing authority',
     () async {
@@ -550,6 +598,8 @@ final class _FakeMigrationCoordinator
     this.releaseInspect,
     this.gatedInspectCall,
     this.failGatedInspect = false,
+    this.discardEntered,
+    this.releaseDiscard,
   });
 
   final List<String> calls = <String>[];
@@ -560,6 +610,8 @@ final class _FakeMigrationCoordinator
   final Completer<void>? releaseInspect;
   final int? gatedInspectCall;
   final bool failGatedInspect;
+  final Completer<void>? discardEntered;
+  final Completer<void>? releaseDiscard;
   int _inspectCalls = 0;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
@@ -624,6 +676,8 @@ final class _FakeMigrationCoordinator
   @override
   Future<void> discardPrepared() async {
     calls.add('discard');
+    discardEntered?.complete();
+    await releaseDiscard?.future;
     authorityState = AtlasVaultPlaintextAuthorityState.legacy;
   }
 
