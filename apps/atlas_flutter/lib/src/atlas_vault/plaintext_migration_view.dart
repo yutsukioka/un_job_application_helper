@@ -473,7 +473,9 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     _clearSummary();
     status = AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy;
     notifyListeners();
-    await _legacyPrivateStateRestorer.restoreLegacyPrivateStateAfterRollback();
+    await _coordinator.restoreReviewedLegacyPrivateState(
+      _legacyPrivateStateRestorer,
+    );
     if (!_isCurrent(revision)) {
       return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
     }
@@ -710,7 +712,9 @@ final class _UnavailableLegacyPrivateStateRestorer
   const _UnavailableLegacyPrivateStateRestorer();
 
   @override
-  Future<void> restoreLegacyPrivateStateAfterRollback() {
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) {
     return Future<void>.error(const AtlasVaultPlaintextMigrationException());
   }
 }

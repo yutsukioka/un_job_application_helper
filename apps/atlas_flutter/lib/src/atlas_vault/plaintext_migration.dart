@@ -137,6 +137,10 @@ abstract interface class AtlasVaultPlaintextMigrationCoordinating {
 
   Future<void> discardPrepared();
 
+  Future<void> restoreReviewedLegacyPrivateState(
+    AtlasVaultLegacyPrivateStateRestoring restorer,
+  );
+
   Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate();
 
   Future<AtlasVaultPlaintextMigrationSummary> resume();
@@ -149,7 +153,9 @@ abstract interface class AtlasVaultPlaintextMigrationOperationAdmission {
 }
 
 abstract interface class AtlasVaultLegacyPrivateStateRestoring {
-  Future<void> restoreLegacyPrivateStateAfterRollback();
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  );
 }
 
 final class _NoopMigrationOperationAdmission
@@ -795,6 +801,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   final Uint8List Function() _nonceProvider;
 
   _MigrationInventory? _reviewedInventory;
+  _MigrationInventory? _rollbackRestorationInventory;
   bool _operating = false;
 
   @override
@@ -1023,6 +1030,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationSummary> _continueRollback(
     AtlasVaultPlaintextMigrationJournal initialJournal,
   ) async {
+    _rollbackRestorationInventory = null;
     var journal = initialJournal;
     if (!journal.rollbackStarted ||
         journal.stage.index >=
@@ -1068,12 +1076,60 @@ final class AtlasVaultPlaintextMigrationCoordinator
       _wipe(key);
     }
 
+    final after = await _readInventory();
+    if (!_journalMatchesInventory(journal, after)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
     if (!await _deleteJournalWithReadBack(journal)) {
       throw const AtlasVaultPlaintextMigrationException();
     }
-    final after = await _readInventory();
     _reviewedInventory = after;
+    _rollbackRestorationInventory = after;
     return after.summary();
+  }
+
+  @override
+  Future<void> restoreReviewedLegacyPrivateState(
+    AtlasVaultLegacyPrivateStateRestoring restorer,
+  ) {
+    return _serialized(() async {
+      try {
+        final inventory = _rollbackRestorationInventory;
+        if (inventory == null ||
+            await _selectedVaultStore.read() != null ||
+            _privateAuthority.isEncryptedPrivateStateActive ||
+            _currentCompatibilityAuthority() !=
+                inventory.compatibilityAuthority) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        final journalBytes = await _journalStore.read();
+        try {
+          if (journalBytes != null) {
+            throw const AtlasVaultPlaintextMigrationException();
+          }
+        } finally {
+          _wipe(journalBytes);
+        }
+        await restorer.restoreLegacyPrivateStateAfterRollback(
+          AtlasVaultPlaintextPrivateState(
+            savedSearches: inventory.savedSearches,
+            trackerRecords: inventory.trackerRecords,
+            authorityBaseURL: Uri.parse(inventory.compatibilityAuthority),
+          ),
+        );
+        if (await _selectedVaultStore.read() != null ||
+            _privateAuthority.isEncryptedPrivateStateActive ||
+            _currentCompatibilityAuthority() !=
+                inventory.compatibilityAuthority) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        _rollbackRestorationInventory = null;
+      } on AtlasVaultPlaintextMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    });
   }
 
   Future<bool> _deleteJournalWithReadBack(

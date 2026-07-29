@@ -387,9 +387,15 @@ class AtlasAppController extends ChangeNotifier
   }
 
   @override
-  Future<void> restoreLegacyPrivateStateAfterRollback() async {
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
     final restorationGeneration = ++_privateAuthorityGeneration;
     final restorationAuthority = _requiredNormalizedBaseURL(baseURL);
+    if (_requiredNormalizedBaseURL(reviewedState.authorityBaseURL) !=
+        restorationAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
     _requireCurrentLegacyRollbackRestoration(
       restorationGeneration,
       restorationAuthority,
@@ -399,55 +405,9 @@ class AtlasAppController extends ChangeNotifier
       restorationGeneration,
       restorationAuthority,
     );
-    if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
-      if (_legacyPrivateProjectionAuthority() != restorationAuthority) {
-        throw const AtlasVaultPlaintextMigrationException();
-      }
-      return;
-    }
-    final store = await _ensureLocalCacheStore();
-    _requireCurrentLegacyRollbackRestoration(
-      restorationGeneration,
-      restorationAuthority,
-    );
-    final restored = await store?.readPrivateStateForMigration();
-    _requireCurrentLegacyRollbackRestoration(
-      restorationGeneration,
-      restorationAuthority,
-    );
-    if (restored?.cachePresent ?? false) {
-      if (_requiredNormalizedBaseURL(restored!.authorityBaseURL) !=
-          restorationAuthority) {
-        throw const AtlasVaultPlaintextMigrationException();
-      }
-      if (restored.savedSearches.isNotEmpty ||
-          restored.trackerRecords.isNotEmpty) {
-        _installLegacyPrivateProjection(
-          savedSearches: restored.savedSearches,
-          trackerRecords: restored.trackerRecords,
-          authorityBaseURL: restorationAuthority,
-        );
-        notifyListeners();
-        return;
-      }
-    }
-
-    final client = _clientFactory(restorationAuthority);
-    final restoredSavedSearches = await client
-        .savedSearchesForPlaintextMigration();
-    _requireCurrentLegacyRollbackRestoration(
-      restorationGeneration,
-      restorationAuthority,
-    );
-    final restoredTrackerRecords = await client
-        .trackerRecordsForPlaintextMigration();
-    _requireCurrentLegacyRollbackRestoration(
-      restorationGeneration,
-      restorationAuthority,
-    );
     _installLegacyPrivateProjection(
-      savedSearches: restoredSavedSearches,
-      trackerRecords: restoredTrackerRecords,
+      savedSearches: reviewedState.savedSearches,
+      trackerRecords: reviewedState.trackerRecords,
       authorityBaseURL: restorationAuthority,
     );
     notifyListeners();

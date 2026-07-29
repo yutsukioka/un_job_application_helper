@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -576,10 +577,15 @@ final class _FakeLegacyPrivateStateRestorer
   final Completer<void>? release;
   final bool fail;
   final List<String> calls = <String>[];
+  final List<AtlasVaultPlaintextPrivateState> restoredStates =
+      <AtlasVaultPlaintextPrivateState>[];
 
   @override
-  Future<void> restoreLegacyPrivateStateAfterRollback() async {
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
     calls.add('restore');
+    restoredStates.add(reviewedState);
     entered?.complete();
     await release?.future;
     if (fail) {
@@ -679,6 +685,19 @@ final class _FakeMigrationCoordinator
     discardEntered?.complete();
     await releaseDiscard?.future;
     authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+  }
+
+  @override
+  Future<void> restoreReviewedLegacyPrivateState(
+    AtlasVaultLegacyPrivateStateRestoring restorer,
+  ) {
+    return restorer.restoreLegacyPrivateStateAfterRollback(
+      AtlasVaultPlaintextPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      ),
+    );
   }
 
   @override

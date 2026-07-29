@@ -237,14 +237,15 @@ runtime activation. A process interruption after store or key deletion resumes
 the persisted rollback operation; generic preparation resume cannot reconstruct
 discarded resources. After rollback is read back as complete, the owner remains
 in a blocking `restoringLegacy` state while the controller drains admitted
-plaintext work and reinstalls the preserved strict cache private snapshot.
-Only then may the owner publish legacy authority. A restart therefore does not
-present empty saved-search and tracker lists while claiming rollback is ready,
-and a cache containing private state requires no compatibility-network
-refresh. When no private cache state exists, the controller instead performs
-both strict migration-only compatibility reads against the unchanged,
-generation-bound authority and installs their results atomically before
-publishing legacy readiness. A failed or stale read installs nothing. The
+plaintext work and installs the coordinator's exact reviewed, same-authority
+inventory. That inventory is re-read from memory, cache, and both compatibility
+families, matched against the protected journal before journal deletion, and
+retained only for a one-shot coordinator-to-controller handoff. Only then may
+the owner publish legacy authority. A restart therefore does not present empty
+saved-search and tracker lists while claiming rollback is ready, and a mixed
+cache plus compatibility inventory restores cache-only and remote-only records
+together without a second compatibility-network read. The presentation owner
+receives no private value. A failed or stale handoff installs nothing. The
 coordinator separately inspects rollback availability from the protected
 journal. The owner exposes Discard after an interrupted preparation only when
 the journal remains at `prepared` or `encrypted_verified`, no plaintext
@@ -447,13 +448,16 @@ proves the restore requires no compatibility request, and fails closed rather
 than publishing an empty legacy-ready presentation. The following exact-head
 cycle binds the in-memory projection to its actual compatibility authority, so
 records loaded by a candidate-server connection test cannot merge into another
-server's migration. It also restores remote-only legacy records through strict
-migration reads when no private cache snapshot exists, while retaining the
-cache-backed zero-network rollback path. The next exact-head correction keeps
+server's migration. It also restores remote-only legacy records before
+legacy-ready publication. The next exact-head correction keeps
 failed post-rollback restoration in a blocking recovery state, exposes safe
 pre-commit discard after an interrupted preparation, fences failed authority
 inspection after hide or disposal, and source-binds overlapping connection
 operations so stale candidate reads cannot republish private state.
+The final rollback-restoration correction transfers the coordinator's exact
+reviewed cache-and-compatibility union directly to the controller, so an
+incomplete cache cannot hide remote-only records and restoration performs no
+second compatibility read.
 
 ## 54. Android Integration Evidence
 

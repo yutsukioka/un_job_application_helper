@@ -566,6 +566,74 @@ void main() {
   );
 
   test(
+    'rollback transfers the exact reviewed cache and remote inventory',
+    () async {
+      final fixture = _MigrationFixture();
+      final cacheSearch = _savedSearch(requestText: 'CACHE_ONLY_QUERY');
+      final cacheTracker = _trackerRecord(status: 'applied');
+      final remoteSearch = AtlasSavedSearch(
+        name: 'Remote only search',
+        request: const AtlasSearchRequest(text: 'REMOTE_ONLY_QUERY'),
+        createdAt: '2026-07-05T00:00:00Z',
+        updatedAt: '2026-07-06T00:00:00Z',
+      );
+      final remoteTracker = AtlasApplicationRecord(
+        id: 'remote-tracker-record',
+        jobKey: 'unhcr:remote-private-job',
+        status: 'saved',
+        updatedAt: '2026-07-07T00:00:00Z',
+      );
+      fixture.memory.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[cacheSearch],
+        trackerRecords: <AtlasApplicationRecord>[cacheTracker],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: <AtlasSavedSearch>[cacheSearch],
+        trackerRecords: <AtlasApplicationRecord>[cacheTracker],
+        privateSha256: '1' * 64,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[remoteSearch],
+        trackerRecords: <AtlasApplicationRecord>[remoteTracker],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.memory.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+      );
+
+      await fixture.coordinator.discardPrepared();
+      final restorer = _CapturingLegacyPrivateStateRestorer();
+      await fixture.coordinator.restoreReviewedLegacyPrivateState(restorer);
+
+      expect(restorer.calls, 1);
+      expect(
+        restorer.restored!.savedSearches.map((value) => value.name),
+        <String>['Remote only search', 'UN roles'],
+      );
+      expect(
+        restorer.restored!.trackerRecords.map((value) => value.jobKey),
+        <String>['unhcr:remote-private-job', 'unicef:private-job'],
+      );
+      expect(
+        restorer.restored!.authorityBaseURL,
+        Uri.parse('http://atlas.test:8765'),
+      );
+      expect(fixture.journal.bytes, isNull);
+      expect(fixture.selection.value, isNull);
+      await expectLater(
+        fixture.coordinator.restoreReviewedLegacyPrivateState(restorer),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(restorer.calls, 1);
+    },
+  );
+
+  test(
     'rollback resumes after staged store deletion without recreating resources',
     () async {
       final fixture = _MigrationFixture();
@@ -1008,6 +1076,20 @@ AtlasApplicationRecord _trackerRecord({
   );
 }
 
+final class _CapturingLegacyPrivateStateRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  int calls = 0;
+  AtlasVaultPlaintextPrivateState? restored;
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
+    calls += 1;
+    restored = reviewedState;
+  }
+}
+
 final class _MigrationFixture {
   _MigrationFixture() {
     final state = AtlasVaultPlaintextPrivateState(
@@ -1074,6 +1156,10 @@ final class _MigrationFixture {
     '66666666-6666-4666-8666-666666666666',
     '77777777-7777-4777-8777-777777777777',
     '88888888-8888-4888-8888-888888888888',
+    '99999999-9999-4999-8999-999999999999',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   ]);
   late final AtlasVaultPlaintextMigrationCoordinator coordinator;
 

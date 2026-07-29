@@ -2020,6 +2020,7 @@ void main() {
       final transport = _RecordingTransport();
       final migrationCoordinator = _ControllerMigrationCoordinator(
         authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: _privateCachePlaintextState(),
       )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
@@ -2062,6 +2063,7 @@ void main() {
         'resume',
         'discard',
         'inspect-authority',
+        'restore-reviewed',
       ]);
     },
   );
@@ -2096,21 +2098,19 @@ void main() {
           'notes': 'remote private notes',
           'applied_at': '2026-07-03T00:00:00Z',
           'updated_at': '2026-07-04T00:00:00Z',
-        })
-        ..enteredCompatibilitySavedSearchRead = Completer<void>()
-        ..releaseCompatibilitySavedSearchRead = Completer<void>()
-        ..enteredCompatibilityTrackerRead = Completer<void>()
-        ..releaseCompatibilityTrackerRead = Completer<void>();
+        });
+      final restoreEntered = Completer<void>();
+      final releaseRestore = Completer<void>();
       addTearDown(() {
-        if (!transport.releaseCompatibilitySavedSearchRead!.isCompleted) {
-          transport.releaseCompatibilitySavedSearchRead!.complete();
-        }
-        if (!transport.releaseCompatibilityTrackerRead!.isCompleted) {
-          transport.releaseCompatibilityTrackerRead!.complete();
+        if (!releaseRestore.isCompleted) {
+          releaseRestore.complete();
         }
       });
       final migrationCoordinator = _ControllerMigrationCoordinator(
         authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: _remoteOnlyPlaintextState(),
+        restoreEntered: restoreEntered,
+        releaseRestore: releaseRestore,
       )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
@@ -2140,14 +2140,11 @@ void main() {
       final discard = migrationOwner.discardPreparedMigration().whenComplete(
         () => discardCompleted = true,
       );
-      await Future.any(<Future<void>>[
-        transport.enteredCompatibilitySavedSearchRead!.future,
-        discard,
-      ]);
+      await restoreEntered.future;
       expect(
         discardCompleted,
         isFalse,
-        reason: 'legacy readiness must wait for remote private-state restore',
+        reason: 'legacy readiness must wait for reviewed-inventory restore',
       );
       expect(
         migrationOwner.status,
@@ -2156,16 +2153,7 @@ void main() {
       expect(controller.savedSearches, isEmpty);
       expect(controller.trackerRecords, isEmpty);
 
-      transport.releaseCompatibilitySavedSearchRead!.complete();
-      await transport.enteredCompatibilityTrackerRead!.future;
-      expect(
-        migrationOwner.status,
-        AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy,
-      );
-      expect(controller.savedSearches, isEmpty);
-      expect(controller.trackerRecords, isEmpty);
-
-      transport.releaseCompatibilityTrackerRead!.complete();
+      releaseRestore.complete();
       await discard;
 
       expect(
@@ -2174,8 +2162,96 @@ void main() {
       );
       expect(controller.savedSearches.single.name, 'Remote legacy search');
       expect(controller.trackerRecords.single.id, 'remote-legacy-record');
-      expect(transport.savedSearchReadCount, 1);
-      expect(transport.trackerReadCount, 1);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, contains('restore-reviewed'));
+    },
+  );
+
+  test(
+    'restart rollback restores reviewed cache and remote-only records together',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_mixed_rollback_restore_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Remote legacy search',
+          'description': 'remote private description',
+          'request': _compatibilityMigrationRequest(text: 'remote-private'),
+          'created_at': '2026-07-01T00:00:00Z',
+          'updated_at': '2026-07-02T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'remote-legacy-record',
+          'job_key': 'undp:remote-legacy',
+          'status': 'saved',
+          'notes': 'remote private notes',
+          'applied_at': '2026-07-03T00:00:00Z',
+          'updated_at': '2026-07-04T00:00:00Z',
+        });
+      final cacheState = _privateCachePlaintextState();
+      final remoteState = _remoteOnlyPlaintextState();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: AtlasVaultPlaintextPrivateState(
+          savedSearches: <AtlasSavedSearch>[
+            ...cacheState.savedSearches,
+            ...remoteState.savedSearches,
+          ],
+          trackerRecords: <AtlasApplicationRecord>[
+            ...cacheState.trackerRecords,
+            ...remoteState.trackerRecords,
+          ],
+          authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+        ),
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+        legacyPrivateStateRestorer: controller,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(migrationOwner.dispose);
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await migrationOwner.resumeMigration();
+      await migrationOwner.discardPreparedMigration();
+
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(controller.savedSearches.map((value) => value.name), <String>[
+        'Legacy private search',
+        'Remote legacy search',
+      ]);
+      expect(controller.trackerRecords.map((value) => value.id), <String>[
+        'legacy-record',
+        'remote-legacy-record',
+      ]);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, contains('restore-reviewed'));
     },
   );
 
@@ -2500,10 +2576,18 @@ void main() {
 
 final class _ControllerMigrationCoordinator
     implements AtlasVaultPlaintextMigrationCoordinating {
-  _ControllerMigrationCoordinator({required this.authorityState});
+  _ControllerMigrationCoordinator({
+    required this.authorityState,
+    this.rollbackRestorationState,
+    this.restoreEntered,
+    this.releaseRestore,
+  });
 
   final List<String> calls = <String>[];
   AtlasVaultPlaintextAuthorityState authorityState;
+  final AtlasVaultPlaintextPrivateState? rollbackRestorationState;
+  final Completer<void>? restoreEntered;
+  final Completer<void>? releaseRestore;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
 
@@ -2547,6 +2631,23 @@ final class _ControllerMigrationCoordinator
   Future<void> discardPrepared() async {
     calls.add('discard');
     authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+  }
+
+  @override
+  Future<void> restoreReviewedLegacyPrivateState(
+    AtlasVaultLegacyPrivateStateRestoring restorer,
+  ) async {
+    calls.add('restore-reviewed');
+    restoreEntered?.complete();
+    await releaseRestore?.future;
+    await restorer.restoreLegacyPrivateStateAfterRollback(
+      rollbackRestorationState ??
+          AtlasVaultPlaintextPrivateState(
+            savedSearches: const <AtlasSavedSearch>[],
+            trackerRecords: const <AtlasApplicationRecord>[],
+            authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+          ),
+    );
   }
 
   @override
@@ -2984,6 +3085,40 @@ AtlasLocalCacheSnapshot _privateCacheSnapshot() {
         status: 'saved',
       ),
     ],
+  );
+}
+
+AtlasVaultPlaintextPrivateState _privateCachePlaintextState() {
+  final snapshot = _privateCacheSnapshot();
+  return AtlasVaultPlaintextPrivateState(
+    savedSearches: snapshot.savedSearches,
+    trackerRecords: snapshot.trackerRecords,
+    authorityBaseURL: snapshot.baseURL,
+  );
+}
+
+AtlasVaultPlaintextPrivateState _remoteOnlyPlaintextState() {
+  return AtlasVaultPlaintextPrivateState(
+    savedSearches: <AtlasSavedSearch>[
+      AtlasSavedSearch(
+        name: 'Remote legacy search',
+        description: 'remote private description',
+        request: const AtlasSearchRequest(text: 'remote-private'),
+        createdAt: '2026-07-01T00:00:00Z',
+        updatedAt: '2026-07-02T00:00:00Z',
+      ),
+    ],
+    trackerRecords: <AtlasApplicationRecord>[
+      AtlasApplicationRecord(
+        id: 'remote-legacy-record',
+        jobKey: 'undp:remote-legacy',
+        status: 'saved',
+        notes: 'remote private notes',
+        appliedAt: '2026-07-03T00:00:00Z',
+        updatedAt: '2026-07-04T00:00:00Z',
+      ),
+    ],
+    authorityBaseURL: Uri.parse('http://atlas.test:8765'),
   );
 }
 
