@@ -129,6 +129,194 @@ void main() {
     expect(controller.filters.closingSoon, isTrue);
   });
 
+  test(
+    'candidate server private state cannot mutate configured authority',
+    () async {
+      final configuredTransport = _RecordingTransport();
+      final candidateTransport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Candidate private search',
+          'description': 'candidate private description',
+          'request': const AtlasSearchRequest(
+            text: 'candidate-private',
+          ).toJson(),
+          'created_at': '2026-07-01T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'candidate-private-record',
+          'job_key': 'candidate:private-job',
+          'status': 'saved',
+          'updated_at': '2026-07-02T00:00:00Z',
+        });
+      final configuredAuthority = Uri.parse(
+        'http://configured-atlas.test:8765',
+      );
+      final candidateAuthority = Uri.parse('http://candidate-atlas.test:8765');
+      final controller = AtlasAppController(
+        initialBaseURL: configuredAuthority,
+        clientFactory: (baseURL) => AtlasAPIClient(
+          baseURL: baseURL,
+          transport: baseURL == candidateAuthority
+              ? candidateTransport
+              : configuredTransport,
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.testConnection(candidateAuthority);
+
+      expect(controller.baseURL, configuredAuthority);
+      expect(controller.savedSearches.single.name, 'Candidate private search');
+      expect(controller.trackerRecords.single.id, 'candidate-private-record');
+
+      await controller.saveCurrentSearch();
+      await controller.saveJob(JobSearchResult.fromAPIJson(_jobJson));
+
+      expect(configuredTransport.savedSearchNames, isEmpty);
+      expect(configuredTransport.savedJobKeys, isEmpty);
+      expect(
+        controller.connectionMessage,
+        'Save job failed: AtlasVault private-state operation failed.',
+      );
+      expect(controller.savedSearches.single.name, 'Candidate private search');
+      expect(controller.trackerRecords.single.id, 'candidate-private-record');
+    },
+  );
+
+  test(
+    'candidate private family blocks cross-family configured mutation',
+    () async {
+      Future<void> expectMutationBlocked({
+        required _RecordingTransport candidateTransport,
+        required Future<void> Function(AtlasAppController controller) mutate,
+      }) async {
+        final configuredTransport = _RecordingTransport();
+        final configuredAuthority = Uri.parse(
+          'http://configured-atlas.test:8765',
+        );
+        final candidateAuthority = Uri.parse(
+          'http://candidate-atlas.test:8765',
+        );
+        final controller = AtlasAppController(
+          initialBaseURL: configuredAuthority,
+          clientFactory: (baseURL) => AtlasAPIClient(
+            baseURL: baseURL,
+            transport: baseURL == candidateAuthority
+                ? candidateTransport
+                : configuredTransport,
+          ),
+        );
+        addTearDown(controller.dispose);
+
+        await controller.testConnection(candidateAuthority);
+        await mutate(controller);
+
+        expect(configuredTransport.savedSearchNames, isEmpty);
+        expect(configuredTransport.savedJobKeys, isEmpty);
+      }
+
+      final savedSearchOnlyTransport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Candidate private search',
+          'description': 'candidate private description',
+          'request': const AtlasSearchRequest(
+            text: 'candidate-private',
+          ).toJson(),
+          'created_at': '2026-07-01T00:00:00Z',
+        });
+      await expectMutationBlocked(
+        candidateTransport: savedSearchOnlyTransport,
+        mutate: (controller) =>
+            controller.saveJob(JobSearchResult.fromAPIJson(_jobJson)),
+      );
+
+      final trackerOnlyTransport = _RecordingTransport()
+        ..trackerStore.add(<String, Object?>{
+          'id': 'candidate-private-record',
+          'job_key': 'candidate:private-job',
+          'status': 'saved',
+          'updated_at': '2026-07-02T00:00:00Z',
+        });
+      await expectMutationBlocked(
+        candidateTransport: trackerOnlyTransport,
+        mutate: (controller) => controller.saveCurrentSearch(),
+      );
+    },
+  );
+
+  test('saved authority supersedes stale candidate private reads', () async {
+    final candidateSavedSearchEntered = Completer<void>();
+    final releaseCandidateSavedSearch = Completer<void>();
+    addTearDown(() {
+      if (!releaseCandidateSavedSearch.isCompleted) {
+        releaseCandidateSavedSearch.complete();
+      }
+    });
+    final candidateTransport = _RecordingTransport()
+      ..savedSearchStore.add(<String, Object?>{
+        'name': 'Stale candidate search',
+        'description': 'stale candidate private description',
+        'request': const AtlasSearchRequest(
+          text: 'stale-candidate-private',
+        ).toJson(),
+        'created_at': '2026-07-01T00:00:00Z',
+      })
+      ..trackerStore.add(<String, Object?>{
+        'id': 'stale-candidate-record',
+        'job_key': 'candidate:stale-private-job',
+        'status': 'saved',
+        'updated_at': '2026-07-02T00:00:00Z',
+      })
+      ..enteredCompatibilitySavedSearchRead = candidateSavedSearchEntered
+      ..releaseCompatibilitySavedSearchRead = releaseCandidateSavedSearch;
+    final savedTransport = _RecordingTransport()
+      ..savedSearchStore.add(<String, Object?>{
+        'name': 'Saved authority search',
+        'description': 'saved authority private description',
+        'request': const AtlasSearchRequest(
+          text: 'saved-authority-private',
+        ).toJson(),
+        'created_at': '2026-07-03T00:00:00Z',
+      })
+      ..trackerStore.add(<String, Object?>{
+        'id': 'saved-authority-record',
+        'job_key': 'saved:private-job',
+        'status': 'saved',
+        'updated_at': '2026-07-04T00:00:00Z',
+      });
+    final candidateAuthority = Uri.parse('http://candidate-atlas.test:8765');
+    final savedAuthority = Uri.parse('http://saved-atlas.test:8765');
+    final controller = AtlasAppController(
+      initialBaseURL: Uri.parse('http://configured-atlas.test:8765'),
+      clientFactory: (baseURL) => AtlasAPIClient(
+        baseURL: baseURL,
+        transport: baseURL == candidateAuthority
+            ? candidateTransport
+            : savedTransport,
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    final staleTest = controller.testConnection(candidateAuthority);
+    await candidateSavedSearchEntered.future;
+    await controller.saveAndReload(savedAuthority);
+
+    expect(controller.baseURL, savedAuthority);
+    expect(controller.savedSearches.single.name, 'Saved authority search');
+    expect(controller.trackerRecords.single.id, 'saved-authority-record');
+
+    releaseCandidateSavedSearch.complete();
+    await staleTest;
+
+    expect(controller.baseURL, savedAuthority);
+    expect(controller.savedSearches.single.name, 'Saved authority search');
+    expect(controller.trackerRecords.single.id, 'saved-authority-record');
+    expect(
+      controller.connectionMessage,
+      'Saved http://saved-atlas.test:8765 and refreshed 1 job.',
+    );
+  });
+
   test('controller reports validation and local refresh failures', () async {
     final controller = AtlasAppController(
       clientFactory: (baseURL) =>
@@ -1758,6 +1946,727 @@ void main() {
     expect(transport.savedJobKeys, ['undp_oracle_hcm:34063']);
     expect(controller.isJobSaved('undp_oracle_hcm:34063'), isTrue);
   });
+
+  test(
+    'migration authority bootstraps before private cache and endpoint reads',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_authority_bootstrap_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(migrationCoordinator.calls, <String>['inspect-authority']);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+      expect(controller.connectionStatus, 'Offline (cached)');
+
+      await controller.testConnection(Uri.parse('http://atlas.test:8765'));
+      await controller.saveCurrentSearch();
+
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(transport.savedSearchNames, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
+  test(
+    'restart rollback restores preserved private cache without network reads',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_rollback_restore_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: _privateCachePlaintextState(),
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+        legacyPrivateStateRestorer: controller,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(migrationOwner.dispose);
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+
+      await migrationOwner.resumeMigration();
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.prepared,
+      );
+      await migrationOwner.discardPreparedMigration();
+
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(controller.savedSearches.single.name, 'Legacy private search');
+      expect(controller.trackerRecords.single.id, 'legacy-record');
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, <String>[
+        'inspect-authority',
+        'resume',
+        'discard',
+        'inspect-authority',
+        'restore-reviewed',
+      ]);
+    },
+  );
+
+  test(
+    'restart rollback restores remote-only private state before legacy readiness',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_remote_rollback_restore_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      final transport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Remote legacy search',
+          'description': 'remote private description',
+          'request': _compatibilityMigrationRequest(text: 'remote-private'),
+          'created_at': '2026-07-01T00:00:00Z',
+          'updated_at': '2026-07-02T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'remote-legacy-record',
+          'job_key': 'undp:remote-legacy',
+          'status': 'saved',
+          'notes': 'remote private notes',
+          'applied_at': '2026-07-03T00:00:00Z',
+          'updated_at': '2026-07-04T00:00:00Z',
+        });
+      final restoreEntered = Completer<void>();
+      final releaseRestore = Completer<void>();
+      addTearDown(() {
+        if (!releaseRestore.isCompleted) {
+          releaseRestore.complete();
+        }
+      });
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: _remoteOnlyPlaintextState(),
+        restoreEntered: restoreEntered,
+        releaseRestore: releaseRestore,
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+        legacyPrivateStateRestorer: controller,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(migrationOwner.dispose);
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await migrationOwner.resumeMigration();
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.prepared,
+      );
+
+      var discardCompleted = false;
+      final discard = migrationOwner.discardPreparedMigration().whenComplete(
+        () => discardCompleted = true,
+      );
+      await restoreEntered.future;
+      expect(
+        discardCompleted,
+        isFalse,
+        reason: 'legacy readiness must wait for reviewed-inventory restore',
+      );
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy,
+      );
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+
+      releaseRestore.complete();
+      await discard;
+
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(controller.savedSearches.single.name, 'Remote legacy search');
+      expect(controller.trackerRecords.single.id, 'remote-legacy-record');
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, contains('restore-reviewed'));
+    },
+  );
+
+  test(
+    'restart rollback restores reviewed cache and remote-only records together',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_mixed_rollback_restore_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final transport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Remote legacy search',
+          'description': 'remote private description',
+          'request': _compatibilityMigrationRequest(text: 'remote-private'),
+          'created_at': '2026-07-01T00:00:00Z',
+          'updated_at': '2026-07-02T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'remote-legacy-record',
+          'job_key': 'undp:remote-legacy',
+          'status': 'saved',
+          'notes': 'remote private notes',
+          'applied_at': '2026-07-03T00:00:00Z',
+          'updated_at': '2026-07-04T00:00:00Z',
+        });
+      final cacheState = _privateCachePlaintextState();
+      final remoteState = _remoteOnlyPlaintextState();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        rollbackRestorationState: AtlasVaultPlaintextPrivateState(
+          savedSearches: <AtlasSavedSearch>[
+            ...cacheState.savedSearches,
+            ...remoteState.savedSearches,
+          ],
+          trackerRecords: <AtlasApplicationRecord>[
+            ...cacheState.trackerRecords,
+            ...remoteState.trackerRecords,
+          ],
+          authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+        ),
+      )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStore: store,
+        now: () => _cacheFixtureNow,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+        legacyPrivateStateRestorer: controller,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(migrationOwner.dispose);
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await migrationOwner.resumeMigration();
+      await migrationOwner.discardPreparedMigration();
+
+      expect(
+        migrationOwner.status,
+        AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+      );
+      expect(controller.savedSearches.map((value) => value.name), <String>[
+        'Legacy private search',
+        'Remote legacy search',
+      ]);
+      expect(controller.trackerRecords.map((value) => value.id), <String>[
+        'legacy-record',
+        'remote-legacy-record',
+      ]);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(migrationCoordinator.calls, contains('restore-reviewed'));
+    },
+  );
+
+  test(
+    'prepared migration suppresses public cache writes without stripping private state',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_prepared_migration_cache_write_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      final seedStore = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _cacheFixtureNow,
+      );
+      await seedStore.write(_privateCacheSnapshot());
+      final initialBytes = await cacheFile.readAsBytes();
+      final initialPrivateState = await seedStore
+          .readPrivateStateForMigration();
+      final transport = _RecordingTransport();
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        localCacheStoreFactory: ({privateStateProtectionActive}) async {
+          return AtlasLocalCacheStore(
+            file: cacheFile,
+            now: () => _cacheFixtureNow,
+            privateStateProtectionActive: privateStateProtectionActive,
+          );
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await migrationOwner.reviewInventory();
+      await migrationOwner.prepareEncryptedMigration();
+
+      await controller.refreshLocalSave();
+
+      expect(transport.searchBodies, isNotEmpty);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+      final preservedPrivateState = await seedStore
+          .readPrivateStateForMigration();
+      expect(
+        preservedPrivateState.privateSha256,
+        initialPrivateState.privateSha256,
+      );
+      expect(
+        preservedPrivateState.savedSearches.single.name,
+        'Legacy private search',
+      );
+      expect(preservedPrivateState.trackerRecords.single.id, 'legacy-record');
+
+      await controller.clearPersistedCache();
+
+      expect(
+        controller.connectionMessage,
+        'Local cache changes are unavailable during AtlasVault migration.',
+      );
+      expect(await cacheFile.exists(), isTrue);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+    },
+  );
+
+  test(
+    'cache clear rechecks migration blocking after async store resolution',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_clear_recheck_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      final seedStore = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _cacheFixtureNow,
+      );
+      await seedStore.write(_privateCacheSnapshot());
+      final initialBytes = await cacheFile.readAsBytes();
+      final enteredFactory = Completer<void>();
+      final releaseFactory = Completer<void>();
+      addTearDown(() {
+        if (!releaseFactory.isCompleted) {
+          releaseFactory.complete();
+        }
+      });
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        localCacheStoreFactory: ({privateStateProtectionActive}) async {
+          enteredFactory.complete();
+          await releaseFactory.future;
+          return AtlasLocalCacheStore(
+            file: cacheFile,
+            now: () => _cacheFixtureNow,
+            privateStateProtectionActive: privateStateProtectionActive,
+          );
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+      await migrationOwner.bootstrapAuthority();
+      await migrationOwner.reviewInventory();
+
+      final clear = controller.clearPersistedCache();
+      await enteredFactory.future;
+      await migrationOwner.prepareEncryptedMigration();
+      releaseFactory.complete();
+      await clear;
+
+      expect(
+        controller.connectionMessage,
+        'Local cache changes are unavailable during AtlasVault migration.',
+      );
+      expect(await cacheFile.exists(), isTrue);
+      expect(await cacheFile.readAsBytes(), orderedEquals(initialBytes));
+    },
+  );
+
+  test(
+    'migration admission drains a previously admitted cache clear',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_migration_clear_drain_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      await cacheFile.writeAsString('public cache');
+      final enteredDelete = Completer<void>();
+      final releaseDelete = Completer<void>();
+      addTearDown(() {
+        if (!releaseDelete.isCompleted) {
+          releaseDelete.complete();
+        }
+      });
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        localCacheStore: AtlasLocalCacheStore(
+          file: _DeleteGatedFile(
+            cacheFile,
+            entered: enteredDelete,
+            release: releaseDelete,
+          ),
+        ),
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+      await migrationOwner.bootstrapAuthority();
+      await migrationOwner.reviewInventory();
+      controller.savedSearches = <AtlasSavedSearch>[
+        AtlasSavedSearch(
+          name: 'Controller-only legacy search',
+          request: const AtlasSearchRequest(text: 'legacy'),
+        ),
+      ];
+      controller.trackerRecords = <AtlasApplicationRecord>[
+        AtlasApplicationRecord(
+          id: 'controller-only-record',
+          jobKey: 'legacy:controller-only',
+          status: 'saved',
+        ),
+      ];
+
+      final clear = controller.clearPersistedCache();
+      await enteredDelete.future;
+      await migrationOwner.prepareEncryptedMigration();
+      var drainCompleted = false;
+      final drain = controller.drainAdmittedPlaintextOperations().whenComplete(
+        () => drainCompleted = true,
+      );
+      await Future<void>(() {});
+
+      expect(drainCompleted, isFalse);
+
+      releaseDelete.complete();
+      await clear;
+      await drain;
+
+      expect(drainCompleted, isTrue);
+      expect(await cacheFile.exists(), isFalse);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
+  test(
+    'migration admission drains all admitted compatibility writes before reads',
+    () async {
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      final enteredTracker = Completer<void>();
+      final releaseTracker = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+        if (!releaseTracker.isCompleted) {
+          releaseTracker.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveSearch = enteredSearch
+        ..releaseCompatibilitySaveSearch = releaseSearch
+        ..enteredCompatibilitySaveJob = enteredTracker
+        ..releaseCompatibilitySaveJob = releaseTracker;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      final savedSearch = controller.saveCurrentSearch();
+      await enteredSearch.future;
+      final savedTracker = controller.saveJob(
+        JobSearchResult.fromJson(_jobJson),
+      );
+      var drainCompleted = false;
+      final drain = controller.drainAdmittedPlaintextOperations().whenComplete(
+        () => drainCompleted = true,
+      );
+      await Future<void>(() {});
+      expect(drainCompleted, isFalse);
+
+      releaseSearch.complete();
+      await enteredTracker.future;
+      await Future<void>(() {});
+      expect(drainCompleted, isFalse);
+
+      releaseTracker.complete();
+      await drain;
+      await savedSearch;
+      await savedTracker;
+
+      final compatibilityClient = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+      expect(
+        (await compatibilityClient.savedSearches()).map((value) => value.name),
+        <String>['Search 1'],
+      );
+      expect(
+        (await compatibilityClient.trackerRecords()).map(
+          (value) => value.jobKey,
+        ),
+        <String>['undp_oracle_hcm:34063'],
+      );
+    },
+  );
+
+  test('migration context attaches once without starting authority work', () {
+    final firstCoordinator = _ControllerMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+    );
+    final secondCoordinator = _ControllerMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+    );
+    final firstOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: firstCoordinator,
+    );
+    final secondOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: secondCoordinator,
+    );
+    final controller = AtlasAppController();
+    addTearDown(firstOwner.dispose);
+    addTearDown(secondOwner.dispose);
+    addTearDown(controller.dispose);
+
+    controller.attachPlaintextMigrationContext(
+      AtlasVaultPlaintextMigrationContext(owner: firstOwner),
+    );
+
+    expect(firstCoordinator.calls, isEmpty);
+    expect(
+      () => controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: secondOwner),
+      ),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    expect(secondCoordinator.calls, isEmpty);
+  });
+}
+
+final class _ControllerMigrationCoordinator
+    implements AtlasVaultPlaintextMigrationCoordinating {
+  _ControllerMigrationCoordinator({
+    required this.authorityState,
+    this.rollbackRestorationState,
+    this.restoreEntered,
+    this.releaseRestore,
+  });
+
+  final List<String> calls = <String>[];
+  AtlasVaultPlaintextAuthorityState authorityState;
+  final AtlasVaultPlaintextPrivateState? rollbackRestorationState;
+  final Completer<void>? restoreEntered;
+  final Completer<void>? releaseRestore;
+  AtlasVaultPlaintextMigrationStage resumeStage =
+      AtlasVaultPlaintextMigrationStage.commitInProgress;
+
+  AtlasVaultPlaintextMigrationSummary _summary({
+    AtlasVaultPlaintextMigrationStage? stage,
+  }) {
+    return AtlasVaultPlaintextMigrationSummary(
+      savedSearchCount: 1,
+      trackerRecordCount: 1,
+      localCachePrivatePresent: true,
+      compatibilityPrivatePresent: true,
+      stage: stage,
+    );
+  }
+
+  @override
+  Future<AtlasVaultPlaintextAuthorityState> inspectAuthority() async {
+    calls.add('inspect-authority');
+    return authorityState;
+  }
+
+  @override
+  Future<bool> inspectPreparedRollbackAvailability() async {
+    return resumeStage == AtlasVaultPlaintextMigrationStage.prepared ||
+        resumeStage == AtlasVaultPlaintextMigrationStage.encryptedVerified;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> inventory() async {
+    calls.add('inventory');
+    return _summary();
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> prepare() async {
+    calls.add('prepare');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.encryptedVerified);
+  }
+
+  @override
+  Future<void> discardPrepared() async {
+    calls.add('discard');
+    authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+  }
+
+  @override
+  Future<void> restoreReviewedLegacyPrivateState(
+    AtlasVaultLegacyPrivateStateRestoring restorer,
+  ) async {
+    calls.add('restore-reviewed');
+    restoreEntered?.complete();
+    await releaseRestore?.future;
+    await restorer.restoreLegacyPrivateStateAfterRollback(
+      rollbackRestorationState ??
+          AtlasVaultPlaintextPrivateState(
+            savedSearches: const <AtlasSavedSearch>[],
+            trackerRecords: const <AtlasApplicationRecord>[],
+            authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+          ),
+    );
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> finalizeAndActivate() async {
+    calls.add('finalize');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.completionPending);
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> resume() async {
+    calls.add('resume');
+    return _summary(stage: resumeStage);
+  }
+
+  @override
+  Future<AtlasVaultPlaintextMigrationSummary> activateSelected() async {
+    calls.add('activate-selected');
+    return _summary(stage: AtlasVaultPlaintextMigrationStage.completionPending);
+  }
 }
 
 final class _RecordingTransport implements AtlasTransport {
@@ -1885,12 +2794,16 @@ final class _RecordingTransport implements AtlasTransport {
           await releaseCompatibilitySaveJob!.future;
         }
         savedJobKeys.add('undp_oracle_hcm:34063');
-        return {
+        final record = <String, Object?>{
           'id': 'undp_oracle_hcm-34063',
           'job_key': 'undp_oracle_hcm:34063',
           'status': 'saved',
           'updated_at': '2026-07-02T00:00:00Z',
         };
+        trackerStore
+          ..removeWhere((existing) => existing['id'] == 'undp_oracle_hcm-34063')
+          ..insert(0, record);
+        return record;
       case 'api/tracker':
         trackerReadCount += 1;
         enteredCompatibilityTrackerRead?.complete();
@@ -2057,6 +2970,38 @@ final class _ParentCreateGatedFile implements File {
   }
 }
 
+final class _DeleteGatedFile implements File {
+  _DeleteGatedFile(
+    this._delegate, {
+    required this.entered,
+    required this.release,
+  });
+
+  final File _delegate;
+  final Completer<void> entered;
+  final Completer<void> release;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  Future<bool> exists() => _delegate.exists();
+
+  @override
+  Future<FileSystemEntity> delete({bool recursive = false}) async {
+    if (!entered.isCompleted) {
+      entered.complete();
+    }
+    await release.future;
+    return _delegate.delete(recursive: recursive);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    return super.noSuchMethod(invocation);
+  }
+}
+
 final class _ParentCreateGatedDirectory implements Directory {
   _ParentCreateGatedDirectory(
     this._delegate, {
@@ -2141,6 +3086,83 @@ AtlasLocalCacheSnapshot _privateCacheSnapshot() {
       ),
     ],
   );
+}
+
+AtlasVaultPlaintextPrivateState _privateCachePlaintextState() {
+  final snapshot = _privateCacheSnapshot();
+  return AtlasVaultPlaintextPrivateState(
+    savedSearches: snapshot.savedSearches,
+    trackerRecords: snapshot.trackerRecords,
+    authorityBaseURL: snapshot.baseURL,
+  );
+}
+
+AtlasVaultPlaintextPrivateState _remoteOnlyPlaintextState() {
+  return AtlasVaultPlaintextPrivateState(
+    savedSearches: <AtlasSavedSearch>[
+      AtlasSavedSearch(
+        name: 'Remote legacy search',
+        description: 'remote private description',
+        request: const AtlasSearchRequest(text: 'remote-private'),
+        createdAt: '2026-07-01T00:00:00Z',
+        updatedAt: '2026-07-02T00:00:00Z',
+      ),
+    ],
+    trackerRecords: <AtlasApplicationRecord>[
+      AtlasApplicationRecord(
+        id: 'remote-legacy-record',
+        jobKey: 'undp:remote-legacy',
+        status: 'saved',
+        notes: 'remote private notes',
+        appliedAt: '2026-07-03T00:00:00Z',
+        updatedAt: '2026-07-04T00:00:00Z',
+      ),
+    ],
+    authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+  );
+}
+
+Map<String, Object?> _compatibilityMigrationRequest({required String text}) {
+  return <String, Object?>{
+    'text': text,
+    'status': <String>['open'],
+    'organizations': <String>[],
+    'source_ids': <String>[],
+    'ats_families': <String>[],
+    'cities': <String>[],
+    'countries_iso3': <String>[],
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': <String>[],
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': <String>[],
+    'ccog_codes': <String>[],
+    'ccog_families': <String>[],
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': <String>[],
+    'contract_groups': <String>[],
+    'seniority_groups': <String>[],
+    'work_modalities': <String>[],
+    'volunteer_kinds': <String>[],
+    'unv_categories': <String>[],
+    'unv_volunteer_types': <String>[],
+    'closing_date_from': null,
+    'closing_date_to': null,
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': false,
+    'exclude_expired_open': true,
+    'limit': 50,
+    'offset': 0,
+    'sort': 'closing_date_asc',
+  };
 }
 
 final class _FailingTransport implements AtlasTransport {

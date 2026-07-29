@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 
 import '../../atlas_vault.dart';
+import 'canonical_json.dart';
 import 'local_store_io.dart';
+import 'plaintext_migration.dart';
+import 'strict_values.dart';
 
 const String atlasVaultAndroidMethodChannelName = 'atlas/vault_android';
 
@@ -78,15 +81,8 @@ final class AtlasVaultAndroidCapabilities {
   String toString() => 'AtlasVaultAndroidCapabilities(<redacted>)';
 }
 
-abstract interface class AtlasVaultSecureKeyStore {
-  Future<void> createVaultKey(String vaultId, Uint8List vaultKey);
-
-  Future<Uint8List?> loadVaultKey(String vaultId);
-
-  Future<bool> containsVaultKey(String vaultId);
-
-  Future<void> deleteVaultKey(String vaultId);
-}
+abstract interface class AtlasVaultSecureKeyStore
+    implements AtlasVaultMigrationSecureKeyStore {}
 
 final class AtlasAndroidVaultSecureKeyStore
     implements AtlasVaultSecureKeyStore {
@@ -302,6 +298,177 @@ final class AtlasAndroidVaultLocalStoreIO implements AtlasVaultLocalStoreIO {
 
   @override
   String toString() => 'AtlasAndroidVaultLocalStoreIO(<redacted>)';
+}
+
+final class AtlasAndroidProtectedMigrationJournalStore
+    implements AtlasVaultProtectedMigrationJournalStore {
+  AtlasAndroidProtectedMigrationJournalStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  static const int maximumJournalByteCount = 16 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> read() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'readPlaintextMigrationJournal',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = copyAtlasVaultAndroidBytesInternal(value);
+    if (bytes.isEmpty || bytes.length > maximumJournalByteCount) {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+      throw const AtlasVaultAndroidStorageException();
+    }
+    return bytes;
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    final bytes = _validatedJournalBytes(canonicalBytes);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'createPlaintextMigrationJournal',
+        <String, Object?>{'journal_bytes': bytes},
+      );
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    _validateSha256(expectedSha256);
+    final bytes = _validatedJournalBytes(canonicalBytes);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'replacePlaintextMigrationJournal',
+        <String, Object?>{
+          'journal_bytes': bytes,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    _validateSha256(expectedSha256);
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      _channel,
+      'deletePlaintextMigrationJournal',
+      <String, Object?>{
+        'expected_sha256': expectedSha256,
+        'allow_absent': allowAbsent,
+      },
+    );
+  }
+
+  Uint8List _validatedJournalBytes(Uint8List source) {
+    if (source.isEmpty || source.length > maximumJournalByteCount) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+    Uint8List? canonical;
+    try {
+      final value = decodeAtlasVaultJsonObject(
+        utf8.decode(source, allowMalformed: false),
+        context: 'Migration journal',
+      );
+      canonical = encodeCanonicalJson(value);
+      if (!_constantTimeEquals(source, canonical)) {
+        throw const AtlasVaultAndroidStorageException();
+      }
+      return Uint8List.fromList(canonical);
+    } catch (_) {
+      throw const AtlasVaultAndroidStorageException();
+    } finally {
+      if (canonical != null) {
+        wipeAtlasVaultAndroidBytesInternal(canonical);
+      }
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidProtectedMigrationJournalStore(<redacted>)';
+}
+
+final class AtlasAndroidSelectedVaultStore
+    implements AtlasVaultSelectedVaultStore {
+  AtlasAndroidSelectedVaultStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<String?> read() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'readSelectedVault',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    if (value is! String) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+    validateAtlasVaultAndroidVaultIdInternal(value);
+    return value;
+  }
+
+  @override
+  Future<void> create(String vaultId) async {
+    validateAtlasVaultAndroidVaultIdInternal(vaultId);
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      _channel,
+      'createSelectedVault',
+      <String, Object?>{'vault_id': vaultId},
+    );
+  }
+
+  @override
+  Future<void> clear(String expectedVaultId) async {
+    validateAtlasVaultAndroidVaultIdInternal(expectedVaultId);
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      _channel,
+      'clearSelectedVault',
+      <String, Object?>{'expected_vault_id': expectedVaultId},
+    );
+  }
+
+  @override
+  String toString() => 'AtlasAndroidSelectedVaultStore(<redacted>)';
+}
+
+void _validateSha256(String value) {
+  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+    throw const AtlasVaultAndroidStorageException();
+  }
+}
+
+bool _constantTimeEquals(Uint8List left, Uint8List right) {
+  var difference = left.length ^ right.length;
+  final maximum = left.length > right.length ? left.length : right.length;
+  for (var index = 0; index < maximum; index += 1) {
+    difference |=
+        (index < left.length ? left[index] : 0) ^
+        (index < right.length ? right[index] : 0);
+  }
+  return difference == 0;
 }
 
 void validateAtlasVaultAndroidVaultIdInternal(String value) {

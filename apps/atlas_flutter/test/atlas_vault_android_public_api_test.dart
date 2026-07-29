@@ -9,10 +9,22 @@ void main() {
     AtlasVaultSecureKeyStore? secureKeyStore;
     AtlasVaultLocalStoreIO? localStore;
     AtlasVaultAndroidCapabilities? capabilities;
+    AtlasVaultProtectedMigrationJournalStore? journalStore;
+    AtlasVaultSelectedVaultStore? selectedVaultStore;
+    AtlasVaultPlaintextMigrationCoordinator? migrationCoordinator;
+    AtlasVaultPlaintextMigrationCoordinating? coordinating;
+    AtlasVaultPlaintextMigrationContext? migrationContext;
+    AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
 
     expect(secureKeyStore, isNull);
     expect(localStore, isNull);
     expect(capabilities, isNull);
+    expect(journalStore, isNull);
+    expect(selectedVaultStore, isNull);
+    expect(migrationCoordinator, isNull);
+    expect(coordinating, isNull);
+    expect(migrationContext, isNull);
+    expect(migrationOwner, isNull);
     expect(atlasVaultAndroidMethodChannelName, 'atlas/vault_android');
   });
 

@@ -13,6 +13,23 @@ typedef AtlasCacheStoreFactory =
       bool Function()? privateStateProtectionActive,
     });
 
+final class _AtlasConnectionOperation {
+  const _AtlasConnectionOperation({
+    required this.identifier,
+    required this.sourceAuthority,
+  });
+
+  final int identifier;
+  final Uri sourceAuthority;
+}
+
+final class _AtlasStaleConnectionOperation implements Exception {
+  const _AtlasStaleConnectionOperation();
+
+  @override
+  String toString() => 'Atlas connection operation is no longer current.';
+}
+
 const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 
 Future<AtlasLocalCacheStore?> _defaultCacheStore({
@@ -44,7 +61,10 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
   );
 }
 
-class AtlasAppController extends ChangeNotifier {
+class AtlasAppController extends ChangeNotifier
+    implements
+        AtlasVaultPlaintextMigrationOperationAdmission,
+        AtlasVaultLegacyPrivateStateRestoring {
   AtlasAppController({
     Uri? initialBaseURL,
     AtlasClientFactory? clientFactory,
@@ -107,15 +127,44 @@ class AtlasAppController extends ChangeNotifier {
   final DateTime Function() _now;
   final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
   int _privateAuthorityGeneration = 0;
+  Uri? _savedSearchLegacyAuthorityBaseURL;
+  Uri? _trackerLegacyAuthorityBaseURL;
   bool _privateActivationInProgress = false;
   bool _privateDeactivationInProgress = false;
   Future<void>? _privateDeactivationOperation;
-  Future<void>? _cacheWriteOperation;
+  Future<void>? _cacheMutationOperation;
+  Future<void>? _compatibilityPrivateMutationOperation;
+  AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
+  int _connectionOperationSequence = 0;
+  _AtlasConnectionOperation? _activeConnectionOperation;
+  int? _testingConnectionOperationIdentifier;
+  int? _savingConnectionOperationIdentifier;
+  int? _refreshingConnectionOperationIdentifier;
+  int? _searchingConnectionOperationIdentifier;
 
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
         _privateDeactivationInProgress ||
+        (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
+            false) ||
         (_privateStatePersistence?.isActive ?? false);
+  }
+
+  bool get _plaintextMigrationBlocksPersistedCacheWrites {
+    return _plaintextMigrationContext?.owner.blocksPersistedCacheWrites ??
+        false;
+  }
+
+  AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
+      _plaintextMigrationContext;
+
+  void attachPlaintextMigrationContext(
+    AtlasVaultPlaintextMigrationContext context,
+  ) {
+    if (_plaintextMigrationContext != null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    _plaintextMigrationContext = context;
   }
 
   void clearConnectionMessage() {
@@ -215,6 +264,8 @@ class AtlasAppController extends ChangeNotifier {
   @override
   void dispose() {
     _searchRefreshPendingAfterPrivateTransition = false;
+    _activeConnectionOperation = null;
+    _connectionOperationSequence += 1;
     _cancelSearchDebounce();
     super.dispose();
   }
@@ -267,6 +318,7 @@ class AtlasAppController extends ChangeNotifier {
       }
       savedSearches = const <AtlasSavedSearch>[];
       trackerRecords = const <AtlasApplicationRecord>[];
+      _clearLegacyPrivateProjectionAuthority();
       _syncSavedSearchSequence();
       notifyListeners();
       return AtlasVaultActivationResult.failed;
@@ -302,6 +354,7 @@ class AtlasAppController extends ChangeNotifier {
     } finally {
       savedSearches = const <AtlasSavedSearch>[];
       trackerRecords = const <AtlasApplicationRecord>[];
+      _clearLegacyPrivateProjectionAuthority();
       _syncSavedSearchSequence();
       notifyListeners();
     }
@@ -320,29 +373,91 @@ class AtlasAppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> clearPersistedCache() async {
-    final store = await _ensureLocalCacheStore();
-    await store?.clear();
-    results = const [];
-    updateRuns = const [];
-    sources = const [];
-    if (!_privateStateProtectionActive) {
-      savedSearches = const [];
-      trackerRecords = const [];
+  Future<void> bootstrapPrivateAuthorityAndLoadPersistedCache() async {
+    final context = _plaintextMigrationContext;
+    if (context == null) {
+      await loadPersistedCache();
+      return;
     }
-    _cachedAllJobs = const [];
-    _cachedJobDetails = const <String, AtlasJobDetail>{};
-    _committedPublicSearchRequest = null;
-    healthSummary = null;
-    facets = const {};
-    facetLabels = const {};
-    unclassifiedCount = 0;
-    total = 0;
-    cachedJobCount = 0;
-    cacheSavedAt = null;
-    operationalDataLoadedAt = null;
-    connectionStatus = 'Not connected';
-    connectionMessage = 'Local cache cleared.';
+    await context.owner.bootstrapAuthority();
+    if (context.owner.blocksLegacyPrivateAuthority) {
+      _hideLegacyPrivateStateForMigration();
+    }
+    await loadPersistedCache();
+  }
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
+    final restorationGeneration = ++_privateAuthorityGeneration;
+    final restorationAuthority = _requiredNormalizedBaseURL(baseURL);
+    if (_requiredNormalizedBaseURL(reviewedState.authorityBaseURL) !=
+        restorationAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    _requireCurrentLegacyRollbackRestoration(
+      restorationGeneration,
+      restorationAuthority,
+    );
+    await drainAdmittedPlaintextOperations();
+    _requireCurrentLegacyRollbackRestoration(
+      restorationGeneration,
+      restorationAuthority,
+    );
+    _installLegacyPrivateProjection(
+      savedSearches: reviewedState.savedSearches,
+      trackerRecords: reviewedState.trackerRecords,
+      authorityBaseURL: restorationAuthority,
+    );
+    notifyListeners();
+  }
+
+  Future<void> clearPersistedCache() async {
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      _publishPersistedCacheMigrationBlock();
+      return;
+    }
+    final clearsLegacyPrivateState = !_privateStateProtectionActive;
+    await _retainCacheMutation(() async {
+      if (_plaintextMigrationBlocksPersistedCacheWrites) {
+        _publishPersistedCacheMigrationBlock();
+        return;
+      }
+      final store = await _ensureLocalCacheStore();
+      if (_plaintextMigrationBlocksPersistedCacheWrites) {
+        _publishPersistedCacheMigrationBlock();
+        return;
+      }
+      await store?.clear();
+      results = const [];
+      updateRuns = const [];
+      sources = const [];
+      if (clearsLegacyPrivateState) {
+        savedSearches = const [];
+        trackerRecords = const [];
+        _clearLegacyPrivateProjectionAuthority();
+      }
+      _cachedAllJobs = const [];
+      _cachedJobDetails = const <String, AtlasJobDetail>{};
+      _committedPublicSearchRequest = null;
+      healthSummary = null;
+      facets = const {};
+      facetLabels = const {};
+      unclassifiedCount = 0;
+      total = 0;
+      cachedJobCount = 0;
+      cacheSavedAt = null;
+      operationalDataLoadedAt = null;
+      connectionStatus = 'Not connected';
+      connectionMessage = 'Local cache cleared.';
+      notifyListeners();
+    });
+  }
+
+  void _publishPersistedCacheMigrationBlock() {
+    connectionMessage =
+        'Local cache changes are unavailable during AtlasVault migration.';
     notifyListeners();
   }
 
@@ -365,65 +480,108 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> testConnection(Uri candidateBaseURL) async {
+    final operation = _beginConnectionOperation(candidateBaseURL);
+    _testingConnectionOperationIdentifier = operation.identifier;
     isTesting = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(candidateBaseURL);
+      final client = _clientFactory(operation.sourceAuthority);
       final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
       healthSummary = health;
       connectionStatus = 'Connected';
       connectionMessage = _healthMessage(health);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       connectionStatus = 'Not connected';
       connectionMessage = 'Connection failed: $error';
     } finally {
-      isTesting = false;
-      notifyListeners();
+      if (_testingConnectionOperationIdentifier == operation.identifier) {
+        _testingConnectionOperationIdentifier = null;
+        isTesting = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
   Future<void> saveAndReload(Uri candidateBaseURL) async {
+    final operation = _beginConnectionOperation(candidateBaseURL);
+    _savingConnectionOperationIdentifier = operation.identifier;
     isSaving = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(candidateBaseURL);
-      healthSummary = await client.health();
-      baseURL = candidateBaseURL;
+      final client = _clientFactory(operation.sourceAuthority);
+      final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
+      healthSummary = health;
+      baseURL = operation.sourceAuthority;
       connectionStatus = 'Connected';
-      final refreshed = await _refreshSearch(client);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      final refreshed = await _refreshSearch(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
       await _writePersistedCache();
+      _requireCurrentConnectionOperation(operation, client);
       connectionMessage =
-          'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
+          'Saved ${_formatBaseURL(operation.sourceAuthority)} and refreshed $refreshed ${_jobWord(refreshed)}.';
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       connectionStatus = 'Not connected';
       connectionMessage = 'Save failed: $error';
     } finally {
-      isSaving = false;
-      notifyListeners();
+      if (_savingConnectionOperationIdentifier == operation.identifier) {
+        _savingConnectionOperationIdentifier = null;
+        isSaving = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
   Future<void> refreshLocalSave() async {
+    final operation = _beginConnectionOperation(baseURL);
+    _refreshingConnectionOperationIdentifier = operation.identifier;
     isRefreshingLocalSave = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(baseURL);
-      await _refreshHealthIfAvailable(client);
-      final refreshed = await _refreshSearch(client);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      final client = _clientFactory(operation.sourceAuthority);
+      await _refreshHealthIfAvailable(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      final refreshed = await _refreshSearch(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
       await _writePersistedCache();
+      _requireCurrentConnectionOperation(operation, client);
       connectionStatus = 'Connected';
       connectionMessage =
           'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached on this device.';
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       if (_cachedAllJobs.isNotEmpty) {
         _applyLocalSearch();
       }
@@ -432,8 +590,12 @@ class AtlasAppController extends ChangeNotifier {
           : 'Offline (cached)';
       connectionMessage = 'Local save refresh failed: $error';
     } finally {
-      isRefreshingLocalSave = false;
-      notifyListeners();
+      if (_refreshingConnectionOperationIdentifier == operation.identifier) {
+        _refreshingConnectionOperationIdentifier = null;
+        isRefreshingLocalSave = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
@@ -513,19 +675,24 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        if (_privateStateProtectionActive ||
+            _privateActivationInProgress ||
+            _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
+        _requireLegacySavedSearchMutationAuthority();
         final client = _clientFactory(baseURL);
-        final savedSearch = await client.saveSearch(
-          name: name,
-          request: request,
-          summary: summary,
+        final savedSearch = await _retainCompatibilityPrivateMutation(
+          () =>
+              client.saveSearch(name: name, request: request, summary: summary),
         );
         if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
           throw const AtlasVaultPrivateStateException();
         }
         _upsertSavedSearch(savedSearch);
+        _savedSearchLegacyAuthorityBaseURL = _requiredNormalizedBaseURL(
+          baseURL,
+        );
       }
       await _writePersistedCache();
       connectionStatus = 'Connected';
@@ -553,15 +720,21 @@ class AtlasAppController extends ChangeNotifier {
         }
         _installPrivateSnapshot(snapshot);
       } else {
-        if (_privateActivationInProgress || _privateDeactivationInProgress) {
+        if (_privateStateProtectionActive ||
+            _privateActivationInProgress ||
+            _privateDeactivationInProgress) {
           throw const AtlasVaultPrivateStateException();
         }
+        _requireLegacyTrackerMutationAuthority();
         final client = _clientFactory(baseURL);
-        final record = await client.saveJob(job.jobKey);
+        final record = await _retainCompatibilityPrivateMutation(
+          () => client.saveJob(job.jobKey),
+        );
         if (!_mayAcceptCompatibilityMutation(privateAuthorityGeneration)) {
           throw const AtlasVaultPrivateStateException();
         }
         _upsertTrackerRecord(record);
+        _trackerLegacyAuthorityBaseURL = _requiredNormalizedBaseURL(baseURL);
       }
       await _writePersistedCache();
       connectionStatus = 'Connected';
@@ -611,9 +784,14 @@ class AtlasAppController extends ChangeNotifier {
     await _refreshIfReady();
   }
 
-  Future<int> _refreshSearch(AtlasAPIClient client) async {
+  Future<int> _refreshSearch(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
     final publicAuthorityGeneration = _privateAuthorityGeneration;
     final mayPublishPublicRequest = !_privateStateProtectionActive;
+    _requireCurrentConnectionOperation(operation, client);
+    _searchingConnectionOperationIdentifier = operation.identifier;
     isSearching = true;
     notifyListeners();
     try {
@@ -622,8 +800,10 @@ class AtlasAppController extends ChangeNotifier {
       AtlasSearchResponse? cacheResponse;
       if (!_searchRequestsEquivalent(activeRequest, cacheRequest)) {
         cacheResponse = await _fetchCachedAllJobs(client, cacheRequest);
+        _requireCurrentConnectionOperation(operation, client);
       }
       final response = await client.search(activeRequest);
+      _requireCurrentConnectionOperation(operation, client);
       _applySearchResponse(response);
       if (_searchRequestsEquivalent(activeRequest, cacheRequest)) {
         _cachedAllJobs = List.unmodifiable(response.results);
@@ -644,7 +824,10 @@ class AtlasAppController extends ChangeNotifier {
       }
       return cachedJobCount;
     } finally {
-      isSearching = false;
+      if (_searchingConnectionOperationIdentifier == operation.identifier) {
+        _searchingConnectionOperationIdentifier = null;
+        isSearching = false;
+      }
     }
   }
 
@@ -708,65 +891,111 @@ class AtlasAppController extends ChangeNotifier {
     return (values[value] ?? 0) > 0;
   }
 
-  Future<void> _loadSavedSearches(AtlasAPIClient client) async {
+  Future<void> _loadSavedSearches(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
     final persistence = _privateStatePersistence;
     final authorityGeneration = _privateAuthorityGeneration;
     if (persistence?.isActive ?? false) {
       try {
         final snapshot = await persistence!.read();
+        _requireCurrentConnectionOperation(operation, client);
         if (!_mayAcceptPrivateRead(persistence, authorityGeneration)) {
           return;
         }
         _installPrivateSnapshot(snapshot);
+      } on _AtlasStaleConnectionOperation {
+        rethrow;
       } catch (_) {
         // The last committed encrypted projection remains authoritative.
       }
       return;
     }
-    if (_privateActivationInProgress || _privateDeactivationInProgress) {
+    if (_privateStateProtectionActive ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress) {
       return;
     }
     try {
       final compatibilitySearches = await client.savedSearches();
+      _requireCurrentCompatibilityConnectionOperation(operation, client);
       if (!_mayAcceptCompatibilityMutation(authorityGeneration)) {
         return;
       }
       savedSearches = List.unmodifiable(compatibilitySearches);
+      _savedSearchLegacyAuthorityBaseURL = _requiredNormalizedBaseURL(
+        client.baseURL,
+      );
       _syncSavedSearchSequence();
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Saved-search persistence is not required for health/search success.
     }
   }
 
-  Future<void> _loadOperationalData(AtlasAPIClient client) async {
+  Future<void> _loadOperationalData(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
     try {
-      updateRuns = List.unmodifiable(await client.updates());
+      final loadedRuns = await client.updates();
+      _requireCurrentConnectionOperation(operation, client);
+      updateRuns = List.unmodifiable(loadedRuns);
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Operational summaries are best-effort and should not block Search.
     }
     try {
-      sources = List.unmodifiable(await client.sources());
+      final loadedSources = await client.sources();
+      _requireCurrentConnectionOperation(operation, client);
+      sources = List.unmodifiable(loadedSources);
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Source-health summaries are best-effort and should not block Search.
     }
     final authorityGeneration = _privateAuthorityGeneration;
     if (!_privateStateProtectionActive && !_privateActivationInProgress) {
       try {
         final compatibilityRecords = await client.trackerRecords();
+        _requireCurrentCompatibilityConnectionOperation(operation, client);
         if (_mayAcceptCompatibilityMutation(authorityGeneration)) {
           trackerRecords = List.unmodifiable(compatibilityRecords);
+          _trackerLegacyAuthorityBaseURL = _requiredNormalizedBaseURL(
+            client.baseURL,
+          );
         }
+      } on _AtlasStaleConnectionOperation {
+        rethrow;
       } catch (_) {
+        _requireCurrentConnectionOperation(operation, client);
         // Saved-job persistence is independent from Search refresh.
       }
     }
+    _requireCurrentConnectionOperation(operation, client);
     operationalDataLoadedAt = _now();
   }
 
-  Future<void> _refreshHealthIfAvailable(AtlasAPIClient client) async {
+  Future<void> _refreshHealthIfAvailable(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
     try {
-      healthSummary = await client.health();
+      final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
+      healthSummary = health;
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Search can still succeed when the health probe is temporarily stale.
     }
   }
@@ -1133,6 +1362,9 @@ class AtlasAppController extends ChangeNotifier {
     if (!_privateStateProtectionActive) {
       savedSearches = List.unmodifiable(snapshot.savedSearches);
       trackerRecords = List.unmodifiable(snapshot.trackerRecords);
+      final authority = _requiredNormalizedBaseURL(snapshot.baseURL);
+      _savedSearchLegacyAuthorityBaseURL = authority;
+      _trackerLegacyAuthorityBaseURL = authority;
     }
     _cachedJobDetails = Map.unmodifiable(snapshot.cachedJobDetails);
     updateRuns = List.unmodifiable(snapshot.updateRuns);
@@ -1161,36 +1393,70 @@ class AtlasAppController extends ChangeNotifier {
   }
 
   Future<void> _writePersistedCache() {
-    final previous = _cacheWriteOperation;
+    return _retainCacheMutation(_performPersistedCacheWrite);
+  }
+
+  Future<void> _retainCacheMutation(Future<void> Function() body) {
+    final previous = _cacheMutationOperation;
     late final Future<void> operation;
     Future<void> run() async {
       if (previous != null) {
         try {
           await previous;
         } catch (_) {
-          // A later explicit write is independent from the previous failure.
+          // A later explicit cache mutation is independent from this failure.
         }
       }
-      await _performPersistedCacheWrite();
+      await body();
     }
 
     operation = run().whenComplete(() {
-      if (identical(_cacheWriteOperation, operation)) {
-        _cacheWriteOperation = null;
+      if (identical(_cacheMutationOperation, operation)) {
+        _cacheMutationOperation = null;
       }
     });
-    _cacheWriteOperation = operation;
+    _cacheMutationOperation = operation;
     return operation;
   }
 
+  Future<T> _retainCompatibilityPrivateMutation<T>(Future<T> Function() body) {
+    final previous = _compatibilityPrivateMutationOperation;
+    late final Future<void> retained;
+    Future<T> run() async {
+      if (previous != null) {
+        await previous;
+      }
+      return body();
+    }
+
+    final result = run();
+    retained = result
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() {
+          if (identical(_compatibilityPrivateMutationOperation, retained)) {
+            _compatibilityPrivateMutationOperation = null;
+          }
+        });
+    _compatibilityPrivateMutationOperation = retained;
+    return result;
+  }
+
   Future<void> _performPersistedCacheWrite() async {
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
+    }
     final store = await _ensureLocalCacheStore();
     final savedAt = cacheSavedAt;
-    if (store == null || savedAt == null) {
+    if (store == null ||
+        savedAt == null ||
+        _plaintextMigrationBlocksPersistedCacheWrites) {
       return;
     }
     final searchRequest =
         _committedPublicSearchRequest ?? _cacheSearchRequest();
+    final includesLegacyPrivateState =
+        !_privateStateProtectionActive &&
+        _legacyPrivateProjectionMatchesAuthority(baseURL);
     var snapshot = AtlasLocalCacheSnapshot(
       schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
       baseURL: baseURL,
@@ -1207,21 +1473,31 @@ class AtlasAppController extends ChangeNotifier {
       ),
       cachedAllJobs: _cachedAllJobs.isEmpty ? results : _cachedAllJobs,
       healthSummary: healthSummary,
-      savedSearches: savedSearches,
-      trackerRecords: trackerRecords,
+      savedSearches: includesLegacyPrivateState
+          ? savedSearches
+          : const <AtlasSavedSearch>[],
+      trackerRecords: includesLegacyPrivateState
+          ? trackerRecords
+          : const <AtlasApplicationRecord>[],
       cachedJobDetails: _cachedJobDetails,
       updateRuns: updateRuns,
       sources: sources,
       operationalDataLoadedAt: operationalDataLoadedAt,
     );
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
+    }
     if (_privateStateProtectionActive) {
       snapshot = snapshot.withoutPrivateState();
+    }
+    if (_plaintextMigrationBlocksPersistedCacheWrites) {
+      return;
     }
     await store.write(snapshot);
   }
 
   Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
-    final operation = _cacheWriteOperation;
+    final operation = _cacheMutationOperation;
     if (operation == null) {
       return;
     }
@@ -1233,12 +1509,188 @@ class AtlasAppController extends ChangeNotifier {
     _requireCurrentPrivateActivation(activationGeneration);
   }
 
+  Future<void> _drainCacheWriteForMigration() async {
+    final operation = _cacheMutationOperation;
+    if (operation == null) {
+      return;
+    }
+    try {
+      await operation;
+    } catch (_) {
+      // Migration re-reads the authoritative cache after the admitted write.
+    }
+  }
+
+  @override
+  Future<void> drainAdmittedPlaintextOperations() async {
+    while (true) {
+      final compatibility = _compatibilityPrivateMutationOperation;
+      final cache = _cacheMutationOperation;
+      if (compatibility == null && cache == null) {
+        return;
+      }
+      if (compatibility != null) {
+        await compatibility;
+      }
+      if (cache != null) {
+        try {
+          await cache;
+        } catch (_) {
+          // Migration re-reads every plaintext source after admitted work.
+        }
+      }
+    }
+  }
+
   void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
     savedSearches = List<AtlasSavedSearch>.unmodifiable(snapshot.savedSearches);
     trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
       snapshot.trackerRecords,
     );
+    _clearLegacyPrivateProjectionAuthority();
     _syncSavedSearchSequence();
+  }
+
+  void _hideLegacyPrivateStateForMigration() {
+    _privateAuthorityGeneration += 1;
+    savedSearches = const <AtlasSavedSearch>[];
+    trackerRecords = const <AtlasApplicationRecord>[];
+    _clearLegacyPrivateProjectionAuthority();
+    _syncSavedSearchSequence();
+    notifyListeners();
+  }
+
+  void _requireCurrentLegacyRollbackRestoration(
+    int generation,
+    Uri expectedAuthority,
+  ) {
+    final context = _plaintextMigrationContext;
+    if (generation != _privateAuthorityGeneration ||
+        context == null ||
+        context.owner.status !=
+            AtlasVaultPlaintextMigrationPresentationStatus.restoringLegacy ||
+        _privateActivationInProgress ||
+        _privateDeactivationInProgress ||
+        (_privateStatePersistence?.isActive ?? false) ||
+        _requiredNormalizedBaseURL(baseURL) != expectedAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  Uri _requiredNormalizedBaseURL(Uri? value) {
+    final normalized = value == null
+        ? null
+        : AtlasAPIClient.normalizedBaseURL(value.toString());
+    if (normalized == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return normalized;
+  }
+
+  _AtlasConnectionOperation _beginConnectionOperation(Uri sourceAuthority) {
+    final operation = _AtlasConnectionOperation(
+      identifier: ++_connectionOperationSequence,
+      sourceAuthority: _requiredNormalizedBaseURL(sourceAuthority),
+    );
+    _activeConnectionOperation = operation;
+    return operation;
+  }
+
+  bool _isCurrentConnectionOperation(_AtlasConnectionOperation operation) =>
+      identical(_activeConnectionOperation, operation);
+
+  void _requireCurrentConnectionOperation(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient _,
+  ) {
+    if (!_isCurrentConnectionOperation(operation)) {
+      throw const _AtlasStaleConnectionOperation();
+    }
+  }
+
+  void _requireCurrentCompatibilityConnectionOperation(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient client,
+  ) {
+    _requireCurrentConnectionOperation(operation, client);
+    final clientAuthority = AtlasAPIClient.normalizedBaseURL(
+      client.baseURL.toString(),
+    );
+    if (clientAuthority != operation.sourceAuthority) {
+      throw const _AtlasStaleConnectionOperation();
+    }
+  }
+
+  void _completeConnectionOperation(_AtlasConnectionOperation operation) {
+    if (identical(_activeConnectionOperation, operation)) {
+      _activeConnectionOperation = null;
+    }
+  }
+
+  Uri? _legacyPrivateProjectionAuthority() {
+    final savedAuthority = savedSearches.isEmpty
+        ? null
+        : _savedSearchLegacyAuthorityBaseURL;
+    final trackerAuthority = trackerRecords.isEmpty
+        ? null
+        : _trackerLegacyAuthorityBaseURL;
+    if ((savedSearches.isNotEmpty && savedAuthority == null) ||
+        (trackerRecords.isNotEmpty && trackerAuthority == null)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    if (savedAuthority != null &&
+        trackerAuthority != null &&
+        savedAuthority != trackerAuthority) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return savedAuthority ?? trackerAuthority;
+  }
+
+  void _installLegacyPrivateProjection({
+    required List<AtlasSavedSearch> savedSearches,
+    required List<AtlasApplicationRecord> trackerRecords,
+    required Uri authorityBaseURL,
+  }) {
+    final authority = _requiredNormalizedBaseURL(authorityBaseURL);
+    this.savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches);
+    this.trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
+      trackerRecords,
+    );
+    _savedSearchLegacyAuthorityBaseURL = authority;
+    _trackerLegacyAuthorityBaseURL = authority;
+    _syncSavedSearchSequence();
+  }
+
+  void _clearLegacyPrivateProjectionAuthority() {
+    _savedSearchLegacyAuthorityBaseURL = null;
+    _trackerLegacyAuthorityBaseURL = null;
+  }
+
+  bool _legacyPrivateProjectionMatchesAuthority(Uri authorityBaseURL) {
+    if (savedSearches.isEmpty && trackerRecords.isEmpty) {
+      return true;
+    }
+    try {
+      return _legacyPrivateProjectionAuthority() ==
+          _requiredNormalizedBaseURL(authorityBaseURL);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _requireLegacySavedSearchMutationAuthority() {
+    _requireLegacyPrivateProjectionMutationAuthority();
+  }
+
+  void _requireLegacyTrackerMutationAuthority() {
+    _requireLegacyPrivateProjectionMutationAuthority();
+  }
+
+  void _requireLegacyPrivateProjectionMutationAuthority() {
+    final authority = _legacyPrivateProjectionAuthority();
+    if (authority != null && authority != _requiredNormalizedBaseURL(baseURL)) {
+      throw const AtlasVaultPrivateStateException();
+    }
   }
 
   bool _mayAcceptCompatibilityMutation(int authorityGeneration) {
@@ -1898,18 +2350,27 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   AtlasMobileTab _selectedTab = AtlasMobileTab.search;
   late final AtlasAppController _controller;
   late final bool _ownsController;
+  AtlasVaultPlaintextMigrationPresentationOwner? _ownedMigrationOwner;
 
   @override
   void initState() {
     super.initState();
-    _controller =
-        widget.controller ??
-        AtlasAppController(localCacheStoreFactory: _defaultCacheStore);
-    _ownsController = widget.controller == null;
+    final suppliedController = widget.controller;
+    if (suppliedController != null) {
+      _controller = suppliedController;
+      _ownsController = false;
+    } else {
+      final assembly = _buildDefaultControllerAssembly();
+      _controller = assembly.controller;
+      _ownedMigrationOwner = assembly.migrationOwner;
+      _ownsController = true;
+    }
     if (_ownsController) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          unawaited(_controller.loadPersistedCache());
+          unawaited(
+            _controller.bootstrapPrivateAuthorityAndLoadPersistedCache(),
+          );
         }
       });
     }
@@ -1918,6 +2379,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   @override
   void dispose() {
     if (_ownsController) {
+      _ownedMigrationOwner?.dispose();
       _controller.dispose();
     }
     super.dispose();
@@ -2006,6 +2468,180 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => AtlasFilterSheet(controller: _controller),
+    );
+  }
+}
+
+final class _AtlasDefaultControllerAssembly {
+  const _AtlasDefaultControllerAssembly({
+    required this.controller,
+    this.migrationOwner,
+  });
+
+  final AtlasAppController controller;
+  final AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
+}
+
+_AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
+  if (!Platform.isAndroid) {
+    return _AtlasDefaultControllerAssembly(
+      controller: AtlasAppController(
+        localCacheStoreFactory: _defaultCacheStore,
+      ),
+    );
+  }
+
+  final keyStore = AtlasAndroidVaultSecureKeyStore();
+  final localStore = AtlasAndroidVaultLocalStoreIO();
+  final runtime = AtlasVaultPrivateStateRuntime(
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+  );
+  final controller = AtlasAppController(
+    localCacheStoreFactory: _defaultCacheStore,
+    privateStatePersistence: runtime,
+  );
+  final coordinator = AtlasVaultPlaintextMigrationCoordinator(
+    inMemorySource: _AtlasControllerPlaintextMigrationSource(controller),
+    compatibilitySource: _AtlasControllerCompatibilityMigrationSource(
+      controller,
+    ),
+    cacheSource: _AtlasControllerCacheMigrationSource(controller),
+    operationAdmission: controller,
+    journalStore: AtlasAndroidProtectedMigrationJournalStore(),
+    selectedVaultStore: AtlasAndroidSelectedVaultStore(),
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    privateAuthority: _AtlasControllerMigrationPrivateAuthority(
+      controller: controller,
+      runtime: runtime,
+    ),
+  );
+  final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+    coordinator: coordinator,
+    legacyPrivateStateRestorer: controller,
+  );
+  controller.attachPlaintextMigrationContext(
+    AtlasVaultPlaintextMigrationContext(owner: owner),
+  );
+  return _AtlasDefaultControllerAssembly(
+    controller: controller,
+    migrationOwner: owner,
+  );
+}
+
+final class _AtlasControllerPlaintextMigrationSource
+    implements AtlasVaultPlaintextStateSource {
+  const _AtlasControllerPlaintextMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState() async {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: controller.savedSearches,
+      trackerRecords: controller.trackerRecords,
+      authorityBaseURL: controller._legacyPrivateProjectionAuthority(),
+    );
+  }
+}
+
+final class _AtlasControllerCompatibilityMigrationSource
+    implements AtlasVaultCompatibilityPrivateSource {
+  const _AtlasControllerCompatibilityMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  AtlasAPIClient get _client => controller._clientFactory(controller.baseURL);
+
+  @override
+  Uri get authorityBaseURL => controller.baseURL;
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState>
+  readCompatibilityPrivateState() async {
+    final client = _client;
+    final savedSearches = await client.savedSearchesForPlaintextMigration();
+    final trackerRecords = await client.trackerRecordsForPlaintextMigration();
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: savedSearches,
+      trackerRecords: trackerRecords,
+    );
+  }
+
+  @override
+  Future<bool> deleteSavedSearch(String name) {
+    return _client.deleteSavedSearch(name);
+  }
+
+  @override
+  Future<bool> deleteTrackerRecord(String recordId) {
+    return _client.deleteTrackerRecord(recordId);
+  }
+}
+
+final class _AtlasControllerCacheMigrationSource
+    implements AtlasLocalCacheMigrationSource {
+  const _AtlasControllerCacheMigrationSource(this.controller);
+
+  final AtlasAppController controller;
+
+  @override
+  Future<AtlasLocalCacheMigrationPrivateState>
+  readPrivateStateForMigration() async {
+    await controller._drainCacheWriteForMigration();
+    final store = await controller._ensureLocalCacheStore();
+    if (store == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return store.readPrivateStateForMigration();
+  }
+
+  @override
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) async {
+    await controller._drainCacheWriteForMigration();
+    final store = await controller._ensureLocalCacheStore();
+    if (store == null) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await store.removePrivateStateForMigration(
+      expectedPrivateSha256: expectedPrivateSha256,
+    );
+  }
+}
+
+final class _AtlasControllerMigrationPrivateAuthority
+    implements AtlasVaultPlaintextMigrationPrivateAuthority {
+  const _AtlasControllerMigrationPrivateAuthority({
+    required this.controller,
+    required this.runtime,
+  });
+
+  final AtlasAppController controller;
+  final AtlasVaultPrivateStateRuntime runtime;
+
+  @override
+  bool get isEncryptedPrivateStateActive => runtime.isActive;
+
+  @override
+  void hideLegacyPrivateState() {
+    controller._hideLegacyPrivateStateForMigration();
+  }
+
+  @override
+  Future<bool> activateEncryptedPrivateState(String vaultId) async {
+    return await controller.activateExistingAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated;
+  }
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readEncryptedPrivateState() async {
+    final snapshot = await runtime.read();
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: snapshot.savedSearches,
+      trackerRecords: snapshot.trackerRecords,
     );
   }
 }
@@ -5000,6 +5636,14 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
         children: [
           const _SettingsHeader(),
           const SizedBox(height: 22),
+          if (controller.plaintextMigrationContext case final context?) ...[
+            _SettingsSection(
+              title: 'AtlasVault',
+              children: <Widget>[
+                AtlasVaultPlaintextMigrationPanel(owner: context.owner),
+              ],
+            ),
+          ],
           _SettingsSection(
             title: 'Server',
             children: [

@@ -100,6 +100,39 @@ internal class AtlasVaultAndroidStorage(
                         deleteLocalStore(requiredVaultId(call))
                         null
                     }
+                    "readPlaintextMigrationJournal" ->
+                        readPlaintextMigrationJournal()
+                    "createPlaintextMigrationJournal" -> {
+                        createPlaintextMigrationJournal(
+                            requiredBytes(call, "journal_bytes"),
+                        )
+                        null
+                    }
+                    "replacePlaintextMigrationJournal" -> {
+                        replacePlaintextMigrationJournal(
+                            requiredBytes(call, "journal_bytes"),
+                            requiredString(call, "expected_sha256"),
+                        )
+                        null
+                    }
+                    "deletePlaintextMigrationJournal" -> {
+                        deletePlaintextMigrationJournal(
+                            requiredString(call, "expected_sha256"),
+                            requiredBoolean(call, "allow_absent"),
+                        )
+                        null
+                    }
+                    "readSelectedVault" -> readSelectedVault()
+                    "createSelectedVault" -> {
+                        createSelectedVault(requiredVaultId(call))
+                        null
+                    }
+                    "clearSelectedVault" -> {
+                        clearSelectedVault(
+                            requiredString(call, "expected_vault_id"),
+                        )
+                        null
+                    }
                     else -> throw StorageFailure()
                 }
                 mainHandler.post { result.success(value) }
@@ -360,6 +393,146 @@ internal class AtlasVaultAndroidStorage(
         }
     }
 
+    private fun readPlaintextMigrationJournal(): ByteArray? {
+        val bytes = readProtectedBlob(
+            migrationJournalFile(createParent = false),
+            MIGRATION_JOURNAL_PURPOSE,
+            MAX_MIGRATION_JOURNAL_BYTES,
+        ) ?: return null
+        try {
+            validateCanonicalJsonDocument(bytes, MAX_MIGRATION_JOURNAL_BYTES)
+            return bytes.copyOf()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun createPlaintextMigrationJournal(suppliedBytes: ByteArray) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(bytes, MAX_MIGRATION_JOURNAL_BYTES)
+            createProtectedBlob(
+                migrationJournalFile(createParent = true),
+                MIGRATION_JOURNAL_PURPOSE,
+                bytes,
+                MAX_MIGRATION_JOURNAL_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun replacePlaintextMigrationJournal(
+        suppliedBytes: ByteArray,
+        expectedSha256: String,
+    ) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(bytes, MAX_MIGRATION_JOURNAL_BYTES)
+            replaceProtectedBlob(
+                migrationJournalFile(createParent = false),
+                MIGRATION_JOURNAL_PURPOSE,
+                bytes,
+                expectedSha256,
+                MAX_MIGRATION_JOURNAL_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun deletePlaintextMigrationJournal(
+        expectedSha256: String,
+        allowAbsent: Boolean,
+    ) {
+        deleteProtectedBlob(
+            migrationJournalFile(createParent = false),
+            MIGRATION_JOURNAL_PURPOSE,
+            expectedSha256,
+            allowAbsent,
+            MAX_MIGRATION_JOURNAL_BYTES,
+        )
+    }
+
+    private fun readSelectedVault(): String? {
+        val bytes = readProtectedBlob(
+            selectedVaultFile(createParent = false),
+            SELECTED_VAULT_PURPOSE,
+            MAX_SELECTED_VAULT_BYTES,
+        ) ?: return null
+        try {
+            val value = parseStrictObject(bytes)
+            requireExactKeys(value, setOf("format", "version", "vault_id"))
+            val vaultId = strictString(value.opt("vault_id"))
+            if (value.opt("format") != SELECTED_VAULT_FORMAT ||
+                strictInt(value.opt("version")) != SELECTED_VAULT_VERSION
+            ) {
+                throw StorageFailure()
+            }
+            validateVaultId(vaultId)
+            val canonical = canonicalJsonBytes(value)
+            try {
+                if (!MessageDigest.isEqual(bytes, canonical)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                canonical.fill(0)
+            }
+            return vaultId
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun createSelectedVault(vaultId: String) {
+        validateVaultId(vaultId)
+        val bytes = canonicalJsonBytes(
+            linkedMapOf<String, Any>(
+                "format" to SELECTED_VAULT_FORMAT,
+                "version" to SELECTED_VAULT_VERSION,
+                "vault_id" to vaultId,
+            ),
+        )
+        try {
+            createProtectedBlob(
+                selectedVaultFile(createParent = true),
+                SELECTED_VAULT_PURPOSE,
+                bytes,
+                MAX_SELECTED_VAULT_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun clearSelectedVault(expectedVaultId: String) {
+        validateVaultId(expectedVaultId)
+        val current = readSelectedVault() ?: throw StorageFailure()
+        if (current != expectedVaultId) {
+            throw StorageFailure()
+        }
+        val bytes = canonicalJsonBytes(
+            linkedMapOf<String, Any>(
+                "format" to SELECTED_VAULT_FORMAT,
+                "version" to SELECTED_VAULT_VERSION,
+                "vault_id" to current,
+            ),
+        )
+        try {
+            deleteProtectedBlob(
+                selectedVaultFile(createParent = false),
+                SELECTED_VAULT_PURPOSE,
+                sha256Hex(bytes),
+                allowAbsent = false,
+                maximumPlaintextBytes = MAX_SELECTED_VAULT_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
     private fun validateCanonicalLocalStore(bytes: ByteArray, vaultId: String) {
         if (bytes.isEmpty() || bytes.size > MAX_STORE_BYTES) {
             throw StorageFailure()
@@ -398,6 +571,245 @@ internal class AtlasVaultAndroidStorage(
         } finally {
             canonical.fill(0)
         }
+    }
+
+    private fun readProtectedBlob(
+        file: File,
+        purpose: String,
+        maximumPlaintextBytes: Int,
+    ): ByteArray? {
+        if (!atomicFileExists(file, atlasVaultRoot(create = false))) {
+            return null
+        }
+        val envelopeBytes = readBoundedFile(
+            file,
+            protectedEnvelopeMaximum(maximumPlaintextBytes),
+        )
+        try {
+            val envelope = parseStrictObject(envelopeBytes)
+            requireExactKeys(
+                envelope,
+                setOf("format", "version", "purpose", "nonce", "ciphertext"),
+            )
+            if (envelope.opt("format") != PROTECTED_BLOB_FORMAT ||
+                strictInt(envelope.opt("version")) != PROTECTED_BLOB_VERSION ||
+                envelope.opt("purpose") != purpose
+            ) {
+                throw StorageFailure()
+            }
+            val canonical = canonicalJsonBytes(envelope)
+            try {
+                if (!MessageDigest.isEqual(envelopeBytes, canonical)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                canonical.fill(0)
+            }
+            val nonce = decodeCanonicalBase64(
+                strictString(envelope.opt("nonce")),
+                NONCE_BYTES,
+            )
+            val ciphertext = decodeCanonicalBase64Range(
+                strictString(envelope.opt("ciphertext")),
+                TAG_BYTES,
+                maximumPlaintextBytes + TAG_BYTES,
+            )
+            try {
+                val cipher = Cipher.getInstance(AES_GCM)
+                cipher.init(
+                    Cipher.DECRYPT_MODE,
+                    existingMasterKey(),
+                    GCMParameterSpec(TAG_BITS, nonce),
+                )
+                cipher.updateAAD(protectedBlobAad(purpose))
+                return cipher.doFinal(ciphertext).also {
+                    if (it.isEmpty() || it.size > maximumPlaintextBytes) {
+                        it.fill(0)
+                        throw StorageFailure()
+                    }
+                }
+            } finally {
+                nonce.fill(0)
+                ciphertext.fill(0)
+            }
+        } finally {
+            envelopeBytes.fill(0)
+        }
+    }
+
+    private fun createProtectedBlob(
+        file: File,
+        purpose: String,
+        plaintext: ByteArray,
+        maximumPlaintextBytes: Int,
+    ) {
+        if (plaintext.isEmpty() || plaintext.size > maximumPlaintextBytes) {
+            throw StorageFailure()
+        }
+        if (atomicFileExists(file, atlasVaultRoot(create = false))) {
+            throw StorageFailure()
+        }
+        val envelopeBytes = protectBlob(plaintext, purpose)
+        try {
+            atomicWrite(file, envelopeBytes, createOnly = true)
+            val restored = readProtectedBlob(
+                file,
+                purpose,
+                maximumPlaintextBytes,
+            ) ?: throw StorageFailure()
+            try {
+                if (!MessageDigest.isEqual(plaintext, restored)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                restored.fill(0)
+            }
+        } finally {
+            envelopeBytes.fill(0)
+        }
+    }
+
+    private fun replaceProtectedBlob(
+        file: File,
+        purpose: String,
+        plaintext: ByteArray,
+        expectedSha256: String,
+        maximumPlaintextBytes: Int,
+    ) {
+        if (plaintext.isEmpty() || plaintext.size > maximumPlaintextBytes) {
+            throw StorageFailure()
+        }
+        val expectedDigest = decodeSha256(expectedSha256)
+        try {
+            val current = readProtectedBlob(
+                file,
+                purpose,
+                maximumPlaintextBytes,
+            ) ?: throw StorageFailure()
+            try {
+                val actualDigest =
+                    MessageDigest.getInstance("SHA-256").digest(current)
+                try {
+                    if (!MessageDigest.isEqual(actualDigest, expectedDigest)) {
+                        throw StorageFailure()
+                    }
+                } finally {
+                    actualDigest.fill(0)
+                }
+            } finally {
+                current.fill(0)
+            }
+        } finally {
+            expectedDigest.fill(0)
+        }
+        val envelopeBytes = protectBlob(plaintext, purpose)
+        try {
+            atomicWrite(file, envelopeBytes, createOnly = false)
+            val restored = readProtectedBlob(
+                file,
+                purpose,
+                maximumPlaintextBytes,
+            ) ?: throw StorageFailure()
+            try {
+                if (!MessageDigest.isEqual(plaintext, restored)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                restored.fill(0)
+            }
+        } finally {
+            envelopeBytes.fill(0)
+        }
+    }
+
+    private fun deleteProtectedBlob(
+        file: File,
+        purpose: String,
+        expectedSha256: String,
+        allowAbsent: Boolean,
+        maximumPlaintextBytes: Int,
+    ) {
+        val current = readProtectedBlob(
+            file,
+            purpose,
+            maximumPlaintextBytes,
+        )
+        if (current == null) {
+            if (allowAbsent) {
+                return
+            }
+            throw StorageFailure()
+        }
+        val expectedDigest = decodeSha256(expectedSha256)
+        try {
+            val actualDigest = MessageDigest.getInstance("SHA-256").digest(current)
+            try {
+                if (!MessageDigest.isEqual(actualDigest, expectedDigest)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                actualDigest.fill(0)
+            }
+        } finally {
+            current.fill(0)
+            expectedDigest.fill(0)
+        }
+        ensureSafeAtomicState(file, atlasVaultRoot(create = false))
+        AtomicFile(file).delete()
+        if (atomicFileExists(file, atlasVaultRoot(create = false))) {
+            throw StorageFailure()
+        }
+    }
+
+    private fun protectBlob(plaintext: ByteArray, purpose: String): ByteArray {
+        val cipher = Cipher.getInstance(AES_GCM)
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateMasterKey())
+        cipher.updateAAD(protectedBlobAad(purpose))
+        val ciphertext = cipher.doFinal(plaintext)
+        val nonce = cipher.iv.copyOf()
+        if (nonce.size != NONCE_BYTES ||
+            ciphertext.size != plaintext.size + TAG_BYTES
+        ) {
+            nonce.fill(0)
+            ciphertext.fill(0)
+            throw StorageFailure()
+        }
+        try {
+            return canonicalJsonBytes(
+                linkedMapOf<String, Any>(
+                    "format" to PROTECTED_BLOB_FORMAT,
+                    "version" to PROTECTED_BLOB_VERSION,
+                    "purpose" to purpose,
+                    "nonce" to Base64.encodeToString(nonce, Base64.NO_WRAP),
+                    "ciphertext" to
+                        Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                ),
+            )
+        } finally {
+            nonce.fill(0)
+            ciphertext.fill(0)
+        }
+    }
+
+    private fun validateCanonicalJsonDocument(bytes: ByteArray, maximum: Int) {
+        if (bytes.isEmpty() || bytes.size > maximum) {
+            throw StorageFailure()
+        }
+        val value = parseStrictObject(bytes)
+        val canonical = canonicalJsonBytes(value)
+        try {
+            if (!MessageDigest.isEqual(bytes, canonical)) {
+                throw StorageFailure()
+            }
+        } finally {
+            canonical.fill(0)
+        }
+    }
+
+    private fun protectedEnvelopeMaximum(maximumPlaintextBytes: Int): Int {
+        val encodedMaximum =
+            ((maximumPlaintextBytes + TAG_BYTES + 2) / 3) * 4
+        return encodedMaximum + MAX_PROTECTED_ENVELOPE_OVERHEAD
     }
 
     private fun atomicWrite(file: File, bytes: ByteArray, createOnly: Boolean) {
@@ -548,6 +960,11 @@ internal class AtlasVaultAndroidStorage(
             .toByteArray(StandardCharsets.UTF_8)
     }
 
+    private fun protectedBlobAad(purpose: String): ByteArray {
+        return "$PROTECTED_BLOB_AAD_PREFIX:$APPLICATION_ID:$purpose"
+            .toByteArray(StandardCharsets.UTF_8)
+    }
+
     private fun keyFile(vaultId: String, createParent: Boolean): File {
         validateVaultId(vaultId)
         val root = keysRoot(createParent)
@@ -560,6 +977,24 @@ internal class AtlasVaultAndroidStorage(
         validateVaultId(vaultId)
         val root = vaultDirectory(vaultId, createParent)
         return File(root, LOCAL_STORE_FILE).also {
+            ensureContained(it, root)
+        }
+    }
+
+    private fun migrationJournalFile(createParent: Boolean): File {
+        val root = File(atlasVaultRoot(createParent), "migrations").also {
+            ensureDirectory(it, createParent)
+        }
+        return File(root, MIGRATION_JOURNAL_FILE).also {
+            ensureContained(it, root)
+        }
+    }
+
+    private fun selectedVaultFile(createParent: Boolean): File {
+        val root = File(atlasVaultRoot(createParent), "selection").also {
+            ensureDirectory(it, createParent)
+        }
+        return File(root, SELECTED_VAULT_FILE).also {
             ensureContained(it, root)
         }
     }
@@ -651,6 +1086,10 @@ internal class AtlasVaultAndroidStorage(
         return call.argument<ByteArray>(key) ?: throw StorageFailure()
     }
 
+    private fun requiredBoolean(call: MethodCall, key: String): Boolean {
+        return call.argument<Boolean>(key) ?: throw StorageFailure()
+    }
+
     private fun parseStrictObject(bytes: ByteArray): JSONObject {
         val text = try {
             StandardCharsets.UTF_8.newDecoder()
@@ -720,12 +1159,45 @@ internal class AtlasVaultAndroidStorage(
         return decoded
     }
 
+    private fun decodeCanonicalBase64Range(
+        value: String,
+        minimumLength: Int,
+        maximumLength: Int,
+    ): ByteArray {
+        if (value.any { it.isWhitespace() }) {
+            throw StorageFailure()
+        }
+        val decoded = try {
+            Base64.decode(value, Base64.NO_WRAP)
+        } catch (_: IllegalArgumentException) {
+            throw StorageFailure()
+        }
+        if (decoded.size !in minimumLength..maximumLength ||
+            Base64.encodeToString(decoded, Base64.NO_WRAP) != value
+        ) {
+            decoded.fill(0)
+            throw StorageFailure()
+        }
+        return decoded
+    }
+
     private fun decodeSha256(value: String): ByteArray {
         if (!SHA256_PATTERN.matches(value)) {
             throw StorageFailure()
         }
         return ByteArray(SHA256_BYTES) { index ->
             value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
+
+    private fun sha256Hex(value: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value)
+        try {
+            return digest.joinToString(separator = "") { byte ->
+                "%02x".format(Locale.US, byte.toInt() and 0xff)
+            }
+        } finally {
+            digest.fill(0)
         }
     }
 
@@ -813,6 +1285,15 @@ internal class AtlasVaultAndroidStorage(
         const val KEY_WRAP_AAD_PREFIX = "atlasvault-android-key-wrap-v1"
         const val KEY_WRAP_FORMAT = "atlasvault-android-key-wrap"
         const val KEY_WRAP_VERSION = 1
+        const val PROTECTED_BLOB_AAD_PREFIX =
+            "atlasvault-android-protected-blob-v1"
+        const val PROTECTED_BLOB_FORMAT = "atlasvault-android-protected-blob"
+        const val PROTECTED_BLOB_VERSION = 1
+        const val MIGRATION_JOURNAL_PURPOSE =
+            "plaintext-private-state-migration"
+        const val SELECTED_VAULT_PURPOSE = "selected-vault"
+        const val SELECTED_VAULT_FORMAT = "atlasvault-android-selected-vault"
+        const val SELECTED_VAULT_VERSION = 1
         const val LOCAL_STORE_FORMAT = "atlasvault-local-store"
         const val LOCAL_STORE_VERSION = 1
         const val VAULT_FORMAT = "atlas-vault"
@@ -820,11 +1301,17 @@ internal class AtlasVaultAndroidStorage(
         const val LOCAL_STORE_FILE = "atlasvault-local-store.json"
         const val VAULT_KEY_BYTES = 32
         const val NONCE_BYTES = 12
+        const val TAG_BYTES = 16
         const val WRAPPED_KEY_BYTES = 48
         const val TAG_BITS = 128
         const val SHA256_BYTES = 32
         const val MAX_KEY_ENVELOPE_BYTES = 16 * 1024
         const val MAX_STORE_BYTES = 128 * 1024 * 1024
+        const val MAX_MIGRATION_JOURNAL_BYTES = 16 * 1024 * 1024
+        const val MAX_SELECTED_VAULT_BYTES = 4 * 1024
+        const val MAX_PROTECTED_ENVELOPE_OVERHEAD = 4 * 1024
+        const val MIGRATION_JOURNAL_FILE = "plaintext-private-state.json.enc"
+        const val SELECTED_VAULT_FILE = "selected-vault.json.enc"
 
         val SUPPORTED_METHODS = setOf(
             "capabilities",
@@ -836,6 +1323,13 @@ internal class AtlasVaultAndroidStorage(
             "createLocalStore",
             "replaceLocalStore",
             "deleteLocalStore",
+            "readPlaintextMigrationJournal",
+            "createPlaintextMigrationJournal",
+            "replacePlaintextMigrationJournal",
+            "deletePlaintextMigrationJournal",
+            "readSelectedVault",
+            "createSelectedVault",
+            "clearSelectedVault",
         )
         val VAULT_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
         val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")

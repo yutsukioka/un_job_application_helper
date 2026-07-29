@@ -120,6 +120,44 @@ void main() {
     },
   );
 
+  test(
+    'later process activation remains explicit and restores migrated values',
+    () async {
+      final store = _store(<vault.AtlasVaultEncryptedRecord>[
+        await _savedSearchRecord(
+          name: 'Migrated search',
+          query: 'migration',
+          recordId: '10000000-0000-4000-8000-000000000021',
+          revision: '20000000-0000-4000-8000-000000000021',
+        ),
+        await _savedJobRecord(
+          jobKey: 'migration:job',
+          recordId: '10000000-0000-4000-8000-000000000022',
+          revision: '20000000-0000-4000-8000-000000000022',
+        ),
+      ]);
+      final keyStore = _FakeSecureKeyStore(key: _vaultKey());
+      final storeIO = _FakeLocalStoreIO(store: store);
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: keyStore,
+        localStoreIO: storeIO,
+      );
+
+      expect(runtime.isActive, isFalse);
+      expect(keyStore.calls, isEmpty);
+      expect(storeIO.calls, isEmpty);
+
+      expect(
+        await runtime.activateExisting(_vaultId),
+        AtlasVaultActivationResult.activated,
+      );
+
+      final snapshot = await runtime.read();
+      expect(snapshot.savedSearches.single.name, 'Migrated search');
+      expect(snapshot.trackerRecords.single.jobKey, 'migration:job');
+    },
+  );
+
   test('deactivation supersedes a direct runtime activation', () async {
     final enteredLoad = Completer<void>();
     final releaseLoad = Completer<void>();

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -168,4 +170,85 @@ void main() {
     expect(failure.toString(), isNot(contains('native-secret')));
     expect(failure.toString(), isNot(contains('/private/path')));
   });
+
+  test('protected migration journal uses exact CAS channel methods', () async {
+    final journal = AtlasAndroidProtectedMigrationJournalStore(
+      channel: recorder.channel,
+    );
+    final bytes = Uint8List.fromList(utf8.encode('{"canonical":true}'));
+    recorder.handler = (call) async {
+      switch (call.method) {
+        case 'readPlaintextMigrationJournal':
+          expect(call.arguments, isNull);
+          return bytes;
+        case 'createPlaintextMigrationJournal':
+          expect(call.arguments, <String, Object?>{'journal_bytes': bytes});
+          return null;
+        case 'replacePlaintextMigrationJournal':
+          expect(call.arguments, <String, Object?>{
+            'journal_bytes': bytes,
+            'expected_sha256': 'a' * 64,
+          });
+          return null;
+        case 'deletePlaintextMigrationJournal':
+          expect(call.arguments, <String, Object?>{
+            'expected_sha256': 'b' * 64,
+            'allow_absent': false,
+          });
+          return null;
+      }
+      fail('Unexpected migration journal method.');
+    };
+
+    final restored = await journal.read();
+    expect(restored, orderedEquals(bytes));
+    expect(identical(restored, bytes), isFalse);
+    await journal.create(bytes);
+    await journal.replace(bytes, expectedSha256: 'a' * 64);
+    await journal.delete(expectedSha256: 'b' * 64);
+
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'readPlaintextMigrationJournal',
+      'createPlaintextMigrationJournal',
+      'replacePlaintextMigrationJournal',
+      'deletePlaintextMigrationJournal',
+    ]);
+  });
+
+  test(
+    'selected vault registry is create-only and expected-ID cleared',
+    () async {
+      final selection = AtlasAndroidSelectedVaultStore(
+        channel: recorder.channel,
+      );
+      recorder.handler = (call) async {
+        switch (call.method) {
+          case 'readSelectedVault':
+            expect(call.arguments, isNull);
+            return 'vault-alpha';
+          case 'createSelectedVault':
+            expect(call.arguments, <String, Object?>{
+              'vault_id': 'vault-alpha',
+            });
+            return null;
+          case 'clearSelectedVault':
+            expect(call.arguments, <String, Object?>{
+              'expected_vault_id': 'vault-alpha',
+            });
+            return null;
+        }
+        fail('Unexpected selected-vault method.');
+      };
+
+      expect(await selection.read(), 'vault-alpha');
+      await selection.create('vault-alpha');
+      await selection.clear('vault-alpha');
+
+      expect(recorder.calls.map((call) => call.method), <String>[
+        'readSelectedVault',
+        'createSelectedVault',
+        'clearSelectedVault',
+      ]);
+    },
+  );
 }

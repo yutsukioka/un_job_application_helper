@@ -194,7 +194,229 @@ void main() {
       expect(transport.requests[4].jsonBody?['summary'], 'Text: finance');
       expect(transport.requests[4].jsonBody?['request'], isA<Map>());
     });
+
+    test(
+      'migration delete handles are path encoded and errors redact them',
+      () async {
+        final transport = _FailingDeleteTransport();
+        final client = AtlasAPIClient(
+          baseURL: Uri.parse('http://127.0.0.1:8765'),
+          transport: transport,
+        );
+
+        await expectLater(
+          client.deleteSavedSearch('private/name'),
+          throwsA(isA<AtlasAPIException>()),
+        );
+        await expectLater(
+          client.deleteTrackerRecord('private tracker id'),
+          throwsA(isA<AtlasAPIException>()),
+        );
+
+        expect(transport.requests.map((request) => request.path), <String>[
+          'api/saved-searches/private%2Fname',
+          'api/tracker/private%20tracker%20id',
+        ]);
+        for (final error in transport.errors) {
+          expect(error.toString(), isNot(contains('private')));
+          expect(error.toString(), isNot(contains('tracker')));
+        }
+      },
+    );
+
+    test(
+      'migration compatibility inventory requires complete raw rows',
+      () async {
+        final validSavedSearch = <String, Object?>{
+          'name': 'Private search',
+          'description': null,
+          'request': _compatibilityVacancySearchRequest(),
+          'created_at': '2026-07-01T00:00:00Z',
+          'updated_at': '2026-07-02T00:00:00Z',
+        };
+        final validTracker = <String, Object?>{
+          'id': 'tracker-1',
+          'job_key': 'source:private-job',
+          'status': 'saved',
+          'notes': null,
+          'applied_at': null,
+          'updated_at': '2026-07-02T00:00:00Z',
+        };
+        final validClient = AtlasAPIClient(
+          transport: _MigrationInventoryTransport(
+            savedSearches: <Object?>[validSavedSearch],
+            trackerRecords: <Object?>[validTracker],
+          ),
+        );
+
+        final savedSearch =
+            (await validClient.savedSearchesForPlaintextMigration()).single;
+        expect(savedSearch.name, 'Private search');
+        expect(savedSearch.request.text, 'private');
+        expect(savedSearch.request.organizations, <String>['UN']);
+        expect(savedSearch.request.sourceIDs, <String>['source-1']);
+        expect(savedSearch.request.countriesISO3, <String>['JPN']);
+        expect(savedSearch.request.gradeCodes, <String>['P3']);
+        expect(savedSearch.request.workModalities, <String>['remote']);
+        expect(savedSearch.request.closingDateTo, '2026-12-31');
+        expect(savedSearch.request.includeFacets, isTrue);
+        expect(
+          (await validClient.trackerRecordsForPlaintextMigration()).single.id,
+          'tracker-1',
+        );
+
+        for (final malformed in <Object?>[
+          <String, Object?>{'not': 'a list'},
+          <Object?>[validSavedSearch, 'dropped private row'],
+          <Object?>[
+            <String, Object?>{...validSavedSearch}..remove('name'),
+          ],
+          <Object?>[
+            <String, Object?>{...validSavedSearch, 'unknown': 'private'},
+          ],
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: malformed,
+              trackerRecords: const <Object?>[],
+            ),
+          );
+          await expectLater(
+            client.savedSearchesForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+
+        for (final malformedRequest in <Map<String, Object?>>[
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'include_facets': true,
+          },
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'regions': <String>['Asia'],
+          },
+          <String, Object?>{
+            ..._compatibilityVacancySearchRequest(),
+            'min_location_confidence': 1,
+          },
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: <Object?>[
+                <String, Object?>{
+                  ...validSavedSearch,
+                  'request': malformedRequest,
+                },
+              ],
+              trackerRecords: const <Object?>[],
+            ),
+          );
+          await expectLater(
+            client.savedSearchesForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+
+        for (final malformed in <Object?>[
+          <String, Object?>{'not': 'a list'},
+          <Object?>[validTracker, 7],
+          <Object?>[
+            <String, Object?>{...validTracker}..remove('job_key'),
+          ],
+          <Object?>[
+            <String, Object?>{...validTracker, 'unknown': 'private'},
+          ],
+        ]) {
+          final client = AtlasAPIClient(
+            transport: _MigrationInventoryTransport(
+              savedSearches: const <Object?>[],
+              trackerRecords: malformed,
+            ),
+          );
+          await expectLater(
+            client.trackerRecordsForPlaintextMigration(),
+            throwsA(isA<AtlasAPIException>()),
+          );
+        }
+      },
+    );
   });
+}
+
+Map<String, Object?> _compatibilityVacancySearchRequest() {
+  return <String, Object?>{
+    'text': 'private',
+    'status': <String>['open'],
+    'organizations': <String>['UN'],
+    'source_ids': <String>['source-1'],
+    'ats_families': <String>[],
+    'cities': <String>['Tokyo'],
+    'countries_iso3': <String>['JPN'],
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': <String>['international'],
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': <String>['P3'],
+    'ccog_codes': <String>[],
+    'ccog_families': <String>['IT'],
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': <String>['data'],
+    'contract_groups': <String>['staff'],
+    'seniority_groups': <String>['mid'],
+    'work_modalities': <String>['remote'],
+    'volunteer_kinds': <String>[],
+    'unv_categories': <String>[],
+    'unv_volunteer_types': <String>[],
+    'closing_date_from': null,
+    'closing_date_to': '2026-12-31',
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': false,
+    'exclude_expired_open': true,
+    'limit': 50,
+    'offset': 0,
+    'sort': 'closing_date_asc',
+  };
+}
+
+final class _MigrationInventoryTransport implements AtlasTransport {
+  const _MigrationInventoryTransport({
+    required this.savedSearches,
+    required this.trackerRecords,
+  });
+
+  final Object? savedSearches;
+  final Object? trackerRecords;
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    return switch (request.path) {
+      'api/saved-searches' => savedSearches,
+      'api/tracker' => trackerRecords,
+      _ => throw const AtlasAPIException.invalidResponse(),
+    };
+  }
+}
+
+final class _FailingDeleteTransport implements AtlasTransport {
+  final requests = <AtlasRequest>[];
+  final errors = <Object>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    requests.add(request);
+    const error = AtlasAPIException.invalidResponse();
+    errors.add(error);
+    throw error;
+  }
 }
 
 final class RecordingAtlasTransport implements AtlasTransport {
