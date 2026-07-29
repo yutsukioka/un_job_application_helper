@@ -566,7 +566,11 @@ final class _RecoveryScenario {
   }
 
   Future<void> expectRolledBack() async {
-    expect(await nativeJournalStore.read(), isNull);
+    expect(await nativeJournalStore.read(), isNotNull);
+    expect(
+      await coordinator.inspectAuthority(),
+      AtlasVaultPlaintextAuthorityState.migrationPending,
+    );
     expect(await nativeSelectedStore.read(), isNull);
     expect(await nativeLocalStore.read(expectedVaultId), isNull);
     expect(await nativeKeyStore.containsVaultKey(expectedVaultId), isFalse);
@@ -577,6 +581,11 @@ final class _RecoveryScenario {
     final cacheState = await cacheStore.readPrivateStateForMigration();
     expect(cacheState.savedSearches, hasLength(1));
     expect(cacheState.trackerRecords, hasLength(1));
+    final restorer = _RecoveryLegacyRestorer();
+    await coordinator.restoreReviewedLegacyPrivateState(restorer);
+    expect(restorer.restored?.savedSearches, hasLength(1));
+    expect(restorer.restored?.trackerRecords, hasLength(1));
+    expect(await nativeJournalStore.read(), isNull);
   }
 
   Future<void> expectCompleted() async {
@@ -827,6 +836,18 @@ final class _InterruptingCacheSource implements AtlasLocalCacheMigrationSource {
       failAfterNextRemove = false;
       throw StateError('interrupted after cache cleanup');
     }
+  }
+}
+
+final class _RecoveryLegacyRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  AtlasVaultPlaintextPrivateState? restored;
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
+    restored = reviewedState;
   }
 }
 

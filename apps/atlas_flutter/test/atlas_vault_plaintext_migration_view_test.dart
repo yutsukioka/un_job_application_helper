@@ -256,6 +256,7 @@ void main() {
       });
       final coordinator = _FakeMigrationCoordinator(
         authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        durableRollbackPending: true,
       )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
       final restorer = _FakeLegacyPrivateStateRestorer(
         entered: restoreEntered,
@@ -274,7 +275,14 @@ void main() {
       );
 
       final discard = owner.discardPreparedMigration();
-      await restoreEntered.future;
+      await Future.any<void>(<Future<void>>[
+        restoreEntered.future,
+        discard.then<void>((_) {
+          throw TestFailure(
+            'rollback completed without durable legacy restoration',
+          );
+        }),
+      ]);
 
       expect(restorer.calls, <String>['restore']);
       expect(
@@ -305,6 +313,7 @@ void main() {
     () async {
       final coordinator = _FakeMigrationCoordinator(
         authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+        durableRollbackPending: true,
       )..resumeStage = AtlasVaultPlaintextMigrationStage.encryptedVerified;
       final restorer = _FakeLegacyPrivateStateRestorer(fail: true);
       final owner = AtlasVaultPlaintextMigrationPresentationOwner(
@@ -428,7 +437,7 @@ void main() {
       releaseInspect: releaseInspect,
       gatedInspectCall: 2,
       failGatedInspect: true,
-    )..resumeCompletesLegacy = true;
+    )..resumeCompletesDurableRollback = true;
     final owner = AtlasVaultPlaintextMigrationPresentationOwner(
       coordinator: coordinator,
     );
@@ -477,7 +486,7 @@ void main() {
   test('completed rollback resume returns owner to legacy authority', () async {
     final coordinator = _FakeMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
-    )..resumeCompletesLegacy = true;
+    )..resumeCompletesDurableRollback = true;
     final restorer = _FakeLegacyPrivateStateRestorer();
     final owner = AtlasVaultPlaintextMigrationPresentationOwner(
       coordinator: coordinator,
@@ -606,6 +615,7 @@ final class _FakeMigrationCoordinator
     this.failGatedInspect = false,
     this.discardEntered,
     this.releaseDiscard,
+    this.durableRollbackPending = false,
   });
 
   final List<String> calls = <String>[];
@@ -618,12 +628,13 @@ final class _FakeMigrationCoordinator
   final bool failGatedInspect;
   final Completer<void>? discardEntered;
   final Completer<void>? releaseDiscard;
+  final bool durableRollbackPending;
   int _inspectCalls = 0;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
   bool preparedRollbackAvailable = false;
   bool failFinalize = false;
-  bool resumeCompletesLegacy = false;
+  bool resumeCompletesDurableRollback = false;
   AtlasVaultPlaintextAuthorityState? resumeFailureAuthority;
 
   AtlasVaultPlaintextMigrationSummary get _inventorySummary =>
@@ -684,20 +695,23 @@ final class _FakeMigrationCoordinator
     calls.add('discard');
     discardEntered?.complete();
     await releaseDiscard?.future;
-    authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+    authorityState = durableRollbackPending
+        ? AtlasVaultPlaintextAuthorityState.migrationPending
+        : AtlasVaultPlaintextAuthorityState.legacy;
   }
 
   @override
   Future<void> restoreReviewedLegacyPrivateState(
     AtlasVaultLegacyPrivateStateRestoring restorer,
-  ) {
-    return restorer.restoreLegacyPrivateStateAfterRollback(
+  ) async {
+    await restorer.restoreLegacyPrivateStateAfterRollback(
       AtlasVaultPlaintextPrivateState(
         savedSearches: const <AtlasSavedSearch>[],
         trackerRecords: const <AtlasApplicationRecord>[],
         authorityBaseURL: Uri.parse('http://atlas.test:8765'),
       ),
     );
+    authorityState = AtlasVaultPlaintextAuthorityState.legacy;
   }
 
   @override
@@ -719,8 +733,8 @@ final class _FakeMigrationCoordinator
       authorityState = failureAuthority;
       throw const AtlasVaultPlaintextMigrationException();
     }
-    if (resumeCompletesLegacy) {
-      authorityState = AtlasVaultPlaintextAuthorityState.legacy;
+    if (resumeCompletesDurableRollback) {
+      authorityState = AtlasVaultPlaintextAuthorityState.migrationPending;
       return _inventorySummary;
     }
     return _stageSummary(resumeStage);

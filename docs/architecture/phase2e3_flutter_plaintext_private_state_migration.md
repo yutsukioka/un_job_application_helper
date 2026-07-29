@@ -238,14 +238,19 @@ the persisted rollback operation; generic preparation resume cannot reconstruct
 discarded resources. After rollback is read back as complete, the owner remains
 in a blocking `restoringLegacy` state while the controller drains admitted
 plaintext work and installs the coordinator's exact reviewed, same-authority
-inventory. That inventory is re-read from memory, cache, and both compatibility
-families, matched against the protected journal before journal deletion, and
-retained only for a one-shot coordinator-to-controller handoff. Only then may
-the owner publish legacy authority. A restart therefore does not present empty
-saved-search and tracker lists while claiming rollback is ready, and a mixed
-cache plus compatibility inventory restores cache-only and remote-only records
-together without a second compatibility-network read. The presentation owner
-receives no private value. A failed or stale handoff installs nothing. The
+inventory. That inventory remains durably encoded in the protected journal
+after staged store and key deletion. The coordinator rereads memory, cache, and
+both compatibility families and matches them against the journal before
+handoff. It transfers the immutable journal inventory directly to the
+controller without another cache or compatibility read, then revalidates every
+authority and source after controller acknowledgement. The journal is deleted
+and read back only after installation succeeds. Only then may the owner publish
+legacy authority. A process restart in this interval therefore remains
+`migrationPending`, blocks legacy writes, and requires explicit Resume; it
+cannot bypass restoration or present an incomplete cache as authoritative. A
+mixed cache plus compatibility inventory restores cache-only and remote-only
+records together. The presentation owner receives no private value. A failed
+or stale handoff leaves the journal durable and installs no new authority. The
 coordinator separately inspects rollback availability from the protected
 journal. The owner exposes Discard after an interrupted preparation only when
 the journal remains at `prepared` or `encrypted_verified`, no plaintext
@@ -331,12 +336,15 @@ completed but unacknowledged journal deletion publishes active authority.
 Resume adopts only exact expected resources and persisted progress. It handles
 key, store, deletion, cache, selection, activation, and journal-clear
 interruptions without repeating completed destructive operations. Rollback
-resume separately adopts acknowledged staged-store and staged-key deletion and
-returns the owner to legacy authority after clearing the journal and restoring
-the preserved local private snapshot. Owner revision, controller authority
-generation, runtime activity, and cache authority are rechecked around the
-asynchronous read so a hide or superseding transition cannot republish stale
-private state.
+resume separately adopts acknowledged staged-store and staged-key deletion.
+Its protected journal remains the durable restoration-pending authority until
+the exact reviewed four-source inventory is installed in the controller and
+acknowledged. Interruption before that acknowledgement returns to explicit
+Resume with legacy writes blocked. Owner revision, controller authority
+generation, runtime activity, compatibility authority, selection, local-store
+absence, key absence, and current inventory are rechecked around the
+asynchronous installation so a hide or superseding transition cannot republish
+stale private state.
 
 Owner authority-inspection completions are revision-fenced on both success and
 failure. Hiding or disposing the owner while an inspection is suspended leaves
@@ -457,7 +465,10 @@ operations so stale candidate reads cannot republish private state.
 The final rollback-restoration correction transfers the coordinator's exact
 reviewed cache-and-compatibility union directly to the controller, so an
 incomplete cache cannot hide remote-only records and restoration performs no
-second compatibility read.
+second compatibility read. The subsequent exact-head correction keeps that
+union in the encrypted journal across process termination, classifies the
+interval as migration-pending, requires explicit Resume, and clears the journal
+only after the controller acknowledges exact installation.
 
 ## 54. Android Integration Evidence
 

@@ -209,7 +209,7 @@ void main() {
 
       await coordinator.discardPrepared();
 
-      expect(await journalStore.read(), isNull);
+      expect(await journalStore.read(), isNotNull);
       expect(await keyStore.containsVaultKey(journal.vaultId), isFalse);
       expect(await localStore.read(journal.vaultId), isNull);
       expect(await selectedStore.read(), isNull);
@@ -223,6 +223,19 @@ void main() {
       );
       expect(compatibility.deleteCalls, 0);
       expect(memory.state.trackerRecords.single.notes, noteSentinel);
+
+      final rollbackRelaunched = buildCoordinator();
+      expect(
+        await rollbackRelaunched.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.migrationPending,
+      );
+      final rollbackSummary = await rollbackRelaunched.resume();
+      expect(rollbackSummary.stage, isNull);
+      final restorer = _CapturingLegacyRestorer();
+      await rollbackRelaunched.restoreReviewedLegacyPrivateState(restorer);
+      expect(restorer.restored?.savedSearches.single.name, search.name);
+      expect(restorer.restored?.trackerRecords.single.jobKey, tracker.jobKey);
+      expect(await journalStore.read(), isNull);
 
       await coordinator.inventory();
       await coordinator.prepare();
@@ -362,6 +375,18 @@ final class _CompatibilitySource
           .toList(growable: false),
     );
     return found;
+  }
+}
+
+final class _CapturingLegacyRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  AtlasVaultPlaintextPrivateState? restored;
+
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {
+    restored = reviewedState;
   }
 }
 

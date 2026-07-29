@@ -548,13 +548,12 @@ void main() {
 
       expect(fixture.localStore.store, isNull);
       expect(fixture.keyStore.keys, isEmpty);
-      expect(fixture.journal.bytes, isNull);
+      expect(fixture.journal.bytes, isNotNull);
       expect(fixture.events.skip(rollbackEventOffset), <String>[
         'journal.replace',
         'local-store.delete',
         'journal.replace',
         'key-store.delete',
-        'journal.delete',
       ]);
       expect(fixture.cache.removeCalls, 0);
       expect(fixture.compatibility.deleteSavedSearchCalls, 0);
@@ -562,6 +561,13 @@ void main() {
       expect(fixture.memory.state.savedSearches, hasLength(1));
       expect(fixture.cache.state.savedSearches, hasLength(1));
       expect(fixture.compatibility.state.savedSearches, hasLength(1));
+
+      await fixture.coordinator.restoreReviewedLegacyPrivateState(
+        _CapturingLegacyPrivateStateRestorer(),
+      );
+
+      expect(fixture.journal.bytes, isNull);
+      expect(fixture.events.last, 'journal.delete');
     },
   );
 
@@ -607,8 +613,20 @@ void main() {
       );
 
       await fixture.coordinator.discardPrepared();
+      expect(fixture.journal.bytes, isNotNull);
+      final restartedCoordinator = fixture.restartCoordinator();
+      expect(
+        await restartedCoordinator.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.migrationPending,
+      );
+      expect(
+        await restartedCoordinator.inspectPreparedRollbackAvailability(),
+        isFalse,
+      );
+      final resumed = await restartedCoordinator.resume();
+      expect(resumed.stage, isNull);
       final restorer = _CapturingLegacyPrivateStateRestorer();
-      await fixture.coordinator.restoreReviewedLegacyPrivateState(restorer);
+      await restartedCoordinator.restoreReviewedLegacyPrivateState(restorer);
 
       expect(restorer.calls, 1);
       expect(
@@ -660,6 +678,14 @@ void main() {
       expect(fixture.localStore.createCalls, createCalls);
       expect(fixture.localStore.store, isNull);
       expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.journal.bytes, isNotNull);
+      expect(
+        await fixture.coordinator.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.migrationPending,
+      );
+      await fixture.coordinator.restoreReviewedLegacyPrivateState(
+        _CapturingLegacyPrivateStateRestorer(),
+      );
       expect(fixture.journal.bytes, isNull);
       expect(
         await fixture.coordinator.inspectAuthority(),
@@ -693,6 +719,10 @@ void main() {
       expect(fixture.localStore.createCalls, storeCreateCalls);
       expect(fixture.localStore.store, isNull);
       expect(fixture.keyStore.keys, isEmpty);
+      expect(fixture.journal.bytes, isNotNull);
+      await fixture.coordinator.restoreReviewedLegacyPrivateState(
+        _CapturingLegacyPrivateStateRestorer(),
+      );
       expect(fixture.journal.bytes, isNull);
     },
   );
@@ -1121,6 +1151,24 @@ final class _MigrationFixture {
           Uint8List.fromList(List<int>.generate(32, (index) => index + 1)),
       nonceProvider: () =>
           Uint8List.fromList(List<int>.generate(12, (index) => index + 1)),
+    );
+  }
+
+  AtlasVaultPlaintextMigrationCoordinator restartCoordinator() {
+    return AtlasVaultPlaintextMigrationCoordinator(
+      inMemorySource: memory,
+      compatibilitySource: compatibility,
+      cacheSource: cache,
+      operationAdmission: admission,
+      journalStore: journal,
+      selectedVaultStore: selection,
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
+      privateAuthority: privateAuthority,
+      now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
+      uuidProvider: () => throw StateError('Unexpected UUID request.'),
+      vaultKeyProvider: () => throw StateError('Unexpected key request.'),
+      nonceProvider: () => throw StateError('Unexpected nonce request.'),
     );
   }
 

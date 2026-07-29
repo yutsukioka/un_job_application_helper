@@ -235,7 +235,8 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         if (!_isCurrent(revision)) {
           return;
         }
-        if (authority != AtlasVaultPlaintextAuthorityState.legacy) {
+        if (authority != AtlasVaultPlaintextAuthorityState.legacy &&
+            authority != AtlasVaultPlaintextAuthorityState.migrationPending) {
           throw const AtlasVaultPlaintextMigrationException();
         }
         status = await _restoreLegacyPrivateState(revision);
@@ -440,7 +441,8 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
       }
       _preparedRollbackAvailable = false;
-      if (authority == AtlasVaultPlaintextAuthorityState.legacy) {
+      if (authority == AtlasVaultPlaintextAuthorityState.legacy ||
+          authority == AtlasVaultPlaintextAuthorityState.migrationPending) {
         return _restoreLegacyPrivateState(revision);
       }
       return switch (authority) {

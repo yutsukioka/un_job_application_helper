@@ -801,7 +801,6 @@ final class AtlasVaultPlaintextMigrationCoordinator
   final Uint8List Function() _nonceProvider;
 
   _MigrationInventory? _reviewedInventory;
-  _MigrationInventory? _rollbackRestorationInventory;
   bool _operating = false;
 
   @override
@@ -878,6 +877,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
             journal.deletedTrackerRecordIds.isNotEmpty ||
             journal.cacheCleared ||
             journal.selectionCreated) {
+          return false;
+        }
+        if (journal.rollbackStarted && journal.rollbackStoreDeleted) {
           return false;
         }
         return await _selectedVaultStore.read() == null;
@@ -1030,7 +1032,6 @@ final class AtlasVaultPlaintextMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationSummary> _continueRollback(
     AtlasVaultPlaintextMigrationJournal initialJournal,
   ) async {
-    _rollbackRestorationInventory = null;
     var journal = initialJournal;
     if (!journal.rollbackStarted ||
         journal.stage.index >=
@@ -1080,11 +1081,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
     if (!_journalMatchesInventory(journal, after)) {
       throw const AtlasVaultPlaintextMigrationException();
     }
-    if (!await _deleteJournalWithReadBack(journal)) {
-      throw const AtlasVaultPlaintextMigrationException();
-    }
     _reviewedInventory = after;
-    _rollbackRestorationInventory = after;
     return after.summary();
   }
 
@@ -1094,36 +1091,44 @@ final class AtlasVaultPlaintextMigrationCoordinator
   ) {
     return _serialized(() async {
       try {
-        final inventory = _rollbackRestorationInventory;
-        if (inventory == null ||
+        final journal = await _readJournalRequired();
+        if (!journal.rollbackStarted ||
+            !journal.rollbackStoreDeleted ||
+            journal.stage.index >=
+                AtlasVaultPlaintextMigrationStage.commitInProgress.index ||
             await _selectedVaultStore.read() != null ||
             _privateAuthority.isEncryptedPrivateStateActive ||
             _currentCompatibilityAuthority() !=
-                inventory.compatibilityAuthority) {
+                journal.compatibilityAuthority ||
+            await _localStoreIO.read(journal.vaultId) != null ||
+            await _secureKeyStore.containsVaultKey(journal.vaultId)) {
           throw const AtlasVaultPlaintextMigrationException();
         }
-        final journalBytes = await _journalStore.read();
-        try {
-          if (journalBytes != null) {
-            throw const AtlasVaultPlaintextMigrationException();
-          }
-        } finally {
-          _wipe(journalBytes);
+        final before = await _readInventory();
+        if (!_journalMatchesInventory(journal, before)) {
+          throw const AtlasVaultPlaintextMigrationException();
         }
         await restorer.restoreLegacyPrivateStateAfterRollback(
           AtlasVaultPlaintextPrivateState(
-            savedSearches: inventory.savedSearches,
-            trackerRecords: inventory.trackerRecords,
-            authorityBaseURL: Uri.parse(inventory.compatibilityAuthority),
+            savedSearches: journal.savedSearches,
+            trackerRecords: journal.trackerRecords,
+            authorityBaseURL: Uri.parse(journal.compatibilityAuthority),
           ),
         );
         if (await _selectedVaultStore.read() != null ||
             _privateAuthority.isEncryptedPrivateStateActive ||
             _currentCompatibilityAuthority() !=
-                inventory.compatibilityAuthority) {
+                journal.compatibilityAuthority ||
+            await _localStoreIO.read(journal.vaultId) != null ||
+            await _secureKeyStore.containsVaultKey(journal.vaultId)) {
           throw const AtlasVaultPlaintextMigrationException();
         }
-        _rollbackRestorationInventory = null;
+        final after = await _readInventory();
+        if (!_journalMatchesInventory(journal, after) ||
+            !await _deleteJournalWithReadBack(journal)) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+        _reviewedInventory = after;
       } on AtlasVaultPlaintextMigrationException {
         rethrow;
       } catch (_) {
