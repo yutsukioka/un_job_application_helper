@@ -129,6 +129,8 @@ abstract interface class AtlasVaultPlaintextMigrationPrivateAuthority {
 abstract interface class AtlasVaultPlaintextMigrationCoordinating {
   Future<AtlasVaultPlaintextAuthorityState> inspectAuthority();
 
+  Future<bool> inspectPreparedRollbackAvailability();
+
   Future<AtlasVaultPlaintextMigrationSummary> inventory();
 
   Future<AtlasVaultPlaintextMigrationSummary> prepare();
@@ -841,6 +843,42 @@ final class AtlasVaultPlaintextMigrationCoordinator
       });
     } catch (_) {
       return AtlasVaultPlaintextAuthorityState.recoveryRequired;
+    }
+  }
+
+  @override
+  Future<bool> inspectPreparedRollbackAvailability() async {
+    try {
+      return await _serialized(() async {
+        final journalBytes = await _journalStore.read();
+        if (journalBytes == null) {
+          return false;
+        }
+        late final AtlasVaultPlaintextMigrationJournal journal;
+        try {
+          journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+            journalBytes,
+          );
+        } finally {
+          _wipe(journalBytes);
+        }
+        if (journal.stage != AtlasVaultPlaintextMigrationStage.prepared &&
+            journal.stage !=
+                AtlasVaultPlaintextMigrationStage.encryptedVerified) {
+          return false;
+        }
+        if (journal.deletedSavedSearchNames.isNotEmpty ||
+            journal.deletedTrackerRecordIds.isNotEmpty ||
+            journal.cacheCleared ||
+            journal.selectionCreated) {
+          return false;
+        }
+        return await _selectedVaultStore.read() == null;
+      });
+    } on AtlasVaultPlaintextMigrationException {
+      rethrow;
+    } catch (_) {
+      throw const AtlasVaultPlaintextMigrationException();
     }
   }
 

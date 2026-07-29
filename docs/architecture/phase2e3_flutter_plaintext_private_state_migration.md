@@ -244,7 +244,14 @@ and a cache containing private state requires no compatibility-network
 refresh. When no private cache state exists, the controller instead performs
 both strict migration-only compatibility reads against the unchanged,
 generation-bound authority and installs their results atomically before
-publishing legacy readiness. A failed or stale read installs nothing.
+publishing legacy readiness. A failed or stale read installs nothing. The
+coordinator separately inspects rollback availability from the protected
+journal. The owner exposes Discard after an interrupted preparation only when
+the journal remains at `prepared` or `encrypted_verified`, no plaintext
+deletion or cache clearing is recorded, and no selected vault exists.
+Post-commit journals never expose Discard. If rollback completes but legacy
+projection restoration fails, the owner remains `recoveryRequired`; it does
+not reopen compatibility mutations or persisted private-cache writes.
 
 ## 31. Compatibility Saved-Search Deletion
 
@@ -326,6 +333,16 @@ the preserved local private snapshot. Owner revision, controller authority
 generation, runtime activity, and cache authority are rechecked around the
 asynchronous read so a hide or superseding transition cannot republish stale
 private state.
+
+Owner authority-inspection completions are revision-fenced on both success and
+failure. Hiding or disposing the owner while an inspection is suspended leaves
+the presentation hidden and prevents a late notification.
+
+Test Connection, Save and Reload, and Local Save Refresh each receive a
+normalized source-authority operation token. Every asynchronous health,
+search, compatibility, tracker, update, and source read rechecks that token
+before publication. A newer operation supersedes older candidate-server work,
+so stale private projections cannot overwrite the saved authority.
 
 ## 42. Authority Bootstrap
 
@@ -429,7 +446,11 @@ cycle binds the in-memory projection to its actual compatibility authority, so
 records loaded by a candidate-server connection test cannot merge into another
 server's migration. It also restores remote-only legacy records through strict
 migration reads when no private cache snapshot exists, while retaining the
-cache-backed zero-network rollback path.
+cache-backed zero-network rollback path. The next exact-head correction keeps
+failed post-rollback restoration in a blocking recovery state, exposes safe
+pre-commit discard after an interrupted preparation, fences failed authority
+inspection after hide or disposal, and source-binds overlapping connection
+operations so stale candidate reads cannot republish private state.
 
 ## 54. Android Integration Evidence
 

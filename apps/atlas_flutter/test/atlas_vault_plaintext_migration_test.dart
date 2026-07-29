@@ -538,6 +538,10 @@ void main() {
       final fixture = _MigrationFixture();
       await fixture.coordinator.inventory();
       await fixture.coordinator.prepare();
+      expect(
+        await fixture.coordinator.inspectPreparedRollbackAvailability(),
+        isTrue,
+      );
       final rollbackEventOffset = fixture.events.length;
 
       await fixture.coordinator.discardPrepared();
@@ -576,6 +580,10 @@ void main() {
       expect(fixture.localStore.store, isNull);
       expect(fixture.keyStore.keys, isNotEmpty);
       expect(fixture.journal.bytes, isNotNull);
+      expect(
+        await fixture.coordinator.inspectPreparedRollbackAvailability(),
+        isTrue,
+      );
       final createCalls = fixture.localStore.createCalls;
 
       final resumed = await fixture.coordinator.resume();
@@ -631,6 +639,11 @@ void main() {
     fixture.journal.bytes = verified
         .transitionedTo(AtlasVaultPlaintextMigrationStage.commitInProgress)
         .canonicalBytes();
+
+    expect(
+      await fixture.coordinator.inspectPreparedRollbackAvailability(),
+      isFalse,
+    );
 
     await expectLater(
       fixture.coordinator.discardPrepared(),

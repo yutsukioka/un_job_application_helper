@@ -58,6 +58,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
   String? _operationKind;
   int _revision = 0;
   bool _disposed = false;
+  bool _preparedRollbackAvailable = false;
 
   bool get blocksLegacyPrivateAuthority {
     return switch (status) {
@@ -95,37 +96,69 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     };
   }
 
+  bool get canDiscardPreparedMigration {
+    return status == AtlasVaultPlaintextMigrationPresentationStatus.prepared ||
+        (status ==
+                AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired &&
+            _preparedRollbackAvailable);
+  }
+
   Future<void> bootstrapAuthority() {
     return _run('bootstrap', (revision) async {
-      final authority = await _coordinator.inspectAuthority();
+      try {
+        final authority = await _coordinator.inspectAuthority();
+        if (!_isCurrent(revision)) {
+          return;
+        }
+        var rollbackAvailable = false;
+        if (authority == AtlasVaultPlaintextAuthorityState.migrationPending) {
+          rollbackAvailable = await _coordinator
+              .inspectPreparedRollbackAvailability();
+          if (!_isCurrent(revision)) {
+            return;
+          }
+        }
+        _clearSummary();
+        _preparedRollbackAvailable = rollbackAvailable;
+        status = switch (authority) {
+          AtlasVaultPlaintextAuthorityState.unresolved =>
+            AtlasVaultPlaintextMigrationPresentationStatus.hidden,
+          AtlasVaultPlaintextAuthorityState.legacy =>
+            AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+          AtlasVaultPlaintextAuthorityState.migrationPending =>
+            AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+          AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive =>
+            AtlasVaultPlaintextMigrationPresentationStatus.activationRequired,
+          AtlasVaultPlaintextAuthorityState.encryptedActive =>
+            AtlasVaultPlaintextMigrationPresentationStatus.active,
+          AtlasVaultPlaintextAuthorityState.recoveryRequired =>
+            AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
+          AtlasVaultPlaintextAuthorityState.unsupported =>
+            AtlasVaultPlaintextMigrationPresentationStatus.unsupported,
+        };
+      } catch (_) {
+        if (!_isCurrent(revision)) {
+          return;
+        }
+        _clearSummary();
+        status =
+            AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
+      }
       if (!_isCurrent(revision)) {
         return;
       }
-      _clearSummary();
-      status = switch (authority) {
-        AtlasVaultPlaintextAuthorityState.unresolved =>
-          AtlasVaultPlaintextMigrationPresentationStatus.hidden,
-        AtlasVaultPlaintextAuthorityState.legacy =>
-          AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
-        AtlasVaultPlaintextAuthorityState.migrationPending =>
-          AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
-        AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive =>
-          AtlasVaultPlaintextMigrationPresentationStatus.activationRequired,
-        AtlasVaultPlaintextAuthorityState.encryptedActive =>
-          AtlasVaultPlaintextMigrationPresentationStatus.active,
-        AtlasVaultPlaintextAuthorityState.recoveryRequired =>
-          AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
-        AtlasVaultPlaintextAuthorityState.unsupported =>
-          AtlasVaultPlaintextMigrationPresentationStatus.unsupported,
-      };
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
   Future<void> reviewInventory() {
     return _run('inventory', (revision) async {
       status = AtlasVaultPlaintextMigrationPresentationStatus.inventorying;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
       try {
         final summary = await _coordinator.inventory();
         if (!_isCurrent(revision)) {
@@ -141,7 +174,9 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         status =
             AtlasVaultPlaintextMigrationPresentationStatus.conflictDetected;
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
@@ -152,7 +187,9 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         return;
       }
       status = AtlasVaultPlaintextMigrationPresentationStatus.preparing;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
       try {
         final summary = await _coordinator.prepare();
         if (!_isCurrent(revision)) {
@@ -169,19 +206,26 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         }
         status = await _statusAfterMigrationFailure(revision);
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
   Future<void> discardPreparedMigration() {
     return _run('discard', (revision) async {
-      if (status != AtlasVaultPlaintextMigrationPresentationStatus.prepared) {
+      if (!canDiscardPreparedMigration) {
         return;
       }
+      _preparedRollbackAvailable = false;
       status = AtlasVaultPlaintextMigrationPresentationStatus.preparing;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
+      var rollbackCompleted = false;
       try {
         await _coordinator.discardPrepared();
+        rollbackCompleted = true;
         if (!_isCurrent(revision)) {
           return;
         }
@@ -197,9 +241,17 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         if (!_isCurrent(revision)) {
           return;
         }
-        status = await _statusAfterMigrationFailure(revision);
+        status = rollbackCompleted
+            ? AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired
+            : await _statusAfterMigrationFailure(
+                revision,
+                legacyStatus: AtlasVaultPlaintextMigrationPresentationStatus
+                    .recoveryRequired,
+              );
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
@@ -208,8 +260,11 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
       if (status != AtlasVaultPlaintextMigrationPresentationStatus.prepared) {
         return;
       }
+      _preparedRollbackAvailable = false;
       status = AtlasVaultPlaintextMigrationPresentationStatus.finalizing;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
       try {
         final summary = await _coordinator.finalizeAndActivate();
         if (!_isCurrent(revision)) {
@@ -225,14 +280,19 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         }
         status = await _statusAfterMigrationFailure(revision);
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
   Future<void> resumeMigration() {
     return _run('resume', (revision) async {
+      _preparedRollbackAvailable = false;
       status = AtlasVaultPlaintextMigrationPresentationStatus.finalizing;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
       try {
         final summary = await _coordinator.resume();
         if (!_isCurrent(revision)) {
@@ -257,7 +317,9 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         }
         status = await _statusAfterMigrationFailure(revision);
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
@@ -267,8 +329,11 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
           AtlasVaultPlaintextMigrationPresentationStatus.activationRequired) {
         return;
       }
+      _preparedRollbackAvailable = false;
       status = AtlasVaultPlaintextMigrationPresentationStatus.activating;
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
       try {
         final summary = await _coordinator.activateSelected();
         if (!_isCurrent(revision)) {
@@ -285,7 +350,9 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         status =
             AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
       }
-      notifyListeners();
+      if (_isCurrent(revision)) {
+        notifyListeners();
+      }
     });
   }
 
@@ -322,17 +389,30 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
   bool _isCurrent(int revision) => !_disposed && revision == _revision;
 
   Future<AtlasVaultPlaintextMigrationPresentationStatus>
-  _statusAfterMigrationFailure(int revision) async {
+  _statusAfterMigrationFailure(
+    int revision, {
+    AtlasVaultPlaintextMigrationPresentationStatus legacyStatus =
+        AtlasVaultPlaintextMigrationPresentationStatus.failed,
+  }) async {
     try {
       final authority = await _coordinator.inspectAuthority();
       if (!_isCurrent(revision)) {
         return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
       }
+      if (authority == AtlasVaultPlaintextAuthorityState.migrationPending) {
+        final rollbackAvailable = await _coordinator
+            .inspectPreparedRollbackAvailability();
+        if (!_isCurrent(revision)) {
+          return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+        }
+        _preparedRollbackAvailable = rollbackAvailable;
+        return AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired;
+      }
+      _preparedRollbackAvailable = false;
       return switch (authority) {
-        AtlasVaultPlaintextAuthorityState.legacy =>
-          AtlasVaultPlaintextMigrationPresentationStatus.failed,
+        AtlasVaultPlaintextAuthorityState.legacy => legacyStatus,
         AtlasVaultPlaintextAuthorityState.migrationPending =>
-          AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+          AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
         AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive =>
           AtlasVaultPlaintextMigrationPresentationStatus.activationRequired,
         AtlasVaultPlaintextAuthorityState.encryptedActive =>
@@ -342,6 +422,10 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         _ => AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
       };
     } catch (_) {
+      if (!_isCurrent(revision)) {
+        return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+      }
+      _preparedRollbackAvailable = false;
       return AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
     }
   }
@@ -353,6 +437,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
       if (!_isCurrent(revision)) {
         return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
       }
+      _preparedRollbackAvailable = false;
       if (authority == AtlasVaultPlaintextAuthorityState.legacy) {
         return _restoreLegacyPrivateState(revision);
       }
@@ -370,6 +455,10 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
         _ => AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
       };
     } catch (_) {
+      if (!_isCurrent(revision)) {
+        return AtlasVaultPlaintextMigrationPresentationStatus.hidden;
+      }
+      _preparedRollbackAvailable = false;
       return AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired;
     }
   }
@@ -404,6 +493,7 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
     localCachePrivatePresent = false;
     compatibilityPrivatePresent = false;
     stage = null;
+    _preparedRollbackAvailable = false;
   }
 
   @override
@@ -494,6 +584,14 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
       case AtlasVaultPlaintextMigrationPresentationStatus.completionPending:
         return <Widget>[
           const Text('Migration requires explicit resumption.'),
+          if (owner.status ==
+                  AtlasVaultPlaintextMigrationPresentationStatus
+                      .resumeRequired &&
+              owner.canDiscardPreparedMigration)
+            OutlinedButton(
+              onPressed: owner.discardPreparedMigration,
+              child: const Text('Discard Prepared Migration'),
+            ),
           FilledButton(
             onPressed: owner.resumeMigration,
             child: const Text('Resume Migration'),

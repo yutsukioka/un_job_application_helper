@@ -13,6 +13,23 @@ typedef AtlasCacheStoreFactory =
       bool Function()? privateStateProtectionActive,
     });
 
+final class _AtlasConnectionOperation {
+  const _AtlasConnectionOperation({
+    required this.identifier,
+    required this.sourceAuthority,
+  });
+
+  final int identifier;
+  final Uri sourceAuthority;
+}
+
+final class _AtlasStaleConnectionOperation implements Exception {
+  const _AtlasStaleConnectionOperation();
+
+  @override
+  String toString() => 'Atlas connection operation is no longer current.';
+}
+
 const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 
 Future<AtlasLocalCacheStore?> _defaultCacheStore({
@@ -118,6 +135,12 @@ class AtlasAppController extends ChangeNotifier
   Future<void>? _cacheMutationOperation;
   Future<void>? _compatibilityPrivateMutationOperation;
   AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
+  int _connectionOperationSequence = 0;
+  _AtlasConnectionOperation? _activeConnectionOperation;
+  int? _testingConnectionOperationIdentifier;
+  int? _savingConnectionOperationIdentifier;
+  int? _refreshingConnectionOperationIdentifier;
+  int? _searchingConnectionOperationIdentifier;
 
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
@@ -241,6 +264,8 @@ class AtlasAppController extends ChangeNotifier
   @override
   void dispose() {
     _searchRefreshPendingAfterPrivateTransition = false;
+    _activeConnectionOperation = null;
+    _connectionOperationSequence += 1;
     _cancelSearchDebounce();
     super.dispose();
   }
@@ -495,65 +520,108 @@ class AtlasAppController extends ChangeNotifier
   }
 
   Future<void> testConnection(Uri candidateBaseURL) async {
+    final operation = _beginConnectionOperation(candidateBaseURL);
+    _testingConnectionOperationIdentifier = operation.identifier;
     isTesting = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(candidateBaseURL);
+      final client = _clientFactory(operation.sourceAuthority);
       final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
       healthSummary = health;
       connectionStatus = 'Connected';
       connectionMessage = _healthMessage(health);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       connectionStatus = 'Not connected';
       connectionMessage = 'Connection failed: $error';
     } finally {
-      isTesting = false;
-      notifyListeners();
+      if (_testingConnectionOperationIdentifier == operation.identifier) {
+        _testingConnectionOperationIdentifier = null;
+        isTesting = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
   Future<void> saveAndReload(Uri candidateBaseURL) async {
+    final operation = _beginConnectionOperation(candidateBaseURL);
+    _savingConnectionOperationIdentifier = operation.identifier;
     isSaving = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(candidateBaseURL);
-      healthSummary = await client.health();
-      baseURL = candidateBaseURL;
+      final client = _clientFactory(operation.sourceAuthority);
+      final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
+      healthSummary = health;
+      baseURL = operation.sourceAuthority;
       connectionStatus = 'Connected';
-      final refreshed = await _refreshSearch(client);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      final refreshed = await _refreshSearch(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
       await _writePersistedCache();
+      _requireCurrentConnectionOperation(operation, client);
       connectionMessage =
-          'Saved ${_formatBaseURL(candidateBaseURL)} and refreshed $refreshed ${_jobWord(refreshed)}.';
+          'Saved ${_formatBaseURL(operation.sourceAuthority)} and refreshed $refreshed ${_jobWord(refreshed)}.';
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       connectionStatus = 'Not connected';
       connectionMessage = 'Save failed: $error';
     } finally {
-      isSaving = false;
-      notifyListeners();
+      if (_savingConnectionOperationIdentifier == operation.identifier) {
+        _savingConnectionOperationIdentifier = null;
+        isSaving = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
   Future<void> refreshLocalSave() async {
+    final operation = _beginConnectionOperation(baseURL);
+    _refreshingConnectionOperationIdentifier = operation.identifier;
     isRefreshingLocalSave = true;
     connectionMessage = null;
     notifyListeners();
     try {
-      final client = _clientFactory(baseURL);
-      await _refreshHealthIfAvailable(client);
-      final refreshed = await _refreshSearch(client);
-      await _loadSavedSearches(client);
-      await _loadOperationalData(client);
+      final client = _clientFactory(operation.sourceAuthority);
+      await _refreshHealthIfAvailable(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      final refreshed = await _refreshSearch(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadSavedSearches(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
+      await _loadOperationalData(client, operation);
+      _requireCurrentConnectionOperation(operation, client);
       await _writePersistedCache();
+      _requireCurrentConnectionOperation(operation, client);
       connectionStatus = 'Connected';
       connectionMessage =
           'Local save refreshed: $refreshed ${_jobWord(refreshed)} cached on this device.';
+    } on _AtlasStaleConnectionOperation {
+      // A newer connection operation owns all publishable state.
     } catch (error) {
+      if (!_isCurrentConnectionOperation(operation)) {
+        return;
+      }
       if (_cachedAllJobs.isNotEmpty) {
         _applyLocalSearch();
       }
@@ -562,8 +630,12 @@ class AtlasAppController extends ChangeNotifier
           : 'Offline (cached)';
       connectionMessage = 'Local save refresh failed: $error';
     } finally {
-      isRefreshingLocalSave = false;
-      notifyListeners();
+      if (_refreshingConnectionOperationIdentifier == operation.identifier) {
+        _refreshingConnectionOperationIdentifier = null;
+        isRefreshingLocalSave = false;
+        _completeConnectionOperation(operation);
+        notifyListeners();
+      }
     }
   }
 
@@ -752,9 +824,14 @@ class AtlasAppController extends ChangeNotifier
     await _refreshIfReady();
   }
 
-  Future<int> _refreshSearch(AtlasAPIClient client) async {
+  Future<int> _refreshSearch(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
     final publicAuthorityGeneration = _privateAuthorityGeneration;
     final mayPublishPublicRequest = !_privateStateProtectionActive;
+    _requireCurrentConnectionOperation(operation, client);
+    _searchingConnectionOperationIdentifier = operation.identifier;
     isSearching = true;
     notifyListeners();
     try {
@@ -763,8 +840,10 @@ class AtlasAppController extends ChangeNotifier
       AtlasSearchResponse? cacheResponse;
       if (!_searchRequestsEquivalent(activeRequest, cacheRequest)) {
         cacheResponse = await _fetchCachedAllJobs(client, cacheRequest);
+        _requireCurrentConnectionOperation(operation, client);
       }
       final response = await client.search(activeRequest);
+      _requireCurrentConnectionOperation(operation, client);
       _applySearchResponse(response);
       if (_searchRequestsEquivalent(activeRequest, cacheRequest)) {
         _cachedAllJobs = List.unmodifiable(response.results);
@@ -785,7 +864,10 @@ class AtlasAppController extends ChangeNotifier
       }
       return cachedJobCount;
     } finally {
-      isSearching = false;
+      if (_searchingConnectionOperationIdentifier == operation.identifier) {
+        _searchingConnectionOperationIdentifier = null;
+        isSearching = false;
+      }
     }
   }
 
@@ -849,16 +931,23 @@ class AtlasAppController extends ChangeNotifier
     return (values[value] ?? 0) > 0;
   }
 
-  Future<void> _loadSavedSearches(AtlasAPIClient client) async {
+  Future<void> _loadSavedSearches(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
     final persistence = _privateStatePersistence;
     final authorityGeneration = _privateAuthorityGeneration;
     if (persistence?.isActive ?? false) {
       try {
         final snapshot = await persistence!.read();
+        _requireCurrentConnectionOperation(operation, client);
         if (!_mayAcceptPrivateRead(persistence, authorityGeneration)) {
           return;
         }
         _installPrivateSnapshot(snapshot);
+      } on _AtlasStaleConnectionOperation {
+        rethrow;
       } catch (_) {
         // The last committed encrypted projection remains authoritative.
       }
@@ -871,6 +960,7 @@ class AtlasAppController extends ChangeNotifier
     }
     try {
       final compatibilitySearches = await client.savedSearches();
+      _requireCurrentCompatibilityConnectionOperation(operation, client);
       if (!_mayAcceptCompatibilityMutation(authorityGeneration)) {
         return;
       }
@@ -879,43 +969,73 @@ class AtlasAppController extends ChangeNotifier
         client.baseURL,
       );
       _syncSavedSearchSequence();
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Saved-search persistence is not required for health/search success.
     }
   }
 
-  Future<void> _loadOperationalData(AtlasAPIClient client) async {
+  Future<void> _loadOperationalData(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
     try {
-      updateRuns = List.unmodifiable(await client.updates());
+      final loadedRuns = await client.updates();
+      _requireCurrentConnectionOperation(operation, client);
+      updateRuns = List.unmodifiable(loadedRuns);
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Operational summaries are best-effort and should not block Search.
     }
     try {
-      sources = List.unmodifiable(await client.sources());
+      final loadedSources = await client.sources();
+      _requireCurrentConnectionOperation(operation, client);
+      sources = List.unmodifiable(loadedSources);
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Source-health summaries are best-effort and should not block Search.
     }
     final authorityGeneration = _privateAuthorityGeneration;
     if (!_privateStateProtectionActive && !_privateActivationInProgress) {
       try {
         final compatibilityRecords = await client.trackerRecords();
+        _requireCurrentCompatibilityConnectionOperation(operation, client);
         if (_mayAcceptCompatibilityMutation(authorityGeneration)) {
           trackerRecords = List.unmodifiable(compatibilityRecords);
           _trackerLegacyAuthorityBaseURL = _requiredNormalizedBaseURL(
             client.baseURL,
           );
         }
+      } on _AtlasStaleConnectionOperation {
+        rethrow;
       } catch (_) {
+        _requireCurrentConnectionOperation(operation, client);
         // Saved-job persistence is independent from Search refresh.
       }
     }
+    _requireCurrentConnectionOperation(operation, client);
     operationalDataLoadedAt = _now();
   }
 
-  Future<void> _refreshHealthIfAvailable(AtlasAPIClient client) async {
+  Future<void> _refreshHealthIfAvailable(
+    AtlasAPIClient client,
+    _AtlasConnectionOperation operation,
+  ) async {
     try {
-      healthSummary = await client.health();
+      final health = await client.health();
+      _requireCurrentConnectionOperation(operation, client);
+      healthSummary = health;
+    } on _AtlasStaleConnectionOperation {
+      rethrow;
     } catch (_) {
+      _requireCurrentConnectionOperation(operation, client);
       // Search can still succeed when the health probe is temporarily stale.
     }
   }
@@ -1505,6 +1625,46 @@ class AtlasAppController extends ChangeNotifier
       throw const AtlasVaultPlaintextMigrationException();
     }
     return normalized;
+  }
+
+  _AtlasConnectionOperation _beginConnectionOperation(Uri sourceAuthority) {
+    final operation = _AtlasConnectionOperation(
+      identifier: ++_connectionOperationSequence,
+      sourceAuthority: _requiredNormalizedBaseURL(sourceAuthority),
+    );
+    _activeConnectionOperation = operation;
+    return operation;
+  }
+
+  bool _isCurrentConnectionOperation(_AtlasConnectionOperation operation) =>
+      identical(_activeConnectionOperation, operation);
+
+  void _requireCurrentConnectionOperation(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient _,
+  ) {
+    if (!_isCurrentConnectionOperation(operation)) {
+      throw const _AtlasStaleConnectionOperation();
+    }
+  }
+
+  void _requireCurrentCompatibilityConnectionOperation(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient client,
+  ) {
+    _requireCurrentConnectionOperation(operation, client);
+    final clientAuthority = AtlasAPIClient.normalizedBaseURL(
+      client.baseURL.toString(),
+    );
+    if (clientAuthority != operation.sourceAuthority) {
+      throw const _AtlasStaleConnectionOperation();
+    }
+  }
+
+  void _completeConnectionOperation(_AtlasConnectionOperation operation) {
+    if (identical(_activeConnectionOperation, operation)) {
+      _activeConnectionOperation = null;
+    }
   }
 
   Uri? _legacyPrivateProjectionAuthority() {

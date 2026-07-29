@@ -271,16 +271,127 @@ void main() {
       expect(restorer.calls, <String>['restore']);
       expect(
         owner.status,
-        AtlasVaultPlaintextMigrationPresentationStatus.failed,
+        AtlasVaultPlaintextMigrationPresentationStatus.recoveryRequired,
       );
       expect(
         owner.status,
         isNot(AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable),
       );
+      expect(owner.blocksLegacyPrivateAuthority, isTrue);
+      expect(owner.blocksPersistedCacheWrites, isTrue);
       expect(owner.savedSearchCount, 0);
       expect(owner.trackerRecordCount, 0);
     },
   );
+
+  testWidgets('partially prepared resume failure exposes explicit discard', (
+    tester,
+  ) async {
+    final coordinator =
+        _FakeMigrationCoordinator(
+            authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+          )
+          ..resumeStage = AtlasVaultPlaintextMigrationStage.prepared
+          ..resumeFailureAuthority =
+              AtlasVaultPlaintextAuthorityState.migrationPending
+          ..preparedRollbackAvailable = true;
+    final restorer = _FakeLegacyPrivateStateRestorer();
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+      legacyPrivateStateRestorer: restorer,
+    );
+    addTearDown(owner.dispose);
+
+    await owner.bootstrapAuthority();
+    await owner.resumeMigration();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultPlaintextMigrationPanel(owner: owner)),
+      ),
+    );
+
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.resumeRequired,
+    );
+    expect(find.text('Resume Migration'), findsOneWidget);
+    expect(find.text('Discard Prepared Migration'), findsOneWidget);
+
+    await tester.tap(find.text('Discard Prepared Migration'));
+    await tester.pumpAndSettle();
+
+    expect(coordinator.calls, contains('discard'));
+    expect(restorer.calls, <String>['restore']);
+    expect(
+      owner.status,
+      AtlasVaultPlaintextMigrationPresentationStatus.legacyAvailable,
+    );
+  });
+
+  test('failed authority inspection cannot republish after hide', () async {
+    final inspectEntered = Completer<void>();
+    final releaseInspect = Completer<void>();
+    addTearDown(() {
+      if (!releaseInspect.isCompleted) {
+        releaseInspect.complete();
+      }
+    });
+    final coordinator =
+        _FakeMigrationCoordinator(
+            authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+            inspectEntered: inspectEntered,
+            releaseInspect: releaseInspect,
+            gatedInspectCall: 2,
+            failGatedInspect: true,
+          )
+          ..resumeFailureAuthority =
+              AtlasVaultPlaintextAuthorityState.migrationPending;
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+    await owner.bootstrapAuthority();
+    var notifications = 0;
+    owner.addListener(() => notifications += 1);
+
+    final resume = owner.resumeMigration();
+    await inspectEntered.future;
+    owner.hide();
+    final notificationsAfterHide = notifications;
+    releaseInspect.complete();
+    await resume;
+
+    expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.hidden);
+    expect(notifications, notificationsAfterHide);
+  });
+
+  test('failed completion inspection cannot notify after disposal', () async {
+    final inspectEntered = Completer<void>();
+    final releaseInspect = Completer<void>();
+    addTearDown(() {
+      if (!releaseInspect.isCompleted) {
+        releaseInspect.complete();
+      }
+    });
+    final coordinator = _FakeMigrationCoordinator(
+      authorityState: AtlasVaultPlaintextAuthorityState.migrationPending,
+      inspectEntered: inspectEntered,
+      releaseInspect: releaseInspect,
+      gatedInspectCall: 2,
+      failGatedInspect: true,
+    )..resumeCompletesLegacy = true;
+    final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.bootstrapAuthority();
+
+    final resume = owner.resumeMigration();
+    await inspectEntered.future;
+    owner.dispose();
+    releaseInspect.complete();
+
+    await expectLater(resume, completes);
+  });
 
   testWidgets('post-commit finalization failure exposes explicit resume', (
     tester,
@@ -435,14 +546,24 @@ final class _FakeMigrationCoordinator
     this.authorityState = AtlasVaultPlaintextAuthorityState.legacy,
     this.inventoryEntered,
     this.releaseInventory,
+    this.inspectEntered,
+    this.releaseInspect,
+    this.gatedInspectCall,
+    this.failGatedInspect = false,
   });
 
   final List<String> calls = <String>[];
   AtlasVaultPlaintextAuthorityState authorityState;
   final Completer<void>? inventoryEntered;
   final Completer<void>? releaseInventory;
+  final Completer<void>? inspectEntered;
+  final Completer<void>? releaseInspect;
+  final int? gatedInspectCall;
+  final bool failGatedInspect;
+  int _inspectCalls = 0;
   AtlasVaultPlaintextMigrationStage resumeStage =
       AtlasVaultPlaintextMigrationStage.commitInProgress;
+  bool preparedRollbackAvailable = false;
   bool failFinalize = false;
   bool resumeCompletesLegacy = false;
   AtlasVaultPlaintextAuthorityState? resumeFailureAuthority;
@@ -470,8 +591,20 @@ final class _FakeMigrationCoordinator
   @override
   Future<AtlasVaultPlaintextAuthorityState> inspectAuthority() async {
     calls.add('inspect-authority');
+    _inspectCalls += 1;
+    if (_inspectCalls == gatedInspectCall) {
+      inspectEntered?.complete();
+      await releaseInspect?.future;
+      if (failGatedInspect) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    }
     return authorityState;
   }
+
+  @override
+  Future<bool> inspectPreparedRollbackAvailability() async =>
+      preparedRollbackAvailable;
 
   @override
   Future<AtlasVaultPlaintextMigrationSummary> inventory() async {

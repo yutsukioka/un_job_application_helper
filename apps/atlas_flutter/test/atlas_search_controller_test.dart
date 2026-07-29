@@ -244,6 +244,79 @@ void main() {
     },
   );
 
+  test('saved authority supersedes stale candidate private reads', () async {
+    final candidateSavedSearchEntered = Completer<void>();
+    final releaseCandidateSavedSearch = Completer<void>();
+    addTearDown(() {
+      if (!releaseCandidateSavedSearch.isCompleted) {
+        releaseCandidateSavedSearch.complete();
+      }
+    });
+    final candidateTransport = _RecordingTransport()
+      ..savedSearchStore.add(<String, Object?>{
+        'name': 'Stale candidate search',
+        'description': 'stale candidate private description',
+        'request': const AtlasSearchRequest(
+          text: 'stale-candidate-private',
+        ).toJson(),
+        'created_at': '2026-07-01T00:00:00Z',
+      })
+      ..trackerStore.add(<String, Object?>{
+        'id': 'stale-candidate-record',
+        'job_key': 'candidate:stale-private-job',
+        'status': 'saved',
+        'updated_at': '2026-07-02T00:00:00Z',
+      })
+      ..enteredCompatibilitySavedSearchRead = candidateSavedSearchEntered
+      ..releaseCompatibilitySavedSearchRead = releaseCandidateSavedSearch;
+    final savedTransport = _RecordingTransport()
+      ..savedSearchStore.add(<String, Object?>{
+        'name': 'Saved authority search',
+        'description': 'saved authority private description',
+        'request': const AtlasSearchRequest(
+          text: 'saved-authority-private',
+        ).toJson(),
+        'created_at': '2026-07-03T00:00:00Z',
+      })
+      ..trackerStore.add(<String, Object?>{
+        'id': 'saved-authority-record',
+        'job_key': 'saved:private-job',
+        'status': 'saved',
+        'updated_at': '2026-07-04T00:00:00Z',
+      });
+    final candidateAuthority = Uri.parse('http://candidate-atlas.test:8765');
+    final savedAuthority = Uri.parse('http://saved-atlas.test:8765');
+    final controller = AtlasAppController(
+      initialBaseURL: Uri.parse('http://configured-atlas.test:8765'),
+      clientFactory: (baseURL) => AtlasAPIClient(
+        baseURL: baseURL,
+        transport: baseURL == candidateAuthority
+            ? candidateTransport
+            : savedTransport,
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    final staleTest = controller.testConnection(candidateAuthority);
+    await candidateSavedSearchEntered.future;
+    await controller.saveAndReload(savedAuthority);
+
+    expect(controller.baseURL, savedAuthority);
+    expect(controller.savedSearches.single.name, 'Saved authority search');
+    expect(controller.trackerRecords.single.id, 'saved-authority-record');
+
+    releaseCandidateSavedSearch.complete();
+    await staleTest;
+
+    expect(controller.baseURL, savedAuthority);
+    expect(controller.savedSearches.single.name, 'Saved authority search');
+    expect(controller.trackerRecords.single.id, 'saved-authority-record');
+    expect(
+      controller.connectionMessage,
+      'Saved http://saved-atlas.test:8765 and refreshed 1 job.',
+    );
+  });
+
   test('controller reports validation and local refresh failures', () async {
     final controller = AtlasAppController(
       clientFactory: (baseURL) =>
@@ -2450,6 +2523,12 @@ final class _ControllerMigrationCoordinator
   Future<AtlasVaultPlaintextAuthorityState> inspectAuthority() async {
     calls.add('inspect-authority');
     return authorityState;
+  }
+
+  @override
+  Future<bool> inspectPreparedRollbackAvailability() async {
+    return resumeStage == AtlasVaultPlaintextMigrationStage.prepared ||
+        resumeStage == AtlasVaultPlaintextMigrationStage.encryptedVerified;
   }
 
   @override
