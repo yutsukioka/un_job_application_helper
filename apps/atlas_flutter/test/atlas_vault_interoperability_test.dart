@@ -589,7 +589,46 @@ void main() {
         AtlasVaultRecoveryImportDisposition.recoveryRequired,
       );
       expect(result.pendingImport, isTrue);
-      expect(pendingChanges, <bool>[true]);
+      expect(pendingChanges, <bool>[false, true]);
+      expect(
+        fixture.events.indexOf('recovery-import.pending:true'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+      expect(admission.blocksNewLegacyMutation, isFalse);
+    },
+  );
+
+  test(
+    'inconclusive post-create journal read remains pending before admission ends',
+    () async {
+      final pendingChanges = <bool>[];
+      final admission = _ImportOperationAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: admission,
+        recoveryImportPendingChanges: pendingChanges,
+      );
+      admission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+      fixture.faults
+        ..failAfterEvent = 'import-journal.create'
+        ..failBeforeEvent = 'import-journal.read'
+        ..remainingBeforeMatches = 2;
+
+      final confirmation = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await admission.entered;
+      admission.releaseAdmittedMutation();
+      final result = await confirmation;
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.recoveryRequired,
+      );
+      expect(result.pendingImport, isTrue);
+      expect(fixture.importJournal.current, isNotNull);
+      expect(pendingChanges, <bool>[false, true]);
       expect(
         fixture.events.indexOf('recovery-import.pending:true'),
         lessThan(fixture.events.indexOf('import-admission.end')),
@@ -833,7 +872,7 @@ void main() {
       ).stage,
       AtlasVaultRecoveryImportStage.completionPending,
     );
-    expect(pendingChanges, <bool>[true]);
+    expect(pendingChanges, <bool>[false, true]);
     fixture.faults.clear();
     expect(
       (await fixture.coordinator.prepareRecoveryImport()).disposition,
@@ -845,12 +884,50 @@ void main() {
       )).disposition,
       AtlasVaultRecoveryImportDisposition.importedAndActive,
     );
-    expect(pendingChanges, <bool>[true, false]);
+    expect(pendingChanges, <bool>[false, true, false]);
     expect(
       fixture.events.indexOf('import-journal.delete'),
-      lessThan(fixture.events.indexOf('recovery-import.pending:false')),
+      lessThan(fixture.events.lastIndexOf('recovery-import.pending:false')),
     );
   });
+
+  test(
+    'conclusive absent journal read releases post-delete pending authority',
+    () async {
+      final pendingChanges = <bool>[];
+      final fixture = await _ImportFixture.create(
+        failAfterEvent: 'import-journal.delete',
+        recoveryImportPendingChanges: pendingChanges,
+      );
+      await fixture.coordinator.prepareRecoveryImport();
+
+      final interrupted = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        interrupted.disposition,
+        AtlasVaultRecoveryImportDisposition.completionPending,
+      );
+      expect(interrupted.pendingImport, isTrue);
+      expect(fixture.importJournal.current, isNull);
+      expect(pendingChanges, <bool>[false, true]);
+      fixture.faults.clear();
+
+      final inspected = await fixture.coordinator.prepareRecoveryImport();
+
+      expect(
+        inspected.disposition,
+        AtlasVaultRecoveryImportDisposition.existingVault,
+      );
+      expect(inspected.pendingImport, isFalse);
+      expect(pendingChanges, <bool>[false, true, false]);
+      expect(
+        fixture.events.lastIndexOf('import-journal.read'),
+        lessThan(fixture.events.lastIndexOf('recovery-import.pending:false')),
+      );
+    },
+  );
 
   test(
     'cancelled journal backup reselection preserves pending state',

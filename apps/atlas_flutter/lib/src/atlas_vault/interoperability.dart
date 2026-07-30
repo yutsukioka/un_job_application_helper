@@ -712,6 +712,9 @@ final class AtlasVaultInteroperabilityCoordinator
       AtlasVaultRecoveryImportJournal? journal;
       try {
         journal = await _loadImportJournal(dependencies.journalStore);
+        if (journal == null) {
+          _recoveryImportPendingDidChange(false);
+        }
         final gate = await _cleanInstallGate(dependencies, journal: journal);
         if (gate != _ImportGate.ready) {
           return _fixedImportResult(
@@ -802,6 +805,7 @@ final class AtlasVaultInteroperabilityCoordinator
       }
       AtlasVaultRecoveryKey? recoveryKey;
       Uint8List? vaultKey;
+      AtlasVaultRecoveryImportJournal? journal;
       var importAdmissionHeld = false;
       try {
         recoveryKey = AtlasVaultRecoveryKey.parse(recoveryKeyText);
@@ -820,7 +824,7 @@ final class AtlasVaultInteroperabilityCoordinator
         );
         recoveryKey.destroy();
         recoveryKey = null;
-        var journal = await _loadImportJournal(dependencies.journalStore);
+        journal = await _loadImportJournal(dependencies.journalStore);
         if (journal == null) {
           await _importOperationAdmission.beginRecoveryImportAdmission();
           importAdmissionHeld = true;
@@ -909,18 +913,33 @@ final class AtlasVaultInteroperabilityCoordinator
           _wipe(localBytes);
         }
       } catch (_) {
-        final journal = await _safeLoadImportJournal(dependencies.journalStore);
-        if (journal != null) {
+        AtlasVaultRecoveryImportJournal? recoveredJournal;
+        var journalReadWasConclusive = false;
+        try {
+          recoveredJournal = await _loadImportJournal(
+            dependencies.journalStore,
+          );
+          journalReadWasConclusive = true;
+        } catch (_) {
+          // The locally known journal remains authoritative until a later
+          // successful read proves absence.
+        }
+        final pendingJournal =
+            recoveredJournal ?? (journalReadWasConclusive ? null : journal);
+        if (pendingJournal != null) {
           _recoveryImportPendingDidChange(true);
+        } else if (journalReadWasConclusive) {
+          _recoveryImportPendingDidChange(false);
         }
         return _fixedImportResult(
-          journal == null
+          pendingJournal == null
               ? AtlasVaultRecoveryImportDisposition.failed
-              : journal.stage == AtlasVaultRecoveryImportStage.completionPending
+              : pendingJournal.stage ==
+                    AtlasVaultRecoveryImportStage.completionPending
               ? AtlasVaultRecoveryImportDisposition.completionPending
               : AtlasVaultRecoveryImportDisposition.recoveryRequired,
           count: export.records.length,
-          pendingImport: journal != null,
+          pendingImport: pendingJournal != null,
         );
       } finally {
         if (importAdmissionHeld) {
@@ -1577,16 +1596,6 @@ final class AtlasVaultInteroperabilityCoordinator
       return AtlasVaultRecoveryImportJournal.decodeBytes(bytes);
     } finally {
       _wipe(bytes);
-    }
-  }
-
-  Future<AtlasVaultRecoveryImportJournal?> _safeLoadImportJournal(
-    AtlasVaultProtectedRecoveryImportJournalStore store,
-  ) async {
-    try {
-      return await _loadImportJournal(store);
-    } catch (_) {
-      return null;
     }
   }
 

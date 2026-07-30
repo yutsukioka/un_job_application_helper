@@ -349,6 +349,10 @@ backup reselection is cancelled.
 The sixth review cycle preserves pending owner authority when a malformed or
 noncanonical backup is reselected for a live journal. Validation still fails
 without persistence, while resume/discard controls remain available.
+The seventh review cycle treats an unreadable post-create journal as pending
+until a conclusive read proves absence. A later explicit preparation read that
+does prove absence publishes `pending=false`, including after journal deletion
+committed but its immediate verification failed.
 
 ## 58. Verification
 

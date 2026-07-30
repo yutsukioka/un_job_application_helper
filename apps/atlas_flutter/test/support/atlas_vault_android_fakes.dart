@@ -63,12 +63,18 @@ final class InteropOperationFaults {
   String? failAfterEvent;
   String? failBeforeEvent;
   int remainingAfterMatches = 1;
+  int remainingBeforeMatches = 1;
 
   void before(String event) {
     if (failBeforeEvent != event) {
       return;
     }
+    if (remainingBeforeMatches > 1) {
+      remainingBeforeMatches -= 1;
+      return;
+    }
     failBeforeEvent = null;
+    remainingBeforeMatches = 1;
     throw StateError('deterministic interruption');
   }
 
@@ -89,6 +95,7 @@ final class InteropOperationFaults {
     failAfterEvent = null;
     failBeforeEvent = null;
     remainingAfterMatches = 1;
+    remainingBeforeMatches = 1;
   }
 }
 
@@ -389,6 +396,7 @@ final class InteropMemoryRecoveryImportJournalStore
   Future<Uint8List?> read() async {
     calls.add('import-journal.read');
     events?.add('import-journal.read');
+    faults?.before('import-journal.read');
     return current;
   }
 
