@@ -157,6 +157,34 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
             "Phase 2E-4 vector consumer contract is not registered."
         )
     }
+
+    func testAppleOriginExportVectorIsStrictAndCanonical() throws {
+        let vector = try InteropVector.load(direction: "ios_to_flutter")
+        let envelope = try AtlasVaultEncryptedExportEnvelope.decodeStrict(
+            vector.exportData
+        )
+
+        XCTAssertEqual(try envelope.canonicalData(), vector.exportData)
+        XCTAssertEqual(envelope.records.count, vector.expectedRecordCount)
+    }
+
+    func testPhaseContractRegistersAppleOriginImportCompletion() throws {
+        let root = try InteropVector.repositoryRoot()
+        let architecture = try String(
+            contentsOf: root.appendingPathComponent(
+                "docs/architecture/"
+                    + "phase2e4_ios_flutter_encrypted_interoperability.md"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            architecture.contains(
+                "Flutter import of Apple export: implemented."
+            ),
+            "Checkpoint B Apple-origin import is not implemented."
+        )
+    }
 }
 
 private struct InteropVector {

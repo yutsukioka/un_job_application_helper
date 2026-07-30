@@ -2002,6 +2002,53 @@ void main() {
   );
 
   test(
+    'pending recovery import blocks legacy authority before migration bootstrap',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_recovery_import_authority_bootstrap_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      var importJournalReads = 0;
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        recoveryImportPending: () async {
+          importJournalReads += 1;
+          return true;
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(importJournalReads, 1);
+      expect(migrationCoordinator.calls, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+      expect(controller.connectionStatus, 'Offline (cached)');
+    },
+  );
+
+  test(
     'restart rollback restores preserved private cache without network reads',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(

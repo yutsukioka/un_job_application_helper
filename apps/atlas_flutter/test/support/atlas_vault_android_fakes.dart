@@ -1,3 +1,4 @@
+import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/services.dart';
@@ -309,5 +310,133 @@ final class InteropMemoryMigrationJournalStore
       throw const AtlasVaultPlaintextMigrationException();
     }
     _bytes = null;
+  }
+}
+
+final class InteropMemoryRecoveryImportJournalStore
+    implements AtlasVaultProtectedRecoveryImportJournalStore {
+  InteropMemoryRecoveryImportJournalStore({Uint8List? bytes, this.events})
+    : _bytes = bytes == null ? null : Uint8List.fromList(bytes);
+
+  Uint8List? _bytes;
+  final List<String>? events;
+  final List<String> calls = <String>[];
+
+  Uint8List? get current => _bytes == null ? null : Uint8List.fromList(_bytes!);
+
+  @override
+  Future<Uint8List?> read() async {
+    calls.add('import-journal.read');
+    events?.add('import-journal.read');
+    return current;
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    calls.add('import-journal.create');
+    events?.add('import-journal.create');
+    if (_bytes != null) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _bytes = Uint8List.fromList(canonicalBytes);
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    calls.add('import-journal.replace');
+    events?.add('import-journal.replace');
+    final current = _bytes;
+    if (current == null ||
+        await atlasVaultSha256Hex(current) != expectedSha256) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _bytes = Uint8List.fromList(canonicalBytes);
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    calls.add('import-journal.delete');
+    events?.add('import-journal.delete');
+    final current = _bytes;
+    if (current == null) {
+      if (allowAbsent) {
+        return;
+      }
+      throw const AtlasVaultInteroperabilityException();
+    }
+    if (await atlasVaultSha256Hex(current) != expectedSha256) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _bytes = null;
+  }
+}
+
+final class InteropEmptyPlaintextStateSource
+    implements AtlasVaultPlaintextStateSource {
+  const InteropEmptyPlaintextStateSource();
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState> readPlaintextPrivateState() async {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+    );
+  }
+}
+
+final class InteropEmptyCompatibilityPrivateSource
+    implements AtlasVaultCompatibilityPrivateSource {
+  const InteropEmptyCompatibilityPrivateSource();
+
+  @override
+  Uri get authorityBaseURL => Uri.parse('https://example.invalid/');
+
+  @override
+  Future<AtlasVaultPlaintextPrivateState>
+  readCompatibilityPrivateState() async {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+      authorityBaseURL: authorityBaseURL,
+    );
+  }
+
+  @override
+  Future<bool> deleteSavedSearch(String name) {
+    throw StateError('Import must not mutate compatibility private state.');
+  }
+
+  @override
+  Future<bool> deleteTrackerRecord(String recordId) {
+    throw StateError('Import must not mutate compatibility private state.');
+  }
+}
+
+final class InteropEmptyCacheMigrationSource
+    implements AtlasLocalCacheMigrationSource {
+  const InteropEmptyCacheMigrationSource();
+
+  @override
+  Future<AtlasLocalCacheMigrationPrivateState>
+  readPrivateStateForMigration() async {
+    return AtlasLocalCacheMigrationPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+      privateSha256: null,
+      cachePresent: false,
+    );
+  }
+
+  @override
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) {
+    throw StateError('Import must not mutate the plaintext cache.');
   }
 }

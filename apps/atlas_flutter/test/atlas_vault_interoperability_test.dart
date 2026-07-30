@@ -259,6 +259,75 @@ void main() {
       throwsA(isA<vault.AtlasVaultFormatException>()),
     );
   });
+
+  test(
+    'Apple-origin import preparation is explicit and side-effect free',
+    () async {
+      final fixture = await _ImportFixture.create();
+
+      final result = await fixture.coordinator.prepareRecoveryImport();
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.importPrepared,
+      );
+      expect(result.encryptedRecordCount, fixture.caseData.expectedRecordCount);
+      expect(fixture.transport.pickCalls, 1);
+      expect(fixture.events, isEmpty);
+      expect(fixture.importJournal.current, isNull);
+    },
+  );
+
+  test('wrong import recovery key creates no persistent resource', () async {
+    final fixture = await _ImportFixture.create();
+    await fixture.coordinator.prepareRecoveryImport();
+
+    final result = await fixture.coordinator.confirmRecoveryImport(
+      'AVRK1-INVALID',
+    );
+
+    expect(result.disposition, AtlasVaultRecoveryImportDisposition.failed);
+    expect(fixture.events, isEmpty);
+    expect(fixture.storeIO.current, isNull);
+    expect(
+      await fixture.keyStore.containsVaultKey(fixture.caseData.vaultId),
+      isFalse,
+    );
+    expect(await fixture.selected.read(), isNull);
+    expect(fixture.importJournal.current, isNull);
+  });
+
+  test(
+    'import commits store then key then selection and clears journal last',
+    () async {
+      final fixture = await _ImportFixture.create();
+      await fixture.coordinator.prepareRecoveryImport();
+
+      final result = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(
+        fixture.events,
+        containsAllInOrder(<String>[
+          'import-journal.create',
+          'store.create',
+          'import-journal.replace',
+          'key.create',
+          'import-journal.replace',
+          'selection.create',
+          'import-journal.replace',
+          'import-journal.delete',
+        ]),
+      );
+      expect(fixture.events.last, 'import-journal.delete');
+      expect(fixture.runtime.isActive, isTrue);
+    },
+  );
 }
 
 const _privateSentinels = <String>[
@@ -415,13 +484,22 @@ final class _MutableSelectedVaultStore implements AtlasVaultSelectedVaultStore {
 
 final class _RecordingDocumentTransport
     implements AtlasVaultEncryptedDocumentTransport {
-  _RecordingDocumentTransport({this.saveResult = true});
+  _RecordingDocumentTransport({this.saveResult = true, Uint8List? pickedBytes})
+    : _pickedBytes = pickedBytes == null
+          ? null
+          : Uint8List.fromList(pickedBytes);
 
   final bool saveResult;
+  final Uint8List? _pickedBytes;
   Uint8List? savedBytes;
+  int pickCalls = 0;
 
   @override
-  Future<Uint8List?> pickEncryptedExport() async => null;
+  Future<Uint8List?> pickEncryptedExport() async {
+    pickCalls += 1;
+    final bytes = _pickedBytes;
+    return bytes == null ? null : Uint8List.fromList(bytes);
+  }
 
   @override
   Future<bool> saveEncryptedExport(Uint8List canonicalExportBytes) async {
@@ -436,6 +514,105 @@ final class _RecordingDocumentTransport
       ).writeAsBytes(savedBytes!, flush: true);
     }
     return saveResult;
+  }
+}
+
+final class _ImportFixture {
+  _ImportFixture({
+    required this.caseData,
+    required this.events,
+    required this.keyStore,
+    required this.storeIO,
+    required this.selected,
+    required this.importJournal,
+    required this.runtime,
+    required this.transport,
+    required this.coordinator,
+  });
+
+  final _ImportCase caseData;
+  final List<String> events;
+  final InteropMemorySecureKeyStore keyStore;
+  final InteropMemoryLocalStoreIO storeIO;
+  final InteropMemorySelectedVaultStore selected;
+  final InteropMemoryRecoveryImportJournalStore importJournal;
+  final AtlasVaultPrivateStateRuntime runtime;
+  final _RecordingDocumentTransport transport;
+  final AtlasVaultInteroperabilityCoordinator coordinator;
+
+  static Future<_ImportFixture> create() async {
+    final caseData = _ImportCase.iosToFlutter();
+    final events = <String>[];
+    final keyStore = InteropMemorySecureKeyStore(events: events);
+    final storeIO = InteropMemoryLocalStoreIO(events: events);
+    final selected = InteropMemorySelectedVaultStore(events: events);
+    final migration = InteropMemoryMigrationJournalStore();
+    final importJournal = InteropMemoryRecoveryImportJournalStore(
+      events: events,
+    );
+    final runtime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: keyStore,
+      localStoreIO: storeIO,
+    );
+    final transport = _RecordingDocumentTransport(
+      pickedBytes: caseData.canonicalExportBytes,
+    );
+    final coordinator = AtlasVaultInteroperabilityCoordinator(
+      runtime: runtime,
+      selectedVaultStore: selected,
+      migrationJournalStore: migration,
+      recoveryImportPending: () async => importJournal.current != null,
+      documentTransport: transport,
+      recoveryImportJournalStore: importJournal,
+      secureKeyStore: keyStore,
+      localStoreIO: storeIO,
+      inMemorySource: const InteropEmptyPlaintextStateSource(),
+      compatibilitySource: const InteropEmptyCompatibilityPrivateSource(),
+      cacheSource: const InteropEmptyCacheMigrationSource(),
+      now: () => DateTime.parse('2026-07-29T03:04:05Z'),
+      importIdProvider: () => '30000000-0000-4000-8000-000000000301',
+      importStoreIdProvider: () => '30000000-0000-4000-8000-000000000302',
+    );
+    return _ImportFixture(
+      caseData: caseData,
+      events: events,
+      keyStore: keyStore,
+      storeIO: storeIO,
+      selected: selected,
+      importJournal: importJournal,
+      runtime: runtime,
+      transport: transport,
+      coordinator: coordinator,
+    );
+  }
+}
+
+final class _ImportCase {
+  _ImportCase({
+    required this.recoveryText,
+    required this.vaultId,
+    required this.canonicalExportBytes,
+    required this.expectedRecordCount,
+  });
+
+  final String recoveryText;
+  final String vaultId;
+  final Uint8List canonicalExportBytes;
+  final int expectedRecordCount;
+
+  factory _ImportCase.iosToFlutter() {
+    final root = loadAtlasVaultVector(
+      'atlasvault_ios_flutter_interop_vectors_v1.json',
+    );
+    final value = atlasVaultObject(root['ios_to_flutter']);
+    return _ImportCase(
+      recoveryText: value['test_only_recovery_key_text']! as String,
+      vaultId: value['vault_id']! as String,
+      canonicalExportBytes: Uint8List.fromList(
+        base64Decode(value['canonical_encrypted_export_b64']! as String),
+      ),
+      expectedRecordCount: value['expected_encrypted_record_count']! as int,
+    );
   }
 }
 

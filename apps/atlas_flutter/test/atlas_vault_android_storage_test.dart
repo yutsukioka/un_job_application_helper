@@ -63,6 +63,75 @@ void main() {
     );
   });
 
+  test(
+    'encrypted-document picker is explicit, bounded, and path-free',
+    () async {
+      final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+      recorder.handler = (call) async {
+        expect(call.method, 'pickEncryptedExport');
+        expect(call.arguments, isNull);
+        return bytes;
+      };
+      final transport = AtlasAndroidEncryptedDocumentTransport(
+        channel: recorder.channel,
+      );
+
+      final picked = await transport.pickEncryptedExport();
+
+      expect(picked, orderedEquals(bytes));
+      expect(identical(picked, bytes), isFalse);
+      expect(recorder.calls, hasLength(1));
+      expect(recorder.calls.single.toString(), isNot(contains('content://')));
+      expect(recorder.calls.single.toString(), isNot(contains('path')));
+    },
+  );
+
+  test('protected recovery-import journal uses exact CAS methods', () async {
+    final journal = AtlasAndroidProtectedRecoveryImportJournalStore(
+      channel: recorder.channel,
+    );
+    final bytes = Uint8List.fromList(
+      utf8.encode(
+        '{"format":"atlasvault-android-recovery-import","version":1}',
+      ),
+    );
+    recorder.handler = (call) async {
+      switch (call.method) {
+        case 'readRecoveryImportJournal':
+          expect(call.arguments, isNull);
+          return bytes;
+        case 'createRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{'journal_bytes': bytes});
+          return null;
+        case 'replaceRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'journal_bytes': bytes,
+            'expected_sha256': 'a' * 64,
+          });
+          return null;
+        case 'deleteRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'expected_sha256': 'b' * 64,
+            'allow_absent': false,
+          });
+          return null;
+      }
+      fail('Unexpected recovery-import journal method.');
+    };
+
+    expect(await journal.read(), orderedEquals(bytes));
+    await journal.create(bytes);
+    await journal.replace(bytes, expectedSha256: 'a' * 64);
+    await journal.delete(expectedSha256: 'b' * 64);
+
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'readRecoveryImportJournal',
+      'createRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+    ]);
+  });
+
   test('invalid encrypted-document sizes make no platform call', () async {
     final transport = AtlasAndroidEncryptedDocumentTransport(
       channel: recorder.channel,
