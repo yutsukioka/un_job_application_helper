@@ -1,6 +1,8 @@
 package com.yutsukioka.jobagg.atlas
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -37,22 +39,32 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 internal class AtlasVaultAndroidStorage(
-    context: Context,
+    private val activity: Activity,
 ) : AutoCloseable {
-    private val applicationContext = context.applicationContext
+    private val applicationContext: Context = activity.applicationContext
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val masterKeyLock = Any()
     private var channel: MethodChannel? = null
+    private var pendingDocumentOperation: PendingDocumentOperation? = null
+    private var closed = false
 
     fun attach(messenger: BinaryMessenger) {
         check(channel == null)
+        check(!closed)
         channel = MethodChannel(messenger, CHANNEL_NAME).also { methodChannel ->
             methodChannel.setMethodCallHandler(::handleMethodCall)
         }
     }
 
     override fun close() {
+        closed = true
+        val pending = pendingDocumentOperation
+        pendingDocumentOperation = null
+        if (pending != null) {
+            pending.bytes.fill(0)
+            pending.result.success(false)
+        }
         channel?.setMethodCallHandler(null)
         channel = null
         executor.shutdown()
@@ -61,6 +73,10 @@ internal class AtlasVaultAndroidStorage(
     private fun handleMethodCall(call: MethodCall, result: MethodChannel.Result) {
         if (call.method !in SUPPORTED_METHODS) {
             result.notImplemented()
+            return
+        }
+        if (call.method == "saveEncryptedExport") {
+            beginSaveEncryptedExport(call, result)
             return
         }
         executor.execute {
@@ -145,6 +161,121 @@ internal class AtlasVaultAndroidStorage(
                     )
                 }
             }
+        }
+    }
+
+    fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?,
+    ): Boolean {
+        if (requestCode != SAVE_DOCUMENT_REQUEST_CODE) {
+            return false
+        }
+        val pending = pendingDocumentOperation ?: return true
+        if (resultCode != Activity.RESULT_OK || data?.data == null) {
+            pendingDocumentOperation = null
+            pending.bytes.fill(0)
+            pending.result.success(false)
+            return true
+        }
+        val uri = data.data ?: run {
+            pendingDocumentOperation = null
+            pending.bytes.fill(0)
+            pending.result.success(false)
+            return true
+        }
+        executor.execute {
+            var succeeded = false
+            try {
+                writeEncryptedDocument(uri, pending.bytes)
+                succeeded = true
+            } catch (_: Throwable) {
+                succeeded = false
+            } finally {
+                pending.bytes.fill(0)
+                mainHandler.post {
+                    if (pendingDocumentOperation === pending) {
+                        pendingDocumentOperation = null
+                        if (!closed) {
+                            if (succeeded) {
+                                pending.result.success(true)
+                            } else {
+                                pending.result.error(
+                                    ERROR_CODE,
+                                    "AtlasVault Android storage operation failed.",
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    private fun beginSaveEncryptedExport(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        if (closed || pendingDocumentOperation != null) {
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+            return
+        }
+        val supplied = try {
+            requiredBytes(call, "export_bytes")
+        } catch (_: Throwable) {
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+            return
+        }
+        if (supplied.isEmpty() || supplied.size > MAX_DOCUMENT_BYTES) {
+            supplied.fill(0)
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+            return
+        }
+        val bytes = supplied.copyOf()
+        supplied.fill(0)
+        pendingDocumentOperation = PendingDocumentOperation(result, bytes)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = ENCRYPTED_EXPORT_MIME_TYPE
+            putExtra(Intent.EXTRA_TITLE, ENCRYPTED_EXPORT_FILENAME)
+        }
+        try {
+            activity.startActivityForResult(intent, SAVE_DOCUMENT_REQUEST_CODE)
+        } catch (_: Throwable) {
+            pendingDocumentOperation = null
+            bytes.fill(0)
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+        }
+    }
+
+    private fun writeEncryptedDocument(uri: android.net.Uri, bytes: ByteArray) {
+        if (bytes.isEmpty() || bytes.size > MAX_DOCUMENT_BYTES) {
+            throw StorageFailure()
+        }
+        val output = applicationContext.contentResolver.openOutputStream(uri, "w")
+            ?: throw StorageFailure()
+        output.use {
+            it.write(bytes)
+            it.flush()
         }
     }
 
@@ -1274,6 +1405,11 @@ internal class AtlasVaultAndroidStorage(
 
     private class StorageFailure : Exception()
 
+    private data class PendingDocumentOperation(
+        val result: MethodChannel.Result,
+        val bytes: ByteArray,
+    )
+
     private companion object {
         const val CHANNEL_NAME = "atlas/vault_android"
         const val ERROR_CODE = "atlas_vault_android_storage_failed"
@@ -1307,11 +1443,17 @@ internal class AtlasVaultAndroidStorage(
         const val SHA256_BYTES = 32
         const val MAX_KEY_ENVELOPE_BYTES = 16 * 1024
         const val MAX_STORE_BYTES = 128 * 1024 * 1024
+        const val MAX_DOCUMENT_BYTES = 128 * 1024 * 1024
         const val MAX_MIGRATION_JOURNAL_BYTES = 16 * 1024 * 1024
         const val MAX_SELECTED_VAULT_BYTES = 4 * 1024
         const val MAX_PROTECTED_ENVELOPE_OVERHEAD = 4 * 1024
         const val MIGRATION_JOURNAL_FILE = "plaintext-private-state.json.enc"
         const val SELECTED_VAULT_FILE = "selected-vault.json.enc"
+        const val SAVE_DOCUMENT_REQUEST_CODE = 0x4156
+        const val ENCRYPTED_EXPORT_MIME_TYPE =
+            "application/vnd.atlasvault+json"
+        const val ENCRYPTED_EXPORT_FILENAME =
+            "AtlasVault-Encrypted-Backup.atlasvault"
 
         val SUPPORTED_METHODS = setOf(
             "capabilities",
@@ -1330,6 +1472,7 @@ internal class AtlasVaultAndroidStorage(
             "readSelectedVault",
             "createSelectedVault",
             "clearSelectedVault",
+            "saveEncryptedExport",
         )
         val VAULT_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
         val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart' as vault;
@@ -112,6 +113,22 @@ void main() {
     );
   });
 
+  test('discard clears pending recovery setup without persistence', () async {
+    final fixture = await _Fixture.create();
+    final handle = await fixture.coordinator.beginRecoverySetup();
+    final recoveryText = handle.take()!;
+
+    fixture.coordinator.discardPendingRecovery();
+    final result = await fixture.coordinator.confirmRecoverySetup(recoveryText);
+
+    expect(result.disposition, AtlasVaultRecoveryExportDisposition.failed);
+    expect(fixture.storeIO.current!.vaultMetadata.keyWraps, isEmpty);
+    expect(
+      fixture.storeIO.calls.where((value) => value == 'store.replace'),
+      isEmpty,
+    );
+  });
+
   test(
     'confirmed setup preserves records and saves exact Flutter vector bytes',
     () async {
@@ -143,8 +160,8 @@ void main() {
         hasLength(1),
       );
       expect(
-        committed.records.map((record) => record.toJson()),
-        orderedEquals(originalRecords),
+        committed.records.map((record) => jsonEncode(record.toJson())),
+        orderedEquals(originalRecords.map(jsonEncode)),
       );
 
       final saved = await fixture.coordinator.savePreparedExport();
@@ -192,6 +209,23 @@ void main() {
       fixture.storeIO.calls.where((value) => value == 'store.replace'),
       isEmpty,
     );
+  });
+
+  test('new recovery setup preserves an existing passphrase wrap', () async {
+    final fixture = await _Fixture.create(existingPassphraseWrap: true);
+    final handle = await fixture.coordinator.beginRecoverySetup();
+
+    final result = await fixture.coordinator.confirmRecoverySetup(
+      handle.take()!,
+    );
+
+    expect(result.disposition, AtlasVaultRecoveryExportDisposition.exportReady);
+    final wraps = fixture.storeIO.current!.vaultMetadata.keyWraps;
+    expect(
+      wraps.whereType<vault.AtlasVaultPassphraseKeyWrapV1>(),
+      hasLength(1),
+    );
+    expect(wraps.whereType<vault.AtlasVaultRecoveryKeyWrapV2>(), hasLength(1));
   });
 
   test('document cancellation discards prepared encrypted bytes', () async {
@@ -259,6 +293,7 @@ final class _Fixture {
   static Future<_Fixture> create({
     bool activate = true,
     bool existingRecoveryWrap = false,
+    bool existingPassphraseWrap = false,
     Uint8List? migrationJournalBytes,
     bool importPending = false,
     bool saveResult = true,
@@ -268,6 +303,11 @@ final class _Fixture {
     final metadata = export.vaultMetadata.toJson();
     if (!existingRecoveryWrap) {
       metadata['key_wraps'] = <Object?>[];
+    }
+    if (existingPassphraseWrap) {
+      final wraps = List<Object?>.from(metadata['key_wraps']! as List<Object?>);
+      wraps.insert(0, _testPassphraseWrap);
+      metadata['key_wraps'] = wraps;
     }
     final store = vault.AtlasVaultLocalStore.fromJson(<String, Object?>{
       'format': vault.AtlasVaultLocalStore.format,
@@ -327,6 +367,21 @@ final class _Fixture {
   }
 }
 
+const _testPassphraseWrap = <String, Object?>{
+  'id': 'primary-passphrase',
+  'type': 'passphrase',
+  'kdf': <String, Object?>{
+    'algorithm': 'Argon2id',
+    'salt': 'IiIiIiIiIiIiIiIiIiIiIg==',
+    'memory_kib': 1024,
+    'iterations': 2,
+    'parallelism': 1,
+  },
+  'nonce': 'MzMzMzMzMzMzMzMz',
+  'ciphertext':
+      'JJzE300uvWP/iqioMFTRANtsnhXearJAsujEbtWYY1SyRNBUfZu+5bhYcHZvX87L',
+};
+
 final class _MutableSelectedVaultStore implements AtlasVaultSelectedVaultStore {
   _MutableSelectedVaultStore(this.value);
 
@@ -371,6 +426,15 @@ final class _RecordingDocumentTransport
   @override
   Future<bool> saveEncryptedExport(Uint8List canonicalExportBytes) async {
     savedBytes = Uint8List.fromList(canonicalExportBytes);
+    final artifactDirectory =
+        Platform.environment['ATLAS_INTEROP_ARTIFACT_DIR'];
+    if (saveResult && artifactDirectory != null) {
+      final directory = Directory(artifactDirectory);
+      await directory.create(recursive: true);
+      await File(
+        '${directory.path}/flutter-to-ios.atlasvault',
+      ).writeAsBytes(savedBytes!, flush: true);
+    }
     return saveResult;
   }
 }

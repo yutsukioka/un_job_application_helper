@@ -238,6 +238,11 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   }
 
   @override
+  void discardPendingRecovery() {
+    calls.add('discard-pending');
+  }
+
+  @override
   Future<void> stop() async {
     calls.add('stop');
   }

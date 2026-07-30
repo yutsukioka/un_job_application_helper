@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../atlas_vault.dart';
 import 'canonical_json.dart';
+import 'interoperability.dart';
 import 'local_store_io.dart';
 import 'plaintext_migration.dart';
 import 'strict_values.dart';
@@ -19,6 +20,59 @@ final class AtlasVaultAndroidStorageException implements Exception {
 
   @override
   String toString() => 'AtlasVault Android storage operation failed.';
+}
+
+final class AtlasAndroidEncryptedDocumentTransport
+    implements AtlasVaultEncryptedDocumentTransport {
+  AtlasAndroidEncryptedDocumentTransport({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  static const int maximumDocumentByteCount = 128 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> pickEncryptedExport() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'pickEncryptedExport',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = copyAtlasVaultAndroidBytesInternal(value);
+    if (bytes.isEmpty || bytes.length > maximumDocumentByteCount) {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+      throw const AtlasVaultAndroidStorageException();
+    }
+    return bytes;
+  }
+
+  @override
+  Future<bool> saveEncryptedExport(Uint8List canonicalExportBytes) async {
+    if (canonicalExportBytes.isEmpty ||
+        canonicalExportBytes.length > maximumDocumentByteCount) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+    final bytes = Uint8List.fromList(canonicalExportBytes);
+    try {
+      final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+        _channel,
+        'saveEncryptedExport',
+        <String, Object?>{'export_bytes': bytes},
+      );
+      if (value is! bool) {
+        throw const AtlasVaultAndroidStorageException();
+      }
+      return value;
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidEncryptedDocumentTransport(<redacted>)';
 }
 
 final class AtlasVaultAndroidCapabilities {

@@ -15,6 +15,10 @@ void main() {
     AtlasVaultPlaintextMigrationCoordinating? coordinating;
     AtlasVaultPlaintextMigrationContext? migrationContext;
     AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
+    AtlasVaultEncryptedDocumentTransport? documentTransport;
+    AtlasVaultInteroperabilityCoordinating? interoperabilityCoordinator;
+    AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
+    AtlasVaultInteroperabilitySession? interoperabilitySession;
 
     expect(secureKeyStore, isNull);
     expect(localStore, isNull);
@@ -25,6 +29,10 @@ void main() {
     expect(coordinating, isNull);
     expect(migrationContext, isNull);
     expect(migrationOwner, isNull);
+    expect(documentTransport, isNull);
+    expect(interoperabilityCoordinator, isNull);
+    expect(interoperabilityOwner, isNull);
+    expect(interoperabilitySession, isNull);
     expect(atlasVaultAndroidMethodChannelName, 'atlas/vault_android');
   });
 

@@ -3,8 +3,6 @@ import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'dart:typed_data';
-
 final class AtlasVaultAndroidMethodCallRecorder {
   AtlasVaultAndroidMethodCallRecorder({required String channelName})
     : channel = MethodChannel(channelName);
@@ -154,7 +152,9 @@ final class InteropMemorySecureKeyStore implements AtlasVaultSecureKeyStore {
 
 final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
   InteropMemoryLocalStoreIO({AtlasVaultLocalStore? store, this.events})
-    : _store = store;
+    : // Keep the public fake setup label readable.
+      // ignore: prefer_initializing_formals
+      _store = store;
 
   AtlasVaultLocalStore? _store;
   final List<String>? events;
@@ -213,7 +213,9 @@ final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
 final class InteropMemorySelectedVaultStore
     implements AtlasVaultSelectedVaultStore {
   InteropMemorySelectedVaultStore({String? value, this.events})
-    : _value = value;
+    : // Keep the public fake setup label readable.
+      // ignore: prefer_initializing_formals
+      _value = value;
 
   String? _value;
   final List<String>? events;

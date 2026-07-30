@@ -28,9 +28,13 @@ Uint8List loadAtlasVaultVectorBytes(String fileName) {
   if (object is! Map<String, dynamic>) {
     throw StateError('AtlasVault vector file is invalid.');
   }
-  final warning = object['warning'] ?? object['description'];
-  if (warning is! String ||
-      !warning.toLowerCase().replaceAll('-', ' ').contains('test only')) {
+  final warning =
+      object['_warning'] ?? object['warning'] ?? object['description'];
+  final normalizedWarning = warning is String
+      ? warning.toLowerCase().replaceAll('-', ' ')
+      : '';
+  if (!normalizedWarning.contains('test only') &&
+      !normalizedWarning.contains('fake test data only')) {
     throw StateError('AtlasVault vector test-only warning is missing.');
   }
   return bytes;
