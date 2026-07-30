@@ -419,6 +419,34 @@ void main() {
     expect(fixture.importJournal.current, isNull);
   });
 
+  test('noncanonical recovery documents are rejected before import', () async {
+    final canonical = _ImportCase.iosToFlutter().canonicalExportBytes;
+    final canonicalText = utf8.decode(canonical);
+    final decoded = jsonDecode(canonicalText)! as Map<String, dynamic>;
+    final reordered = <String, dynamic>{
+      for (final key in decoded.keys.toList().reversed) key: decoded[key],
+    };
+    final candidates = <Uint8List>[
+      Uint8List.fromList(<int>[0x20, ...canonical]),
+      Uint8List.fromList(utf8.encode(jsonEncode(reordered))),
+      Uint8List.fromList(
+        utf8.encode(
+          '{"format":"atlasvault-export",${canonicalText.substring(1)}',
+        ),
+      ),
+    ];
+
+    for (final candidate in candidates) {
+      final fixture = await _ImportFixture.create(pickedBytes: candidate);
+
+      final result = await fixture.coordinator.prepareRecoveryImport();
+
+      expect(result.disposition, AtlasVaultRecoveryImportDisposition.failed);
+      expect(_persistentImportMutations(fixture.events), isEmpty);
+      expect(fixture.importJournal.current, isNull);
+    }
+  });
+
   test('selected vault rejects import before opening the picker', () async {
     final fixture = await _ImportFixture.create(
       selectedVaultId: 'existing-vault',
@@ -784,8 +812,10 @@ void main() {
   );
 
   test('journal-clear failure remains explicitly resumable', () async {
+    final pendingChanges = <bool>[];
     final fixture = await _ImportFixture.create(
       failBeforeEvent: 'import-journal.delete',
+      recoveryImportPendingChanges: pendingChanges,
     );
     await fixture.coordinator.prepareRecoveryImport();
 
@@ -803,6 +833,7 @@ void main() {
       ).stage,
       AtlasVaultRecoveryImportStage.completionPending,
     );
+    expect(pendingChanges, <bool>[true]);
     fixture.faults.clear();
     expect(
       (await fixture.coordinator.prepareRecoveryImport()).disposition,
@@ -814,7 +845,37 @@ void main() {
       )).disposition,
       AtlasVaultRecoveryImportDisposition.importedAndActive,
     );
+    expect(pendingChanges, <bool>[true, false]);
+    expect(
+      fixture.events.indexOf('import-journal.delete'),
+      lessThan(fixture.events.indexOf('recovery-import.pending:false')),
+    );
   });
+
+  test(
+    'cancelled journal backup reselection preserves pending state',
+    () async {
+      final fixture = await _ImportFixture.create(
+        failAfterEvent: 'store.create',
+      );
+      await fixture.coordinator.prepareRecoveryImport();
+      final interrupted = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      expect(interrupted.pendingImport, isTrue);
+      fixture.faults.clear();
+      fixture.transport.cancelFuturePicks();
+
+      final cancelled = await fixture.coordinator.prepareRecoveryImport();
+
+      expect(
+        cancelled.disposition,
+        AtlasVaultRecoveryImportDisposition.cancelled,
+      );
+      expect(cancelled.pendingImport, isTrue);
+      expect(fixture.importJournal.current, isNotNull);
+    },
+  );
 
   test(
     'pre-selection reset removes only hash-bound import resources',
@@ -1121,9 +1182,14 @@ final class _RecordingDocumentTransport
           : Uint8List.fromList(pickedBytes);
 
   final bool saveResult;
-  final Uint8List? _pickedBytes;
+  Uint8List? _pickedBytes;
   Uint8List? savedBytes;
   int pickCalls = 0;
+
+  void cancelFuturePicks() {
+    _pickedBytes?.fillRange(0, _pickedBytes!.length, 0);
+    _pickedBytes = null;
+  }
 
   @override
   Future<Uint8List?> pickEncryptedExport() async {

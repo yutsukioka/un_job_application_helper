@@ -2092,6 +2092,37 @@ void main() {
   });
 
   test(
+    'import activation leaves journal authority to the pending callback',
+    () async {
+      final source = await File(
+        'lib/features/app_shell/atlas_app.dart',
+      ).readAsString();
+      final activationStart = source.indexOf(
+        'Future<AtlasVaultActivationResult> _activateExistingAtlasVault',
+      );
+      final activationEnd = source.indexOf(
+        'Future<void> deactivateAtlasVault()',
+        activationStart,
+      );
+      expect(activationStart, isNonNegative);
+      expect(activationEnd, greaterThan(activationStart));
+      final activationSource = source.substring(activationStart, activationEnd);
+
+      expect(
+        activationSource,
+        isNot(contains('_recoveryImportBlocksLegacyPrivateAuthority = false')),
+      );
+      expect(
+        source,
+        contains(
+          'void _recoveryImportPendingDidChange(bool pending) {\n'
+          '    _recoveryImportBlocksLegacyPrivateAuthority = pending;',
+        ),
+      );
+    },
+  );
+
+  test(
     'restart rollback restores preserved private cache without network reads',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(

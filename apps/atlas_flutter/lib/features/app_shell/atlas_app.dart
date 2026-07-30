@@ -353,9 +353,6 @@ class AtlasAppController extends ChangeNotifier
         throw const AtlasVaultPrivateStateException();
       }
       _installPrivateSnapshot(snapshot);
-      if (recoveryImportResume) {
-        _recoveryImportBlocksLegacyPrivateAuthority = false;
-      }
       notifyListeners();
       return AtlasVaultActivationResult.activated;
     } catch (_) {

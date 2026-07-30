@@ -434,7 +434,7 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
           'Encrypted backup import cancelled.',
           count: 0,
           importReady: true,
-          pending: false,
+          pending: result.pendingImport,
         );
       case AtlasVaultRecoveryImportDisposition.migrationRequired:
         _publish(

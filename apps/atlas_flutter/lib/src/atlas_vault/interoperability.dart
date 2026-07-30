@@ -740,6 +740,9 @@ final class AtlasVaultInteroperabilityCoordinator
             canonicalBytes.length > _maximumDocumentByteCount) {
           throw const AtlasVaultInteroperabilityException();
         }
+        if (!_constantTimeEquals(selectedBytes, canonicalBytes)) {
+          throw const AtlasVaultInteroperabilityException();
+        }
         final digest = await atlasVaultSha256Hex(canonicalBytes);
         if (journal != null) {
           final localStore = _localStoreForImport(

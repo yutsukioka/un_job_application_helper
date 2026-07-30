@@ -160,6 +160,10 @@ If journal creation commits but its post-write verification reports failure,
 fallback reload publishes pending-import authority before releasing the
 temporary admission fence, so legacy writes cannot reopen between recovery and
 resume.
+Imported-vault activation does not clear that authority. The controller keeps
+legacy/cache private writes blocked through a completion-pending activation
+and releases them only when successful journal deletion publishes
+`pending=false`.
 
 ## 28. Existing-Vault Policy
 
@@ -172,8 +176,11 @@ read, no persistable permission, and no returned URI or path.
 
 ## 30. Strict Import Preparation
 
-Picked bytes are strict-decoded, canonically re-encoded, and digest-bound
-before recovery entry or persistent work.
+Picked bytes are strict-decoded and canonically re-encoded, then required to
+match that canonical encoding byte-for-byte before recovery entry or
+persistent work. Reordered keys, whitespace variants, duplicate-key aliases,
+and other semantically equivalent but noncanonical documents are rejected and
+never digest-bound to an import journal.
 
 ## 31. Recovery Verification
 
@@ -218,6 +225,8 @@ Activation remains explicit and follows committed selection.
 ## 39. Journal-Clear-Last
 
 The journal clears only after committed state is fully verified.
+Until deletion succeeds, pending-import authority remains published even when
+runtime activation already succeeded.
 
 ## 40. Interrupted Resume
 
@@ -227,6 +236,9 @@ available while the legacy compatibility service is offline.
 After the matching backup is reselected, the owner always advances to explicit
 recovery-key submission while preserving pending-import authority. It does not
 loop back to the document picker for an already journaled transaction.
+Cancelling that explicit backup reselection also preserves the pending state
+and its resume/discard controls; it never reclassifies a live journal as a new
+import.
 
 ## 41. Pre-Selection Reset
 
@@ -330,6 +342,10 @@ submission for every journal stage. It also transfers encrypted export bytes
 exclusively to the Android document worker before scheduling I/O, so terminal
 shutdown can wipe only unclaimed bytes and the worker wipes its owned buffer
 after writing.
+The fifth review cycle retains the legacy/cache authority fence through
+completion-pending journal deletion, requires selected recovery-document bytes
+to equal their canonical encoding, and preserves pending owner state when
+backup reselection is cancelled.
 
 ## 58. Verification
 

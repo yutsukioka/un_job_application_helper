@@ -320,6 +320,45 @@ void main() {
     owner.dispose();
   });
 
+  testWidgets('cancelled backup reselection keeps pending import controls', (
+    tester,
+  ) async {
+    final coordinator = _FakeCoordinator(
+      importInspection: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.resumeRequired,
+        encryptedRecordCount: 4,
+        pendingImport: true,
+      ),
+      importResult: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.cancelled,
+        encryptedRecordCount: 0,
+        pendingImport: true,
+      ),
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.present();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    await tester.tap(find.text('Resume Recovery Import'));
+    await tester.pumpAndSettle();
+
+    expect(
+      owner.status,
+      AtlasVaultInteroperabilityPresentationStatus.cancelled,
+    );
+    expect(owner.pendingImport, isTrue);
+    expect(find.text('Resume Recovery Import'), findsOneWidget);
+    expect(find.text('Discard Pending Import'), findsOneWidget);
+    expect(find.text('Import Encrypted Backup'), findsNothing);
+    owner.dispose();
+  });
+
   testWidgets('discard pending import requires explicit confirmation', (
     tester,
   ) async {
