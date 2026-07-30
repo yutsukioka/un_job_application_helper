@@ -23,6 +23,63 @@ void main() {
 
   test('construction performs no platform call', () {
     AtlasAndroidVaultSecureKeyStore(channel: recorder.channel);
+    AtlasAndroidEncryptedDocumentTransport(channel: recorder.channel);
+
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('encrypted-document save is explicit, bounded, and path-free', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+    recorder.handler = (call) async {
+      expect(call.method, 'saveEncryptedExport');
+      expect(call.arguments, <String, Object?>{'export_bytes': bytes});
+      return true;
+    };
+    final transport = AtlasAndroidEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
+
+    expect(await transport.saveEncryptedExport(bytes), isTrue);
+
+    expect(recorder.calls, hasLength(1));
+    expect(recorder.calls.single.arguments.toString(), isNot(contains('path')));
+    expect(recorder.calls.single.arguments.toString(), isNot(contains('uri')));
+  });
+
+  test('encrypted-document save cancellation is fixed', () async {
+    recorder.handler = (call) async {
+      expect(call.method, 'saveEncryptedExport');
+      return false;
+    };
+    final transport = AtlasAndroidEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
+
+    expect(
+      await transport.saveEncryptedExport(
+        Uint8List.fromList(utf8.encode('{"encrypted":true}')),
+      ),
+      isFalse,
+    );
+  });
+
+  test('invalid encrypted-document sizes make no platform call', () async {
+    final transport = AtlasAndroidEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
+
+    await expectLater(
+      transport.saveEncryptedExport(Uint8List(0)),
+      throwsA(isA<AtlasVaultAndroidStorageException>()),
+    );
+    await expectLater(
+      transport.saveEncryptedExport(
+        Uint8List(
+          AtlasAndroidEncryptedDocumentTransport.maximumDocumentByteCount + 1,
+        ),
+      ),
+      throwsA(isA<AtlasVaultAndroidStorageException>()),
+    );
 
     expect(recorder.calls, isEmpty);
   });
