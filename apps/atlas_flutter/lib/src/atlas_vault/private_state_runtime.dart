@@ -96,6 +96,10 @@ final class AtlasVaultPrivateStateRuntime
   @override
   bool get isActive => _active && !_deactivating;
 
+  bool isActiveVault(String vaultId) {
+    return isActive && _vaultId == vaultId;
+  }
+
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
     if (_active || _activating || _deactivating) {

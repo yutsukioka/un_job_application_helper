@@ -59,6 +59,39 @@ Uint8List deterministicVaultKey() {
   );
 }
 
+final class InteropOperationFaults {
+  String? failAfterEvent;
+  String? failBeforeEvent;
+  int remainingAfterMatches = 1;
+
+  void before(String event) {
+    if (failBeforeEvent != event) {
+      return;
+    }
+    failBeforeEvent = null;
+    throw StateError('deterministic interruption');
+  }
+
+  void after(String event) {
+    if (failAfterEvent != event) {
+      return;
+    }
+    if (remainingAfterMatches > 1) {
+      remainingAfterMatches -= 1;
+      return;
+    }
+    failAfterEvent = null;
+    remainingAfterMatches = 1;
+    throw StateError('deterministic interruption');
+  }
+
+  void clear() {
+    failAfterEvent = null;
+    failBeforeEvent = null;
+    remainingAfterMatches = 1;
+  }
+}
+
 final class TestAtlasVaultPlaintextMigrationPrivateAuthority
     implements AtlasVaultPlaintextMigrationPrivateAuthority {
   TestAtlasVaultPlaintextMigrationPrivateAuthority({
@@ -110,11 +143,12 @@ final class TestAtlasVaultPlaintextMigrationPrivateAuthority
 }
 
 final class InteropMemorySecureKeyStore implements AtlasVaultSecureKeyStore {
-  InteropMemorySecureKeyStore({Uint8List? key, this.events})
+  InteropMemorySecureKeyStore({Uint8List? key, this.events, this.faults})
     : _key = key == null ? null : Uint8List.fromList(key);
 
   Uint8List? _key;
   final List<String>? events;
+  final InteropOperationFaults? faults;
   final List<String> calls = <String>[];
 
   @override
@@ -125,6 +159,7 @@ final class InteropMemorySecureKeyStore implements AtlasVaultSecureKeyStore {
       throw const AtlasVaultAndroidStorageException();
     }
     _key = Uint8List.fromList(vaultKey);
+    faults?.after('key.create');
   }
 
   @override
@@ -148,17 +183,27 @@ final class InteropMemorySecureKeyStore implements AtlasVaultSecureKeyStore {
     events?.add('key.delete');
     _key?.fillRange(0, _key!.length, 0);
     _key = null;
+    faults?.after('key.delete');
+  }
+
+  void replaceKeyForTest(Uint8List? value) {
+    _key?.fillRange(0, _key!.length, 0);
+    _key = value == null ? null : Uint8List.fromList(value);
   }
 }
 
 final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
-  InteropMemoryLocalStoreIO({AtlasVaultLocalStore? store, this.events})
-    : // Keep the public fake setup label readable.
-      // ignore: prefer_initializing_formals
-      _store = store;
+  InteropMemoryLocalStoreIO({
+    AtlasVaultLocalStore? store,
+    this.events,
+    this.faults,
+  }) : // Keep the public fake setup label readable.
+       // ignore: prefer_initializing_formals
+       _store = store;
 
   AtlasVaultLocalStore? _store;
   final List<String>? events;
+  final InteropOperationFaults? faults;
   final List<String> calls = <String>[];
   String? lastExpectedSha256;
 
@@ -183,6 +228,7 @@ final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
       throw const AtlasVaultAndroidStorageException();
     }
     _store = AtlasVaultLocalStore.fromJson(store.toJson());
+    faults?.after('store.create');
   }
 
   @override
@@ -201,6 +247,7 @@ final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
     }
     lastExpectedSha256 = expectedSha256;
     _store = AtlasVaultLocalStore.fromJson(store.toJson());
+    faults?.after('store.replace');
   }
 
   @override
@@ -208,18 +255,26 @@ final class InteropMemoryLocalStoreIO implements AtlasVaultLocalStoreIO {
     calls.add('store.delete');
     events?.add('store.delete');
     _store = null;
+    faults?.after('store.delete');
+  }
+
+  void replaceStoreForTest(AtlasVaultLocalStore? value) {
+    _store = value == null
+        ? null
+        : AtlasVaultLocalStore.fromJson(value.toJson());
   }
 }
 
 final class InteropMemorySelectedVaultStore
     implements AtlasVaultSelectedVaultStore {
-  InteropMemorySelectedVaultStore({String? value, this.events})
+  InteropMemorySelectedVaultStore({String? value, this.events, this.faults})
     : // Keep the public fake setup label readable.
       // ignore: prefer_initializing_formals
       _value = value;
 
   String? _value;
   final List<String>? events;
+  final InteropOperationFaults? faults;
   final List<String> calls = <String>[];
 
   @override
@@ -237,6 +292,7 @@ final class InteropMemorySelectedVaultStore
       throw const AtlasVaultPlaintextMigrationException();
     }
     _value = vaultId;
+    faults?.after('selection.create');
   }
 
   @override
@@ -247,6 +303,7 @@ final class InteropMemorySelectedVaultStore
       throw const AtlasVaultPlaintextMigrationException();
     }
     _value = null;
+    faults?.after('selection.clear');
   }
 }
 
@@ -315,11 +372,15 @@ final class InteropMemoryMigrationJournalStore
 
 final class InteropMemoryRecoveryImportJournalStore
     implements AtlasVaultProtectedRecoveryImportJournalStore {
-  InteropMemoryRecoveryImportJournalStore({Uint8List? bytes, this.events})
-    : _bytes = bytes == null ? null : Uint8List.fromList(bytes);
+  InteropMemoryRecoveryImportJournalStore({
+    Uint8List? bytes,
+    this.events,
+    this.faults,
+  }) : _bytes = bytes == null ? null : Uint8List.fromList(bytes);
 
   Uint8List? _bytes;
   final List<String>? events;
+  final InteropOperationFaults? faults;
   final List<String> calls = <String>[];
 
   Uint8List? get current => _bytes == null ? null : Uint8List.fromList(_bytes!);
@@ -339,6 +400,7 @@ final class InteropMemoryRecoveryImportJournalStore
       throw const AtlasVaultInteroperabilityException();
     }
     _bytes = Uint8List.fromList(canonicalBytes);
+    faults?.after('import-journal.create');
   }
 
   @override
@@ -354,6 +416,7 @@ final class InteropMemoryRecoveryImportJournalStore
       throw const AtlasVaultInteroperabilityException();
     }
     _bytes = Uint8List.fromList(canonicalBytes);
+    faults?.after('import-journal.replace');
   }
 
   @override
@@ -363,6 +426,7 @@ final class InteropMemoryRecoveryImportJournalStore
   }) async {
     calls.add('import-journal.delete');
     events?.add('import-journal.delete');
+    faults?.before('import-journal.delete');
     final current = _bytes;
     if (current == null) {
       if (allowAbsent) {
@@ -374,6 +438,11 @@ final class InteropMemoryRecoveryImportJournalStore
       throw const AtlasVaultInteroperabilityException();
     }
     _bytes = null;
+    faults?.after('import-journal.delete');
+  }
+
+  void replaceBytesForTest(Uint8List? value) {
+    _bytes = value == null ? null : Uint8List.fromList(value);
   }
 }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +27,30 @@ void main() {
     AtlasAndroidEncryptedDocumentTransport(channel: recorder.channel);
 
     expect(recorder.calls, isEmpty);
+  });
+
+  test('native document bridge owns one path-free SAF operation', () {
+    final storage = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+    final activity = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/MainActivity.kt',
+    ).readAsStringSync();
+
+    expect(storage, contains('Intent.ACTION_OPEN_DOCUMENT'));
+    expect(storage, contains('Intent.ACTION_CREATE_DOCUMENT'));
+    expect(storage, contains('Intent.CATEGORY_OPENABLE'));
+    expect(storage, contains('Intent.EXTRA_MIME_TYPES'));
+    expect(storage, contains('type = "*/*"'));
+    expect(storage, contains('pendingDocumentOperation != null'));
+    expect(storage, contains('pendingDocumentOperation = null'));
+    expect(storage, contains('pending.result.success('));
+    expect(storage, contains('MAX_DOCUMENT_BYTES = 128 * 1024 * 1024'));
+    expect(storage, isNot(contains('takePersistableUriPermission')));
+    expect(activity, contains('atlasVaultStorage?.onActivityResult'));
+    expect(activity, isNot(contains('recovery-import')));
+    expect(activity, isNot(contains('Cipher.getInstance')));
   });
 
   test('encrypted-document save is explicit, bounded, and path-free', () async {
@@ -86,15 +111,43 @@ void main() {
     },
   );
 
+  test('picker rejects empty and oversized platform results', () async {
+    final transport = AtlasAndroidEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
+    recorder.handler = (_) async => Uint8List(0);
+    await expectLater(
+      transport.pickEncryptedExport(),
+      throwsA(isA<AtlasVaultAndroidStorageException>()),
+    );
+
+    recorder.handler = (_) async => Uint8List(
+      AtlasAndroidEncryptedDocumentTransport.maximumDocumentByteCount + 1,
+    );
+    await expectLater(
+      transport.pickEncryptedExport(),
+      throwsA(isA<AtlasVaultAndroidStorageException>()),
+    );
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'pickEncryptedExport',
+      'pickEncryptedExport',
+    ]);
+  });
+
   test('protected recovery-import journal uses exact CAS methods', () async {
     final journal = AtlasAndroidProtectedRecoveryImportJournalStore(
       channel: recorder.channel,
     );
-    final bytes = Uint8List.fromList(
-      utf8.encode(
-        '{"format":"atlasvault-android-recovery-import","version":1}',
-      ),
-    );
+    final bytes = AtlasVaultRecoveryImportJournal.prepared(
+      importId: '30000000-0000-4000-8000-000000000301',
+      exportId: '30000000-0000-4000-8000-000000000302',
+      vaultId: 'vault-alpha',
+      storeId: '30000000-0000-4000-8000-000000000303',
+      createdAt: '2026-07-29T03:04:05Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    ).canonicalBytes();
     recorder.handler = (call) async {
       switch (call.method) {
         case 'readRecoveryImportJournal':
@@ -130,6 +183,48 @@ void main() {
       'replaceRecoveryImportJournal',
       'deleteRecoveryImportJournal',
     ]);
+  });
+
+  test(
+    'recovery-import journal rejects incomplete schema before platform',
+    () async {
+      final journal = AtlasAndroidProtectedRecoveryImportJournalStore(
+        channel: recorder.channel,
+      );
+      final incomplete = Uint8List.fromList(
+        utf8.encode(
+          '{"format":"atlasvault-android-recovery-import","version":1}',
+        ),
+      );
+
+      await expectLater(
+        journal.create(incomplete),
+        throwsA(isA<AtlasVaultAndroidStorageException>()),
+      );
+      expect(recorder.calls, isEmpty);
+    },
+  );
+
+  test('recovery-import journal is a protected no-backup blob', () {
+    final storage = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+
+    expect(storage, contains('applicationContext.noBackupFilesDir'));
+    expect(
+      storage,
+      contains('RECOVERY_IMPORT_JOURNAL_PURPOSE = "recovery-import"'),
+    );
+    expect(
+      storage,
+      contains('RECOVERY_IMPORT_JOURNAL_FILE = "recovery-import.json.enc"'),
+    );
+    expect(storage, contains('recoveryImportJournalFile(createParent = true)'));
+    expect(storage, contains('createProtectedBlob('));
+    expect(storage, contains('replaceProtectedBlob('));
+    expect(storage, contains('deleteProtectedBlob('));
+    expect(storage, contains('cipher.updateAAD(protectedBlobAad(purpose))'));
   });
 
   test('invalid encrypted-document sizes make no platform call', () async {

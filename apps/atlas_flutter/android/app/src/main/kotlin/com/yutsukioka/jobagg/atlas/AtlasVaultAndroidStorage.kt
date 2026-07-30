@@ -62,8 +62,10 @@ internal class AtlasVaultAndroidStorage(
         val pending = pendingDocumentOperation
         pendingDocumentOperation = null
         if (pending != null) {
-            pending.bytes.fill(0)
-            pending.result.success(false)
+            pending.bytes?.fill(0)
+            pending.result.success(
+                if (pending.kind == DocumentOperationKind.PICK) null else false,
+            )
         }
         channel?.setMethodCallHandler(null)
         channel = null
@@ -75,9 +77,15 @@ internal class AtlasVaultAndroidStorage(
             result.notImplemented()
             return
         }
-        if (call.method == "saveEncryptedExport") {
-            beginSaveEncryptedExport(call, result)
-            return
+        when (call.method) {
+            "pickEncryptedExport" -> {
+                beginPickEncryptedExport(result)
+                return
+            }
+            "saveEncryptedExport" -> {
+                beginSaveEncryptedExport(call, result)
+                return
+            }
         }
         executor.execute {
             try {
@@ -138,6 +146,28 @@ internal class AtlasVaultAndroidStorage(
                         )
                         null
                     }
+                    "readRecoveryImportJournal" ->
+                        readRecoveryImportJournal()
+                    "createRecoveryImportJournal" -> {
+                        createRecoveryImportJournal(
+                            requiredBytes(call, "journal_bytes"),
+                        )
+                        null
+                    }
+                    "replaceRecoveryImportJournal" -> {
+                        replaceRecoveryImportJournal(
+                            requiredBytes(call, "journal_bytes"),
+                            requiredString(call, "expected_sha256"),
+                        )
+                        null
+                    }
+                    "deleteRecoveryImportJournal" -> {
+                        deleteRecoveryImportJournal(
+                            requiredString(call, "expected_sha256"),
+                            requiredBoolean(call, "allow_absent"),
+                        )
+                        null
+                    }
                     "readSelectedVault" -> readSelectedVault()
                     "createSelectedVault" -> {
                         createSelectedVault(requiredVaultId(call))
@@ -169,37 +199,83 @@ internal class AtlasVaultAndroidStorage(
         resultCode: Int,
         data: Intent?,
     ): Boolean {
-        if (requestCode != SAVE_DOCUMENT_REQUEST_CODE) {
+        if (requestCode != SAVE_DOCUMENT_REQUEST_CODE &&
+            requestCode != PICK_DOCUMENT_REQUEST_CODE
+        ) {
             return false
         }
         val pending = pendingDocumentOperation ?: return true
+        val expectedKind =
+            if (requestCode == PICK_DOCUMENT_REQUEST_CODE) {
+                DocumentOperationKind.PICK
+            } else {
+                DocumentOperationKind.SAVE
+            }
+        if (pending.kind != expectedKind) {
+            pendingDocumentOperation = null
+            pending.bytes?.fill(0)
+            pending.result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+            return true
+        }
         if (resultCode != Activity.RESULT_OK || data?.data == null) {
             pendingDocumentOperation = null
-            pending.bytes.fill(0)
-            pending.result.success(false)
+            pending.bytes?.fill(0)
+            pending.result.success(
+                if (pending.kind == DocumentOperationKind.PICK) null else false,
+            )
             return true
         }
         val uri = data.data ?: run {
             pendingDocumentOperation = null
-            pending.bytes.fill(0)
-            pending.result.success(false)
+            pending.bytes?.fill(0)
+            pending.result.success(
+                if (pending.kind == DocumentOperationKind.PICK) null else false,
+            )
             return true
         }
         executor.execute {
+            var pickedBytes: ByteArray? = null
             var succeeded = false
             try {
-                writeEncryptedDocument(uri, pending.bytes)
+                if (pending.kind == DocumentOperationKind.PICK) {
+                    pickedBytes = readEncryptedDocument(uri)
+                } else {
+                    writeEncryptedDocument(
+                        uri,
+                        pending.bytes ?: throw StorageFailure(),
+                    )
+                }
                 succeeded = true
             } catch (_: Throwable) {
                 succeeded = false
             } finally {
-                pending.bytes.fill(0)
+                pending.bytes?.fill(0)
                 mainHandler.post {
                     if (pendingDocumentOperation === pending) {
                         pendingDocumentOperation = null
                         if (!closed) {
                             if (succeeded) {
-                                pending.result.success(true)
+                                if (pending.kind ==
+                                    DocumentOperationKind.PICK
+                                ) {
+                                    val resultBytes = pickedBytes
+                                    if (resultBytes == null) {
+                                        pending.result.error(
+                                            ERROR_CODE,
+                                            "AtlasVault Android storage operation failed.",
+                                            null,
+                                        )
+                                    } else {
+                                        pending.result.success(resultBytes)
+                                        resultBytes.fill(0)
+                                    }
+                                } else {
+                                    pending.result.success(true)
+                                }
                             } else {
                                 pending.result.error(
                                     ERROR_CODE,
@@ -209,10 +285,49 @@ internal class AtlasVaultAndroidStorage(
                             }
                         }
                     }
+                    pickedBytes?.fill(0)
                 }
             }
         }
         return true
+    }
+
+    private fun beginPickEncryptedExport(result: MethodChannel.Result) {
+        if (closed || pendingDocumentOperation != null) {
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+            return
+        }
+        pendingDocumentOperation = PendingDocumentOperation(
+            result = result,
+            kind = DocumentOperationKind.PICK,
+            bytes = null,
+        )
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    ENCRYPTED_EXPORT_MIME_TYPE,
+                    "application/json",
+                    "application/octet-stream",
+                ),
+            )
+        }
+        try {
+            activity.startActivityForResult(intent, PICK_DOCUMENT_REQUEST_CODE)
+        } catch (_: Throwable) {
+            pendingDocumentOperation = null
+            result.error(
+                ERROR_CODE,
+                "AtlasVault Android storage operation failed.",
+                null,
+            )
+        }
     }
 
     private fun beginSaveEncryptedExport(
@@ -248,7 +363,11 @@ internal class AtlasVaultAndroidStorage(
         }
         val bytes = supplied.copyOf()
         supplied.fill(0)
-        pendingDocumentOperation = PendingDocumentOperation(result, bytes)
+        pendingDocumentOperation = PendingDocumentOperation(
+            result = result,
+            kind = DocumentOperationKind.SAVE,
+            bytes = bytes,
+        )
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = ENCRYPTED_EXPORT_MIME_TYPE
@@ -276,6 +395,38 @@ internal class AtlasVaultAndroidStorage(
         output.use {
             it.write(bytes)
             it.flush()
+        }
+    }
+
+    private fun readEncryptedDocument(uri: android.net.Uri): ByteArray {
+        val input = applicationContext.contentResolver.openInputStream(uri)
+            ?: throw StorageFailure()
+        val output = WipeableByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        try {
+            input.use {
+                var total = 0
+                while (true) {
+                    val count = it.read(buffer)
+                    if (count < 0) {
+                        break
+                    }
+                    total += count
+                    if (total > MAX_DOCUMENT_BYTES) {
+                        throw StorageFailure()
+                    }
+                    output.write(buffer, 0, count)
+                }
+            }
+            val bytes = output.toByteArray()
+            if (bytes.isEmpty() || bytes.size > MAX_DOCUMENT_BYTES) {
+                bytes.fill(0)
+                throw StorageFailure()
+            }
+            return bytes
+        } finally {
+            buffer.fill(0)
+            output.wipe()
         }
     }
 
@@ -584,6 +735,78 @@ internal class AtlasVaultAndroidStorage(
             expectedSha256,
             allowAbsent,
             MAX_MIGRATION_JOURNAL_BYTES,
+        )
+    }
+
+    private fun readRecoveryImportJournal(): ByteArray? {
+        val bytes = readProtectedBlob(
+            recoveryImportJournalFile(createParent = false),
+            RECOVERY_IMPORT_JOURNAL_PURPOSE,
+            MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+        ) ?: return null
+        try {
+            validateCanonicalJsonDocument(
+                bytes,
+                MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+            )
+            return bytes.copyOf()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun createRecoveryImportJournal(suppliedBytes: ByteArray) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(
+                bytes,
+                MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+            )
+            createProtectedBlob(
+                recoveryImportJournalFile(createParent = true),
+                RECOVERY_IMPORT_JOURNAL_PURPOSE,
+                bytes,
+                MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun replaceRecoveryImportJournal(
+        suppliedBytes: ByteArray,
+        expectedSha256: String,
+    ) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(
+                bytes,
+                MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+            )
+            replaceProtectedBlob(
+                recoveryImportJournalFile(createParent = false),
+                RECOVERY_IMPORT_JOURNAL_PURPOSE,
+                bytes,
+                expectedSha256,
+                MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun deleteRecoveryImportJournal(
+        expectedSha256: String,
+        allowAbsent: Boolean,
+    ) {
+        deleteProtectedBlob(
+            recoveryImportJournalFile(createParent = false),
+            RECOVERY_IMPORT_JOURNAL_PURPOSE,
+            expectedSha256,
+            allowAbsent,
+            MAX_RECOVERY_IMPORT_JOURNAL_BYTES,
         )
     }
 
@@ -1121,6 +1344,15 @@ internal class AtlasVaultAndroidStorage(
         }
     }
 
+    private fun recoveryImportJournalFile(createParent: Boolean): File {
+        val root = File(atlasVaultRoot(createParent), "imports").also {
+            ensureDirectory(it, createParent)
+        }
+        return File(root, RECOVERY_IMPORT_JOURNAL_FILE).also {
+            ensureContained(it, root)
+        }
+    }
+
     private fun selectedVaultFile(createParent: Boolean): File {
         val root = File(atlasVaultRoot(createParent), "selection").also {
             ensureDirectory(it, createParent)
@@ -1405,9 +1637,22 @@ internal class AtlasVaultAndroidStorage(
 
     private class StorageFailure : Exception()
 
+    private class WipeableByteArrayOutputStream : ByteArrayOutputStream() {
+        fun wipe() {
+            buf.fill(0)
+            reset()
+        }
+    }
+
+    private enum class DocumentOperationKind {
+        PICK,
+        SAVE,
+    }
+
     private data class PendingDocumentOperation(
         val result: MethodChannel.Result,
-        val bytes: ByteArray,
+        val kind: DocumentOperationKind,
+        val bytes: ByteArray?,
     )
 
     private companion object {
@@ -1427,6 +1672,7 @@ internal class AtlasVaultAndroidStorage(
         const val PROTECTED_BLOB_VERSION = 1
         const val MIGRATION_JOURNAL_PURPOSE =
             "plaintext-private-state-migration"
+        const val RECOVERY_IMPORT_JOURNAL_PURPOSE = "recovery-import"
         const val SELECTED_VAULT_PURPOSE = "selected-vault"
         const val SELECTED_VAULT_FORMAT = "atlasvault-android-selected-vault"
         const val SELECTED_VAULT_VERSION = 1
@@ -1445,11 +1691,14 @@ internal class AtlasVaultAndroidStorage(
         const val MAX_STORE_BYTES = 128 * 1024 * 1024
         const val MAX_DOCUMENT_BYTES = 128 * 1024 * 1024
         const val MAX_MIGRATION_JOURNAL_BYTES = 16 * 1024 * 1024
+        const val MAX_RECOVERY_IMPORT_JOURNAL_BYTES = 64 * 1024
         const val MAX_SELECTED_VAULT_BYTES = 4 * 1024
         const val MAX_PROTECTED_ENVELOPE_OVERHEAD = 4 * 1024
         const val MIGRATION_JOURNAL_FILE = "plaintext-private-state.json.enc"
+        const val RECOVERY_IMPORT_JOURNAL_FILE = "recovery-import.json.enc"
         const val SELECTED_VAULT_FILE = "selected-vault.json.enc"
         const val SAVE_DOCUMENT_REQUEST_CODE = 0x4156
+        const val PICK_DOCUMENT_REQUEST_CODE = 0x4157
         const val ENCRYPTED_EXPORT_MIME_TYPE =
             "application/vnd.atlasvault+json"
         const val ENCRYPTED_EXPORT_FILENAME =
@@ -1469,10 +1718,15 @@ internal class AtlasVaultAndroidStorage(
             "createPlaintextMigrationJournal",
             "replacePlaintextMigrationJournal",
             "deletePlaintextMigrationJournal",
+            "readRecoveryImportJournal",
+            "createRecoveryImportJournal",
+            "replaceRecoveryImportJournal",
+            "deleteRecoveryImportJournal",
             "readSelectedVault",
             "createSelectedVault",
             "clearSelectedVault",
             "saveEncryptedExport",
+            "pickEncryptedExport",
         )
         val VAULT_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
         val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")

@@ -8,11 +8,13 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
         async throws
     {
         let vector = try InteropVector.load(direction: "flutter_to_ios")
+        let importData = try vector.directArtifactDataIfConfigured()
         let storage = InteropImportStorage()
         let envelope = try AtlasVaultEncryptedExportEnvelope.decodeStrict(
-            vector.exportData
+            importData
         )
-        XCTAssertEqual(try envelope.canonicalData(), vector.exportData)
+        XCTAssertEqual(try envelope.canonicalData(), importData)
+        XCTAssertEqual(importData, vector.exportData)
         XCTAssertEqual(envelope.records.count, vector.expectedRecordCount)
 
         let environment = AtlasVaultRecoveryImportEnvironment(
@@ -21,7 +23,7 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
                 await storage.selection()
             },
             hasPendingCreation: { false },
-            readFile: { _ in vector.exportData },
+            readFile: { _ in importData },
             loadJournal: {
                 await storage.journal()
             },
@@ -132,7 +134,7 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
         XCTAssertNotNil(snapshot.selection)
         for sentinel in vector.privateSentinels {
             XCTAssertFalse(
-                String(decoding: vector.exportData, as: UTF8.self)
+                String(decoding: importData, as: UTF8.self)
                     .contains(sentinel),
                 sentinel
             )
@@ -168,6 +170,106 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
         XCTAssertEqual(envelope.records.count, vector.expectedRecordCount)
     }
 
+    func testAppleProductionCoordinatorWritesExactFlutterArtifact()
+        async throws
+    {
+        let vector = try InteropVector.load(direction: "ios_to_flutter")
+        let envelope = try AtlasVaultEncryptedExportEnvelope.decodeStrict(
+            vector.exportData
+        )
+        let selected = try AtlasSelectedVaultID(
+            validating: vector.vaultID
+        )
+        let store = AtlasVaultLocalStoreEnvelope(
+            storeID: vector.sourceStoreID,
+            createdAt: vector.exportTimestamp,
+            updatedAt: vector.exportTimestamp,
+            vaultMetadata: try envelope.vaultMetadata.localStoreMetadata(),
+            records: envelope.records
+        )
+        let environment = AtlasVaultRecoveryExportEnvironment(
+            authorize: { true },
+            selectVault: { selected },
+            loadVaultKey: { vaultID in
+                guard vaultID == vector.vaultID else {
+                    throw AtlasVaultRecoveryExportFailure.recoveryRequired
+                }
+                return vector.vaultKey
+            },
+            loadStore: { vaultID, vaultKey in
+                guard
+                    vaultID == vector.vaultID,
+                    vaultKey == vector.vaultKey
+                else {
+                    throw AtlasVaultRecoveryExportFailure.recoveryRequired
+                }
+                return store
+            },
+            saveStore: { _, _, _ in
+                throw AtlasVaultRecoveryExportFailure.recoveryRequired
+            },
+            hydrate: { records, vaultID, vaultKey in
+                let session = try AtlasVaultUnlockedSession(
+                    vaultID: vaultID,
+                    vaultKey: vaultKey
+                )
+                _ = try AtlasVaultRecordHydrator().hydrate(
+                    records: records,
+                    session: session
+                )
+            },
+            loadJournal: { nil },
+            saveJournal: { _ in
+                throw AtlasVaultRecoveryExportFailure.recoveryRequired
+            },
+            clearJournal: {
+                throw AtlasVaultRecoveryExportFailure.recoveryRequired
+            },
+            generateRecoveryKey: { vector.vaultKey },
+            generateSalt: { Data(repeating: 0, count: 32) },
+            generateNonce: { Data(repeating: 0, count: 12) },
+            generateID: { vector.exportID },
+            timestamp: { vector.exportTimestamp }
+        )
+        let coordinator = AtlasVaultRecoveryExportCoordinator(
+            environment: environment
+        )
+
+        let document = try await coordinator.resumeAndPrepareExport(
+            secret: vector.recoveryText
+        )
+
+        XCTAssertEqual(document.encryptedData, vector.exportData)
+        XCTAssertEqual(
+            InteropVector.sha256(document.encryptedData),
+            vector.exportSHA256
+        )
+        if let artifactDirectory = InteropVector.artifactDirectory {
+            try FileManager.default.createDirectory(
+                at: artifactDirectory,
+                withIntermediateDirectories: true
+            )
+            let artifactURL = artifactDirectory.appendingPathComponent(
+                "ios-to-flutter.atlasvault"
+            )
+            try document.encryptedData.write(
+                to: artifactURL,
+                options: .atomic
+            )
+            try (vector.exportSHA256 + "\n").write(
+                to: artifactDirectory.appendingPathComponent(
+                    "ios-to-flutter.sha256"
+                ),
+                atomically: true,
+                encoding: .utf8
+            )
+            XCTAssertEqual(
+                try Data(contentsOf: artifactURL),
+                vector.exportData
+            )
+        }
+    }
+
     func testPhaseContractRegistersAppleOriginImportCompletion() throws {
         let root = try InteropVector.repositoryRoot()
         let architecture = try String(
@@ -188,11 +290,25 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
 }
 
 private struct InteropVector {
+    let direction: String
     let recoveryText: String
+    let vaultID: String
+    let vaultKey: Data
+    let exportID: String
+    let exportTimestamp: String
     let sourceStoreID: String
     let exportData: Data
+    let exportSHA256: String
     let expectedRecordCount: Int
     let privateSentinels: [String]
+
+    static var artifactDirectory: URL? {
+        ProcessInfo.processInfo.environment[
+            "ATLAS_INTEROP_ARTIFACT_DIR"
+        ].map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        }
+    }
 
     static func load(direction: String) throws -> Self {
         let root = try repositoryRoot()
@@ -217,29 +333,30 @@ private struct InteropVector {
         let vectorData = try XCTUnwrap(
             Data(base64Encoded: encoded)
         )
-        if let artifactDirectory = ProcessInfo.processInfo.environment[
-            "ATLAS_INTEROP_ARTIFACT_DIR"
-        ] {
-            let name = direction == "flutter_to_ios"
-                ? "flutter-to-ios.atlasvault"
-                : "ios-to-flutter.atlasvault"
-            let directURL = URL(fileURLWithPath: artifactDirectory)
-                .appendingPathComponent(name)
-            guard FileManager.default.fileExists(atPath: directURL.path)
-            else {
-                XCTFail("Required direct interoperability artifact is absent.")
-                throw CocoaError(.fileNoSuchFile)
-            }
-            XCTAssertEqual(try Data(contentsOf: directURL), vectorData)
-        }
         return Self(
+            direction: direction,
             recoveryText: try XCTUnwrap(
                 value["test_only_recovery_key_text"] as? String
+            ),
+            vaultID: try XCTUnwrap(value["vault_id"] as? String),
+            vaultKey: try XCTUnwrap(
+                Data(
+                    base64Encoded: try XCTUnwrap(
+                        value["test_only_vault_key_b64"] as? String
+                    )
+                )
+            ),
+            exportID: try XCTUnwrap(value["export_id"] as? String),
+            exportTimestamp: try XCTUnwrap(
+                value["export_timestamp"] as? String
             ),
             sourceStoreID: try XCTUnwrap(
                 value["local_source_store_id"] as? String
             ),
             exportData: vectorData,
+            exportSHA256: try XCTUnwrap(
+                value["canonical_encrypted_export_sha256"] as? String
+            ),
             expectedRecordCount: try XCTUnwrap(
                 value["expected_encrypted_record_count"] as? Int
             ),
@@ -251,6 +368,30 @@ private struct InteropVector {
                 "saved_job",
             ]
         )
+    }
+
+    func directArtifactDataIfConfigured() throws -> Data {
+        guard let directory = Self.artifactDirectory else {
+            return exportData
+        }
+        let filename = direction == "flutter_to_ios"
+            ? "flutter-to-ios.atlasvault"
+            : "ios-to-flutter.atlasvault"
+        let directURL = directory.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: directURL.path) else {
+            XCTFail("Required direct interoperability artifact is absent.")
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let data = try Data(contentsOf: directURL)
+        XCTAssertEqual(data, exportData)
+        XCTAssertEqual(Self.sha256(data), exportSHA256)
+        return data
+    }
+
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     static func repositoryRoot() throws -> URL {

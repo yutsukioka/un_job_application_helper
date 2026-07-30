@@ -401,9 +401,11 @@ not render or author private state, perform cloud sync, or migrate plaintext.
 
 Flutter/Android and Apple exchange the same canonical `atlasvault-export`
 version 1 envelope. The exporter preserves vault metadata, valid existing key
-wraps, ordered encrypted records, and tombstones. It excludes device-local
-store IDs and timestamps, selected-vault state, protected journals, local
-paths or content URIs, raw keys, recovery text, and plaintext payloads.
+wraps, ordered encrypted records, and tombstones. A recovery transport contains
+exactly one recovery-wrap v2 and may preserve valid coexisting passphrase-wrap
+v1 entries. It excludes device-local store IDs and timestamps, selected-vault
+state, protected journals, local paths or content URIs, raw keys, recovery
+text, and plaintext payloads.
 
 Recovery-wrap v2 remains the portable recovery boundary. The recovery key is
 displayed or entered separately and is never embedded in the document. An
@@ -411,11 +413,19 @@ exporter must authenticate the recovery wrap against the active vault key and
 hydrate every encrypted record before offering canonical bytes for an explicit
 save.
 
-An importing device creates a new device-local store ID and local key
-protection. Imported metadata and ordered encrypted records are not rewritten.
-Installation is clean-install only, journaled, store-first, key-second, and
-selection-last. Existing-vault replacement and cross-vault merging are not
-part of this contract.
+An importing device creates a new device-local store ID, local timestamps, and
+local key protection. Imported metadata and ordered encrypted records are not
+rewritten; tombstones and supported-but-unrendered private record families
+remain encrypted and ordered. Flutter installation is clean-install only,
+journaled, store-first, key-second, and selection-last. The protected import
+journal contains only transaction identifiers, stages, and resource digests;
+it excludes export bytes, record identifiers, paths, content URIs, plaintext,
+and raw keys. Before selection, explicit reset is bound to those digests. After
+selection, the transaction is resume-only and the journal clears last.
+Existing-vault replacement and cross-vault merging are not part of this
+contract. The recovery key travels separately, no plaintext intermediary or
+cloud service is required, and this profile does not alter the export wire
+fields or versions.
 
 ## Future Device Onboarding And Removal
 

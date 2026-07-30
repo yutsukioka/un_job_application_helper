@@ -7,6 +7,14 @@ import 'interoperability.dart';
 enum AtlasVaultInteroperabilityPresentationStatus {
   hidden,
   ready,
+  pickingImport,
+  awaitingImportRecoveryKey,
+  importing,
+  resumeRequired,
+  completionPending,
+  importedActive,
+  migrationRequired,
+  existingVault,
   generatingRecoveryKey,
   awaitingRecoveryConfirmation,
   preparingExport,
@@ -17,6 +25,15 @@ enum AtlasVaultInteroperabilityPresentationStatus {
   failed,
   recoveryRequired,
   unavailable,
+}
+
+final class AtlasVaultInteroperabilityContext {
+  const AtlasVaultInteroperabilityContext({required this.owner});
+
+  final AtlasVaultInteroperabilityPresentationOwner owner;
+
+  @override
+  String toString() => 'AtlasVaultInteroperabilityContext(<redacted>)';
 }
 
 final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
@@ -33,6 +50,8 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
   String message = 'Encrypted interoperability is hidden.';
   int encryptedRecordCount = 0;
   bool recoveryWrapPresent = false;
+  bool importAvailable = false;
+  bool pendingImport = false;
 
   Future<void>? _operation;
   int _generation = 0;
@@ -41,11 +60,63 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
   Future<void> present() async {
     final generation = _generation;
     try {
+      final importAvailability = await _retain(
+        _coordinator.inspectRecoveryImport,
+      );
+      if (!_isCurrent(generation)) {
+        return;
+      }
+      switch (importAvailability.disposition) {
+        case AtlasVaultRecoveryImportDisposition.resumeRequired:
+        case AtlasVaultRecoveryImportDisposition.completionPending:
+          _publishImportResult(importAvailability);
+          return;
+        case AtlasVaultRecoveryImportDisposition.ready:
+          importAvailable = true;
+          pendingImport = false;
+        case AtlasVaultRecoveryImportDisposition.migrationRequired:
+        case AtlasVaultRecoveryImportDisposition.existingVault:
+        case AtlasVaultRecoveryImportDisposition.unavailable:
+          importAvailable = false;
+          pendingImport = false;
+        case AtlasVaultRecoveryImportDisposition.importPrepared:
+        case AtlasVaultRecoveryImportDisposition.importedAndActive:
+        case AtlasVaultRecoveryImportDisposition.cancelled:
+        case AtlasVaultRecoveryImportDisposition.failed:
+        case AtlasVaultRecoveryImportDisposition.recoveryRequired:
+          throw const AtlasVaultInteroperabilityException();
+      }
       final availability = await _retain(_coordinator.inspectRecoveryExport);
       if (!_isCurrent(generation)) {
         return;
       }
       if (!availability.available) {
+        if (importAvailable) {
+          _publish(
+            AtlasVaultInteroperabilityPresentationStatus.ready,
+            'Encrypted backup import is available.',
+            count: 0,
+            wrapPresent: false,
+            importReady: true,
+          );
+          return;
+        }
+        if (importAvailability.disposition ==
+            AtlasVaultRecoveryImportDisposition.migrationRequired) {
+          _publish(
+            AtlasVaultInteroperabilityPresentationStatus.migrationRequired,
+            'Plaintext private data must be resolved before import.',
+          );
+          return;
+        }
+        if (importAvailability.disposition ==
+            AtlasVaultRecoveryImportDisposition.existingVault) {
+          _publish(
+            AtlasVaultInteroperabilityPresentationStatus.existingVault,
+            'Encrypted import requires a clean installation.',
+          );
+          return;
+        }
         _publish(
           AtlasVaultInteroperabilityPresentationStatus.unavailable,
           'Encrypted interoperability is unavailable.',
@@ -61,12 +132,79 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
             : 'Recovery export setup is required.',
         count: availability.encryptedRecordCount,
         wrapPresent: availability.recoveryWrapPresent,
+        importReady: importAvailable,
       );
     } catch (_) {
       if (_isCurrent(generation)) {
         _publish(
           AtlasVaultInteroperabilityPresentationStatus.unavailable,
           'Encrypted interoperability is unavailable.',
+        );
+      }
+    }
+  }
+
+  Future<void> prepareRecoveryImport() async {
+    final generation = _generation;
+    _publish(
+      AtlasVaultInteroperabilityPresentationStatus.pickingImport,
+      'Select an encrypted AtlasVault backup.',
+    );
+    try {
+      final result = await _retain(_coordinator.prepareRecoveryImport);
+      if (_isCurrent(generation)) {
+        _publishImportResult(result);
+      }
+    } catch (_) {
+      if (_isCurrent(generation)) {
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.failed,
+          'Encrypted backup import failed.',
+        );
+      }
+    }
+  }
+
+  Future<void> confirmRecoveryImport(String recoveryKeyText) async {
+    final generation = _generation;
+    _publish(
+      AtlasVaultInteroperabilityPresentationStatus.importing,
+      'Verifying and importing encrypted backup.',
+    );
+    try {
+      final result = await _retain(
+        () => _coordinator.confirmRecoveryImport(recoveryKeyText),
+      );
+      if (_isCurrent(generation)) {
+        _publishImportResult(result);
+      }
+    } catch (_) {
+      if (_isCurrent(generation)) {
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.failed,
+          'Encrypted backup import failed.',
+        );
+      }
+    }
+  }
+
+  Future<void> discardPendingImport() async {
+    final generation = _generation;
+    _publish(
+      AtlasVaultInteroperabilityPresentationStatus.importing,
+      'Discarding pending encrypted import.',
+    );
+    try {
+      final result = await _retain(_coordinator.discardPendingImport);
+      if (_isCurrent(generation)) {
+        _publishImportResult(result);
+      }
+    } catch (_) {
+      if (_isCurrent(generation)) {
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.recoveryRequired,
+          'Pending encrypted import requires recovery.',
+          pending: true,
         );
       }
     }
@@ -91,10 +229,12 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
       );
       return handle;
     } catch (_) {
-      _publish(
-        AtlasVaultInteroperabilityPresentationStatus.failed,
-        'Recovery export setup failed.',
-      );
+      if (_isCurrent(generation)) {
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.failed,
+          'Recovery export setup failed.',
+        );
+      }
       rethrow;
     }
   }
@@ -173,6 +313,8 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
     message = 'Encrypted interoperability is hidden.';
     encryptedRecordCount = 0;
     recoveryWrapPresent = false;
+    importAvailable = false;
+    pendingImport = false;
     if (!_disposed) {
       notifyListeners();
     }
@@ -259,11 +401,105 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
     }
   }
 
+  void _publishImportResult(AtlasVaultRecoveryImportResult result) {
+    switch (result.disposition) {
+      case AtlasVaultRecoveryImportDisposition.ready:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.ready,
+          'Encrypted backup import is available.',
+          count: result.encryptedRecordCount,
+          importReady: true,
+          pending: false,
+        );
+      case AtlasVaultRecoveryImportDisposition.importPrepared:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus
+              .awaitingImportRecoveryKey,
+          'Enter the recovery key to verify and import the backup.',
+          count: result.encryptedRecordCount,
+          importReady: true,
+          pending: result.pendingImport,
+        );
+      case AtlasVaultRecoveryImportDisposition.importedAndActive:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.importedActive,
+          'Encrypted backup imported and activated.',
+          count: result.encryptedRecordCount,
+          importReady: false,
+          pending: false,
+        );
+      case AtlasVaultRecoveryImportDisposition.cancelled:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.cancelled,
+          'Encrypted backup import cancelled.',
+          count: 0,
+          importReady: true,
+          pending: false,
+        );
+      case AtlasVaultRecoveryImportDisposition.migrationRequired:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.migrationRequired,
+          'Plaintext private data must be resolved before import.',
+          count: 0,
+          importReady: false,
+          pending: result.pendingImport,
+        );
+      case AtlasVaultRecoveryImportDisposition.existingVault:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.existingVault,
+          'Encrypted import requires a clean installation.',
+          count: 0,
+          importReady: false,
+          pending: result.pendingImport,
+        );
+      case AtlasVaultRecoveryImportDisposition.resumeRequired:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.resumeRequired,
+          'A pending encrypted import must be resumed or discarded.',
+          count: result.encryptedRecordCount,
+          importReady: true,
+          pending: true,
+        );
+      case AtlasVaultRecoveryImportDisposition.completionPending:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.completionPending,
+          'Encrypted import completion must be verified.',
+          count: result.encryptedRecordCount,
+          importReady: true,
+          pending: true,
+        );
+      case AtlasVaultRecoveryImportDisposition.failed:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.failed,
+          'Encrypted backup import failed.',
+          count: result.encryptedRecordCount,
+          pending: result.pendingImport,
+        );
+      case AtlasVaultRecoveryImportDisposition.recoveryRequired:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.recoveryRequired,
+          'A valid recovery key or matching backup is required.',
+          count: result.encryptedRecordCount,
+          pending: result.pendingImport,
+        );
+      case AtlasVaultRecoveryImportDisposition.unavailable:
+        _publish(
+          AtlasVaultInteroperabilityPresentationStatus.unavailable,
+          'Encrypted interoperability is unavailable.',
+          count: 0,
+          importReady: false,
+          pending: result.pendingImport,
+        );
+    }
+  }
+
   void _publish(
     AtlasVaultInteroperabilityPresentationStatus next,
     String fixedMessage, {
     int? count,
     bool? wrapPresent,
+    bool? importReady,
+    bool? pending,
   }) {
     if (_disposed) {
       return;
@@ -275,6 +511,12 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
     }
     if (wrapPresent != null) {
       recoveryWrapPresent = wrapPresent;
+    }
+    if (importReady != null) {
+      importAvailable = importReady;
+    }
+    if (pending != null) {
+      pendingImport = pending;
     }
     notifyListeners();
   }
@@ -290,6 +532,8 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
     message = 'Encrypted interoperability is hidden.';
     encryptedRecordCount = 0;
     recoveryWrapPresent = false;
+    importAvailable = false;
+    pendingImport = false;
     _disposed = true;
     super.dispose();
   }
@@ -313,6 +557,7 @@ class _AtlasVaultInteroperabilityPanelState
     extends State<AtlasVaultInteroperabilityPanel>
     with WidgetsBindingObserver {
   final TextEditingController _recoveryInput = TextEditingController();
+  final TextEditingController _importRecoveryInput = TextEditingController();
   String? _displayRecoveryText;
 
   @override
@@ -347,6 +592,7 @@ class _AtlasVaultInteroperabilityPanelState
     widget.owner.removeListener(_handleOwnerChanged);
     _clearLocalRecoveryState(notify: false);
     _recoveryInput.dispose();
+    _importRecoveryInput.dispose();
     super.dispose();
   }
 
@@ -367,7 +613,9 @@ class _AtlasVaultInteroperabilityPanelState
     final busy = switch (owner.status) {
       AtlasVaultInteroperabilityPresentationStatus.generatingRecoveryKey ||
       AtlasVaultInteroperabilityPresentationStatus.preparingExport ||
-      AtlasVaultInteroperabilityPresentationStatus.saving => true,
+      AtlasVaultInteroperabilityPresentationStatus.saving ||
+      AtlasVaultInteroperabilityPresentationStatus.pickingImport ||
+      AtlasVaultInteroperabilityPresentationStatus.importing => true,
       _ => false,
     };
     return Column(
@@ -410,6 +658,67 @@ class _AtlasVaultInteroperabilityPanelState
           FilledButton(
             onPressed: busy ? null : _prepareExistingExport,
             child: const Text('Prepare Encrypted Backup'),
+          ),
+        ],
+        if (owner.importAvailable &&
+            !owner.pendingImport &&
+            (owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus.ready ||
+                owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus.cancelled ||
+                owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus.failed ||
+                owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus
+                        .recoveryRequired)) ...[
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: busy
+                ? null
+                : () => unawaited(owner.prepareRecoveryImport()),
+            child: const Text('Import Encrypted Backup'),
+          ),
+        ],
+        if (owner.pendingImport &&
+            owner.status !=
+                AtlasVaultInteroperabilityPresentationStatus.importing &&
+            owner.status !=
+                AtlasVaultInteroperabilityPresentationStatus.pickingImport) ...[
+          FilledButton(
+            onPressed: busy
+                ? null
+                : () => unawaited(owner.prepareRecoveryImport()),
+            child: const Text('Resume Recovery Import'),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: busy ? null : _confirmDiscardPendingImport,
+            child: const Text('Discard Pending Import'),
+          ),
+        ],
+        if (owner.status ==
+            AtlasVaultInteroperabilityPresentationStatus
+                .awaitingImportRecoveryKey) ...[
+          TextField(
+            controller: _importRecoveryInput,
+            obscureText: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(labelText: 'Recovery Key'),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton(
+                onPressed: _confirmRecoveryImport,
+                child: const Text('Import and Activate'),
+              ),
+              TextButton(
+                onPressed: _cancelRecoveryImport,
+                child: const Text('Cancel'),
+              ),
+            ],
           ),
         ],
         if (owner.status ==
@@ -460,9 +769,13 @@ class _AtlasVaultInteroperabilityPanelState
     _clearLocalRecoveryState();
     try {
       final handle = await widget.owner.beginRecoverySetup();
+      if (!mounted) {
+        handle.destroy();
+        return;
+      }
       final value = handle.take();
       handle.destroy();
-      if (!mounted || value == null) {
+      if (value == null) {
         return;
       }
       setState(() {
@@ -490,8 +803,46 @@ class _AtlasVaultInteroperabilityPanelState
     widget.owner.hide();
   }
 
+  void _confirmRecoveryImport() {
+    final value = _importRecoveryInput.text;
+    _clearLocalRecoveryState();
+    unawaited(widget.owner.confirmRecoveryImport(value));
+  }
+
+  void _cancelRecoveryImport() {
+    _clearLocalRecoveryState();
+    widget.owner.hide();
+  }
+
+  Future<void> _confirmDiscardPendingImport() async {
+    final shouldDiscard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Discard Pending Import?'),
+        content: const Text(
+          'Only matching pre-selection import resources will be removed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDiscard == true && mounted) {
+      _clearLocalRecoveryState();
+      await widget.owner.discardPendingImport();
+    }
+  }
+
   void _clearLocalRecoveryState({bool notify = true}) {
     _recoveryInput.clear();
+    _importRecoveryInput.clear();
     _displayRecoveryText = null;
     if (notify && mounted) {
       setState(() {});

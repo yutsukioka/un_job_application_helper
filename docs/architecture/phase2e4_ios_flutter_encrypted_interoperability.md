@@ -124,6 +124,8 @@ presence. It retains no key, identifier, bytes, path, URI, or private value.
 
 Swift imports the Flutter vector through the existing production coordinator
 and verifies ordering, hydration, tombstones, selection, and plaintext absence.
+The direct Flutter artifact has the checked-in canonical digest and is consumed
+without a plaintext sidecar.
 
 ## 25. Checkpoint B Boundary
 
@@ -222,21 +224,30 @@ Tombstones are imported unchanged, authenticated, and never rendered.
 ## 45. Apple To Flutter Proof
 
 Checkpoint B consumes Apple vector and direct artifact bytes through the
-production Flutter coordinator.
+production Flutter coordinator. The Apple production recovery-export
+coordinator generates the canonical Apple-origin document, Dart verifies its
+digest, and Android installs its unchanged encrypted records.
 
 ## 46. Native Picker Smoke
 
-Android evidence covers explicit cancellation and completion without exposing
-document-provider identity.
+The native bridge uses the Storage Access Framework and returns bytes or a
+fixed cancellation result, never document-provider identity. Emulator
+DocumentsUI smoke evidence is recorded separately from byte-level integration
+evidence and is not represented as a completed file save unless automation
+actually completes it.
 
 ## 47. Android Integration Evidence
 
 Real-emulator tests cover secure installation, resume, reset binding,
-clean-install admission, and no plaintext transport.
+clean-install admission, and no plaintext transport. The happy-path test also
+re-exports the active imported vault through the real Android secure-storage
+boundaries. The recovery matrix covers every journal stage and unsafe-input
+gate.
 
 ## 48. Apple Test Evidence
 
-Swift proves Flutter-origin import without Apple production-source changes.
+Swift proves Flutter-origin import and generates the Apple-origin export
+without Apple production-source changes.
 
 ## 49. Public-Cache Privacy
 
@@ -274,28 +285,31 @@ stored persistently.
 
 ## 57. TDD Checkpoint B
 
-Checkpoint B will preserve a separate red commit before import implementation.
+A separate valid red commit precedes import implementation. Deterministic tests
+cover clean-install admission, verification before persistence, protected
+journal privacy, every resume stage, hash-bound reset, controller bootstrap,
+owner generation fencing, and Android secure installation.
 
 ## 58. Verification
 
 Each checkpoint requires focused/full tests, Android and Apple builds, source
-guards, exact scope, protected-path checks, and empty artifact scans.
+guards, exact scope, protected-path checks, and empty repository artifact
+scans. Direct fake encrypted artifacts remain only under the persistent
+checkpoint and are verified by SHA-256 and plaintext sentinel scans.
 
 ## 59. Go/No-Go
-
-Checkpoint A status:
 
 - Flutter recovery export: implemented.
 - Flutter recovery setup: implemented.
 - Android encrypted-document save: implemented.
 - Apple import of Flutter export: implemented.
-- Flutter import of Apple export: pending Checkpoint B.
-- Android secure installation: pending Checkpoint B.
-- Interrupted Flutter import resume: pending Checkpoint B.
-- Import reset before selection: pending Checkpoint B.
-- Direct encrypted artifact exchange: pending full two-direction gate.
-- Canonical byte agreement: implemented for Flutter-to-Apple.
-- No plaintext intermediary: implemented for Checkpoint A.
+- Flutter import of Apple export: implemented.
+- Android secure installation: implemented.
+- Interrupted Flutter import resume: implemented.
+- Import reset before selection: implemented.
+- Direct encrypted artifact exchange: implemented.
+- Canonical byte agreement: implemented.
+- No plaintext intermediary: implemented.
 - Existing-vault replacement: not implemented.
 - Cloud sync: not implemented.
 - Windows secure storage: not implemented.

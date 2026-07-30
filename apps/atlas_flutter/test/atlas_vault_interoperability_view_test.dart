@@ -96,6 +96,30 @@ void main() {
     owner.dispose();
   });
 
+  test('late recovery generation is destroyed after hide', () async {
+    final gate = _Gate<AtlasVaultRecoveryDisplayHandle>();
+    final handle = _FakeDisplayHandle('AVRK1-STALE-TEST-ONLY');
+    final coordinator = _FakeCoordinator(beginGate: gate);
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.present();
+
+    final generation = owner.beginRecoverySetup();
+    await Future<void>.value();
+    owner.hide();
+    gate.complete(handle);
+
+    await expectLater(
+      generation,
+      throwsA(isA<AtlasVaultInteroperabilityException>()),
+    );
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+    expect(owner.encryptedRecordCount, 0);
+    expect(handle.take(), isNull);
+    owner.dispose();
+  });
+
   testWidgets('panel requires explicit setup confirmation and save actions', (
     tester,
   ) async {
@@ -122,7 +146,11 @@ void main() {
     await tester.pump();
     expect(find.text(recoveryText), findsOneWidget);
     expect(find.text('Confirm Recovery Key'), findsOneWidget);
-    expect(coordinator.calls, <String>['inspect', 'begin-recovery']);
+    expect(coordinator.calls, <String>[
+      'inspect-import',
+      'inspect',
+      'begin-recovery',
+    ]);
 
     await tester.enterText(find.byType(TextField), recoveryText);
     await tester.tap(find.text('Confirm Recovery Key'));
@@ -206,6 +234,103 @@ void main() {
     expect(find.text('AVRK1-TEST'), findsNothing);
     owner.dispose();
   });
+
+  testWidgets('pending import offers only explicit resume or discard', (
+    tester,
+  ) async {
+    final coordinator = _FakeCoordinator(
+      importInspection: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.resumeRequired,
+        encryptedRecordCount: 4,
+        pendingImport: true,
+      ),
+      importResult: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.resumeRequired,
+        encryptedRecordCount: 4,
+        pendingImport: true,
+      ),
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.present();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    expect(find.text('Resume Recovery Import'), findsOneWidget);
+    expect(find.text('Discard Pending Import'), findsOneWidget);
+    expect(find.text('Import and Activate'), findsNothing);
+    expect(coordinator.calls, <String>['inspect-import']);
+    owner.dispose();
+  });
+
+  testWidgets('discard pending import requires explicit confirmation', (
+    tester,
+  ) async {
+    final coordinator = _FakeCoordinator(
+      importInspection: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.resumeRequired,
+        encryptedRecordCount: 4,
+        pendingImport: true,
+      ),
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.present();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    await tester.tap(find.text('Discard Pending Import'));
+    await tester.pumpAndSettle();
+    expect(find.text('Discard Pending Import?'), findsOneWidget);
+    expect(coordinator.calls, isNot(contains('discard-import')));
+
+    await tester.tap(find.text('Discard'));
+    await tester.pumpAndSettle();
+    expect(coordinator.calls, contains('discard-import'));
+    expect(owner.pendingImport, isFalse);
+    owner.dispose();
+  });
+
+  test('late import completion cannot republish after hide', () async {
+    final gate = _Gate<AtlasVaultRecoveryImportResult>();
+    final coordinator = _FakeCoordinator(
+      importResult: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+      importConfirmGate: gate,
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+    );
+    await owner.present();
+    await owner.prepareRecoveryImport();
+
+    final confirmation = owner.confirmRecoveryImport('AVRK1-TEST');
+    owner.hide();
+    gate.complete(
+      const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importedAndActive,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+    );
+    await confirmation;
+
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+    expect(owner.encryptedRecordCount, 0);
+    expect(owner.pendingImport, isFalse);
+    owner.dispose();
+  });
 }
 
 final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
@@ -216,14 +341,20 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
       recoveryWrapPresent: false,
     ),
     AtlasVaultRecoveryDisplayHandle? handle,
+    this.beginGate,
     this.confirmGate,
     this.importResult,
+    this.importInspection,
+    this.importConfirmGate,
   }) : handle = handle ?? _FakeDisplayHandle('AVRK1-TEST');
 
   final AtlasVaultRecoveryExportAvailability availability;
   final AtlasVaultRecoveryDisplayHandle handle;
+  final _Gate<AtlasVaultRecoveryDisplayHandle>? beginGate;
   final _Gate<AtlasVaultRecoveryExportResult>? confirmGate;
   final AtlasVaultRecoveryImportResult? importResult;
+  final AtlasVaultRecoveryImportResult? importInspection;
+  final _Gate<AtlasVaultRecoveryImportResult>? importConfirmGate;
   final List<String> calls = <String>[];
 
   @override
@@ -235,7 +366,7 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   @override
   Future<AtlasVaultRecoveryDisplayHandle> beginRecoverySetup() async {
     calls.add('begin-recovery');
-    return handle;
+    return beginGate?.future ?? handle;
   }
 
   @override
@@ -279,12 +410,17 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   @override
   Future<AtlasVaultRecoveryImportResult> inspectRecoveryImport() async {
     calls.add('inspect-import');
-    return (importResult ??
-        const AtlasVaultRecoveryImportResult(
-          disposition: AtlasVaultRecoveryImportDisposition.unavailable,
-          encryptedRecordCount: 0,
-          pendingImport: false,
-        ));
+    final inspection = importInspection;
+    if (inspection != null) {
+      return inspection;
+    }
+    return AtlasVaultRecoveryImportResult(
+      disposition: importResult == null
+          ? AtlasVaultRecoveryImportDisposition.unavailable
+          : AtlasVaultRecoveryImportDisposition.ready,
+      encryptedRecordCount: 0,
+      pendingImport: false,
+    );
   }
 
   @override
@@ -298,6 +434,10 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
     String recoveryKeyText,
   ) async {
     calls.add('confirm-import');
+    final gate = importConfirmGate;
+    if (gate != null) {
+      return gate.future;
+    }
     return const AtlasVaultRecoveryImportResult(
       disposition: AtlasVaultRecoveryImportDisposition.importedAndActive,
       encryptedRecordCount: 4,

@@ -2049,6 +2049,49 @@ void main() {
   );
 
   test(
+    'recovery-import journal read failure blocks legacy authority',
+    () async {
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        recoveryImportPending: () async {
+          throw StateError('deterministic protected journal read failure');
+        },
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(migrationCoordinator.calls, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
+  test('pending recovery import blocks ordinary vault activation', () async {
+    final persistence = _FakePrivateStatePersistence();
+    final controller = AtlasAppController(
+      privateStatePersistence: persistence,
+      recoveryImportPending: () async => true,
+    );
+    addTearDown(controller.dispose);
+    await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+    final result = await controller.activateExistingAtlasVault('vault-alpha');
+
+    expect(result, AtlasVaultActivationResult.failed);
+    expect(persistence.calls, isEmpty);
+  });
+
+  test(
     'restart rollback restores preserved private cache without network reads',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(

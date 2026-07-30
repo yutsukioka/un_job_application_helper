@@ -460,6 +460,115 @@ final class AtlasAndroidProtectedMigrationJournalStore
   String toString() => 'AtlasAndroidProtectedMigrationJournalStore(<redacted>)';
 }
 
+final class AtlasAndroidProtectedRecoveryImportJournalStore
+    implements AtlasVaultProtectedRecoveryImportJournalStore {
+  AtlasAndroidProtectedRecoveryImportJournalStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  static const int maximumJournalByteCount = 64 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> read() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'readRecoveryImportJournal',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = copyAtlasVaultAndroidBytesInternal(value);
+    try {
+      _validate(bytes);
+      return Uint8List.fromList(bytes);
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    final bytes = _validatedCopy(canonicalBytes);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'createRecoveryImportJournal',
+        <String, Object?>{'journal_bytes': bytes},
+      );
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    _validateSha256(expectedSha256);
+    final bytes = _validatedCopy(canonicalBytes);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'replaceRecoveryImportJournal',
+        <String, Object?>{
+          'journal_bytes': bytes,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    _validateSha256(expectedSha256);
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      _channel,
+      'deleteRecoveryImportJournal',
+      <String, Object?>{
+        'expected_sha256': expectedSha256,
+        'allow_absent': allowAbsent,
+      },
+    );
+  }
+
+  Uint8List _validatedCopy(Uint8List source) {
+    _validate(source);
+    return Uint8List.fromList(source);
+  }
+
+  void _validate(Uint8List source) {
+    if (source.isEmpty || source.length > maximumJournalByteCount) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+    Uint8List? canonical;
+    try {
+      final journal = AtlasVaultRecoveryImportJournal.decodeBytes(source);
+      canonical = journal.canonicalBytes();
+      if (!_constantTimeEquals(source, canonical)) {
+        throw const AtlasVaultAndroidStorageException();
+      }
+    } catch (_) {
+      throw const AtlasVaultAndroidStorageException();
+    } finally {
+      if (canonical != null) {
+        wipeAtlasVaultAndroidBytesInternal(canonical);
+      }
+    }
+  }
+
+  @override
+  String toString() =>
+      'AtlasAndroidProtectedRecoveryImportJournalStore(<redacted>)';
+}
+
 final class AtlasAndroidSelectedVaultStore
     implements AtlasVaultSelectedVaultStore {
   AtlasAndroidSelectedVaultStore({MethodChannel? channel})

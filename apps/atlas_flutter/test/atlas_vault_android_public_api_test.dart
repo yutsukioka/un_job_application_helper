@@ -18,7 +18,10 @@ void main() {
     AtlasVaultEncryptedDocumentTransport? documentTransport;
     AtlasVaultInteroperabilityCoordinating? interoperabilityCoordinator;
     AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
+    AtlasVaultInteroperabilityContext? interoperabilityContext;
     AtlasVaultInteroperabilitySession? interoperabilitySession;
+    AtlasVaultProtectedRecoveryImportJournalStore? recoveryImportJournal;
+    AtlasVaultRecoveryImportResult? recoveryImportResult;
 
     expect(secureKeyStore, isNull);
     expect(localStore, isNull);
@@ -32,7 +35,10 @@ void main() {
     expect(documentTransport, isNull);
     expect(interoperabilityCoordinator, isNull);
     expect(interoperabilityOwner, isNull);
+    expect(interoperabilityContext, isNull);
     expect(interoperabilitySession, isNull);
+    expect(recoveryImportJournal, isNull);
+    expect(recoveryImportResult, isNull);
     expect(atlasVaultAndroidMethodChannelName, 'atlas/vault_android');
   });
 
