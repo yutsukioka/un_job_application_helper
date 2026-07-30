@@ -156,6 +156,10 @@ and verified, closing the read-versus-write race. Once a protected import
 journal exists, legacy operations are already blocked and resume uses only
 local journal, store, key, selection, cache, and in-memory authority state; it
 does not revisit a network endpoint.
+If journal creation commits but its post-write verification reports failure,
+fallback reload publishes pending-import authority before releasing the
+temporary admission fence, so legacy writes cannot reopen between recovery and
+resume.
 
 ## 28. Existing-Vault Policy
 
@@ -316,6 +320,8 @@ collision rejection before persistence. A second review cycle proves legacy
 mutation admission is held through initial inventory and journal verification,
 document replacement uses truncating provider semantics, and terminal export
 results expose an explicit retry to the ready state.
+A third review regression proves a durably recovered initial journal publishes
+pending-import authority before the admission fence ends.
 
 ## 58. Verification
 

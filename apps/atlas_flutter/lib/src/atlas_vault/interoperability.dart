@@ -907,6 +907,9 @@ final class AtlasVaultInteroperabilityCoordinator
         }
       } catch (_) {
         final journal = await _safeLoadImportJournal(dependencies.journalStore);
+        if (journal != null) {
+          _recoveryImportPendingDidChange(true);
+        }
         return _fixedImportResult(
           journal == null
               ? AtlasVaultRecoveryImportDisposition.failed

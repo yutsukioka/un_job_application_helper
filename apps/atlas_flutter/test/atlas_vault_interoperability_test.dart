@@ -535,6 +535,41 @@ void main() {
   );
 
   test(
+    'recovered initial journal publishes pending before admission ends',
+    () async {
+      final pendingChanges = <bool>[];
+      final admission = _ImportOperationAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: admission,
+        failAfterEvent: 'import-journal.create',
+        recoveryImportPendingChanges: pendingChanges,
+      );
+      admission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+
+      final confirmation = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await admission.entered;
+      admission.releaseAdmittedMutation();
+      final result = await confirmation;
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.recoveryRequired,
+      );
+      expect(result.pendingImport, isTrue);
+      expect(pendingChanges, <bool>[true]);
+      expect(
+        fixture.events.indexOf('recovery-import.pending:true'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+      expect(admission.blocksNewLegacyMutation, isFalse);
+    },
+  );
+
+  test(
     'new import rejects occupied target resources before journaling',
     () async {
       final occupiedKey = await _ImportFixture.create();
@@ -1153,6 +1188,7 @@ final class _ImportFixture {
     app.AtlasLocalCacheMigrationPrivateState? cacheState,
     bool compatibilityFails = false,
     AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
+    List<bool>? recoveryImportPendingChanges,
     String? failAfterEvent,
     int failAfterOccurrence = 1,
     String? failBeforeEvent,
@@ -1206,6 +1242,12 @@ final class _ImportFixture {
       compatibilitySource: compatibilitySource,
       cacheSource: _ImportCacheSource(cacheState ?? _emptyCacheState()),
       importOperationAdmission: importOperationAdmission,
+      recoveryImportPendingDidChange: recoveryImportPendingChanges == null
+          ? null
+          : (pending) {
+              recoveryImportPendingChanges.add(pending);
+              events.add('recovery-import.pending:$pending');
+            },
       now: () => DateTime.parse('2026-07-29T03:04:05Z'),
       importIdProvider: () => '30000000-0000-4000-8000-000000000301',
       importStoreIdProvider: () => '30000000-0000-4000-8000-000000000302',
