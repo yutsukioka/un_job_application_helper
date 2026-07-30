@@ -47,6 +47,8 @@ void main() {
     expect(storage, contains('pendingDocumentOperation = null'));
     expect(storage, contains('pending.result.success('));
     expect(storage, contains('MAX_DOCUMENT_BYTES = 128 * 1024 * 1024'));
+    expect(storage, contains('openOutputStream(uri, "wt")'));
+    expect(storage, isNot(contains('openOutputStream(uri, "w")')));
     expect(storage, isNot(contains('takePersistableUriPermission')));
     expect(activity, contains('atlasVaultStorage?.onActivityResult'));
     expect(activity, isNot(contains('recovery-import')));

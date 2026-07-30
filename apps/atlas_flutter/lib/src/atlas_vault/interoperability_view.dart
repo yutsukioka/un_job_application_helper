@@ -660,6 +660,20 @@ class _AtlasVaultInteroperabilityPanelState
             child: const Text('Prepare Encrypted Backup'),
           ),
         ],
+        if (!owner.importAvailable &&
+            !owner.pendingImport &&
+            (owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus.cancelled ||
+                owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus.failed ||
+                owner.status ==
+                    AtlasVaultInteroperabilityPresentationStatus
+                        .recoveryRequired)) ...[
+          OutlinedButton(
+            onPressed: busy ? null : () => unawaited(owner.present()),
+            child: const Text('Retry Recovery Export'),
+          ),
+        ],
         if (owner.importAvailable &&
             !owner.pendingImport &&
             (owner.status ==

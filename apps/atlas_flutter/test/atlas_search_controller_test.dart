@@ -2631,6 +2631,50 @@ void main() {
     },
   );
 
+  test(
+    'recovery import admission blocks new legacy writes and drains admitted work',
+    () async {
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveSearch = enteredSearch
+        ..releaseCompatibilitySaveSearch = releaseSearch;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      final admittedSave = controller.saveCurrentSearch();
+      await enteredSearch.future;
+      var admissionCompleted = false;
+      final admission = controller.beginRecoveryImportAdmission().whenComplete(
+        () => admissionCompleted = true,
+      );
+      await Future<void>.value();
+
+      expect(admissionCompleted, isFalse);
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      expect(transport.savedJobKeys, isEmpty);
+
+      releaseSearch.complete();
+      await admittedSave;
+      await admission;
+      expect(admissionCompleted, isTrue);
+      expect(transport.savedSearchNames, <String>['Search 1']);
+
+      controller.endRecoveryImportAdmission();
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      expect(transport.savedJobKeys, <String>['undp_oracle_hcm:34063']);
+    },
+  );
+
   test('migration context attaches once without starting authority work', () {
     final firstCoordinator = _ControllerMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.legacy,

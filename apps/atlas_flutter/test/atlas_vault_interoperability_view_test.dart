@@ -198,6 +198,52 @@ void main() {
     owner.dispose();
   });
 
+  testWidgets('terminal export states offer an explicit retry to ready', (
+    tester,
+  ) async {
+    for (final status in <AtlasVaultInteroperabilityPresentationStatus>[
+      AtlasVaultInteroperabilityPresentationStatus.cancelled,
+      AtlasVaultInteroperabilityPresentationStatus.failed,
+      AtlasVaultInteroperabilityPresentationStatus.recoveryRequired,
+    ]) {
+      final coordinator = _FakeCoordinator(
+        availability: const AtlasVaultRecoveryExportAvailability(
+          available: true,
+          encryptedRecordCount: 3,
+          recoveryWrapPresent: true,
+        ),
+      );
+      final owner =
+          AtlasVaultInteroperabilityPresentationOwner(coordinator: coordinator)
+            ..status = status
+            ..recoveryWrapPresent = true
+            ..importAvailable = false
+            ..pendingImport = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+        ),
+      );
+
+      expect(
+        find.text('Retry Recovery Export'),
+        findsOneWidget,
+        reason: '$status',
+      );
+      await tester.tap(find.text('Retry Recovery Export'));
+      await tester.pumpAndSettle();
+
+      expect(
+        owner.status,
+        AtlasVaultInteroperabilityPresentationStatus.ready,
+        reason: '$status',
+      );
+      expect(find.text('Prepare Encrypted Backup'), findsOneWidget);
+      owner.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
   testWidgets('encrypted import requires explicit pick and recovery submit', (
     tester,
   ) async {

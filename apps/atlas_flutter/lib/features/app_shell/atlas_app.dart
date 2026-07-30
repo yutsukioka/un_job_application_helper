@@ -64,6 +64,7 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
 class AtlasAppController extends ChangeNotifier
     implements
         AtlasVaultPlaintextMigrationOperationAdmission,
+        AtlasVaultRecoveryImportOperationAdmission,
         AtlasVaultLegacyPrivateStateRestoring {
   AtlasAppController({
     Uri? initialBaseURL,
@@ -140,6 +141,7 @@ class AtlasAppController extends ChangeNotifier
   Future<void>? _compatibilityPrivateMutationOperation;
   AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
   AtlasVaultInteroperabilityContext? _interoperabilityContext;
+  bool _recoveryImportAdmissionInProgress = false;
   bool _recoveryImportBlocksLegacyPrivateAuthority = false;
   int _connectionOperationSequence = 0;
   _AtlasConnectionOperation? _activeConnectionOperation;
@@ -151,6 +153,7 @@ class AtlasAppController extends ChangeNotifier
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
         _privateDeactivationInProgress ||
+        _recoveryImportAdmissionInProgress ||
         _recoveryImportBlocksLegacyPrivateAuthority ||
         (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
             false) ||
@@ -158,8 +161,8 @@ class AtlasAppController extends ChangeNotifier
   }
 
   bool get _plaintextMigrationBlocksPersistedCacheWrites {
-    return _plaintextMigrationContext?.owner.blocksPersistedCacheWrites ??
-        false;
+    return _recoveryImportAdmissionInProgress ||
+        (_plaintextMigrationContext?.owner.blocksPersistedCacheWrites ?? false);
   }
 
   AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
@@ -1601,6 +1604,27 @@ class AtlasAppController extends ChangeNotifier
     }
   }
 
+  @override
+  Future<void> beginRecoveryImportAdmission() async {
+    if (_recoveryImportAdmissionInProgress ||
+        _recoveryImportBlocksLegacyPrivateAuthority) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _recoveryImportAdmissionInProgress = true;
+    _privateAuthorityGeneration += 1;
+    try {
+      await drainAdmittedPlaintextOperations();
+    } catch (_) {
+      _recoveryImportAdmissionInProgress = false;
+      rethrow;
+    }
+  }
+
+  @override
+  void endRecoveryImportAdmission() {
+    _recoveryImportAdmissionInProgress = false;
+  }
+
   void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
     savedSearches = List<AtlasSavedSearch>.unmodifiable(snapshot.savedSearches);
     trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
@@ -2623,6 +2647,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     inMemorySource: inMemorySource,
     compatibilitySource: compatibilitySource,
     cacheSource: cacheSource,
+    importOperationAdmission: controller,
     activateImportedVault: (vaultId) async =>
         await controller._activateImportedAtlasVault(vaultId) ==
         AtlasVaultActivationResult.activated,

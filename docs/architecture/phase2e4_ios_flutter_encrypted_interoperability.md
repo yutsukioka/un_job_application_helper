@@ -114,11 +114,15 @@ its own bytes, requires byte-identical re-encoding, and computes SHA-256.
 
 The bridge uses `ACTION_CREATE_DOCUMENT`, one pending operation, a 128-MiB
 bound, no temporary file, no retained URI, and fixed cancellation/error output.
+It opens the chosen provider target with explicit truncate-write mode so a
+shorter replacement cannot retain trailing bytes from an existing document.
 
 ## 23. Flutter Export Presentation
 
 The owner exposes only fixed status/message, encrypted-record count, and wrap
 presence. It retains no key, identifier, bytes, path, URI, or private value.
+Cancelled, failed, and recovery-required export results expose one explicit
+retry that re-inspects authoritative availability before returning to ready.
 
 ## 24. Flutter To Apple Proof
 
@@ -145,9 +149,13 @@ are not adopted.
 Every in-memory, cache, compatibility endpoint, and migration authority must be
 empty and inactive before initial import persistence. Initial preparation and
 the final pre-journal admission check fail closed when compatibility inventory
-cannot be read. Once a protected import journal exists, legacy operations are
-already blocked and resume uses only local journal, store, key, selection,
-cache, and in-memory authority state; it does not revisit a network endpoint.
+cannot be read. Before that final inventory, the controller synchronously
+blocks new legacy private/cache mutations and drains every already-admitted
+operation. The block remains held until the first protected journal is created
+and verified, closing the read-versus-write race. Once a protected import
+journal exists, legacy operations are already blocked and resume uses only
+local journal, store, key, selection, cache, and in-memory authority state; it
+does not revisit a network endpoint.
 
 ## 28. Existing-Vault Policy
 
@@ -304,7 +312,10 @@ journal privacy, every resume stage, hash-bound reset, controller bootstrap,
 owner generation fencing, and Android secure installation. Codex review
 regressions additionally prove endpoint-independent journal resume, rejection
 of occupied target store/key slots before journaling, and full projection
-collision rejection before persistence.
+collision rejection before persistence. A second review cycle proves legacy
+mutation admission is held through initial inventory and journal verification,
+document replacement uses truncating provider semantics, and terminal export
+results expose an explicit retry to the ready state.
 
 ## 58. Verification
 

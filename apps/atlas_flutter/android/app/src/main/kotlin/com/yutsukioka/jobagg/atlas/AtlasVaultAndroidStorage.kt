@@ -390,7 +390,7 @@ internal class AtlasVaultAndroidStorage(
         if (bytes.isEmpty() || bytes.size > MAX_DOCUMENT_BYTES) {
             throw StorageFailure()
         }
-        val output = applicationContext.contentResolver.openOutputStream(uri, "w")
+        val output = applicationContext.contentResolver.openOutputStream(uri, "wt")
             ?: throw StorageFailure()
         output.use {
             it.write(bytes)

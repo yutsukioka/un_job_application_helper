@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -487,6 +488,51 @@ void main() {
     );
     expect(fixture.compatibilitySource.readCalls, compatibilityReads);
   });
+
+  test(
+    'initial import holds legacy mutation admission through journaling',
+    () async {
+      final admission = _ImportOperationAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: admission,
+      );
+      admission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+
+      final confirmation = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await admission.entered;
+
+      expect(admission.blocksNewLegacyMutation, isTrue);
+      expect(admission.tryAdmitLegacyMutation(), isFalse);
+      expect(fixture.importJournal.current, isNull);
+      expect(fixture.events, contains('import-admission.begin'));
+      expect(fixture.events, isNot(contains('import-journal.create')));
+
+      admission.releaseAdmittedMutation();
+      final result = await confirmation;
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(admission.blocksNewLegacyMutation, isFalse);
+      expect(
+        fixture.events.indexOf('import-admission.begin'),
+        lessThan(fixture.events.indexOf('import-admission.drained')),
+      );
+      expect(
+        fixture.events.indexOf('import-admission.drained'),
+        lessThan(fixture.events.indexOf('import-journal.create')),
+      );
+      expect(
+        fixture.events.indexOf('import-journal.create'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+    },
+  );
 
   test(
     'new import rejects occupied target resources before journaling',
@@ -1106,6 +1152,7 @@ final class _ImportFixture {
     AtlasVaultPlaintextPrivateState? compatibilityState,
     app.AtlasLocalCacheMigrationPrivateState? cacheState,
     bool compatibilityFails = false,
+    AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
     String? failAfterEvent,
     int failAfterOccurrence = 1,
     String? failBeforeEvent,
@@ -1158,6 +1205,7 @@ final class _ImportFixture {
       ),
       compatibilitySource: compatibilitySource,
       cacheSource: _ImportCacheSource(cacheState ?? _emptyCacheState()),
+      importOperationAdmission: importOperationAdmission,
       now: () => DateTime.parse('2026-07-29T03:04:05Z'),
       importIdProvider: () => '30000000-0000-4000-8000-000000000301',
       importStoreIdProvider: () => '30000000-0000-4000-8000-000000000302',
@@ -1175,6 +1223,48 @@ final class _ImportFixture {
       compatibilitySource: compatibilitySource,
       coordinator: coordinator,
     );
+  }
+}
+
+final class _ImportOperationAdmission
+    implements AtlasVaultRecoveryImportOperationAdmission {
+  final Completer<void> _entered = Completer<void>();
+  final Completer<void> _release = Completer<void>();
+  List<String>? _events;
+  bool blocksNewLegacyMutation = false;
+
+  Future<void> get entered => _entered.future;
+
+  void attachEvents(List<String> events) {
+    _events = events;
+  }
+
+  bool tryAdmitLegacyMutation() => !blocksNewLegacyMutation;
+
+  void releaseAdmittedMutation() {
+    if (!_release.isCompleted) {
+      _release.complete();
+    }
+  }
+
+  @override
+  Future<void> beginRecoveryImportAdmission() async {
+    if (blocksNewLegacyMutation) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    blocksNewLegacyMutation = true;
+    _events?.add('import-admission.begin');
+    if (!_entered.isCompleted) {
+      _entered.complete();
+    }
+    await _release.future;
+    _events?.add('import-admission.drained');
+  }
+
+  @override
+  void endRecoveryImportAdmission() {
+    _events?.add('import-admission.end');
+    blocksNewLegacyMutation = false;
   }
 }
 

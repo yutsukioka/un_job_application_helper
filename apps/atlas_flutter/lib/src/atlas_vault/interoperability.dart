@@ -336,6 +336,23 @@ abstract interface class AtlasVaultInteroperabilityCoordinating {
   Future<void> stop();
 }
 
+abstract interface class AtlasVaultRecoveryImportOperationAdmission {
+  Future<void> beginRecoveryImportAdmission();
+
+  void endRecoveryImportAdmission();
+}
+
+final class _NoopRecoveryImportOperationAdmission
+    implements AtlasVaultRecoveryImportOperationAdmission {
+  const _NoopRecoveryImportOperationAdmission();
+
+  @override
+  Future<void> beginRecoveryImportAdmission() async {}
+
+  @override
+  void endRecoveryImportAdmission() {}
+}
+
 final class AtlasVaultInteroperabilityCoordinator
     implements AtlasVaultInteroperabilityCoordinating {
   static const int _maximumDocumentByteCount = 128 * 1024 * 1024;
@@ -352,6 +369,7 @@ final class AtlasVaultInteroperabilityCoordinator
     AtlasVaultPlaintextStateSource? inMemorySource,
     AtlasVaultCompatibilityPrivateSource? compatibilitySource,
     AtlasLocalCacheMigrationSource? cacheSource,
+    AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
     Future<bool> Function(String vaultId)? activateImportedVault,
     void Function(bool pending)? recoveryImportPendingDidChange,
     DateTime Function()? now,
@@ -385,6 +403,9 @@ final class AtlasVaultInteroperabilityCoordinator
        _compatibilitySource = compatibilitySource,
        // ignore: prefer_initializing_formals
        _cacheSource = cacheSource,
+       _importOperationAdmission =
+           importOperationAdmission ??
+           const _NoopRecoveryImportOperationAdmission(),
        _activateImportedVault =
            activateImportedVault ??
            ((vaultId) async =>
@@ -418,6 +439,7 @@ final class AtlasVaultInteroperabilityCoordinator
   final AtlasVaultPlaintextStateSource? _inMemorySource;
   final AtlasVaultCompatibilityPrivateSource? _compatibilitySource;
   final AtlasLocalCacheMigrationSource? _cacheSource;
+  final AtlasVaultRecoveryImportOperationAdmission _importOperationAdmission;
   final Future<bool> Function(String vaultId) _activateImportedVault;
   final void Function(bool pending) _recoveryImportPendingDidChange;
   final DateTime Function() _now;
@@ -777,6 +799,7 @@ final class AtlasVaultInteroperabilityCoordinator
       }
       AtlasVaultRecoveryKey? recoveryKey;
       Uint8List? vaultKey;
+      var importAdmissionHeld = false;
       try {
         recoveryKey = AtlasVaultRecoveryKey.parse(recoveryKeyText);
         final wrap = _requireSingleRecoveryWrap(export.vaultMetadata);
@@ -795,6 +818,10 @@ final class AtlasVaultInteroperabilityCoordinator
         recoveryKey.destroy();
         recoveryKey = null;
         var journal = await _loadImportJournal(dependencies.journalStore);
+        if (journal == null) {
+          await _importOperationAdmission.beginRecoveryImportAdmission();
+          importAdmissionHeld = true;
+        }
         final gate = await _cleanInstallGate(dependencies, journal: journal);
         if (gate != _ImportGate.ready) {
           return _fixedImportResult(
@@ -841,6 +868,8 @@ final class AtlasVaultInteroperabilityCoordinator
               dependencies.journalStore,
               journal,
             );
+            _importOperationAdmission.endRecoveryImportAdmission();
+            importAdmissionHeld = false;
           } else if (journal.exportId != export.exportId ||
               journal.vaultId != export.vaultMetadata.vaultId ||
               journal.storeId != storeId ||
@@ -888,6 +917,9 @@ final class AtlasVaultInteroperabilityCoordinator
           pendingImport: journal != null,
         );
       } finally {
+        if (importAdmissionHeld) {
+          _importOperationAdmission.endRecoveryImportAdmission();
+        }
         recoveryKey?.destroy();
         _wipe(vaultKey);
       }
