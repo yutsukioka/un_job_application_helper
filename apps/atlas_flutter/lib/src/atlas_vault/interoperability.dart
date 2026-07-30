@@ -965,6 +965,7 @@ final class AtlasVaultInteroperabilityCoordinator
       try {
         final journal = await _loadImportJournal(dependencies.journalStore);
         if (journal == null) {
+          _recoveryImportPendingDidChange(false);
           return _fixedImportResult(
             AtlasVaultRecoveryImportDisposition.cancelled,
           );

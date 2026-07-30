@@ -353,6 +353,9 @@ The seventh review cycle treats an unreadable post-create journal as pending
 until a conclusive read proves absence. A later explicit preparation read that
 does prove absence publishes `pending=false`, including after journal deletion
 committed but its immediate verification failed.
+The eighth review cycle applies the same conclusive-absence release rule to
+explicit pending-import discard. A discard that proves no protected journal
+exists publishes `pending=false` before returning its fixed cancelled result.
 
 ## 58. Verification
 

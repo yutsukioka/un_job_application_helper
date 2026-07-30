@@ -930,6 +930,44 @@ void main() {
   );
 
   test(
+    'discard releases pending authority after conclusive journal absence',
+    () async {
+      final pendingChanges = <bool>[];
+      final fixture = await _ImportFixture.create(
+        failAfterEvent: 'import-journal.delete',
+        recoveryImportPendingChanges: pendingChanges,
+      );
+      await fixture.coordinator.prepareRecoveryImport();
+
+      final interrupted = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        interrupted.disposition,
+        AtlasVaultRecoveryImportDisposition.completionPending,
+      );
+      expect(interrupted.pendingImport, isTrue);
+      expect(fixture.importJournal.current, isNull);
+      expect(pendingChanges, <bool>[false, true]);
+      fixture.faults.clear();
+
+      final discarded = await fixture.coordinator.discardPendingImport();
+
+      expect(
+        discarded.disposition,
+        AtlasVaultRecoveryImportDisposition.cancelled,
+      );
+      expect(discarded.pendingImport, isFalse);
+      expect(pendingChanges, <bool>[false, true, false]);
+      expect(
+        fixture.events.lastIndexOf('import-journal.read'),
+        lessThan(fixture.events.lastIndexOf('recovery-import.pending:false')),
+      );
+    },
+  );
+
+  test(
     'cancelled journal backup reselection preserves pending state',
     () async {
       final fixture = await _ImportFixture.create(
