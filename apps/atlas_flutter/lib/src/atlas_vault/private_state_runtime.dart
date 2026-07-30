@@ -90,9 +90,30 @@ final class AtlasVaultPrivateStateRuntime
   Map<String, _PrivateRecordMetadata> _trackerMetadata =
       const <String, _PrivateRecordMetadata>{};
   Future<void> _mutationTail = Future<void>.value();
+  int _pendingMutationCount = 0;
+  Future<void>? _interoperabilityOperation;
 
   @override
   bool get isActive => _active && !_deactivating;
+
+  bool isActiveVault(String vaultId) {
+    return isActive && _vaultId == vaultId;
+  }
+
+  Future<void> validateImportProjection({
+    required String vaultId,
+    required Uint8List vaultKey,
+    required vault.AtlasVaultLocalStore store,
+  }) async {
+    try {
+      if (vaultKey.length != 32) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      await _hydrate(vaultId: vaultId, vaultKey: vaultKey, store: store);
+    } catch (_) {
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
 
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
@@ -163,17 +184,92 @@ final class AtlasVaultPrivateStateRuntime
     );
   }
 
+  Future<T> withInteroperabilitySession<T>(
+    Future<T> Function(AtlasVaultInteroperabilitySession session) operation,
+  ) {
+    final generation = _generation;
+    final vaultId = _vaultId;
+    final key = _vaultKey;
+    if (!isActive ||
+        vaultId == null ||
+        key == null ||
+        _pendingMutationCount != 0 ||
+        _interoperabilityOperation != null) {
+      return Future<T>.error(const AtlasVaultPrivateStateException());
+    }
+
+    final keyCopy = Uint8List.fromList(key);
+    final completer = Completer<T>();
+    late final Future<void> retained;
+    retained = () async {
+      AtlasVaultInteroperabilitySession? session;
+      try {
+        final store = await _localStoreIO.read(vaultId);
+        if (store == null ||
+            store.vaultMetadata.vaultId != vaultId ||
+            !_active ||
+            _generation != generation ||
+            _vaultId != vaultId) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        session = AtlasVaultInteroperabilitySession._(
+          generation: generation,
+          vaultId: vaultId,
+          vaultKey: keyCopy,
+          localStore: store,
+          readLocalStore: () => _localStoreIO.read(vaultId),
+          replaceLocalStore:
+              (
+                vault.AtlasVaultLocalStore updated, {
+                required String expectedSha256,
+              }) {
+                if (!_active ||
+                    _generation != generation ||
+                    _vaultId != vaultId ||
+                    updated.vaultMetadata.vaultId != vaultId) {
+                  throw const AtlasVaultPrivateStateException();
+                }
+                return _localStoreIO.replace(
+                  vaultId,
+                  updated,
+                  expectedSha256: expectedSha256,
+                );
+              },
+        );
+        final value = await operation(session);
+        if (!_active || _generation != generation || _vaultId != vaultId) {
+          throw const AtlasVaultPrivateStateException();
+        }
+        completer.complete(value);
+      } catch (_) {
+        if (!completer.isCompleted) {
+          completer.completeError(const AtlasVaultPrivateStateException());
+        }
+      } finally {
+        session?.destroy();
+        _wipe(keyCopy);
+        if (identical(_interoperabilityOperation, retained)) {
+          _interoperabilityOperation = null;
+        }
+      }
+    }();
+    _interoperabilityOperation = retained;
+    return completer.future;
+  }
+
   @override
   Future<void> deactivate() async {
     _activationGeneration += 1;
     _activating = false;
     if (_deactivating) {
       await _mutationTail;
+      await _interoperabilityOperation;
       return;
     }
     _deactivating = true;
     try {
       await _mutationTail;
+      await _interoperabilityOperation;
     } finally {
       _generation += 1;
       _clearSession();
@@ -188,11 +284,15 @@ final class AtlasVaultPrivateStateRuntime
     final generation = _generation;
     final vaultId = _vaultId;
     final key = _vaultKey;
-    if (!isActive || vaultId == null || key == null) {
+    if (!isActive ||
+        vaultId == null ||
+        key == null ||
+        _interoperabilityOperation != null) {
       return Future<AtlasVaultPrivateStateSnapshot>.error(
         const AtlasVaultPrivateStateException(),
       );
     }
+    _pendingMutationCount += 1;
     final keyCopy = Uint8List.fromList(key);
     final previous = _mutationTail;
     final completer = Completer<AtlasVaultPrivateStateSnapshot>();
@@ -213,6 +313,7 @@ final class AtlasVaultPrivateStateRuntime
       } catch (_) {
         completer.completeError(const AtlasVaultPrivateStateException());
       } finally {
+        _pendingMutationCount -= 1;
         _wipe(keyCopy);
       }
     }();
@@ -680,6 +781,86 @@ final class AtlasVaultPrivateStateRuntime
 
   @override
   String toString() => 'AtlasVaultPrivateStateRuntime(<redacted>)';
+}
+
+final class AtlasVaultInteroperabilitySession {
+  AtlasVaultInteroperabilitySession._({
+    required this.generation,
+    required this.vaultId,
+    required Uint8List vaultKey,
+    required this.localStore,
+    required Future<vault.AtlasVaultLocalStore?> Function() readLocalStore,
+    required Future<void> Function(
+      vault.AtlasVaultLocalStore store, {
+      required String expectedSha256,
+    })
+    replaceLocalStore,
+  }) : _vaultKey = Uint8List.fromList(vaultKey),
+       // Keep callback labels readable at the session boundary.
+       // ignore: prefer_initializing_formals
+       _readLocalStore = readLocalStore,
+       // ignore: prefer_initializing_formals
+       _replaceLocalStore = replaceLocalStore;
+
+  final int generation;
+  final String vaultId;
+  final vault.AtlasVaultLocalStore localStore;
+  final Uint8List _vaultKey;
+  final Future<vault.AtlasVaultLocalStore?> Function() _readLocalStore;
+  final Future<void> Function(
+    vault.AtlasVaultLocalStore store, {
+    required String expectedSha256,
+  })
+  _replaceLocalStore;
+  bool _destroyed = false;
+
+  Uint8List copyVaultKey() {
+    _requireActive();
+    return Uint8List.fromList(_vaultKey);
+  }
+
+  Future<vault.AtlasVaultLocalStore> readCurrentLocalStore() async {
+    _requireActive();
+    final value = await _readLocalStore();
+    _requireActive();
+    if (value == null || value.vaultMetadata.vaultId != vaultId) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    return value;
+  }
+
+  Future<void> replaceLocalStore(
+    vault.AtlasVaultLocalStore store, {
+    required String expectedSha256,
+  }) async {
+    _requireActive();
+    if (store.vaultMetadata.vaultId != vaultId) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    await _replaceLocalStore(store, expectedSha256: expectedSha256);
+    _requireActive();
+  }
+
+  void destroy() {
+    if (_destroyed) {
+      return;
+    }
+    _wipe(_vaultKey);
+    _destroyed = true;
+  }
+
+  void _requireActive() {
+    if (_destroyed) {
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
+  static void _wipe(Uint8List value) {
+    value.fillRange(0, value.length, 0);
+  }
+
+  @override
+  String toString() => 'AtlasVaultInteroperabilitySession(<redacted>)';
 }
 
 final class _MutationSession {

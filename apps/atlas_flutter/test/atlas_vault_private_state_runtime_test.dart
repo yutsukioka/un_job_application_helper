@@ -627,6 +627,52 @@ void main() {
     );
   });
 
+  test(
+    'interoperability session excludes mutations and is drained on deactivate',
+    () async {
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: _FakeSecureKeyStore(key: _vaultKey()),
+        localStoreIO: _FakeLocalStoreIO(store: _emptyStore()),
+      );
+      await runtime.activateExisting(_vaultId);
+      final entered = Completer<void>();
+      final release = Completer<void>();
+
+      final export = runtime.withInteroperabilitySession((session) async {
+        expect(session.vaultId, _vaultId);
+        expect(session.localStore.vaultMetadata.vaultId, _vaultId);
+        final key = session.copyVaultKey();
+        expect(key, orderedEquals(_vaultKey()));
+        key.fillRange(0, key.length, 0);
+        entered.complete();
+        await release.future;
+        return session.localStore.records.length;
+      });
+      await entered.future;
+
+      await expectLater(
+        runtime.saveSearch(
+          AtlasSavedSearch(
+            name: 'must not race export',
+            request: const AtlasSearchRequest(text: 'private'),
+          ),
+        ),
+        throwsA(isA<AtlasVaultPrivateStateException>()),
+      );
+      var deactivated = false;
+      final deactivation = runtime.deactivate().then((_) {
+        deactivated = true;
+      });
+      await Future<void>.value();
+      expect(deactivated, isFalse);
+
+      release.complete();
+      expect(await export, 0);
+      await deactivation;
+      expect(runtime.isActive, isFalse);
+    },
+  );
+
   test('errors and descriptions never echo private input', () async {
     const failure = AtlasVaultPrivateStateException();
     expect(failure.toString(), 'AtlasVault private-state operation failed.');

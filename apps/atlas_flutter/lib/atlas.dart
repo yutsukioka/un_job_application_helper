@@ -1156,6 +1156,9 @@ final class AtlasLocalCacheMigrationPrivateState {
   final Uri? authorityBaseURL;
   final bool cachePresent;
 
+  bool get containsPrivateState =>
+      savedSearches.isNotEmpty || trackerRecords.isNotEmpty;
+
   @override
   String toString() => 'AtlasLocalCacheMigrationPrivateState(<redacted>)';
 }

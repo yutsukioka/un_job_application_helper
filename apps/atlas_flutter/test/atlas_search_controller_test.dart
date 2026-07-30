@@ -2002,6 +2002,127 @@ void main() {
   );
 
   test(
+    'pending recovery import blocks legacy authority before migration bootstrap',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_recovery_import_authority_bootstrap_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final store = AtlasLocalCacheStore(
+        file: File('${tempDir.path}/atlas-local-cache.json'),
+        now: () => _cacheFixtureNow,
+      );
+      await store.write(_privateCacheSnapshot());
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      var importJournalReads = 0;
+      final controller = AtlasAppController(
+        localCacheStore: store,
+        recoveryImportPending: () async {
+          importJournalReads += 1;
+          return true;
+        },
+        now: () => _cacheFixtureNow,
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(importJournalReads, 1);
+      expect(migrationCoordinator.calls, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+      expect(controller.connectionStatus, 'Offline (cached)');
+    },
+  );
+
+  test(
+    'recovery-import journal read failure blocks legacy authority',
+    () async {
+      final migrationCoordinator = _ControllerMigrationCoordinator(
+        authorityState: AtlasVaultPlaintextAuthorityState.legacy,
+      );
+      final migrationOwner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: migrationCoordinator,
+      );
+      addTearDown(migrationOwner.dispose);
+      final controller = AtlasAppController(
+        recoveryImportPending: () async {
+          throw StateError('deterministic protected journal read failure');
+        },
+      );
+      controller.attachPlaintextMigrationContext(
+        AtlasVaultPlaintextMigrationContext(owner: migrationOwner),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+      expect(migrationCoordinator.calls, isEmpty);
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
+  test('pending recovery import blocks ordinary vault activation', () async {
+    final persistence = _FakePrivateStatePersistence();
+    final controller = AtlasAppController(
+      privateStatePersistence: persistence,
+      recoveryImportPending: () async => true,
+    );
+    addTearDown(controller.dispose);
+    await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+
+    final result = await controller.activateExistingAtlasVault('vault-alpha');
+
+    expect(result, AtlasVaultActivationResult.failed);
+    expect(persistence.calls, isEmpty);
+  });
+
+  test(
+    'import activation leaves journal authority to the pending callback',
+    () async {
+      final source = await File(
+        'lib/features/app_shell/atlas_app.dart',
+      ).readAsString();
+      final activationStart = source.indexOf(
+        'Future<AtlasVaultActivationResult> _activateExistingAtlasVault',
+      );
+      final activationEnd = source.indexOf(
+        'Future<void> deactivateAtlasVault()',
+        activationStart,
+      );
+      expect(activationStart, isNonNegative);
+      expect(activationEnd, greaterThan(activationStart));
+      final activationSource = source.substring(activationStart, activationEnd);
+
+      expect(
+        activationSource,
+        isNot(contains('_recoveryImportBlocksLegacyPrivateAuthority = false')),
+      );
+      expect(
+        source,
+        contains(
+          'void _recoveryImportPendingDidChange(bool pending) {\n'
+          '    _recoveryImportBlocksLegacyPrivateAuthority = pending;',
+        ),
+      );
+    },
+  );
+
+  test(
     'restart rollback restores preserved private cache without network reads',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(
@@ -2538,6 +2659,50 @@ void main() {
         ),
         <String>['undp_oracle_hcm:34063'],
       );
+    },
+  );
+
+  test(
+    'recovery import admission blocks new legacy writes and drains admitted work',
+    () async {
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..enteredCompatibilitySaveSearch = enteredSearch
+        ..releaseCompatibilitySaveSearch = releaseSearch;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      final admittedSave = controller.saveCurrentSearch();
+      await enteredSearch.future;
+      var admissionCompleted = false;
+      final admission = controller.beginRecoveryImportAdmission().whenComplete(
+        () => admissionCompleted = true,
+      );
+      await Future<void>.value();
+
+      expect(admissionCompleted, isFalse);
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      expect(transport.savedJobKeys, isEmpty);
+
+      releaseSearch.complete();
+      await admittedSave;
+      await admission;
+      expect(admissionCompleted, isTrue);
+      expect(transport.savedSearchNames, <String>['Search 1']);
+
+      controller.endRecoveryImportAdmission();
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+      expect(transport.savedJobKeys, <String>['undp_oracle_hcm:34063']);
     },
   );
 

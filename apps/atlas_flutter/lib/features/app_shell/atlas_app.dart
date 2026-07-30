@@ -64,6 +64,7 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
 class AtlasAppController extends ChangeNotifier
     implements
         AtlasVaultPlaintextMigrationOperationAdmission,
+        AtlasVaultRecoveryImportOperationAdmission,
         AtlasVaultLegacyPrivateStateRestoring {
   AtlasAppController({
     Uri? initialBaseURL,
@@ -71,6 +72,7 @@ class AtlasAppController extends ChangeNotifier
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
     AtlasVaultPrivateStatePersistence? privateStatePersistence,
+    Future<bool> Function()? recoveryImportPending,
     DateTime Function()? now,
     Timer Function(Duration, void Function())? searchDebounceTimerFactory,
   }) : baseURL = initialBaseURL ?? Uri.parse('http://10.253.1.43:8765'),
@@ -84,6 +86,8 @@ class AtlasAppController extends ChangeNotifier
        // Keep the compatibility constructor side-effect free.
        // ignore: prefer_initializing_formals
        _privateStatePersistence = privateStatePersistence,
+       // ignore: prefer_initializing_formals
+       _recoveryImportPending = recoveryImportPending,
        _now = now ?? DateTime.now,
        _searchDebounceTimerFactory =
            searchDebounceTimerFactory ??
@@ -124,6 +128,7 @@ class AtlasAppController extends ChangeNotifier
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
   final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
+  final Future<bool> Function()? _recoveryImportPending;
   final DateTime Function() _now;
   final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
   int _privateAuthorityGeneration = 0;
@@ -135,6 +140,9 @@ class AtlasAppController extends ChangeNotifier
   Future<void>? _cacheMutationOperation;
   Future<void>? _compatibilityPrivateMutationOperation;
   AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
+  AtlasVaultInteroperabilityContext? _interoperabilityContext;
+  bool _recoveryImportAdmissionInProgress = false;
+  bool _recoveryImportBlocksLegacyPrivateAuthority = false;
   int _connectionOperationSequence = 0;
   _AtlasConnectionOperation? _activeConnectionOperation;
   int? _testingConnectionOperationIdentifier;
@@ -145,18 +153,23 @@ class AtlasAppController extends ChangeNotifier
   bool get _privateStateProtectionActive {
     return _privateActivationInProgress ||
         _privateDeactivationInProgress ||
+        _recoveryImportAdmissionInProgress ||
+        _recoveryImportBlocksLegacyPrivateAuthority ||
         (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
             false) ||
         (_privateStatePersistence?.isActive ?? false);
   }
 
   bool get _plaintextMigrationBlocksPersistedCacheWrites {
-    return _plaintextMigrationContext?.owner.blocksPersistedCacheWrites ??
-        false;
+    return _recoveryImportAdmissionInProgress ||
+        (_plaintextMigrationContext?.owner.blocksPersistedCacheWrites ?? false);
   }
 
   AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
       _plaintextMigrationContext;
+
+  AtlasVaultInteroperabilityContext? get interoperabilityContext =>
+      _interoperabilityContext;
 
   void attachPlaintextMigrationContext(
     AtlasVaultPlaintextMigrationContext context,
@@ -165,6 +178,22 @@ class AtlasAppController extends ChangeNotifier
       throw const AtlasVaultPlaintextMigrationException();
     }
     _plaintextMigrationContext = context;
+  }
+
+  void attachInteroperabilityContext(
+    AtlasVaultInteroperabilityContext context,
+  ) {
+    if (_interoperabilityContext != null) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _interoperabilityContext = context;
+  }
+
+  void _recoveryImportPendingDidChange(bool pending) {
+    _recoveryImportBlocksLegacyPrivateAuthority = pending;
+    if (pending) {
+      _hideLegacyPrivateStateForMigration();
+    }
   }
 
   void clearConnectionMessage() {
@@ -272,7 +301,23 @@ class AtlasAppController extends ChangeNotifier
 
   Future<AtlasVaultActivationResult> activateExistingAtlasVault(
     String vaultId,
-  ) async {
+  ) {
+    return _activateExistingAtlasVault(vaultId, recoveryImportResume: false);
+  }
+
+  Future<AtlasVaultActivationResult> _activateImportedAtlasVault(
+    String vaultId,
+  ) {
+    return _activateExistingAtlasVault(vaultId, recoveryImportResume: true);
+  }
+
+  Future<AtlasVaultActivationResult> _activateExistingAtlasVault(
+    String vaultId, {
+    required bool recoveryImportResume,
+  }) async {
+    if (_recoveryImportBlocksLegacyPrivateAuthority && !recoveryImportResume) {
+      return AtlasVaultActivationResult.failed;
+    }
     final persistence = _privateStatePersistence;
     if (persistence == null ||
         persistence.isActive ||
@@ -374,6 +419,20 @@ class AtlasAppController extends ChangeNotifier
   }
 
   Future<void> bootstrapPrivateAuthorityAndLoadPersistedCache() async {
+    final inspectRecoveryImport = _recoveryImportPending;
+    if (inspectRecoveryImport != null) {
+      try {
+        _recoveryImportBlocksLegacyPrivateAuthority =
+            await inspectRecoveryImport();
+      } catch (_) {
+        _recoveryImportBlocksLegacyPrivateAuthority = true;
+      }
+    }
+    if (_recoveryImportBlocksLegacyPrivateAuthority) {
+      _hideLegacyPrivateStateForMigration();
+      await loadPersistedCache();
+      return;
+    }
     final context = _plaintextMigrationContext;
     if (context == null) {
       await loadPersistedCache();
@@ -1542,6 +1601,27 @@ class AtlasAppController extends ChangeNotifier
     }
   }
 
+  @override
+  Future<void> beginRecoveryImportAdmission() async {
+    if (_recoveryImportAdmissionInProgress ||
+        _recoveryImportBlocksLegacyPrivateAuthority) {
+      throw const AtlasVaultInteroperabilityException();
+    }
+    _recoveryImportAdmissionInProgress = true;
+    _privateAuthorityGeneration += 1;
+    try {
+      await drainAdmittedPlaintextOperations();
+    } catch (_) {
+      _recoveryImportAdmissionInProgress = false;
+      rethrow;
+    }
+  }
+
+  @override
+  void endRecoveryImportAdmission() {
+    _recoveryImportAdmissionInProgress = false;
+  }
+
   void _installPrivateSnapshot(AtlasVaultPrivateStateSnapshot snapshot) {
     savedSearches = List<AtlasSavedSearch>.unmodifiable(snapshot.savedSearches);
     trackerRecords = List<AtlasApplicationRecord>.unmodifiable(
@@ -2351,6 +2431,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   late final AtlasAppController _controller;
   late final bool _ownsController;
   AtlasVaultPlaintextMigrationPresentationOwner? _ownedMigrationOwner;
+  AtlasVaultInteroperabilityPresentationOwner? _ownedInteroperabilityOwner;
 
   @override
   void initState() {
@@ -2363,6 +2444,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       final assembly = _buildDefaultControllerAssembly();
       _controller = assembly.controller;
       _ownedMigrationOwner = assembly.migrationOwner;
+      _ownedInteroperabilityOwner = assembly.interoperabilityOwner;
       _ownsController = true;
     }
     if (_ownsController) {
@@ -2379,6 +2461,8 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   @override
   void dispose() {
     if (_ownsController) {
+      unawaited(_ownedInteroperabilityOwner?.stopAndDrain());
+      _ownedInteroperabilityOwner?.dispose();
       _ownedMigrationOwner?.dispose();
       _controller.dispose();
     }
@@ -2476,10 +2560,12 @@ final class _AtlasDefaultControllerAssembly {
   const _AtlasDefaultControllerAssembly({
     required this.controller,
     this.migrationOwner,
+    this.interoperabilityOwner,
   });
 
   final AtlasAppController controller;
   final AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
+  final AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
 }
 
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
@@ -2493,6 +2579,10 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
 
   final keyStore = AtlasAndroidVaultSecureKeyStore();
   final localStore = AtlasAndroidVaultLocalStoreIO();
+  final selectedVaultStore = AtlasAndroidSelectedVaultStore();
+  final migrationJournalStore = AtlasAndroidProtectedMigrationJournalStore();
+  final recoveryImportJournalStore =
+      AtlasAndroidProtectedRecoveryImportJournalStore();
   final runtime = AtlasVaultPrivateStateRuntime(
     secureKeyStore: keyStore,
     localStoreIO: localStore,
@@ -2500,16 +2590,27 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   final controller = AtlasAppController(
     localCacheStoreFactory: _defaultCacheStore,
     privateStatePersistence: runtime,
+    recoveryImportPending: () async {
+      final bytes = await recoveryImportJournalStore.read();
+      try {
+        return bytes != null;
+      } finally {
+        bytes?.fillRange(0, bytes.length, 0);
+      }
+    },
   );
+  final inMemorySource = _AtlasControllerPlaintextMigrationSource(controller);
+  final compatibilitySource = _AtlasControllerCompatibilityMigrationSource(
+    controller,
+  );
+  final cacheSource = _AtlasControllerCacheMigrationSource(controller);
   final coordinator = AtlasVaultPlaintextMigrationCoordinator(
-    inMemorySource: _AtlasControllerPlaintextMigrationSource(controller),
-    compatibilitySource: _AtlasControllerCompatibilityMigrationSource(
-      controller,
-    ),
-    cacheSource: _AtlasControllerCacheMigrationSource(controller),
+    inMemorySource: inMemorySource,
+    compatibilitySource: compatibilitySource,
+    cacheSource: cacheSource,
     operationAdmission: controller,
-    journalStore: AtlasAndroidProtectedMigrationJournalStore(),
-    selectedVaultStore: AtlasAndroidSelectedVaultStore(),
+    journalStore: migrationJournalStore,
+    selectedVaultStore: selectedVaultStore,
     secureKeyStore: keyStore,
     localStoreIO: localStore,
     privateAuthority: _AtlasControllerMigrationPrivateAuthority(
@@ -2524,9 +2625,41 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   controller.attachPlaintextMigrationContext(
     AtlasVaultPlaintextMigrationContext(owner: owner),
   );
+  final interoperabilityCoordinator = AtlasVaultInteroperabilityCoordinator(
+    runtime: runtime,
+    selectedVaultStore: selectedVaultStore,
+    migrationJournalStore: migrationJournalStore,
+    recoveryImportPending: () async {
+      final bytes = await recoveryImportJournalStore.read();
+      try {
+        return bytes != null;
+      } finally {
+        bytes?.fillRange(0, bytes.length, 0);
+      }
+    },
+    documentTransport: AtlasAndroidEncryptedDocumentTransport(),
+    recoveryImportJournalStore: recoveryImportJournalStore,
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    inMemorySource: inMemorySource,
+    compatibilitySource: compatibilitySource,
+    cacheSource: cacheSource,
+    importOperationAdmission: controller,
+    activateImportedVault: (vaultId) async =>
+        await controller._activateImportedAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated,
+    recoveryImportPendingDidChange: controller._recoveryImportPendingDidChange,
+  );
+  final interoperabilityOwner = AtlasVaultInteroperabilityPresentationOwner(
+    coordinator: interoperabilityCoordinator,
+  );
+  controller.attachInteroperabilityContext(
+    AtlasVaultInteroperabilityContext(owner: interoperabilityOwner),
+  );
   return _AtlasDefaultControllerAssembly(
     controller: controller,
     migrationOwner: owner,
+    interoperabilityOwner: interoperabilityOwner,
   );
 }
 
@@ -5641,6 +5774,14 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               title: 'AtlasVault',
               children: <Widget>[
                 AtlasVaultPlaintextMigrationPanel(owner: context.owner),
+              ],
+            ),
+          ],
+          if (controller.interoperabilityContext case final context?) ...[
+            _SettingsSection(
+              title: 'Encrypted Interoperability',
+              children: <Widget>[
+                AtlasVaultInteroperabilityPanel(owner: context.owner),
               ],
             ),
           ],
