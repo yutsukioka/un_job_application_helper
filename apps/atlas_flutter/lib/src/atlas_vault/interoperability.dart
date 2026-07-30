@@ -709,8 +709,9 @@ final class AtlasVaultInteroperabilityCoordinator
       }
       Uint8List? selectedBytes;
       Uint8List? canonicalBytes;
+      AtlasVaultRecoveryImportJournal? journal;
       try {
-        final journal = await _loadImportJournal(dependencies.journalStore);
+        journal = await _loadImportJournal(dependencies.journalStore);
         final gate = await _cleanInstallGate(dependencies, journal: journal);
         if (gate != _ImportGate.ready) {
           return _fixedImportResult(
@@ -775,7 +776,10 @@ final class AtlasVaultInteroperabilityCoordinator
           pendingImport: journal != null,
         );
       } catch (_) {
-        return _fixedImportResult(AtlasVaultRecoveryImportDisposition.failed);
+        return _fixedImportResult(
+          AtlasVaultRecoveryImportDisposition.failed,
+          pendingImport: journal != null,
+        );
       } finally {
         _wipe(selectedBytes);
         _wipe(canonicalBytes);

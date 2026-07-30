@@ -877,6 +877,35 @@ void main() {
     },
   );
 
+  test('invalid journal backup reselection preserves pending state', () async {
+    final canonical = _ImportCase.iosToFlutter().canonicalExportBytes;
+    final candidates = <Uint8List>[
+      Uint8List.fromList(utf8.encode('{invalid')),
+      Uint8List.fromList(<int>[0x20, ...canonical]),
+    ];
+
+    for (final candidate in candidates) {
+      final fixture = await _ImportFixture.create(
+        failAfterEvent: 'store.create',
+      );
+      await fixture.coordinator.prepareRecoveryImport();
+      final interrupted = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      expect(interrupted.pendingImport, isTrue);
+      fixture.faults.clear();
+      fixture.transport.replaceFuturePick(candidate);
+      final before = _persistentImportMutations(fixture.events).length;
+
+      final failed = await fixture.coordinator.prepareRecoveryImport();
+
+      expect(failed.disposition, AtlasVaultRecoveryImportDisposition.failed);
+      expect(failed.pendingImport, isTrue);
+      expect(fixture.importJournal.current, isNotNull);
+      expect(_persistentImportMutations(fixture.events), hasLength(before));
+    }
+  });
+
   test(
     'pre-selection reset removes only hash-bound import resources',
     () async {
@@ -1189,6 +1218,11 @@ final class _RecordingDocumentTransport
   void cancelFuturePicks() {
     _pickedBytes?.fillRange(0, _pickedBytes!.length, 0);
     _pickedBytes = null;
+  }
+
+  void replaceFuturePick(Uint8List bytes) {
+    _pickedBytes?.fillRange(0, _pickedBytes!.length, 0);
+    _pickedBytes = Uint8List.fromList(bytes);
   }
 
   @override

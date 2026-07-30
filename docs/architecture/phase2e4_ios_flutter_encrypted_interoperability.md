@@ -346,6 +346,9 @@ The fifth review cycle retains the legacy/cache authority fence through
 completion-pending journal deletion, requires selected recovery-document bytes
 to equal their canonical encoding, and preserves pending owner state when
 backup reselection is cancelled.
+The sixth review cycle preserves pending owner authority when a malformed or
+noncanonical backup is reselected for a live journal. Validation still fails
+without persistence, while resume/discard controls remain available.
 
 ## 58. Verification
 
