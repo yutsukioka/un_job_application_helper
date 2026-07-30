@@ -67,11 +67,10 @@ void main() {
       final prepared = await fixture.coordinator.prepareRecoveryImport();
       expect(
         prepared.disposition,
-        profile.journalStage == AtlasVaultRecoveryImportStage.completionPending
-            ? AtlasVaultRecoveryImportDisposition.completionPending
-            : AtlasVaultRecoveryImportDisposition.resumeRequired,
+        AtlasVaultRecoveryImportDisposition.importPrepared,
         reason: profile.label,
       );
+      expect(prepared.pendingImport, isTrue, reason: profile.label);
       final result = await fixture.coordinator.confirmRecoveryImport(
         vector.recoveryText,
       );

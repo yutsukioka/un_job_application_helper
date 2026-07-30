@@ -49,6 +49,10 @@ void main() {
     expect(storage, contains('MAX_DOCUMENT_BYTES = 128 * 1024 * 1024'));
     expect(storage, contains('openOutputStream(uri, "wt")'));
     expect(storage, isNot(contains('openOutputStream(uri, "w")')));
+    expect(storage, contains('pending.takeBytesForWorker()'));
+    expect(storage, contains('workerBytes?.fill(0)'));
+    expect(storage, contains('fun wipeUnclaimedBytes()'));
+    expect(storage, isNot(contains('pending.bytes?.fill(0)')));
     expect(storage, isNot(contains('takePersistableUriPermission')));
     expect(activity, contains('atlasVaultStorage?.onActivityResult'));
     expect(activity, isNot(contains('recovery-import')));

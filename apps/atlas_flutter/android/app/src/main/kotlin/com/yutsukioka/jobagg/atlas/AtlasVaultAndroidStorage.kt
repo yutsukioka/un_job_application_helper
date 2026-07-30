@@ -62,7 +62,7 @@ internal class AtlasVaultAndroidStorage(
         val pending = pendingDocumentOperation
         pendingDocumentOperation = null
         if (pending != null) {
-            pending.bytes?.fill(0)
+            pending.wipeUnclaimedBytes()
             pending.result.success(
                 if (pending.kind == DocumentOperationKind.PICK) null else false,
             )
@@ -213,7 +213,7 @@ internal class AtlasVaultAndroidStorage(
             }
         if (pending.kind != expectedKind) {
             pendingDocumentOperation = null
-            pending.bytes?.fill(0)
+            pending.wipeUnclaimedBytes()
             pending.result.error(
                 ERROR_CODE,
                 "AtlasVault Android storage operation failed.",
@@ -223,7 +223,7 @@ internal class AtlasVaultAndroidStorage(
         }
         if (resultCode != Activity.RESULT_OK || data?.data == null) {
             pendingDocumentOperation = null
-            pending.bytes?.fill(0)
+            pending.wipeUnclaimedBytes()
             pending.result.success(
                 if (pending.kind == DocumentOperationKind.PICK) null else false,
             )
@@ -231,62 +231,87 @@ internal class AtlasVaultAndroidStorage(
         }
         val uri = data.data ?: run {
             pendingDocumentOperation = null
-            pending.bytes?.fill(0)
+            pending.wipeUnclaimedBytes()
             pending.result.success(
                 if (pending.kind == DocumentOperationKind.PICK) null else false,
             )
             return true
         }
-        executor.execute {
-            var pickedBytes: ByteArray? = null
-            var succeeded = false
-            try {
-                if (pending.kind == DocumentOperationKind.PICK) {
-                    pickedBytes = readEncryptedDocument(uri)
-                } else {
-                    writeEncryptedDocument(
-                        uri,
-                        pending.bytes ?: throw StorageFailure(),
-                    )
-                }
-                succeeded = true
-            } catch (_: Throwable) {
-                succeeded = false
-            } finally {
-                pending.bytes?.fill(0)
-                mainHandler.post {
-                    if (pendingDocumentOperation === pending) {
-                        pendingDocumentOperation = null
-                        if (!closed) {
-                            if (succeeded) {
-                                if (pending.kind ==
-                                    DocumentOperationKind.PICK
-                                ) {
-                                    val resultBytes = pickedBytes
-                                    if (resultBytes == null) {
-                                        pending.result.error(
-                                            ERROR_CODE,
-                                            "AtlasVault Android storage operation failed.",
-                                            null,
-                                        )
+        val workerBytes = if (pending.kind == DocumentOperationKind.SAVE) {
+            pending.takeBytesForWorker() ?: run {
+                pendingDocumentOperation = null
+                pending.result.error(
+                    ERROR_CODE,
+                    "AtlasVault Android storage operation failed.",
+                    null,
+                )
+                return true
+            }
+        } else {
+            null
+        }
+        try {
+            executor.execute {
+                var pickedBytes: ByteArray? = null
+                var succeeded = false
+                try {
+                    if (pending.kind == DocumentOperationKind.PICK) {
+                        pickedBytes = readEncryptedDocument(uri)
+                    } else {
+                        writeEncryptedDocument(
+                            uri,
+                            workerBytes ?: throw StorageFailure(),
+                        )
+                    }
+                    succeeded = true
+                } catch (_: Throwable) {
+                    succeeded = false
+                } finally {
+                    workerBytes?.fill(0)
+                    mainHandler.post {
+                        if (pendingDocumentOperation === pending) {
+                            pendingDocumentOperation = null
+                            if (!closed) {
+                                if (succeeded) {
+                                    if (pending.kind ==
+                                        DocumentOperationKind.PICK
+                                    ) {
+                                        val resultBytes = pickedBytes
+                                        if (resultBytes == null) {
+                                            pending.result.error(
+                                                ERROR_CODE,
+                                                "AtlasVault Android storage operation failed.",
+                                                null,
+                                            )
+                                        } else {
+                                            pending.result.success(resultBytes)
+                                            resultBytes.fill(0)
+                                        }
                                     } else {
-                                        pending.result.success(resultBytes)
-                                        resultBytes.fill(0)
+                                        pending.result.success(true)
                                     }
                                 } else {
-                                    pending.result.success(true)
+                                    pending.result.error(
+                                        ERROR_CODE,
+                                        "AtlasVault Android storage operation failed.",
+                                        null,
+                                    )
                                 }
-                            } else {
-                                pending.result.error(
-                                    ERROR_CODE,
-                                    "AtlasVault Android storage operation failed.",
-                                    null,
-                                )
                             }
                         }
+                        pickedBytes?.fill(0)
                     }
-                    pickedBytes?.fill(0)
                 }
+            }
+        } catch (_: Throwable) {
+            workerBytes?.fill(0)
+            pendingDocumentOperation = null
+            if (!closed) {
+                pending.result.error(
+                    ERROR_CODE,
+                    "AtlasVault Android storage operation failed.",
+                    null,
+                )
             }
         }
         return true
@@ -1649,11 +1674,26 @@ internal class AtlasVaultAndroidStorage(
         SAVE,
     }
 
-    private data class PendingDocumentOperation(
+    private class PendingDocumentOperation(
         val result: MethodChannel.Result,
         val kind: DocumentOperationKind,
-        val bytes: ByteArray?,
-    )
+        bytes: ByteArray?,
+    ) {
+        private var unclaimedBytes: ByteArray? = bytes
+
+        @Synchronized
+        fun takeBytesForWorker(): ByteArray? {
+            val bytes = unclaimedBytes
+            unclaimedBytes = null
+            return bytes
+        }
+
+        @Synchronized
+        fun wipeUnclaimedBytes() {
+            unclaimedBytes?.fill(0)
+            unclaimedBytes = null
+        }
+    }
 
     private companion object {
         const val CHANNEL_NAME = "atlas/vault_android"

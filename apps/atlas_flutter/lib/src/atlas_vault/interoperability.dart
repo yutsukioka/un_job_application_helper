@@ -767,11 +767,7 @@ final class AtlasVaultInteroperabilityCoordinator
         _preparedImportBytes = Uint8List.fromList(canonicalBytes);
         _preparedImportSha256 = digest;
         return _fixedImportResult(
-          journal == null
-              ? AtlasVaultRecoveryImportDisposition.importPrepared
-              : journal.stage == AtlasVaultRecoveryImportStage.completionPending
-              ? AtlasVaultRecoveryImportDisposition.completionPending
-              : AtlasVaultRecoveryImportDisposition.resumeRequired,
+          AtlasVaultRecoveryImportDisposition.importPrepared,
           count: export.records.length,
           pendingImport: journal != null,
         );

@@ -281,7 +281,7 @@ void main() {
     owner.dispose();
   });
 
-  testWidgets('pending import offers only explicit resume or discard', (
+  testWidgets('pending import resume advances to explicit recovery submit', (
     tester,
   ) async {
     final coordinator = _FakeCoordinator(
@@ -291,7 +291,7 @@ void main() {
         pendingImport: true,
       ),
       importResult: const AtlasVaultRecoveryImportResult(
-        disposition: AtlasVaultRecoveryImportDisposition.resumeRequired,
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
         encryptedRecordCount: 4,
         pendingImport: true,
       ),
@@ -310,6 +310,13 @@ void main() {
     expect(find.text('Discard Pending Import'), findsOneWidget);
     expect(find.text('Import and Activate'), findsNothing);
     expect(coordinator.calls, <String>['inspect-import']);
+
+    await tester.tap(find.text('Resume Recovery Import'));
+    await tester.pumpAndSettle();
+
+    expect(coordinator.calls, <String>['inspect-import', 'prepare-import']);
+    expect(find.text('Recovery Key'), findsOneWidget);
+    expect(find.text('Import and Activate'), findsOneWidget);
     owner.dispose();
   });
 

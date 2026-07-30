@@ -480,8 +480,9 @@ void main() {
 
     expect(
       prepared.disposition,
-      AtlasVaultRecoveryImportDisposition.resumeRequired,
+      AtlasVaultRecoveryImportDisposition.importPrepared,
     );
+    expect(prepared.pendingImport, isTrue);
     expect(
       resumed.disposition,
       AtlasVaultRecoveryImportDisposition.importedAndActive,
@@ -764,11 +765,10 @@ void main() {
         final prepared = await fixture.coordinator.prepareRecoveryImport();
         expect(
           prepared.disposition,
-          interruption.stage == AtlasVaultRecoveryImportStage.completionPending
-              ? AtlasVaultRecoveryImportDisposition.completionPending
-              : AtlasVaultRecoveryImportDisposition.resumeRequired,
+          AtlasVaultRecoveryImportDisposition.importPrepared,
           reason: interruption.event,
         );
+        expect(prepared.pendingImport, isTrue, reason: interruption.event);
         final resumed = await fixture.coordinator.confirmRecoveryImport(
           fixture.caseData.recoveryText,
         );
@@ -806,7 +806,7 @@ void main() {
     fixture.faults.clear();
     expect(
       (await fixture.coordinator.prepareRecoveryImport()).disposition,
-      AtlasVaultRecoveryImportDisposition.completionPending,
+      AtlasVaultRecoveryImportDisposition.importPrepared,
     );
     expect(
       (await fixture.coordinator.confirmRecoveryImport(

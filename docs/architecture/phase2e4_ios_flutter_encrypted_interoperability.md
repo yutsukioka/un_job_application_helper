@@ -224,6 +224,9 @@ The journal clears only after committed state is fully verified.
 Resume reselects the same digest-bound export and re-enters the recovery key.
 Completed steps are verified before advancing. A journaled resume remains
 available while the legacy compatibility service is offline.
+After the matching backup is reselected, the owner always advances to explicit
+recovery-key submission while preserving pending-import authority. It does not
+loop back to the document picker for an already journaled transaction.
 
 ## 41. Pre-Selection Reset
 
@@ -322,6 +325,11 @@ document replacement uses truncating provider semantics, and terminal export
 results expose an explicit retry to the ready state.
 A third review regression proves a durably recovered initial journal publishes
 pending-import authority before the admission fence ends.
+The fourth review cycle proves backup reselection re-enters recovery-key
+submission for every journal stage. It also transfers encrypted export bytes
+exclusively to the Android document worker before scheduling I/O, so terminal
+shutdown can wipe only unclaimed bytes and the worker wipes its owned buffer
+after writing.
 
 ## 58. Verification
 
