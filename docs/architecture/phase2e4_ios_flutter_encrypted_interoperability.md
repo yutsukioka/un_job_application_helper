@@ -135,12 +135,19 @@ installation, resume/reset, presentation, and Apple-to-Flutter proof.
 ## 26. Clean-Install Import Policy
 
 Import requires no selected vault, target resource, plaintext authority,
-migration journal, or conflicting import.
+migration journal, or conflicting import. After the selected document reveals
+its vault ID and before the first journal write, the exact target store and
+secure-key slots must both be absent; even byte-identical orphaned resources
+are not adopted.
 
 ## 27. Plaintext/Migration Gate
 
 Every in-memory, cache, compatibility endpoint, and migration authority must be
-empty and inactive before import persistence.
+empty and inactive before initial import persistence. Initial preparation and
+the final pre-journal admission check fail closed when compatibility inventory
+cannot be read. Once a protected import journal exists, legacy operations are
+already blocked and resume uses only local journal, store, key, selection,
+cache, and in-memory authority state; it does not revisit a network endpoint.
 
 ## 28. Existing-Vault Policy
 
@@ -163,8 +170,10 @@ selection.
 
 ## 32. Record Hydration Validation
 
-Every record is authenticated before installation. Unsupported families and
-tombstones remain encrypted and unrendered.
+Every record is authenticated before installation. The complete Flutter
+projection is also hydrated in temporary memory before the first journal
+write, including duplicate saved-search-name and saved-job-key rejection.
+Unsupported families and tombstones remain encrypted and unrendered.
 
 ## 33. Recovery-Import Journal
 
@@ -201,7 +210,8 @@ The journal clears only after committed state is fully verified.
 ## 40. Interrupted Resume
 
 Resume reselects the same digest-bound export and re-enters the recovery key.
-Completed steps are verified before advancing.
+Completed steps are verified before advancing. A journaled resume remains
+available while the legacy compatibility service is offline.
 
 ## 41. Pre-Selection Reset
 
@@ -255,7 +265,10 @@ Interoperability never writes private payloads into the public cache.
 
 ## 50. Compatibility Endpoint Isolation
 
-It does not call compatibility saved-search or tracker endpoints.
+The initial clean-install gate reads both compatibility families exactly as
+required to prove they are empty. The import never mutates them, never uses
+them as an export/import fallback, and never calls them after the protected
+import journal exists.
 
 ## 51. Secret Lifetime
 
@@ -288,7 +301,10 @@ stored persistently.
 A separate valid red commit precedes import implementation. Deterministic tests
 cover clean-install admission, verification before persistence, protected
 journal privacy, every resume stage, hash-bound reset, controller bootstrap,
-owner generation fencing, and Android secure installation.
+owner generation fencing, and Android secure installation. Codex review
+regressions additionally prove endpoint-independent journal resume, rejection
+of occupied target store/key slots before journaling, and full projection
+collision rejection before persistence.
 
 ## 58. Verification
 

@@ -811,6 +811,17 @@ final class AtlasVaultInteroperabilityCoordinator
           storeId: storeId,
           timestamp: timestamp,
         );
+        if (journal == null) {
+          await _requireImportTargetAvailable(
+            dependencies,
+            export.vaultMetadata.vaultId,
+          );
+        }
+        await _runtime.validateImportProjection(
+          vaultId: export.vaultMetadata.vaultId,
+          vaultKey: vaultKey,
+          store: localStore,
+        );
         final localBytes = localStore.canonicalBytes();
         try {
           final localStoreSha256 = await atlasVaultSha256Hex(localBytes);
@@ -1158,11 +1169,13 @@ final class AtlasVaultInteroperabilityCoordinator
       if (cache.containsPrivateState) {
         return _ImportGate.migrationRequired;
       }
-      final compatibility = await dependencies.compatibilitySource
-          .readCompatibilityPrivateState();
-      if (compatibility.savedSearches.isNotEmpty ||
-          compatibility.trackerRecords.isNotEmpty) {
-        return _ImportGate.migrationRequired;
+      if (journal == null) {
+        final compatibility = await dependencies.compatibilitySource
+            .readCompatibilityPrivateState();
+        if (compatibility.savedSearches.isNotEmpty ||
+            compatibility.trackerRecords.isNotEmpty) {
+          return _ImportGate.migrationRequired;
+        }
       }
       if (journal == null ||
           journal.stage.index <
@@ -1180,6 +1193,16 @@ final class AtlasVaultInteroperabilityCoordinator
       return _ImportGate.unavailable;
     } finally {
       _wipe(migrationBytes);
+    }
+  }
+
+  Future<void> _requireImportTargetAvailable(
+    _ImportDependencies dependencies,
+    String vaultId,
+  ) async {
+    if (await dependencies.localStoreIO.read(vaultId) != null ||
+        await dependencies.secureKeyStore.containsVaultKey(vaultId)) {
+      throw const AtlasVaultInteroperabilityException();
     }
   }
 

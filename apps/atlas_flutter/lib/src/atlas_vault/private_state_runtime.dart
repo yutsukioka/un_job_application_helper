@@ -100,6 +100,21 @@ final class AtlasVaultPrivateStateRuntime
     return isActive && _vaultId == vaultId;
   }
 
+  Future<void> validateImportProjection({
+    required String vaultId,
+    required Uint8List vaultKey,
+    required vault.AtlasVaultLocalStore store,
+  }) async {
+    try {
+      if (vaultKey.length != 32) {
+        throw const AtlasVaultPrivateStateException();
+      }
+      await _hydrate(vaultId: vaultId, vaultKey: vaultKey, store: store);
+    } catch (_) {
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
   @override
   Future<AtlasVaultActivationResult> activateExisting(String vaultId) async {
     if (_active || _activating || _deactivating) {

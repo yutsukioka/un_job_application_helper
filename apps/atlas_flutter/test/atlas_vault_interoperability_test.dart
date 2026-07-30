@@ -461,6 +461,112 @@ void main() {
     expect(_persistentImportMutations(fixture.events), isEmpty);
   });
 
+  test('journaled resume does not revisit compatibility endpoints', () async {
+    final fixture = await _ImportFixture.create(failAfterEvent: 'store.create');
+    await fixture.coordinator.prepareRecoveryImport();
+    final interrupted = await fixture.coordinator.confirmRecoveryImport(
+      fixture.caseData.recoveryText,
+    );
+    expect(interrupted.pendingImport, isTrue);
+    final compatibilityReads = fixture.compatibilitySource.readCalls;
+    fixture.compatibilitySource.fails = true;
+    fixture.faults.clear();
+
+    final prepared = await fixture.coordinator.prepareRecoveryImport();
+    final resumed = await fixture.coordinator.confirmRecoveryImport(
+      fixture.caseData.recoveryText,
+    );
+
+    expect(
+      prepared.disposition,
+      AtlasVaultRecoveryImportDisposition.resumeRequired,
+    );
+    expect(
+      resumed.disposition,
+      AtlasVaultRecoveryImportDisposition.importedAndActive,
+    );
+    expect(fixture.compatibilitySource.readCalls, compatibilityReads);
+  });
+
+  test(
+    'new import rejects occupied target resources before journaling',
+    () async {
+      final occupiedKey = await _ImportFixture.create();
+      await occupiedKey.coordinator.prepareRecoveryImport();
+      occupiedKey.keyStore.replaceKeyForTest(occupiedKey.caseData.vaultKey);
+
+      final keyResult = await occupiedKey.coordinator.confirmRecoveryImport(
+        occupiedKey.caseData.recoveryText,
+      );
+
+      expect(keyResult.disposition, AtlasVaultRecoveryImportDisposition.failed);
+      expect(occupiedKey.importJournal.current, isNull);
+      expect(_persistentImportMutations(occupiedKey.events), isEmpty);
+      expect(
+        await occupiedKey.keyStore.containsVaultKey(
+          occupiedKey.caseData.vaultId,
+        ),
+        isTrue,
+      );
+
+      final occupiedStore = await _ImportFixture.create();
+      await occupiedStore.coordinator.prepareRecoveryImport();
+      occupiedStore.storeIO.replaceStoreForTest(
+        _occupiedStore(occupiedStore.caseData),
+      );
+
+      final storeResult = await occupiedStore.coordinator.confirmRecoveryImport(
+        occupiedStore.caseData.recoveryText,
+      );
+
+      expect(
+        storeResult.disposition,
+        AtlasVaultRecoveryImportDisposition.failed,
+      );
+      expect(occupiedStore.importJournal.current, isNull);
+      expect(_persistentImportMutations(occupiedStore.events), isEmpty);
+      expect(occupiedStore.storeIO.current, isNotNull);
+    },
+  );
+
+  test('logical projection collisions fail before import journaling', () async {
+    for (final type in <vault.AtlasVaultPayloadType>[
+      vault.AtlasVaultPayloadType.savedSearch,
+      vault.AtlasVaultPayloadType.savedJob,
+    ]) {
+      final fixture = await _ImportFixture.create(
+        pickedBytes: await _appleExportWithDuplicateLogicalRecord(type),
+      );
+      expect(
+        (await fixture.coordinator.prepareRecoveryImport()).disposition,
+        AtlasVaultRecoveryImportDisposition.importPrepared,
+      );
+
+      final result = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.failed,
+        reason: type.wireName,
+      );
+      expect(fixture.importJournal.current, isNull, reason: type.wireName);
+      expect(fixture.storeIO.current, isNull, reason: type.wireName);
+      expect(
+        await fixture.keyStore.containsVaultKey(fixture.caseData.vaultId),
+        isFalse,
+        reason: type.wireName,
+      );
+      expect(await fixture.selected.read(), isNull, reason: type.wireName);
+      expect(
+        _persistentImportMutations(fixture.events),
+        isEmpty,
+        reason: type.wireName,
+      );
+    }
+  });
+
   test('corrupt encrypted record creates no persistent resource', () async {
     final fixture = await _ImportFixture.create(
       pickedBytes: _tamperedAppleExportBytes(),
@@ -976,6 +1082,7 @@ final class _ImportFixture {
     required this.faults,
     required this.runtime,
     required this.transport,
+    required this.compatibilitySource,
     required this.coordinator,
   });
 
@@ -988,6 +1095,7 @@ final class _ImportFixture {
   final InteropOperationFaults faults;
   final AtlasVaultPrivateStateRuntime runtime;
   final _RecordingDocumentTransport transport;
+  final _ImportCompatibilitySource compatibilitySource;
   final AtlasVaultInteroperabilityCoordinator coordinator;
 
   static Future<_ImportFixture> create({
@@ -1032,6 +1140,10 @@ final class _ImportFixture {
           ? null
           : pickedBytes ?? caseData.canonicalExportBytes,
     );
+    final compatibilitySource = _ImportCompatibilitySource(
+      compatibilityState ?? _emptyPlaintextState(),
+      fails: compatibilityFails,
+    );
     final coordinator = AtlasVaultInteroperabilityCoordinator(
       runtime: runtime,
       selectedVaultStore: selected,
@@ -1044,10 +1156,7 @@ final class _ImportFixture {
       inMemorySource: _ImportPlaintextSource(
         inMemoryState ?? _emptyPlaintextState(),
       ),
-      compatibilitySource: _ImportCompatibilitySource(
-        compatibilityState ?? _emptyPlaintextState(),
-        fails: compatibilityFails,
-      ),
+      compatibilitySource: compatibilitySource,
       cacheSource: _ImportCacheSource(cacheState ?? _emptyCacheState()),
       now: () => DateTime.parse('2026-07-29T03:04:05Z'),
       importIdProvider: () => '30000000-0000-4000-8000-000000000301',
@@ -1063,6 +1172,7 @@ final class _ImportFixture {
       faults: faults,
       runtime: runtime,
       transport: transport,
+      compatibilitySource: compatibilitySource,
       coordinator: coordinator,
     );
   }
@@ -1071,6 +1181,7 @@ final class _ImportFixture {
 final class _ImportCase {
   _ImportCase({
     required this.recoveryText,
+    required this.vaultKey,
     required this.vaultId,
     required this.canonicalExportBytes,
     required this.expectedRecordCount,
@@ -1082,6 +1193,7 @@ final class _ImportCase {
   });
 
   final String recoveryText;
+  final Uint8List vaultKey;
   final String vaultId;
   final Uint8List canonicalExportBytes;
   final int expectedRecordCount;
@@ -1103,6 +1215,9 @@ final class _ImportCase {
     final value = atlasVaultObject(root['ios_to_flutter']);
     return _ImportCase(
       recoveryText: value['test_only_recovery_key_text']! as String,
+      vaultKey: Uint8List.fromList(
+        base64Decode(value['test_only_vault_key_b64']! as String),
+      ),
       vaultId: value['vault_id']! as String,
       canonicalExportBytes: Uint8List.fromList(
         base64Decode(value['canonical_encrypted_export_b64']! as String),
@@ -1134,6 +1249,87 @@ Uint8List _tamperedAppleExportBytes() {
   records[0] = record;
   source['records'] = records;
   return vault.AtlasVaultEncryptedExport.fromJson(source).canonicalBytes();
+}
+
+vault.AtlasVaultLocalStore _occupiedStore(_ImportCase caseData) {
+  return vault.AtlasVaultLocalStore.fromJson(<String, Object?>{
+    'format': vault.AtlasVaultLocalStore.format,
+    'version': vault.AtlasVaultLocalStore.version,
+    'store_id': '30000000-0000-4000-8000-000000000399',
+    'created_at': '2026-07-29T03:04:05Z',
+    'updated_at': '2026-07-29T03:04:05Z',
+    'vault_metadata': caseData.export.vaultMetadata.toJson(),
+    'records': <Object?>[
+      for (final record in caseData.export.records) record.toJson(),
+    ],
+  });
+}
+
+Future<Uint8List> _appleExportWithDuplicateLogicalRecord(
+  vault.AtlasVaultPayloadType type,
+) async {
+  final caseData = _ImportCase.iosToFlutter();
+  final export = caseData.export;
+  vault.AtlasVaultEncryptedRecord? source;
+  Uint8List? plaintext;
+  for (final record in export.records) {
+    final candidate = await vault.openAtlasVaultRecord(
+      vaultKey: caseData.vaultKey,
+      vaultId: caseData.vaultId,
+      record: record,
+    );
+    if (!record.deleted) {
+      final envelope = vault.AtlasVaultPayloadEnvelope.decodeJson(
+        utf8.decode(candidate, allowMalformed: false),
+      );
+      if (envelope.type == type) {
+        source = record;
+        plaintext = candidate;
+        break;
+      }
+    }
+    candidate.fillRange(0, candidate.length, 0);
+  }
+  if (source == null || plaintext == null) {
+    throw StateError('Missing deterministic interoperability record.');
+  }
+  try {
+    final savedSearch = type == vault.AtlasVaultPayloadType.savedSearch;
+    final template = vault.AtlasVaultEncryptedRecord.fromJson(<String, Object?>{
+      ...source.toJson(),
+      'id': savedSearch
+          ? '30000000-0000-4000-8000-000000000310'
+          : '30000000-0000-4000-8000-000000000320',
+      'revision': savedSearch
+          ? '30000000-0000-4000-8000-000000000311'
+          : '30000000-0000-4000-8000-000000000321',
+      'parent_revision': null,
+      'nonce': base64Encode(
+        Uint8List.fromList(
+          savedSearch
+              ? const <int>[1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
+              : const <int>[2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24],
+        ),
+      ),
+      'ciphertext': base64Encode(Uint8List(16)),
+    });
+    final duplicate = await vault.sealAtlasVaultRecord(
+      plaintext: plaintext,
+      vaultKey: caseData.vaultKey,
+      vaultId: caseData.vaultId,
+      record: template,
+    );
+    return vault.AtlasVaultEncryptedExport.fromJson(<String, Object?>{
+      ...export.toJson(),
+      'records': <Object?>[
+        for (final record in export.records) record.toJson(),
+        duplicate.toJson(),
+      ],
+    }).canonicalBytes();
+  } finally {
+    plaintext.fillRange(0, plaintext.length, 0);
+    caseData.vaultKey.fillRange(0, caseData.vaultKey.length, 0);
+  }
 }
 
 Uint8List _appleExportWithPassphraseWrapBytes() {
@@ -1210,10 +1406,11 @@ final class _ImportPlaintextSource implements AtlasVaultPlaintextStateSource {
 
 final class _ImportCompatibilitySource
     implements AtlasVaultCompatibilityPrivateSource {
-  const _ImportCompatibilitySource(this.state, {required this.fails});
+  _ImportCompatibilitySource(this.state, {required this.fails});
 
   final AtlasVaultPlaintextPrivateState state;
-  final bool fails;
+  bool fails;
+  int readCalls = 0;
 
   @override
   Uri get authorityBaseURL => Uri.parse('https://example.invalid/');
@@ -1221,6 +1418,7 @@ final class _ImportCompatibilitySource
   @override
   Future<AtlasVaultPlaintextPrivateState>
   readCompatibilityPrivateState() async {
+    readCalls += 1;
     if (fails) {
       throw StateError('deterministic compatibility failure');
     }
