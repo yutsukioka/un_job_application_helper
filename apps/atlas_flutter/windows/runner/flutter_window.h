@@ -8,6 +8,8 @@
 
 #include "win32_window.h"
 
+class AtlasVaultWindowsStorage;
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -28,6 +30,9 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // The device-local AtlasVault boundary registered with the Flutter engine.
+  std::unique_ptr<AtlasVaultWindowsStorage> atlas_vault_storage_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

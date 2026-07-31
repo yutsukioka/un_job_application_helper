@@ -172,9 +172,12 @@ void main() {
           'parent_revision': null,
           'deleted': false,
           'key_id': 'key',
-          'nonce_b64': base64Encode(Uint8List(12)),
-          'ciphertext_b64': base64Encode(
-            Uint8List(AtlasWindowsVaultLocalStoreIO.maximumStoreByteCount),
+          'nonce': base64Encode(Uint8List(12)),
+          'ciphertext': base64Encode(
+            Uint8List(
+              (AtlasWindowsVaultLocalStoreIO.maximumStoreByteCount * 3 ~/ 4) +
+                  1,
+            ),
           ),
         }),
       ],
