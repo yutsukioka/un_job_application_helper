@@ -136,14 +136,15 @@ bool Sha256(const uint8_t* data,
           &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0)) ||
       !IsNtSuccess(BCryptGetProperty(
           algorithm, BCRYPT_OBJECT_LENGTH,
-          reinterpret_cast<PUCHAR>(&object_length), sizeof(object_length),
-          &returned, 0)) ||
-      returned != sizeof(object_length) ||
+          reinterpret_cast<PUCHAR>(&object_length),
+          static_cast<ULONG>(sizeof(object_length)), &returned, 0)) ||
+      returned != static_cast<DWORD>(sizeof(object_length)) ||
       !IsNtSuccess(BCryptGetProperty(
           algorithm, BCRYPT_HASH_LENGTH,
-          reinterpret_cast<PUCHAR>(&hash_length), sizeof(hash_length),
-          &returned, 0)) ||
-      returned != sizeof(hash_length) || hash_length != output->size() ||
+          reinterpret_cast<PUCHAR>(&hash_length),
+          static_cast<ULONG>(sizeof(hash_length)), &returned, 0)) ||
+      returned != static_cast<DWORD>(sizeof(hash_length)) ||
+      hash_length != static_cast<DWORD>(output->size()) ||
       object_length == 0) {
     if (algorithm != nullptr) {
       BCryptCloseAlgorithmProvider(algorithm, 0);
@@ -246,7 +247,8 @@ bool EnsureSafeDirectory(const std::wstring& path) {
 bool IsSafeRegularHandle(HANDLE handle) {
   FILE_ATTRIBUTE_TAG_INFO information{};
   if (GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &information,
-                                   sizeof(information)) == FALSE) {
+                                   static_cast<DWORD>(sizeof(information))) ==
+      FALSE) {
     return false;
   }
   return (information.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
@@ -639,7 +641,7 @@ bool UnprotectVaultKey(const KeyEnvelope& envelope,
 
   bool valid = false;
   if (unprotected != FALSE && output.pbData != nullptr &&
-      output.cbData == kVaultKeyLength) {
+      output.cbData == static_cast<DWORD>(kVaultKeyLength)) {
     std::array<uint8_t, 32> recovered_hash{};
     valid =
         Sha256(output.pbData, output.cbData, &recovered_hash) &&
@@ -737,9 +739,10 @@ bool ParseKeyEnvelope(const std::vector<uint8_t>& input,
       !ReadUint16(input, &offset, &vault_id_length) ||
       !ReadUint32(input, &offset, &protected_blob_length) ||
       version != kKeyEnvelopeVersion || vault_id_length == 0 ||
-      vault_id_length > kVaultIdMaximumLength ||
+      static_cast<size_t>(vault_id_length) > kVaultIdMaximumLength ||
       protected_blob_length == 0 ||
-      protected_blob_length > kProtectedBlobMaximumLength ||
+      static_cast<size_t>(protected_blob_length) >
+          kProtectedBlobMaximumLength ||
       input.size() - offset < output->key_sha256.size()) {
     return false;
   }
