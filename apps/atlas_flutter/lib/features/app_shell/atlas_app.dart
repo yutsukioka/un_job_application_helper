@@ -8,6 +8,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'atlas_cache_location.dart';
+
 typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
 typedef AtlasCacheStoreFactory =
     Future<AtlasLocalCacheStore?> Function({
@@ -36,8 +38,8 @@ const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 Future<AtlasLocalCacheStore?> _defaultCacheStore({
   bool Function()? privateStateProtectionActive,
 }) async {
-  try {
-    if (Platform.isAndroid) {
+  if (Platform.isAndroid) {
+    try {
       // coverage:ignore-start
       final directoryPath = await _storageChannel.invokeMethod<String>(
         'appFilesDir',
@@ -49,17 +51,21 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
         );
       }
       // coverage:ignore-end
+    } catch (_) {
+      // Fall through to path_provider's persistent application-support path.
     }
-  } catch (_) {
-    // Fall through to a local development/test fallback.
   }
-  final fallbackDirectory = Directory(
-    '${Directory.systemTemp.path}/atlas_flutter',
-  );
-  return AtlasLocalCacheStore(
-    file: File('${fallbackDirectory.path}/atlas-local-cache-v1.json'),
-    privateStateProtectionActive: privateStateProtectionActive,
-  );
+  try {
+    final cacheFile = await resolveAtlasPersistentCacheFile();
+    return AtlasLocalCacheStore(
+      file: cacheFile,
+      privateStateProtectionActive: privateStateProtectionActive,
+    );
+  } catch (_) {
+    // A persistent cache is optional. Never fall back to an OS-managed
+    // temporary directory because it cannot provide reliable offline storage.
+    return null;
+  }
 }
 
 class AtlasAppController extends ChangeNotifier

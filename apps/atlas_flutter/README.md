@@ -96,6 +96,13 @@ Manual offline flow:
 5. Relaunch Atlas.
 6. Verify Search rows are visible from cache immediately.
 
+Desktop builds store this cache in the operating system's persistent Application
+Support/application-data location under an `Atlas` directory. They do not use the
+system temporary directory. See
+[`docs/architecture/atlas_storage_retention_policy.md`](../../docs/architecture/atlas_storage_retention_policy.md)
+for historical-detail retention, legacy cache migration, archive retention, and
+future cache-deduplication decisions.
+
 ## Screenshots And Review
 
 Loop evidence is stored under:
