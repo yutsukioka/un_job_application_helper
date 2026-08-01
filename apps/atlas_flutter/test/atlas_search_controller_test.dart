@@ -1679,6 +1679,48 @@ void main() {
     ]);
   });
 
+  test(
+    'activation rejects an authority changed during compatibility admission',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final admissionEntered = Completer<void>();
+      final releaseAdmission = Completer<void>();
+      addTearDown(() {
+        if (!releaseAdmission.isCompleted) {
+          releaseAdmission.complete();
+        }
+      });
+      final transport = _RecordingTransport();
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+        compatibilityPrivateStateAdmission: () async {
+          admissionEntered.complete();
+          await releaseAdmission.future;
+          return false;
+        },
+      );
+      addTearDown(controller.dispose);
+
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await admissionEntered.future;
+      await controller.saveAndReload(replacementAuthority);
+      expect(controller.baseURL, replacementAuthority);
+
+      releaseAdmission.complete();
+
+      expect(await activation, AtlasVaultActivationResult.failed);
+      expect(privatePersistence.isActive, isFalse);
+      expect(privatePersistence.calls, isNot(contains('activate')));
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(

@@ -80,6 +80,7 @@ void main() {
       'SHGetKnownFolderPath',
       'FOLDERID_LocalAppData',
       'LockFileEx',
+      'LOCKFILE_FAIL_IMMEDIATELY',
       'UnlockFileEx',
       'FlushFileBuffers',
       'MoveFileExW',
