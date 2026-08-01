@@ -18,6 +18,23 @@ bool isAtlasPersistentDesktopCachePlatform({String? operatingSystem}) {
   return value == 'linux' || value == 'macos' || value == 'windows';
 }
 
+bool isAtlasLegacyTemporaryCachePlatform({String? operatingSystem}) {
+  final value = operatingSystem ?? Platform.operatingSystem;
+  return value == 'ios';
+}
+
+File resolveAtlasLegacyTemporaryCacheFile({
+  Directory? systemTemporaryDirectory,
+}) {
+  final legacyRoot = systemTemporaryDirectory ?? Directory.systemTemp;
+  return File(
+    _joinPath(
+      _joinPath(legacyRoot.path, atlasLegacyTemporaryDirectoryName),
+      atlasLocalCacheFileName,
+    ),
+  );
+}
+
 final class AtlasPersistentCacheLocation {
   AtlasPersistentCacheLocation({
     required this.cacheFile,
@@ -84,12 +101,8 @@ Future<AtlasPersistentCacheLocation> resolveAtlasPersistentCacheLocation({
   final legacyImportRetiredFile = File(
     _joinPath(targetDirectory.path, atlasLegacyImportRetiredFileName),
   );
-  final legacyRoot = legacySystemTemporaryDirectory ?? Directory.systemTemp;
-  final legacyFile = File(
-    _joinPath(
-      _joinPath(legacyRoot.path, atlasLegacyTemporaryDirectoryName),
-      atlasLocalCacheFileName,
-    ),
+  final legacyFile = resolveAtlasLegacyTemporaryCacheFile(
+    systemTemporaryDirectory: legacySystemTemporaryDirectory,
   );
 
   await _copyLegacyCacheIfNeeded(
@@ -109,18 +122,21 @@ Future<void> _copyLegacyCacheIfNeeded({
   required File targetFile,
   required File legacyImportRetiredFile,
 }) async {
-  if (legacyFile.path == targetFile.path ||
-      await targetFile.exists() ||
-      await legacyImportRetiredFile.exists()) {
+  if (legacyFile.path == targetFile.path) {
     return;
   }
-  if (!await legacyFile.exists()) {
+  final hasStaleMigrationFiles = await _hasStaleMigrationFiles(targetFile);
+  if (!hasStaleMigrationFiles &&
+      (await targetFile.exists() ||
+          await legacyImportRetiredFile.exists() ||
+          !await legacyFile.exists())) {
     return;
   }
 
   await _withMigrationLocks(
     targetFile: targetFile,
     operation: () async {
+      await _deleteStaleMigrationFilesUnderLock(targetFile);
       if (await targetFile.exists() ||
           await legacyImportRetiredFile.exists() ||
           !await legacyFile.exists()) {
@@ -132,6 +148,28 @@ Future<void> _copyLegacyCacheIfNeeded({
       );
     },
   );
+}
+
+Future<bool> _hasStaleMigrationFiles(File targetFile) async {
+  if (!await targetFile.parent.exists()) {
+    return false;
+  }
+  final prefix = '${targetFile.path}.migrating-';
+  await for (final entity in targetFile.parent.list(followLinks: false)) {
+    if (entity is File && entity.path.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Future<void> _deleteStaleMigrationFilesUnderLock(File targetFile) async {
+  final prefix = '${targetFile.path}.migrating-';
+  await for (final entity in targetFile.parent.list(followLinks: false)) {
+    if (entity is File && entity.path.startsWith(prefix)) {
+      await entity.delete();
+    }
+  }
 }
 
 Future<T> _withMigrationLocks<T>({

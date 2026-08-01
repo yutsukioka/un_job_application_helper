@@ -28,6 +28,45 @@ void main() {
         isFalse,
       );
     });
+
+    test('keeps only iOS on the pre-existing temporary cache path', () {
+      expect(
+        isAtlasLegacyTemporaryCachePlatform(operatingSystem: 'ios'),
+        isTrue,
+      );
+      for (final operatingSystem in <String>[
+        'android',
+        'linux',
+        'macos',
+        'windows',
+      ]) {
+        expect(
+          isAtlasLegacyTemporaryCachePlatform(operatingSystem: operatingSystem),
+          isFalse,
+        );
+      }
+    });
+
+    test('resolves the pre-existing temporary cache path', () {
+      final temporaryDirectory = Directory('/temporary-root');
+
+      final cacheFile = resolveAtlasLegacyTemporaryCacheFile(
+        systemTemporaryDirectory: temporaryDirectory,
+      );
+
+      expect(
+        cacheFile.path,
+        File(
+          _joinTestPath(
+            _joinTestPath(
+              temporaryDirectory.path,
+              atlasLegacyTemporaryDirectoryName,
+            ),
+            atlasLocalCacheFileName,
+          ),
+        ).path,
+      );
+    });
   });
 
   group('resolveAtlasPersistentCacheFile', () {
@@ -158,6 +197,27 @@ void main() {
       expect(cacheFile.path, persistentFile.path);
       expect(await cacheFile.readAsString(), 'persistent');
       expect(await legacyFile.readAsString(), 'legacy');
+    });
+
+    test('removes stale migration files left by a crashed process', () async {
+      final persistentFile = await resolveAtlasPersistentCacheFile(
+        applicationSupportDirectoryProvider: () async => supportDirectory,
+        legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+      await persistentFile.parent.create(recursive: true);
+      await persistentFile.writeAsString('persistent', flush: true);
+      final staleMigrationFile = File(
+        '${persistentFile.path}.migrating-999999',
+      );
+      await staleMigrationFile.writeAsString('partial', flush: true);
+
+      final resolvedFile = await resolveAtlasPersistentCacheFile(
+        applicationSupportDirectoryProvider: () async => supportDirectory,
+        legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+
+      expect(await resolvedFile.readAsString(), 'persistent');
+      expect(await staleMigrationFile.exists(), isFalse);
     });
 
     test('serializes concurrent legacy imports', () async {

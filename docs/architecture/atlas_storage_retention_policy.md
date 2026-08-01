@@ -198,11 +198,17 @@ and adds an `Atlas` namespace:
 - Linux: the platform application-support/data area under `Atlas`;
 - Android: the existing native app-files location remains preferred.
 
+iOS is intentionally outside this desktop migration. It keeps the pre-existing
+OS-temporary cache behavior in this change rather than moving plaintext private
+state into longer-lived, backup-eligible storage. Durable iOS caching requires a
+separate protected-storage and backup-exclusion design.
+
 On first use, Atlas copies the legacy temporary cache only when the persistent
 target does not exist. The copy is staged and renamed in the target directory,
 the target wins every conflict, and the legacy file is left untouched. If the OS
 cannot provide persistent application support, Atlas disables disk caching rather
-than silently returning to temporary storage.
+than silently returning to temporary storage. While holding the migration lock,
+Atlas also removes stale `.migrating-*` files left by interrupted earlier runs.
 
 An explicit **Clear Local Cache** writes a durable retirement marker before it
 removes the persistent cache. Atlas keeps the legacy temporary file as rollback

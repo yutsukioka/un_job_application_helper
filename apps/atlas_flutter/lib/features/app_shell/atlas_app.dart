@@ -55,6 +55,12 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
       // Android has no temporary-directory fallback if native storage fails.
     }
   }
+  if (isAtlasLegacyTemporaryCachePlatform()) {
+    return AtlasLocalCacheStore(
+      file: resolveAtlasLegacyTemporaryCacheFile(),
+      privateStateProtectionActive: privateStateProtectionActive,
+    );
+  }
   if (!isAtlasPersistentDesktopCachePlatform()) {
     return null;
   }
