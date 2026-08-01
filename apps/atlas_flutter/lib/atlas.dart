@@ -1200,6 +1200,8 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
+    // Fail before waiting for a coordinator. The checks inside the coordinated
+    // write intentionally revalidate protection after asynchronous boundaries.
     _requirePlaintextWriteAllowed(snapshot);
     await _coordinateMutation(() => _writeUnderCoordinator(snapshot));
   }
@@ -1229,6 +1231,9 @@ final class AtlasLocalCacheStore {
 
   Future<void> clear() async {
     await _coordinateMutation(() async {
+      if (_prepareForClear != null) {
+        await file.parent.create(recursive: true);
+      }
       await _prepareForClear?.call();
       if (await file.exists()) {
         await file.delete();

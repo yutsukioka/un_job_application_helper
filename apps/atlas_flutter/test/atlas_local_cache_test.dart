@@ -118,6 +118,27 @@ void main() {
       expect(await store.read(), isNotNull);
     });
 
+    test(
+      'clear prepares a fresh cache directory before its callback',
+      () async {
+        final freshCacheFile = File(
+          '${tempDir.path}/fresh/nested/atlas-local-cache.json',
+        );
+        final retirementMarker = File(
+          '${freshCacheFile.parent.path}/legacy-import-retired',
+        );
+        final store = AtlasLocalCacheStore(
+          file: freshCacheFile,
+          prepareForClear: () => retirementMarker.writeAsString('retired'),
+        );
+
+        await store.clear();
+
+        expect(await retirementMarker.readAsString(), 'retired');
+        expect(await freshCacheFile.exists(), isFalse);
+      },
+    );
+
     test('write waits for the persistent mutation coordinator', () async {
       final location = AtlasPersistentCacheLocation(
         cacheFile: cacheFile,
