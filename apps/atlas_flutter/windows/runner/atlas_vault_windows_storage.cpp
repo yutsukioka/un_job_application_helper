@@ -346,7 +346,8 @@ bool ScopedVaultLock::Acquire(const std::wstring& path) {
   if (!handle_.valid() || !IsSafeRegularHandle(handle_.get())) {
     return false;
   }
-  if (LockFileEx(handle_.get(), LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0,
+  if (LockFileEx(handle_.get(),
+                 LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0,
                  &overlapped_) == FALSE) {
     return false;
   }

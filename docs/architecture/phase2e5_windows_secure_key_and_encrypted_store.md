@@ -125,8 +125,9 @@ non-directory parents, and non-regular destinations. Inspection uses
 ## 23. Per-Vault Cross-Process Lock
 
 Key and store mutations acquire an exclusive byte-range lock through
-`LockFileEx`; `UnlockFileEx` releases it and handle closure provides crash-safe
-release.
+`LockFileEx` with `LOCKFILE_FAIL_IMMEDIATELY`. Contention therefore returns a
+fixed failure without blocking the Windows runner thread. `UnlockFileEx`
+releases an acquired lock and handle closure provides crash-safe release.
 
 ## 24. Create-Only Key Semantics
 
@@ -222,6 +223,9 @@ before any Windows key or encrypted-store call. The production Windows assembly
 also injects the existing compatibility migration source. Activation admission
 drains a retained compatibility mutation before reading that source, preventing
 a just-committed compatibility record from being hidden by encrypted authority.
+Activation captures the normalized compatibility authority and revalidates it
+after every admission or persistence await; a concurrent server selection
+invalidates activation before DPAPI or encrypted-store access.
 Existing plaintext remains untouched.
 
 ## 41. Encrypted Saved-Search Writes
@@ -299,6 +303,8 @@ tamper rejection, and cleanup then passed.
 
 Exact-head review added a deterministic source regression requiring capability
 values to come from real DPAPI, Local AppData, lock, and atomic-replace probes.
+The next review cycle requires nonblocking exclusive lock acquisition so a
+contending process cannot indefinitely block the runner thread.
 
 ## 55. TDD Checkpoint B Evidence
 
@@ -309,6 +315,9 @@ without changing generic runtime behavior.
 Exact-head review added gated regressions proving activation waits for an
 in-flight compatibility mutation, inspects authoritative compatibility state,
 returns `migrationRequired`, and makes zero Windows storage calls.
+The next cycle binds this admission to the captured normalized server authority
+and rejects a concurrent `saveAndReload` authority change before persistence
+activation.
 
 ## 56. Verification
 
