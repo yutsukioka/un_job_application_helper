@@ -75,8 +75,10 @@ Future<void> _copyLegacyCacheIfNeeded({
     final migrationLock = await File(
       '${targetFile.path}.migration.lock',
     ).open(mode: FileMode.append);
+    var lockAcquired = false;
     try {
       await migrationLock.lock(FileLock.exclusive);
+      lockAcquired = true;
       if (await targetFile.exists() || !await legacyFile.exists()) {
         return;
       }
@@ -86,7 +88,9 @@ Future<void> _copyLegacyCacheIfNeeded({
       );
     } finally {
       try {
-        await migrationLock.unlock();
+        if (lockAcquired) {
+          await migrationLock.unlock();
+        }
       } finally {
         await migrationLock.close();
       }
