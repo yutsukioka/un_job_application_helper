@@ -1477,7 +1477,9 @@ void main() {
       final transport = _RecordingTransport()
         ..enteredCompatibilitySaveSearch = entered
         ..releaseCompatibilitySaveSearch = release;
-      final privatePersistence = _FakePrivateStatePersistence();
+      final enteredActivation = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence()
+        ..enteredActivation = enteredActivation;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
         clientFactory: (baseURL) =>
@@ -1488,11 +1490,13 @@ void main() {
 
       final compatibilitySave = controller.saveCurrentSearch();
       await entered.future;
-      expect(
-        await controller.activateExistingAtlasVault('vault-alpha'),
-        AtlasVaultActivationResult.activated,
-      );
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await Future<void>.delayed(Duration.zero);
+      expect(enteredActivation.isCompleted, isFalse);
+
       release.complete();
+      await enteredActivation.future;
+      expect(await activation, AtlasVaultActivationResult.activated);
       await compatibilitySave;
 
       expect(privatePersistence.isActive, isTrue);
@@ -1510,7 +1514,9 @@ void main() {
       final transport = _RecordingTransport()
         ..enteredCompatibilitySaveJob = entered
         ..releaseCompatibilitySaveJob = release;
-      final privatePersistence = _FakePrivateStatePersistence();
+      final enteredActivation = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence()
+        ..enteredActivation = enteredActivation;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
         clientFactory: (baseURL) =>
@@ -1523,11 +1529,13 @@ void main() {
         JobSearchResult.fromJson(_jobJson),
       );
       await entered.future;
-      expect(
-        await controller.activateExistingAtlasVault('vault-alpha'),
-        AtlasVaultActivationResult.activated,
-      );
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await Future<void>.delayed(Duration.zero);
+      expect(enteredActivation.isCompleted, isFalse);
+
       release.complete();
+      await enteredActivation.future;
+      expect(await activation, AtlasVaultActivationResult.activated);
       await compatibilitySave;
 
       expect(privatePersistence.isActive, isTrue);
@@ -2738,7 +2746,7 @@ void main() {
     expect(secondCoordinator.calls, isEmpty);
   });
 
-  test('Windows default assembly is explicit and migration-free', () {
+  test('Windows default assembly is explicit and migration-UI-free', () {
     final source = File(
       'lib/features/app_shell/atlas_app.dart',
     ).readAsStringSync();
@@ -2755,9 +2763,20 @@ void main() {
     expect(windowsAssembly, contains('AtlasWindowsVaultLocalStoreIO()'));
     expect(windowsAssembly, contains('AtlasVaultPrivateStateRuntime('));
     expect(windowsAssembly, contains('privateStatePersistence: runtime'));
+    expect(
+      windowsAssembly,
+      contains('_AtlasControllerCompatibilityMigrationSource'),
+    );
     expect(windowsAssembly, isNot(contains('activateExistingAtlasVault(')));
     expect(windowsAssembly, isNot(contains('SelectedVault')));
-    expect(windowsAssembly, isNot(contains('Migration')));
+    expect(
+      windowsAssembly,
+      isNot(contains('AtlasVaultPlaintextMigrationCoordinator')),
+    );
+    expect(
+      windowsAssembly,
+      isNot(contains('AtlasVaultPlaintextMigrationPresentationOwner')),
+    );
     expect(windowsAssembly, isNot(contains('Interoperability')));
   });
 }

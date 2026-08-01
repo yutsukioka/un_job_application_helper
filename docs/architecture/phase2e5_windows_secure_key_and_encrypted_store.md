@@ -31,8 +31,10 @@ is registered directly after generated plugins.
 ## 6. Existing Windows Plaintext Risk
 
 The historical cache and compatibility endpoints may contain saved searches and
-tracker records while AtlasVault is inactive. This phase detects that state but
-does not migrate or delete it.
+tracker records while AtlasVault is inactive. Explicit activation first drains
+admitted compatibility/cache writes, then queries the compatibility authority
+and persisted cache before any DPAPI or encrypted-store operation. Detected
+plaintext returns `migrationRequired` without migration or deletion.
 
 ## 7. Phase Boundary
 
@@ -80,7 +82,9 @@ binding is not claimed.
 ## 15. No TPM Guarantee
 
 DPAPI availability does not establish TPM or hardware-backed protection. The
-capability response reports `hardware_backed_guaranteed: false`.
+capability response reports `hardware_backed_guaranteed: false`. Availability
+fields are derived from nonsecret current-user DPAPI round-trip, Local AppData,
+cross-process-lock, and atomic create/replace probes rather than fixed literals.
 
 ## 16. Optional Entropy
 
@@ -173,7 +177,9 @@ beyond Windows and the underlying volume.
 ## 33. Flutter Windows Channel
 
 The dedicated channel is `atlas/vault_windows` with only capabilities, key
-create/load/contains/delete, and store read/create/replace/delete methods.
+create/load/contains/delete, and store read/create/replace/delete methods. Its
+capabilities call performs real nonsecret boundary probes and returns no path,
+identity, protected blob, or vault identifier.
 
 ## 34. Windows Dart Adapter
 
@@ -212,8 +218,11 @@ activate a vault.
 ## 40. Migration-Required Preflight
 
 In-memory or persisted plaintext private state returns `migrationRequired`
-before any Windows key or encrypted-store call. Existing plaintext remains
-untouched.
+before any Windows key or encrypted-store call. The production Windows assembly
+also injects the existing compatibility migration source. Activation admission
+drains a retained compatibility mutation before reading that source, preventing
+a just-committed compatibility record from being hidden by encrypted authority.
+Existing plaintext remains untouched.
 
 ## 41. Encrypted Saved-Search Writes
 
@@ -288,11 +297,18 @@ The red commit proved absent Windows storage boundaries. Mocked/source tests,
 Debug and Release builds, fresh-process DPAPI/store tests, external inspection,
 tamper rejection, and cleanup then passed.
 
+Exact-head review added a deterministic source regression requiring capability
+values to come from real DPAPI, Local AppData, lock, and atomic-replace probes.
+
 ## 55. TDD Checkpoint B Evidence
 
 The red commit produced exactly three missing-production-assembly failures
 while 71 assertions passed. The Windows assembly made the focused suite green
 without changing generic runtime behavior.
+
+Exact-head review added gated regressions proving activation waits for an
+in-flight compatibility mutation, inspects authoritative compatibility state,
+returns `migrationRequired`, and makes zero Windows storage calls.
 
 ## 56. Verification
 

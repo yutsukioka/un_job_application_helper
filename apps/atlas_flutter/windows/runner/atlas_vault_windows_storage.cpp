@@ -27,6 +27,7 @@ constexpr size_t kStoreMaximumLength = 128 * 1024 * 1024;
 constexpr size_t kKeyEnvelopeFixedLength = 8 + 4 + 2 + 4 + 32;
 constexpr char kKeyEnvelopeMagic[] = "AVWKEY01";
 constexpr uint32_t kKeyEnvelopeVersion = 1;
+constexpr char kCapabilityProbeVaultId[] = "capability_probe_v1";
 
 enum class OperationResult {
   kSuccess,
@@ -104,6 +105,15 @@ struct KeyEnvelope {
   std::array<uint8_t, 32> key_sha256{};
   std::string vault_id;
   std::vector<uint8_t> protected_blob;
+};
+
+struct StorageCapabilities {
+  bool secure_boundary_available = false;
+  bool dpapi_available = false;
+  bool current_user_scope = false;
+  bool local_app_data_available = false;
+  bool atomic_replace_available = false;
+  bool hardware_backed_guaranteed = false;
 };
 
 void Wipe(std::vector<uint8_t>* value) {
@@ -790,6 +800,96 @@ bool IsValidVaultId(const std::string& value) {
          lower != "draft_metadata";
 }
 
+bool ProbeCurrentUserDpapi() {
+  std::vector<uint8_t> probe_key(kVaultKeyLength);
+  for (size_t index = 0; index < probe_key.size(); ++index) {
+    probe_key[index] = static_cast<uint8_t>(index + 1);
+  }
+  std::array<uint8_t, 32> key_hash{};
+  std::vector<uint8_t> protected_blob;
+  std::vector<uint8_t> recovered_key;
+  const bool protected_ok =
+      ProtectVaultKey(kCapabilityProbeVaultId, probe_key, &key_hash,
+                      &protected_blob);
+  KeyEnvelope envelope;
+  envelope.key_sha256 = key_hash;
+  envelope.vault_id = kCapabilityProbeVaultId;
+  envelope.protected_blob = std::move(protected_blob);
+  const bool unprotected_ok =
+      protected_ok && UnprotectVaultKey(envelope, &recovered_key);
+  const bool matched =
+      unprotected_ok &&
+      ConstantTimeEquals(probe_key.data(), probe_key.size(),
+                         recovered_key.data(), recovered_key.size());
+  Wipe(&probe_key);
+  Wipe(&envelope.protected_blob);
+  Wipe(&recovered_key);
+  SecureZeroMemory(key_hash.data(), key_hash.size());
+  return matched;
+}
+
+bool ProbeAtomicReplacement(const std::wstring& directory) {
+  std::array<uint8_t, 16> random{};
+  if (!IsNtSuccess(BCryptGenRandom(
+          nullptr, random.data(), static_cast<ULONG>(random.size()),
+          BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+    return false;
+  }
+  const std::wstring destination =
+      JoinPath(directory,
+               L".atlasvault-capability-" +
+                   WidenAscii(HexLower(random.data(), random.size())) +
+                   L".probe");
+  std::vector<uint8_t> initial{'A', 'V', 'W', '1'};
+  std::vector<uint8_t> replacement{'A', 'V', 'W', '2'};
+  const OperationResult create_result =
+      AtomicCreate(directory, destination, initial, 64);
+  if (create_result != OperationResult::kSuccess) {
+    if (create_result != OperationResult::kAlreadyExists) {
+      DeleteRegularFile(destination);
+    }
+    Wipe(&initial);
+    Wipe(&replacement);
+    return false;
+  }
+  std::array<uint8_t, 32> digest{};
+  const bool digest_ok = Sha256(initial, &digest);
+  const OperationResult replace_result =
+      digest_ok
+          ? AtomicReplace(directory, destination, replacement,
+                          HexLower(digest.data(), digest.size()), 64)
+          : OperationResult::kFailed;
+  const OperationResult delete_result = DeleteRegularFile(destination);
+  Wipe(&initial);
+  Wipe(&replacement);
+  SecureZeroMemory(digest.data(), digest.size());
+  return replace_result == OperationResult::kSuccess &&
+         delete_result == OperationResult::kSuccess;
+}
+
+StorageCapabilities ProbeStorageCapabilities() {
+  StorageCapabilities capabilities;
+  capabilities.dpapi_available = ProbeCurrentUserDpapi();
+  capabilities.current_user_scope = capabilities.dpapi_available;
+
+  VaultPaths paths;
+  capabilities.local_app_data_available =
+      PrepareVaultPaths(kCapabilityProbeVaultId, &paths);
+  bool lock_available = false;
+  if (capabilities.local_app_data_available) {
+    ScopedVaultLock lock;
+    lock_available = lock.Acquire(paths.lock_path);
+  }
+  capabilities.atomic_replace_available =
+      capabilities.local_app_data_available &&
+      ProbeAtomicReplacement(paths.vault_directory);
+  capabilities.secure_boundary_available =
+      capabilities.dpapi_available && capabilities.current_user_scope &&
+      capabilities.local_app_data_available &&
+      capabilities.atomic_replace_available && lock_available;
+  return capabilities;
+}
+
 const flutter::EncodableMap* ExactArguments(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     const std::vector<std::string>& expected_keys) {
@@ -896,19 +996,20 @@ void AtlasVaultWindowsStorage::HandleMethodCall(
       ReturnFailure(std::move(result));
       return;
     }
+    const StorageCapabilities probed = ProbeStorageCapabilities();
     flutter::EncodableMap capabilities{
         {flutter::EncodableValue("secure_boundary_available"),
-         flutter::EncodableValue(true)},
+         flutter::EncodableValue(probed.secure_boundary_available)},
         {flutter::EncodableValue("dpapi_available"),
-         flutter::EncodableValue(true)},
+         flutter::EncodableValue(probed.dpapi_available)},
         {flutter::EncodableValue("current_user_scope"),
-         flutter::EncodableValue(true)},
+         flutter::EncodableValue(probed.current_user_scope)},
         {flutter::EncodableValue("local_app_data_available"),
-         flutter::EncodableValue(true)},
+         flutter::EncodableValue(probed.local_app_data_available)},
         {flutter::EncodableValue("atomic_replace_available"),
-         flutter::EncodableValue(true)},
+         flutter::EncodableValue(probed.atomic_replace_available)},
         {flutter::EncodableValue("hardware_backed_guaranteed"),
-         flutter::EncodableValue(false)},
+         flutter::EncodableValue(probed.hardware_backed_guaranteed)},
     };
     result->Success(flutter::EncodableValue(capabilities));
     return;

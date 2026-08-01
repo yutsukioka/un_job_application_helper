@@ -73,6 +73,7 @@ class AtlasAppController extends ChangeNotifier
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
     AtlasVaultPrivateStatePersistence? privateStatePersistence,
+    Future<bool> Function()? compatibilityPrivateStateAdmission,
     Future<bool> Function()? recoveryImportPending,
     DateTime Function()? now,
     Timer Function(Duration, void Function())? searchDebounceTimerFactory,
@@ -87,6 +88,8 @@ class AtlasAppController extends ChangeNotifier
        // Keep the compatibility constructor side-effect free.
        // ignore: prefer_initializing_formals
        _privateStatePersistence = privateStatePersistence,
+       // ignore: prefer_initializing_formals
+       _compatibilityPrivateStateAdmission = compatibilityPrivateStateAdmission,
        // ignore: prefer_initializing_formals
        _recoveryImportPending = recoveryImportPending,
        _now = now ?? DateTime.now,
@@ -129,6 +132,7 @@ class AtlasAppController extends ChangeNotifier
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
   final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
+  final Future<bool> Function()? _compatibilityPrivateStateAdmission;
   final Future<bool> Function()? _recoveryImportPending;
   final DateTime Function() _now;
   final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
@@ -334,7 +338,17 @@ class AtlasAppController extends ChangeNotifier
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
       }
-      await _drainCacheWriteForActivation(activationGeneration);
+      await _drainPlaintextOperationsForActivation(activationGeneration);
+      final compatibilityPrivateStateAdmission =
+          _compatibilityPrivateStateAdmission;
+      if (compatibilityPrivateStateAdmission != null) {
+        final containsCompatibilityPrivateState =
+            await compatibilityPrivateStateAdmission();
+        _requireCurrentPrivateActivation(activationGeneration);
+        if (containsCompatibilityPrivateState) {
+          return AtlasVaultActivationResult.migrationRequired;
+        }
+      }
       final cacheStore = await _ensureLocalCacheStore();
       _requireCurrentPrivateActivation(activationGeneration);
       final containsPersistedPrivateState =
@@ -1556,16 +1570,10 @@ class AtlasAppController extends ChangeNotifier
     await store.write(snapshot);
   }
 
-  Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
-    final operation = _cacheMutationOperation;
-    if (operation == null) {
-      return;
-    }
-    try {
-      await operation;
-    } catch (_) {
-      // Activation preflight re-reads the authoritative cache state.
-    }
+  Future<void> _drainPlaintextOperationsForActivation(
+    int activationGeneration,
+  ) async {
+    await drainAdmittedPlaintextOperations();
     _requireCurrentPrivateActivation(activationGeneration);
   }
 
@@ -2577,12 +2585,19 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       secureKeyStore: keyStore,
       localStoreIO: localStore,
     );
-    return _AtlasDefaultControllerAssembly(
-      controller: AtlasAppController(
-        localCacheStoreFactory: _defaultCacheStore,
-        privateStatePersistence: runtime,
-      ),
+    late final AtlasAppController controller;
+    controller = AtlasAppController(
+      localCacheStoreFactory: _defaultCacheStore,
+      privateStatePersistence: runtime,
+      compatibilityPrivateStateAdmission: () async {
+        final privateState = await _AtlasControllerCompatibilityMigrationSource(
+          controller,
+        ).readCompatibilityPrivateState();
+        return privateState.savedSearches.isNotEmpty ||
+            privateState.trackerRecords.isNotEmpty;
+      },
     );
+    return _AtlasDefaultControllerAssembly(controller: controller);
   }
 
   if (!Platform.isAndroid) {
