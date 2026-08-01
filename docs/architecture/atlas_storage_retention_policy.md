@@ -209,6 +209,8 @@ the target wins every conflict, and the legacy file is left untouched. If the OS
 cannot provide persistent application support, Atlas disables disk caching rather
 than silently returning to temporary storage. While holding the migration lock,
 Atlas also removes stale `.migrating-*` files left by interrupted earlier runs.
+Normal durable-cache writes and explicit clears use the same coordinator and OS
+lock, so they cannot race the migration's final no-clobber check and rename.
 
 An explicit **Clear Local Cache** writes a durable retirement marker before it
 removes the persistent cache. Atlas keeps the legacy temporary file as rollback

@@ -153,7 +153,8 @@ void main() {
         );
         final store = AtlasLocalCacheStore(
           file: location.cacheFile,
-          prepareForClear: location.retireLegacyImport,
+          prepareForClear: location.prepareForClearUnderMutationLock,
+          mutationCoordinator: location.coordinateMutation,
         );
 
         await store.clear();

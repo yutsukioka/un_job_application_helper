@@ -1169,17 +1169,22 @@ final class AtlasLocalCacheStore {
     DateTime Function()? now,
     bool Function()? privateStateProtectionActive,
     Future<void> Function()? prepareForClear,
+    Future<void> Function(Future<void> Function())? mutationCoordinator,
   }) : _now = now ?? DateTime.now,
        _privateStateProtectionActive =
            privateStateProtectionActive ?? _privateStateProtectionDisabled,
        // Keep the public constructor parameter descriptive for callers.
        // ignore: prefer_initializing_formals
-       _prepareForClear = prepareForClear;
+       _prepareForClear = prepareForClear,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _mutationCoordinator = mutationCoordinator;
 
   final File file;
   final DateTime Function() _now;
   final bool Function() _privateStateProtectionActive;
   final Future<void> Function()? _prepareForClear;
+  final Future<void> Function(Future<void> Function())? _mutationCoordinator;
 
   Future<AtlasLocalCacheSnapshot?> read() async {
     try {
@@ -1195,8 +1200,12 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
-    final temporaryFile = File('${file.path}.tmp');
     _requirePlaintextWriteAllowed(snapshot);
+    await _coordinateMutation(() => _writeUnderCoordinator(snapshot));
+  }
+
+  Future<void> _writeUnderCoordinator(AtlasLocalCacheSnapshot snapshot) async {
+    final temporaryFile = File('${file.path}.tmp');
     try {
       await file.parent.create(recursive: true);
       _requirePlaintextWriteAllowed(snapshot);
@@ -1219,14 +1228,24 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> clear() async {
-    await _prepareForClear?.call();
-    if (await file.exists()) {
-      await file.delete();
+    await _coordinateMutation(() async {
+      await _prepareForClear?.call();
+      if (await file.exists()) {
+        await file.delete();
+      }
+      final temporaryFile = File('${file.path}.tmp');
+      if (await temporaryFile.exists()) {
+        await temporaryFile.delete();
+      }
+    });
+  }
+
+  Future<void> _coordinateMutation(Future<void> Function() operation) {
+    final coordinator = _mutationCoordinator;
+    if (coordinator == null) {
+      return operation();
     }
-    final temporaryFile = File('${file.path}.tmp');
-    if (await temporaryFile.exists()) {
-      await temporaryFile.delete();
-    }
+    return coordinator(operation);
   }
 
   Future<bool> containsPersistedPrivateState() async {

@@ -69,7 +69,8 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
     return AtlasLocalCacheStore(
       file: cacheLocation.cacheFile,
       privateStateProtectionActive: privateStateProtectionActive,
-      prepareForClear: cacheLocation.retireLegacyImport,
+      prepareForClear: cacheLocation.prepareForClearUnderMutationLock,
+      mutationCoordinator: cacheLocation.coordinateMutation,
     );
   } catch (_) {
     // A persistent cache is optional. Never fall back to an OS-managed

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/features/app_shell/atlas_cache_location.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final _fixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
@@ -114,6 +116,38 @@ void main() {
 
       expect(await cacheFile.exists(), isTrue);
       expect(await store.read(), isNotNull);
+    });
+
+    test('write waits for the persistent mutation coordinator', () async {
+      final location = AtlasPersistentCacheLocation(
+        cacheFile: cacheFile,
+        legacyFile: File('${tempDir.path}/legacy.json'),
+        legacyImportRetiredFile: File('${tempDir.path}/legacy-retired'),
+      );
+      final lockEntered = Completer<void>();
+      final releaseLock = Completer<void>();
+      final lockHolder = location.coordinateMutation(() async {
+        lockEntered.complete();
+        await releaseLock.future;
+      });
+      await lockEntered.future;
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        mutationCoordinator: location.coordinateMutation,
+      );
+      var writeCompleted = false;
+      final write = store
+          .write(_snapshot(savedAt: _fixtureSavedAt))
+          .whenComplete(() => writeCompleted = true);
+
+      await Future<void>.delayed(Duration.zero);
+      expect(writeCompleted, isFalse);
+      expect(await cacheFile.exists(), isFalse);
+
+      releaseLock.complete();
+      await lockHolder;
+      await write;
+      expect(await cacheFile.exists(), isTrue);
     });
 
     test('private-state detection and public-only copy are immutable', () {

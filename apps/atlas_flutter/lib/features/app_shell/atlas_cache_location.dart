@@ -46,18 +46,17 @@ final class AtlasPersistentCacheLocation {
   final File legacyFile;
   final File legacyImportRetiredFile;
 
-  Future<void> retireLegacyImport() {
-    return _withMigrationLocks(
-      targetFile: cacheFile,
-      operation: () async {
-        if (await legacyImportRetiredFile.exists()) {
-          return;
-        }
-        await legacyImportRetiredFile.writeAsString(
-          'Legacy temporary cache import retired by explicit local-cache clear.\n',
-          flush: true,
-        );
-      },
+  Future<void> coordinateMutation(Future<void> Function() operation) {
+    return _withMigrationLocks(targetFile: cacheFile, operation: operation);
+  }
+
+  Future<void> prepareForClearUnderMutationLock() async {
+    if (await legacyImportRetiredFile.exists()) {
+      return;
+    }
+    await legacyImportRetiredFile.writeAsString(
+      'Legacy temporary cache import retired by explicit local-cache clear.\n',
+      flush: true,
     );
   }
 }
