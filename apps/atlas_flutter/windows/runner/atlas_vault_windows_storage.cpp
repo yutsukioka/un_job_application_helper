@@ -15,6 +15,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -808,6 +809,12 @@ const flutter::EncodableMap* ExactArguments(
   return arguments;
 }
 
+bool HasNoArguments(
+    const flutter::MethodCall<flutter::EncodableValue>& call) {
+  return call.arguments() == nullptr ||
+         std::holds_alternative<std::monostate>(*call.arguments());
+}
+
 const std::string* StringArgument(const flutter::EncodableMap& arguments,
                                   const std::string& key) {
   const auto iterator = arguments.find(flutter::EncodableValue(key));
@@ -885,7 +892,7 @@ void AtlasVaultWindowsStorage::HandleMethodCall(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const std::string& method = call.method_name();
   if (method == "capabilities") {
-    if (call.arguments() != nullptr) {
+    if (!HasNoArguments(call)) {
       ReturnFailure(std::move(result));
       return;
     }

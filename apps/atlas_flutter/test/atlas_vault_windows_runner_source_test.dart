@@ -40,6 +40,7 @@ void main() {
       'AtlasVault:',
       'AVWKEY01',
       'ConstantTimeEquals',
+      'std::holds_alternative<std::monostate>',
     ]) {
       expect(source, contains(required));
     }
