@@ -204,6 +204,12 @@ the target wins every conflict, and the legacy file is left untouched. If the OS
 cannot provide persistent application support, Atlas disables disk caching rather
 than silently returning to temporary storage.
 
+An explicit **Clear Local Cache** writes a durable retirement marker before it
+removes the persistent cache. Atlas keeps the legacy temporary file as rollback
+evidence, but the marker permanently makes that file ineligible for automatic
+import. This prevents a later launch from resurrecting data the user explicitly
+cleared while preserving the one-time migration evidence for manual recovery.
+
 ## Follow-up Order
 
 1. Ship and observe the durable Flutter desktop location migration.

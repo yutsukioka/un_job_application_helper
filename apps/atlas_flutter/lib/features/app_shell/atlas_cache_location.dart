@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart';
 const atlasLocalCacheFileName = 'atlas-local-cache-v1.json';
 const atlasApplicationSupportDirectoryName = 'Atlas';
 const atlasLegacyTemporaryDirectoryName = 'atlas_flutter';
+const atlasLegacyImportRetiredFileName =
+    '$atlasLocalCacheFileName.legacy-import-retired';
 
 typedef AtlasApplicationSupportDirectoryProvider = Future<Directory> Function();
 
@@ -16,6 +18,33 @@ bool isAtlasPersistentDesktopCachePlatform({String? operatingSystem}) {
   return value == 'linux' || value == 'macos' || value == 'windows';
 }
 
+final class AtlasPersistentCacheLocation {
+  AtlasPersistentCacheLocation({
+    required this.cacheFile,
+    required this.legacyFile,
+    required this.legacyImportRetiredFile,
+  });
+
+  final File cacheFile;
+  final File legacyFile;
+  final File legacyImportRetiredFile;
+
+  Future<void> retireLegacyImport() {
+    return _withMigrationLocks(
+      targetFile: cacheFile,
+      operation: () async {
+        if (await legacyImportRetiredFile.exists()) {
+          return;
+        }
+        await legacyImportRetiredFile.writeAsString(
+          'Legacy temporary cache import retired by explicit local-cache clear.\n',
+          flush: true,
+        );
+      },
+    );
+  }
+}
+
 /// Resolves Atlas's durable local-cache file and imports the legacy temporary
 /// cache when no durable cache exists yet.
 ///
@@ -23,6 +52,17 @@ bool isAtlasPersistentDesktopCachePlatform({String? operatingSystem}) {
 /// may remove it at any time, but Atlas does not need to destroy the only
 /// rollback copy while adopting the persistent location.
 Future<File> resolveAtlasPersistentCacheFile({
+  AtlasApplicationSupportDirectoryProvider? applicationSupportDirectoryProvider,
+  Directory? legacySystemTemporaryDirectory,
+}) async {
+  final location = await resolveAtlasPersistentCacheLocation(
+    applicationSupportDirectoryProvider: applicationSupportDirectoryProvider,
+    legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+  );
+  return location.cacheFile;
+}
+
+Future<AtlasPersistentCacheLocation> resolveAtlasPersistentCacheLocation({
   AtlasApplicationSupportDirectoryProvider? applicationSupportDirectoryProvider,
   Directory? legacySystemTemporaryDirectory,
 }) async {
@@ -41,6 +81,9 @@ Future<File> resolveAtlasPersistentCacheFile({
   final targetFile = File(
     _joinPath(targetDirectory.path, atlasLocalCacheFileName),
   );
+  final legacyImportRetiredFile = File(
+    _joinPath(targetDirectory.path, atlasLegacyImportRetiredFileName),
+  );
   final legacyRoot = legacySystemTemporaryDirectory ?? Directory.systemTemp;
   final legacyFile = File(
     _joinPath(
@@ -52,25 +95,50 @@ Future<File> resolveAtlasPersistentCacheFile({
   await _copyLegacyCacheIfNeeded(
     legacyFile: legacyFile,
     targetFile: targetFile,
+    legacyImportRetiredFile: legacyImportRetiredFile,
   );
-  return targetFile;
+  return AtlasPersistentCacheLocation(
+    cacheFile: targetFile,
+    legacyFile: legacyFile,
+    legacyImportRetiredFile: legacyImportRetiredFile,
+  );
 }
 
 Future<void> _copyLegacyCacheIfNeeded({
   required File legacyFile,
   required File targetFile,
+  required File legacyImportRetiredFile,
 }) async {
-  if (legacyFile.path == targetFile.path || await targetFile.exists()) {
+  if (legacyFile.path == targetFile.path ||
+      await targetFile.exists() ||
+      await legacyImportRetiredFile.exists()) {
     return;
   }
   if (!await legacyFile.exists()) {
     return;
   }
 
-  await _withInProcessMigrationLock(() async {
-    if (await targetFile.exists() || !await legacyFile.exists()) {
-      return;
-    }
+  await _withMigrationLocks(
+    targetFile: targetFile,
+    operation: () async {
+      if (await targetFile.exists() ||
+          await legacyImportRetiredFile.exists() ||
+          !await legacyFile.exists()) {
+        return;
+      }
+      await _copyLegacyCacheUnderLock(
+        legacyFile: legacyFile,
+        targetFile: targetFile,
+      );
+    },
+  );
+}
+
+Future<T> _withMigrationLocks<T>({
+  required File targetFile,
+  required Future<T> Function() operation,
+}) {
+  return _withInProcessMigrationLock(() async {
     await targetFile.parent.create(recursive: true);
     final migrationLock = await File(
       '${targetFile.path}.migration.lock',
@@ -79,13 +147,7 @@ Future<void> _copyLegacyCacheIfNeeded({
     try {
       await migrationLock.lock(FileLock.exclusive);
       lockAcquired = true;
-      if (await targetFile.exists() || !await legacyFile.exists()) {
-        return;
-      }
-      await _copyLegacyCacheUnderLock(
-        legacyFile: legacyFile,
-        targetFile: targetFile,
-      );
+      return await operation();
     } finally {
       try {
         if (lockAcquired) {
@@ -98,15 +160,13 @@ Future<void> _copyLegacyCacheIfNeeded({
   });
 }
 
-Future<void> _withInProcessMigrationLock(
-  Future<void> Function() operation,
-) async {
+Future<T> _withInProcessMigrationLock<T>(Future<T> Function() operation) async {
   final previous = _migrationQueue;
   final release = Completer<void>();
   _migrationQueue = release.future;
   await previous;
   try {
-    await operation();
+    return await operation();
   } finally {
     release.complete();
   }

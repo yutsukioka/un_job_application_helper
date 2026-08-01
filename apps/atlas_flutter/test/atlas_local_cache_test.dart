@@ -100,6 +100,22 @@ void main() {
       expect(await store.read(), isNull);
     });
 
+    test('clear preserves the snapshot when clear preparation fails', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+        prepareForClear: () async {
+          throw const FileSystemException('retirement marker failed');
+        },
+      );
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
+
+      await expectLater(store.clear(), throwsA(isA<FileSystemException>()));
+
+      expect(await cacheFile.exists(), isTrue);
+      expect(await store.read(), isNotNull);
+    });
+
     test('private-state detection and public-only copy are immutable', () {
       final snapshot = _snapshot(savedAt: _fixtureSavedAt);
 

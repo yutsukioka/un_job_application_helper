@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -92,6 +93,41 @@ void main() {
       expect(await legacyFile.readAsString(), '{"historical_jobs":42}');
       expect(await File('${cacheFile.path}.migrating-$pid').exists(), isFalse);
     });
+
+    test(
+      'explicit clear keeps rollback data but permanently retires its import',
+      () async {
+        final legacyFile = File(
+          _joinTestPath(
+            _joinTestPath(
+              legacySystemTemporaryDirectory.path,
+              atlasLegacyTemporaryDirectoryName,
+            ),
+            atlasLocalCacheFileName,
+          ),
+        );
+        await legacyFile.parent.create(recursive: true);
+        await legacyFile.writeAsString('legacy', flush: true);
+        final location = await resolveAtlasPersistentCacheLocation(
+          applicationSupportDirectoryProvider: () async => supportDirectory,
+          legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+        );
+        final store = AtlasLocalCacheStore(
+          file: location.cacheFile,
+          prepareForClear: location.retireLegacyImport,
+        );
+
+        await store.clear();
+        final nextLocation = await resolveAtlasPersistentCacheLocation(
+          applicationSupportDirectoryProvider: () async => supportDirectory,
+          legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+        );
+
+        expect(await legacyFile.readAsString(), 'legacy');
+        expect(await location.legacyImportRetiredFile.exists(), isTrue);
+        expect(await nextLocation.cacheFile.exists(), isFalse);
+      },
+    );
 
     test('never overwrites an existing persistent cache', () async {
       final persistentFile = File(

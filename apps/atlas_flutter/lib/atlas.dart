@@ -1168,13 +1168,18 @@ final class AtlasLocalCacheStore {
     required this.file,
     DateTime Function()? now,
     bool Function()? privateStateProtectionActive,
+    Future<void> Function()? prepareForClear,
   }) : _now = now ?? DateTime.now,
        _privateStateProtectionActive =
-           privateStateProtectionActive ?? _privateStateProtectionDisabled;
+           privateStateProtectionActive ?? _privateStateProtectionDisabled,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _prepareForClear = prepareForClear;
 
   final File file;
   final DateTime Function() _now;
   final bool Function() _privateStateProtectionActive;
+  final Future<void> Function()? _prepareForClear;
 
   Future<AtlasLocalCacheSnapshot?> read() async {
     try {
@@ -1214,6 +1219,7 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> clear() async {
+    await _prepareForClear?.call();
     if (await file.exists()) {
       await file.delete();
     }

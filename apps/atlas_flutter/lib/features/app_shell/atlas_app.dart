@@ -59,10 +59,11 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
     return null;
   }
   try {
-    final cacheFile = await resolveAtlasPersistentCacheFile();
+    final cacheLocation = await resolveAtlasPersistentCacheLocation();
     return AtlasLocalCacheStore(
-      file: cacheFile,
+      file: cacheLocation.cacheFile,
       privateStateProtectionActive: privateStateProtectionActive,
+      prepareForClear: cacheLocation.retireLegacyImport,
     );
   } catch (_) {
     // A persistent cache is optional. Never fall back to an OS-managed
