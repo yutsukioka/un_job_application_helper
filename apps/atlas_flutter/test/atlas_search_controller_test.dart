@@ -2737,6 +2737,29 @@ void main() {
     );
     expect(secondCoordinator.calls, isEmpty);
   });
+
+  test('Windows default assembly is explicit and migration-free', () {
+    final source = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+    final windowsStart = source.indexOf('if (Platform.isWindows) {');
+    final fallbackStart = source.indexOf(
+      'if (!Platform.isAndroid)',
+      windowsStart < 0 ? 0 : windowsStart,
+    );
+
+    expect(windowsStart, isNonNegative);
+    expect(fallbackStart, greaterThan(windowsStart));
+    final windowsAssembly = source.substring(windowsStart, fallbackStart);
+    expect(windowsAssembly, contains('AtlasWindowsVaultSecureKeyStore()'));
+    expect(windowsAssembly, contains('AtlasWindowsVaultLocalStoreIO()'));
+    expect(windowsAssembly, contains('AtlasVaultPrivateStateRuntime('));
+    expect(windowsAssembly, contains('privateStatePersistence: runtime'));
+    expect(windowsAssembly, isNot(contains('activateExistingAtlasVault(')));
+    expect(windowsAssembly, isNot(contains('SelectedVault')));
+    expect(windowsAssembly, isNot(contains('Migration')));
+    expect(windowsAssembly, isNot(contains('Interoperability')));
+  });
 }
 
 final class _ControllerMigrationCoordinator

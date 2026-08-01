@@ -25,6 +25,104 @@ final class AtlasVaultWindowsMethodCallRecorder {
   }
 }
 
+final class FakeAtlasVaultWindowsPlatform {
+  FakeAtlasVaultWindowsPlatform({
+    String channelName = atlasVaultWindowsMethodChannelName,
+  }) : recorder = AtlasVaultWindowsMethodCallRecorder(channelName: channelName);
+
+  final AtlasVaultWindowsMethodCallRecorder recorder;
+  Uint8List? _vaultKey;
+  Uint8List? _localStoreBytes;
+
+  List<MethodCall> get calls => List<MethodCall>.unmodifiable(recorder.calls);
+
+  Uint8List? get localStoreBytes =>
+      _localStoreBytes == null ? null : Uint8List.fromList(_localStoreBytes!);
+
+  void seedVaultKey(Uint8List value) {
+    _vaultKey = Uint8List.fromList(value);
+  }
+
+  void seedLocalStore(AtlasVaultLocalStore value) {
+    _localStoreBytes = Uint8List.fromList(value.canonicalBytes());
+  }
+
+  void resetCalls() => recorder.calls.clear();
+
+  void install() {
+    recorder.handler = _handle;
+    recorder.install();
+  }
+
+  void uninstall() {
+    recorder.uninstall();
+    _vaultKey?.fillRange(0, _vaultKey!.length, 0);
+    _vaultKey = null;
+    _localStoreBytes = null;
+  }
+
+  Future<Object?> _handle(MethodCall call) async {
+    final arguments = call.arguments == null
+        ? const <Object?, Object?>{}
+        : Map<Object?, Object?>.from(call.arguments! as Map);
+    switch (call.method) {
+      case 'capabilities':
+        return <String, Object?>{
+          'secure_boundary_available': true,
+          'dpapi_available': true,
+          'current_user_scope': true,
+          'local_app_data_available': true,
+          'atomic_replace_available': true,
+          'hardware_backed_guaranteed': false,
+        };
+      case 'createVaultKey':
+        if (_vaultKey != null) {
+          throw PlatformException(code: 'already_exists');
+        }
+        _vaultKey = Uint8List.fromList(arguments['vault_key']! as Uint8List);
+        return null;
+      case 'loadVaultKey':
+        return _vaultKey == null ? null : Uint8List.fromList(_vaultKey!);
+      case 'containsVaultKey':
+        return _vaultKey != null;
+      case 'deleteVaultKey':
+        _vaultKey?.fillRange(0, _vaultKey!.length, 0);
+        _vaultKey = null;
+        return null;
+      case 'readLocalStore':
+        return _localStoreBytes == null
+            ? null
+            : Uint8List.fromList(_localStoreBytes!);
+      case 'createLocalStore':
+        if (_localStoreBytes != null) {
+          throw PlatformException(code: 'already_exists');
+        }
+        _localStoreBytes = Uint8List.fromList(
+          arguments['store_bytes']! as Uint8List,
+        );
+        return null;
+      case 'replaceLocalStore':
+        final current = _localStoreBytes;
+        if (current == null) {
+          throw PlatformException(code: 'storage_failed');
+        }
+        if (arguments['expected_sha256'] !=
+            await atlasVaultSha256Hex(current)) {
+          throw PlatformException(code: 'stale_digest');
+        }
+        _localStoreBytes = Uint8List.fromList(
+          arguments['store_bytes']! as Uint8List,
+        );
+        return null;
+      case 'deleteLocalStore':
+        _localStoreBytes = null;
+        return null;
+      default:
+        throw PlatformException(code: 'not_implemented');
+    }
+  }
+}
+
 AtlasVaultLocalStore testWindowsAtlasVaultLocalStore(
   String vaultId, {
   String updatedAt = '2026-07-31T00:00:00Z',
