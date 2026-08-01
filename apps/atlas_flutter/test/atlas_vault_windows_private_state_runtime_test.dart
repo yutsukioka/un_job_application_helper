@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -42,6 +43,11 @@ void main() {
       hasLength(1),
     );
     expect(windowsAssembly, contains('privateStatePersistence: runtime'));
+    expect(windowsAssembly, contains('compatibilityPrivateStateAdmission:'));
+    expect(
+      windowsAssembly,
+      contains('_AtlasControllerCompatibilityMigrationSource'),
+    );
     expect(
       windowsAssembly,
       contains('localCacheStoreFactory: _defaultCacheStore'),
@@ -165,6 +171,87 @@ void main() {
     expect(controller.savedSearches.single.name, 'Legacy private search');
   });
 
+  test(
+    'Windows compatibility plaintext blocks activation before storage',
+    () async {
+      final platform = FakeAtlasVaultWindowsPlatform()..install();
+      addTearDown(platform.uninstall);
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: AtlasWindowsVaultSecureKeyStore(),
+        localStoreIO: AtlasWindowsVaultLocalStoreIO(),
+      );
+      var admissionCalls = 0;
+      final controller = AtlasAppController(
+        privateStatePersistence: runtime,
+        compatibilityPrivateStateAdmission: () async {
+          admissionCalls += 1;
+          return true;
+        },
+      );
+      addTearDown(() async {
+        controller.dispose();
+        await runtime.deactivate();
+      });
+
+      expect(
+        await controller.activateExistingAtlasVault('windows-runtime-test'),
+        AtlasVaultActivationResult.migrationRequired,
+      );
+      expect(admissionCalls, 1);
+      expect(platform.calls, isEmpty);
+      expect(runtime.isActive, isFalse);
+    },
+  );
+
+  test(
+    'Windows activation drains compatibility mutation before admission',
+    () async {
+      final platform = FakeAtlasVaultWindowsPlatform()..install();
+      addTearDown(platform.uninstall);
+      final runtime = AtlasVaultPrivateStateRuntime(
+        secureKeyStore: AtlasWindowsVaultSecureKeyStore(),
+        localStoreIO: AtlasWindowsVaultLocalStoreIO(),
+      );
+      final transport = _GatedCompatibilityTransport();
+      var admissionCalls = 0;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://127.0.0.1:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: runtime,
+        compatibilityPrivateStateAdmission: () async {
+          admissionCalls += 1;
+          return transport.containsPrivateState;
+        },
+      );
+      addTearDown(() async {
+        controller.dispose();
+        transport.release.completeIfPending();
+        await runtime.deactivate();
+      });
+
+      controller.updateQuery('compatibility mutation');
+      final save = controller.saveCurrentSearch();
+      await transport.entered.future;
+      final activation = controller.activateExistingAtlasVault(
+        'windows-runtime-test',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(admissionCalls, 0);
+      expect(platform.calls, isEmpty);
+
+      transport.containsPrivateState = true;
+      transport.release.complete();
+      await save;
+      expect(await activation, AtlasVaultActivationResult.migrationRequired);
+      expect(admissionCalls, 1);
+      expect(platform.calls, isEmpty);
+      expect(runtime.isActive, isFalse);
+      expect(controller.savedSearches, isEmpty);
+    },
+  );
+
   test('Windows activation fails closed for missing device state', () async {
     final platform = FakeAtlasVaultWindowsPlatform()..install();
     addTearDown(platform.uninstall);
@@ -221,5 +308,34 @@ final class _WindowsPrivateTransport implements AtlasTransport {
       throw StateError('Compatibility private write was not expected.');
     }
     throw StateError('Network access was not expected.');
+  }
+}
+
+final class _GatedCompatibilityTransport implements AtlasTransport {
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  bool containsPrivateState = false;
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    if (request.path == 'api/saved-searches' && request.method == 'POST') {
+      entered.completeIfPending();
+      await release.future;
+      return <String, Object?>{
+        'name': request.jsonBody?['name'],
+        'description': request.jsonBody?['summary'],
+        'request': request.jsonBody?['request'],
+        'created_at': '2026-08-01T00:00:00Z',
+      };
+    }
+    throw StateError('Unexpected compatibility request.');
+  }
+}
+
+extension on Completer<void> {
+  void completeIfPending() {
+    if (!isCompleted) {
+      complete();
+    }
   }
 }

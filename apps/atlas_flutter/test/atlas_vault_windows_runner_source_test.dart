@@ -47,6 +47,30 @@ void main() {
     expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
   });
 
+  test('capabilities are derived from real storage probes', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final required in <String>[
+      'ProbeStorageCapabilities',
+      'ProbeCurrentUserDpapi',
+      'ProbeAtomicReplacement',
+    ]) {
+      expect(source, contains(required));
+    }
+    final capabilitiesStart = source.indexOf('if (method == "capabilities")');
+    final recognizedStart = source.indexOf(
+      'const bool recognized',
+      capabilitiesStart,
+    );
+    expect(capabilitiesStart, isNonNegative);
+    expect(recognizedStart, greaterThan(capabilitiesStart));
+    final handler = source.substring(capabilitiesStart, recognizedStart);
+    expect(handler, contains('ProbeStorageCapabilities()'));
+    expect(handler, isNot(contains('EncodableValue(true)')));
+  });
+
   test('native bridge owns Local AppData paths and file safety', () {
     final source = File(
       'windows/runner/atlas_vault_windows_storage.cpp',
