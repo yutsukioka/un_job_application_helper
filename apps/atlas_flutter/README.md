@@ -4,7 +4,7 @@ Flutter Android client for the Atlas / UN job application helper product. The Sw
 `apps/apple/` is the product reference; this app targets Android parity for Search, filters, saved
 jobs/searches, updates, sources, settings, local cache, and job detail.
 
-Requires Flutter 3.38.0 or newer.
+Requires Flutter 3.44.4 or newer (with Dart 3.12.2 or newer).
 
 ## Local Server
 
