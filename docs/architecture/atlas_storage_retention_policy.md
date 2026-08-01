@@ -211,6 +211,12 @@ than silently returning to temporary storage. While holding the migration lock,
 Atlas also removes stale `.migrating-*` files left by interrupted earlier runs.
 Normal durable-cache writes and explicit clears use the same coordinator and OS
 lock, so they cannot race the migration's final no-clobber check and rename.
+Windows replacements also use a target-adjacent intent marker and retain the
+previous file until the flushed staged file becomes the target. Startup recovery
+runs under that same lock before legacy import: a marked staged file is committed,
+the previous target is the fallback when the stage is unavailable, and an
+unmarked `.tmp` is treated as an incomplete write. This prevents a terminated
+Windows replacement from making Atlas silently import an older legacy snapshot.
 
 An explicit **Clear Local Cache** writes a durable retirement marker before it
 removes the persistent cache. Atlas keeps the legacy temporary file as rollback

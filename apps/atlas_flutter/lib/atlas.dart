@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'src/cache_file_replacement.dart';
 import 'src/atlas_vault/canonical_json.dart' as vault_json;
 import 'src/atlas_vault/crypto.dart' as vault_crypto;
 import 'src/atlas_vault/payloads.dart' as vault_payloads;
@@ -1207,16 +1208,17 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> _writeUnderCoordinator(AtlasLocalCacheSnapshot snapshot) async {
-    final temporaryFile = File('${file.path}.tmp');
+    final temporaryFile = cacheReplacementTemporaryFile(file);
     try {
       await file.parent.create(recursive: true);
+      await recoverInterruptedCacheReplacement(file);
       _requirePlaintextWriteAllowed(snapshot);
       final snapshotJson = snapshot.toJson();
       final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
       _requirePlaintextWriteAllowed(snapshot);
       await temporaryFile.writeAsString(encoded, flush: true);
       _requirePlaintextWriteAllowed(snapshot);
-      await temporaryFile.rename(file.path);
+      await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
     } catch (_) {
       try {
         if (await temporaryFile.exists()) {
@@ -1235,12 +1237,9 @@ final class AtlasLocalCacheStore {
         await file.parent.create(recursive: true);
       }
       await _prepareForClear?.call();
+      await deleteCacheReplacementArtifacts(file);
       if (await file.exists()) {
         await file.delete();
-      }
-      final temporaryFile = File('${file.path}.tmp');
-      if (await temporaryFile.exists()) {
-        await temporaryFile.delete();
       }
     });
   }
@@ -1293,7 +1292,7 @@ final class AtlasLocalCacheStore {
   Future<void> removePrivateStateForMigration({
     required String expectedPrivateSha256,
   }) async {
-    final temporaryFile = File('${file.path}.tmp');
+    final temporaryFile = cacheReplacementTemporaryFile(file);
     try {
       if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedPrivateSha256)) {
         throw const AtlasLocalCacheMigrationException();
@@ -1312,8 +1311,9 @@ final class AtlasLocalCacheStore {
       final encoded = vault_json.encodeCanonicalJson(updated);
       try {
         await file.parent.create(recursive: true);
+        await recoverInterruptedCacheReplacement(file);
         await temporaryFile.writeAsBytes(encoded, flush: true);
-        await temporaryFile.rename(file.path);
+        await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
       } finally {
         encoded.fillRange(0, encoded.length, 0);
       }

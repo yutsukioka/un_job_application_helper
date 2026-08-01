@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
+import 'package:atlas/src/cache_file_replacement.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -131,6 +132,101 @@ void main() {
       expect(await cacheFile.readAsString(), '{"historical_jobs":42}');
       expect(await legacyFile.readAsString(), '{"historical_jobs":42}');
       expect(await File('${cacheFile.path}.migrating-$pid').exists(), isFalse);
+    });
+
+    test(
+      'recovers a committed replacement before considering legacy import',
+      () async {
+        final targetFile = File(
+          _joinTestPath(
+            _joinTestPath(supportDirectory.path, 'Atlas'),
+            atlasLocalCacheFileName,
+          ),
+        );
+        final legacyFile = resolveAtlasLegacyTemporaryCacheFile(
+          systemTemporaryDirectory: legacySystemTemporaryDirectory,
+        );
+        await targetFile.parent.create(recursive: true);
+        await legacyFile.parent.create(recursive: true);
+        await legacyFile.writeAsString('legacy', flush: true);
+        await cacheReplacementTemporaryFile(
+          targetFile,
+        ).writeAsString('new durable cache', flush: true);
+        await cacheReplacementPreviousFile(
+          targetFile,
+        ).writeAsString('old durable cache', flush: true);
+        await cacheReplacementIntentFile(
+          targetFile,
+        ).writeAsString('atlas-cache-replace-v1:17\n', flush: true);
+
+        final cacheFile = await resolveAtlasPersistentCacheFile(
+          applicationSupportDirectoryProvider: () async => supportDirectory,
+          legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+        );
+
+        expect(await cacheFile.readAsString(), 'new durable cache');
+        expect(await legacyFile.readAsString(), 'legacy');
+        expect(await hasCacheReplacementArtifacts(targetFile), isFalse);
+      },
+    );
+
+    test('rejects a marked stage with a mismatched length', () async {
+      final targetFile = File(
+        _joinTestPath(
+          _joinTestPath(supportDirectory.path, 'Atlas'),
+          atlasLocalCacheFileName,
+        ),
+      );
+      final legacyFile = resolveAtlasLegacyTemporaryCacheFile(
+        systemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+      await targetFile.parent.create(recursive: true);
+      await legacyFile.parent.create(recursive: true);
+      await legacyFile.writeAsString('legacy', flush: true);
+      await cacheReplacementTemporaryFile(
+        targetFile,
+      ).writeAsString('truncated', flush: true);
+      await cacheReplacementPreviousFile(
+        targetFile,
+      ).writeAsString('old durable cache', flush: true);
+      await cacheReplacementIntentFile(
+        targetFile,
+      ).writeAsString('atlas-cache-replace-v1:100\n', flush: true);
+
+      final cacheFile = await resolveAtlasPersistentCacheFile(
+        applicationSupportDirectoryProvider: () async => supportDirectory,
+        legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+
+      expect(await cacheFile.readAsString(), 'old durable cache');
+      expect(await legacyFile.readAsString(), 'legacy');
+      expect(await hasCacheReplacementArtifacts(targetFile), isFalse);
+    });
+
+    test('discards an uncommitted staged file before legacy import', () async {
+      final targetFile = File(
+        _joinTestPath(
+          _joinTestPath(supportDirectory.path, 'Atlas'),
+          atlasLocalCacheFileName,
+        ),
+      );
+      final legacyFile = resolveAtlasLegacyTemporaryCacheFile(
+        systemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+      await targetFile.parent.create(recursive: true);
+      await legacyFile.parent.create(recursive: true);
+      await cacheReplacementTemporaryFile(
+        targetFile,
+      ).writeAsString('partial', flush: true);
+      await legacyFile.writeAsString('legacy', flush: true);
+
+      final cacheFile = await resolveAtlasPersistentCacheFile(
+        applicationSupportDirectoryProvider: () async => supportDirectory,
+        legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+
+      expect(await cacheFile.readAsString(), 'legacy');
+      expect(await hasCacheReplacementArtifacts(targetFile), isFalse);
     });
 
     test(

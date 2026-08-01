@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
+import 'package:atlas/src/cache_file_replacement.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final _fixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
@@ -170,6 +171,24 @@ void main() {
       await write;
       expect(await cacheFile.exists(), isTrue);
     });
+
+    test(
+      'Windows replacement protocol commits and cleans its journal',
+      () async {
+        final stagedFile = cacheReplacementTemporaryFile(cacheFile);
+        await cacheFile.writeAsString('old', flush: true);
+        await stagedFile.writeAsString('new', flush: true);
+
+        await replaceCacheFile(
+          targetFile: cacheFile,
+          stagedFile: stagedFile,
+          useWindowsRecoveryProtocol: true,
+        );
+
+        expect(await cacheFile.readAsString(), 'new');
+        expect(await hasCacheReplacementArtifacts(cacheFile), isFalse);
+      },
+    );
 
     test('private-state detection and public-only copy are immutable', () {
       final snapshot = _snapshot(savedAt: _fixtureSavedAt);

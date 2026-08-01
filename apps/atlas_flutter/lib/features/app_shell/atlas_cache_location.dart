@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../src/cache_file_replacement.dart';
+
 const atlasLocalCacheFileName = 'atlas-local-cache-v1.json';
 const atlasApplicationSupportDirectoryName = 'Atlas';
 const atlasLegacyTemporaryDirectoryName = 'atlas_flutter';
@@ -125,7 +127,11 @@ Future<void> _copyLegacyCacheIfNeeded({
     return;
   }
   final hasStaleMigrationFiles = await _hasStaleMigrationFiles(targetFile);
+  final hasReplacementArtifacts = await hasCacheReplacementArtifacts(
+    targetFile,
+  );
   if (!hasStaleMigrationFiles &&
+      !hasReplacementArtifacts &&
       (await targetFile.exists() ||
           await legacyImportRetiredFile.exists() ||
           !await legacyFile.exists())) {
@@ -135,6 +141,7 @@ Future<void> _copyLegacyCacheIfNeeded({
   await _withMigrationLocks(
     targetFile: targetFile,
     operation: () async {
+      await recoverInterruptedCacheReplacement(targetFile);
       await _deleteStaleMigrationFilesUnderLock(targetFile);
       if (await targetFile.exists() ||
           await legacyImportRetiredFile.exists() ||
