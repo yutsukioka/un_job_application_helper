@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
+import 'package:atlas/atlas_vault_windows.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2569,6 +2570,21 @@ final class _AtlasDefaultControllerAssembly {
 }
 
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
+  if (Platform.isWindows) {
+    final keyStore = AtlasWindowsVaultSecureKeyStore();
+    final localStore = AtlasWindowsVaultLocalStoreIO();
+    final runtime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
+    );
+    return _AtlasDefaultControllerAssembly(
+      controller: AtlasAppController(
+        localCacheStoreFactory: _defaultCacheStore,
+        privateStatePersistence: runtime,
+      ),
+    );
+  }
+
   if (!Platform.isAndroid) {
     return _AtlasDefaultControllerAssembly(
       controller: AtlasAppController(
