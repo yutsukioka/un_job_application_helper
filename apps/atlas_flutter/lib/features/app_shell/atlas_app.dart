@@ -52,8 +52,11 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
       }
       // coverage:ignore-end
     } catch (_) {
-      // Fall through to path_provider's persistent application-support path.
+      // Android has no temporary-directory fallback if native storage fails.
     }
+  }
+  if (!isAtlasPersistentDesktopCachePlatform()) {
+    return null;
   }
   try {
     final cacheFile = await resolveAtlasPersistentCacheFile();

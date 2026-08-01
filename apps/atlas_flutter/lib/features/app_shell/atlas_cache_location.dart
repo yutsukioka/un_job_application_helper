@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
@@ -7,6 +8,13 @@ const atlasApplicationSupportDirectoryName = 'Atlas';
 const atlasLegacyTemporaryDirectoryName = 'atlas_flutter';
 
 typedef AtlasApplicationSupportDirectoryProvider = Future<Directory> Function();
+
+Future<void> _migrationQueue = Future.value();
+
+bool isAtlasPersistentDesktopCachePlatform({String? operatingSystem}) {
+  final value = operatingSystem ?? Platform.operatingSystem;
+  return value == 'linux' || value == 'macos' || value == 'windows';
+}
 
 /// Resolves Atlas's durable local-cache file and imports the legacy temporary
 /// cache when no durable cache exists yet.
@@ -59,9 +67,53 @@ Future<void> _copyLegacyCacheIfNeeded({
     return;
   }
 
+  await _withInProcessMigrationLock(() async {
+    if (await targetFile.exists() || !await legacyFile.exists()) {
+      return;
+    }
+    await targetFile.parent.create(recursive: true);
+    final migrationLock = await File(
+      '${targetFile.path}.migration.lock',
+    ).open(mode: FileMode.append);
+    try {
+      await migrationLock.lock(FileLock.exclusive);
+      if (await targetFile.exists() || !await legacyFile.exists()) {
+        return;
+      }
+      await _copyLegacyCacheUnderLock(
+        legacyFile: legacyFile,
+        targetFile: targetFile,
+      );
+    } finally {
+      try {
+        await migrationLock.unlock();
+      } finally {
+        await migrationLock.close();
+      }
+    }
+  });
+}
+
+Future<void> _withInProcessMigrationLock(
+  Future<void> Function() operation,
+) async {
+  final previous = _migrationQueue;
+  final release = Completer<void>();
+  _migrationQueue = release.future;
+  await previous;
+  try {
+    await operation();
+  } finally {
+    release.complete();
+  }
+}
+
+Future<void> _copyLegacyCacheUnderLock({
+  required File legacyFile,
+  required File targetFile,
+}) async {
   final stagingFile = File('${targetFile.path}.migrating-$pid');
   try {
-    await targetFile.parent.create(recursive: true);
     if (await stagingFile.exists()) {
       await stagingFile.delete();
     }
@@ -85,6 +137,7 @@ Future<void> _copyLegacyCacheIfNeeded({
     } on FileSystemException {
       // The durable target remains authoritative even if staging cleanup fails.
     }
+    rethrow;
   }
 }
 

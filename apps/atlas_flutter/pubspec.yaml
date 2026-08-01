@@ -36,6 +36,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   cryptography: ^2.9.0
   path_provider: ^2.1.6
+  # Keep the endorsed implementations on their pre-native-assets/JNI releases
+  # until Atlas's release toolchains have validated those migrations.
+  path_provider_android: 2.2.23
+  path_provider_foundation: 2.5.1
   pointycastle: ^4.0.0
 
 dev_dependencies:
