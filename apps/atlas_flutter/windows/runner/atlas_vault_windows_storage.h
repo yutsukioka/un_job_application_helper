@@ -25,7 +25,7 @@ class AtlasVaultWindowsStorage {
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
   void ExecuteMethodCall(
       std::string method,
-      std::unique_ptr<flutter::EncodableValue> arguments,
+      std::unique_ptr<flutter::EncodableValue> encoded_arguments,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;

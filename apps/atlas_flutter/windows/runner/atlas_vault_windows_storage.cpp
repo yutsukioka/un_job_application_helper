@@ -1140,11 +1140,11 @@ void AtlasVaultWindowsStorage::HandleMethodCall(
 
 void AtlasVaultWindowsStorage::ExecuteMethodCall(
     std::string method_name,
-    std::unique_ptr<flutter::EncodableValue> arguments,
+    std::unique_ptr<flutter::EncodableValue> encoded_arguments,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  flutter::EncodableValue* argument_value = arguments.get();
+  flutter::EncodableValue* argument_value = encoded_arguments.get();
   flutter::MethodCall<flutter::EncodableValue> call(method_name,
-                                                    std::move(arguments));
+                                                    std::move(encoded_arguments));
   ScopedVaultKeyArgumentWiper argument_wiper(method_name, argument_value);
   const std::string& method = call.method_name();
   if (method == "capabilities") {
