@@ -107,6 +107,51 @@ void main() {
     }
   });
 
+  test('native storage operations run on a retained serial worker', () {
+    final header = File(
+      'windows/runner/atlas_vault_windows_storage.h',
+    ).readAsStringSync();
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final required in <String>[
+      'AtlasVaultWindowsStorageWorker',
+      'ExecuteMethodCall',
+      'worker_->Enqueue',
+      'worker_->StopAndDrain',
+      'std::thread',
+      'std::condition_variable',
+      'std::deque',
+    ]) {
+      expect('$header\n$source', contains(required));
+    }
+
+    final handlerStart = source.indexOf(
+      'void AtlasVaultWindowsStorage::HandleMethodCall',
+    );
+    final executorStart = source.indexOf(
+      'void AtlasVaultWindowsStorage::ExecuteMethodCall',
+    );
+    expect(handlerStart, isNonNegative);
+    expect(executorStart, greaterThan(handlerStart));
+    final handler = source.substring(handlerStart, executorStart);
+    expect(handler, contains('worker_->Enqueue'));
+    expect(handler, isNot(contains('BeginOperation')));
+    expect(handler, isNot(contains('ProbeStorageCapabilities')));
+    expect(handler, isNot(contains('AtomicReplace')));
+
+    final destructorStart = source.indexOf(
+      'AtlasVaultWindowsStorage::~AtlasVaultWindowsStorage',
+    );
+    expect(destructorStart, isNonNegative);
+    final destructor = source.substring(destructorStart, handlerStart);
+    expect(
+      destructor.indexOf('SetMethodCallHandler(nullptr)'),
+      lessThan(destructor.indexOf('worker_->StopAndDrain')),
+    );
+  });
+
   test('runner build links only the required Windows libraries', () {
     final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
 
