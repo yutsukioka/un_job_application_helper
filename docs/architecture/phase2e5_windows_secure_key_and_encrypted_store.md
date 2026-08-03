@@ -182,6 +182,13 @@ create/load/contains/delete, and store read/create/replace/delete methods. Its
 capabilities call performs real nonsecret boundary probes and returns no path,
 identity, protected blob, or vault identifier.
 
+The channel handler copies and queues decoded calls on one retained serial
+worker. DPAPI, hashing, path probes, reads, writes, flushes, read-back, and CAS
+replacement therefore do not run on the Windows runner thread. Flutter's
+Windows reply callback supports completion from the worker thread. Bridge
+destruction unregisters the handler, drains queued work, and joins the worker
+before the Flutter engine is destroyed; no detached cleanup is used.
+
 ## 34. Windows Dart Adapter
 
 The adapters validate vault IDs, key lengths, canonical stores, metadata vault
@@ -310,6 +317,10 @@ Exact-head review added a deterministic source regression requiring capability
 values to come from real DPAPI, Local AppData, lock, and atomic-replace probes.
 The next review cycle requires nonblocking exclusive lock acquisition so a
 contending process cannot indefinitely block the runner thread.
+The final native review cycle requires one retained serial worker so bounded
+but large encrypted-store I/O cannot block runner event processing. Its source
+regression proves the handler only copies and enqueues calls, storage work runs
+in the worker executor, and shutdown unregisters then drains and joins.
 
 ## 55. TDD Checkpoint B Evidence
 

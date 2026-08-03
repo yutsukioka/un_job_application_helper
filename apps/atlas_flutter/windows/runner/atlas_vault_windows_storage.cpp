@@ -11,9 +11,14 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <limits>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -966,7 +971,130 @@ void ReturnBytes(
   }
 }
 
+void WipeVaultKeyArgument(const std::string& method,
+                          flutter::EncodableValue* arguments) {
+  if (method != "createVaultKey" || arguments == nullptr) {
+    return;
+  }
+  auto* values = std::get_if<flutter::EncodableMap>(arguments);
+  if (values == nullptr) {
+    return;
+  }
+  const auto iterator = values->find(flutter::EncodableValue("vault_key"));
+  if (iterator == values->end()) {
+    return;
+  }
+  auto* bytes = std::get_if<std::vector<uint8_t>>(&iterator->second);
+  Wipe(bytes);
+}
+
+class ScopedVaultKeyArgumentWiper {
+ public:
+  ScopedVaultKeyArgumentWiper(const std::string& method,
+                              flutter::EncodableValue* arguments)
+      : method_(method), arguments_(arguments) {}
+  ~ScopedVaultKeyArgumentWiper() {
+    WipeVaultKeyArgument(method_, arguments_);
+  }
+
+  ScopedVaultKeyArgumentWiper(const ScopedVaultKeyArgumentWiper&) = delete;
+  ScopedVaultKeyArgumentWiper& operator=(
+      const ScopedVaultKeyArgumentWiper&) = delete;
+
+ private:
+  const std::string& method_;
+  flutter::EncodableValue* arguments_;
+};
+
 }  // namespace
+
+class AtlasVaultWindowsStorageWorker {
+ public:
+  using Result = flutter::MethodResult<flutter::EncodableValue>;
+  using ExecuteCallback = std::function<void(
+      std::string,
+      std::unique_ptr<flutter::EncodableValue>,
+      std::unique_ptr<Result>)>;
+
+  explicit AtlasVaultWindowsStorageWorker(ExecuteCallback execute)
+      : execute_(std::move(execute)),
+        worker_(&AtlasVaultWindowsStorageWorker::Run, this) {}
+
+  ~AtlasVaultWindowsStorageWorker() { StopAndDrain(); }
+
+  AtlasVaultWindowsStorageWorker(const AtlasVaultWindowsStorageWorker&) =
+      delete;
+  AtlasVaultWindowsStorageWorker& operator=(
+      const AtlasVaultWindowsStorageWorker&) = delete;
+
+  void Enqueue(
+      std::string method,
+      std::unique_ptr<flutter::EncodableValue> arguments,
+      std::unique_ptr<Result> result) {
+    PendingOperation operation{std::move(method), std::move(arguments),
+                               std::move(result)};
+    bool rejected = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopping_) {
+        rejected = true;
+      } else {
+        pending_.push_back(std::move(operation));
+      }
+    }
+    if (rejected) {
+      ReturnFailure(std::move(operation.result));
+      return;
+    }
+    condition_.notify_one();
+  }
+
+  void StopAndDrain() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    condition_.notify_all();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+ private:
+  struct PendingOperation {
+    std::string method;
+    std::unique_ptr<flutter::EncodableValue> arguments;
+    std::unique_ptr<Result> result;
+  };
+
+  void Run() {
+    while (true) {
+      PendingOperation operation;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock,
+                        [this] { return stopping_ || !pending_.empty(); });
+        if (pending_.empty()) {
+          if (stopping_) {
+            return;
+          }
+          continue;
+        }
+        operation = std::move(pending_.front());
+        pending_.pop_front();
+      }
+      execute_(std::move(operation.method), std::move(operation.arguments),
+               std::move(operation.result));
+    }
+  }
+
+  ExecuteCallback execute_;
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  std::deque<PendingOperation> pending_;
+  bool stopping_ = false;
+  std::thread worker_;
+};
 
 AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
     flutter::BinaryMessenger* messenger,
@@ -974,7 +1102,16 @@ AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
     : channel_(std::make_unique<
                flutter::MethodChannel<flutter::EncodableValue>>(
           messenger, channel_name,
-          &flutter::StandardMethodCodec::GetInstance())) {
+          &flutter::StandardMethodCodec::GetInstance())),
+      worker_(std::make_unique<AtlasVaultWindowsStorageWorker>(
+          [this](
+              std::string method,
+              std::unique_ptr<flutter::EncodableValue> arguments,
+              std::unique_ptr<
+                  flutter::MethodResult<flutter::EncodableValue>> result) {
+            ExecuteMethodCall(std::move(method), std::move(arguments),
+                              std::move(result));
+          })) {
   channel_->SetMethodCallHandler(
       [this](
           const flutter::MethodCall<flutter::EncodableValue>& call,
@@ -986,11 +1123,29 @@ AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
 
 AtlasVaultWindowsStorage::~AtlasVaultWindowsStorage() {
   channel_->SetMethodCallHandler(nullptr);
+  worker_->StopAndDrain();
 }
 
 void AtlasVaultWindowsStorage::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  std::unique_ptr<flutter::EncodableValue> arguments;
+  if (call.arguments() != nullptr) {
+    arguments =
+        std::make_unique<flutter::EncodableValue>(*call.arguments());
+  }
+  worker_->Enqueue(call.method_name(), std::move(arguments),
+                   std::move(result));
+}
+
+void AtlasVaultWindowsStorage::ExecuteMethodCall(
+    std::string method_name,
+    std::unique_ptr<flutter::EncodableValue> arguments,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  flutter::EncodableValue* argument_value = arguments.get();
+  flutter::MethodCall<flutter::EncodableValue> call(method_name,
+                                                    std::move(arguments));
+  ScopedVaultKeyArgumentWiper argument_wiper(method_name, argument_value);
   const std::string& method = call.method_name();
   if (method == "capabilities") {
     if (!HasNoArguments(call)) {

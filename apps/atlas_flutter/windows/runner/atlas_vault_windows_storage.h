@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+class AtlasVaultWindowsStorageWorker;
+
 class AtlasVaultWindowsStorage {
  public:
   AtlasVaultWindowsStorage(flutter::BinaryMessenger* messenger,
@@ -21,8 +23,13 @@ class AtlasVaultWindowsStorage {
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void ExecuteMethodCall(
+      std::string method,
+      std::unique_ptr<flutter::EncodableValue> arguments,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
+  std::unique_ptr<AtlasVaultWindowsStorageWorker> worker_;
 };
 
 #endif  // RUNNER_ATLAS_VAULT_WINDOWS_STORAGE_H_
