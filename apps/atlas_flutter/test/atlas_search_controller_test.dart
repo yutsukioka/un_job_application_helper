@@ -1721,6 +1721,73 @@ void main() {
     },
   );
 
+  test(
+    'switching authorities deactivates encrypted private state before reload',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final originalTransport = _RecordingTransport();
+      final replacementTransport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Replacement compatibility search',
+          'request': const <String, Object?>{},
+          'created_at': '2026-07-02T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'replacement-record',
+          'job_key': 'undp:replacement',
+          'status': 'saved',
+          'updated_at': '2026-07-02T00:00:00Z',
+        });
+      final privatePersistence = _FakePrivateStatePersistence(
+        activationSnapshot: AtlasVaultPrivateStateSnapshot(
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Encrypted search',
+              request: const AtlasSearchRequest(text: 'encrypted'),
+            ),
+          ],
+          trackerRecords: <AtlasApplicationRecord>[
+            AtlasApplicationRecord(
+              id: 'encrypted-record',
+              jobKey: 'undp:encrypted',
+              status: 'saved',
+            ),
+          ],
+        ),
+      );
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) => AtlasAPIClient(
+          baseURL: baseURL,
+          transport: baseURL == replacementAuthority
+              ? replacementTransport
+              : originalTransport,
+        ),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      await controller.saveAndReload(replacementAuthority);
+
+      expect(controller.baseURL, replacementAuthority);
+      expect(privatePersistence.isActive, isFalse);
+      expect(privatePersistence.calls, contains('deactivate'));
+      expect(replacementTransport.savedSearchReadCount, 1);
+      expect(replacementTransport.trackerReadCount, 1);
+      expect(controller.savedSearches.map((value) => value.name), <String>[
+        'Replacement compatibility search',
+      ]);
+      expect(controller.trackerRecords.map((value) => value.jobKey), <String>[
+        'undp:replacement',
+      ]);
+    },
+  );
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(
