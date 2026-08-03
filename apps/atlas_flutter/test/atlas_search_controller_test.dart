@@ -1680,7 +1680,7 @@ void main() {
   });
 
   test(
-    'activation rejects an authority changed during compatibility admission',
+    'authority change fails closed during private activation admission',
     () async {
       final originalAuthority = Uri.parse('http://atlas.test:8765');
       final replacementAuthority = Uri.parse('http://atlas.next:8765');
@@ -1709,13 +1709,14 @@ void main() {
       final activation = controller.activateExistingAtlasVault('vault-alpha');
       await admissionEntered.future;
       await controller.saveAndReload(replacementAuthority);
-      expect(controller.baseURL, replacementAuthority);
+      expect(controller.baseURL, originalAuthority);
+      expect(controller.connectionStatus, 'Not connected');
 
       releaseAdmission.complete();
 
-      expect(await activation, AtlasVaultActivationResult.failed);
-      expect(privatePersistence.isActive, isFalse);
-      expect(privatePersistence.calls, isNot(contains('activate')));
+      expect(await activation, AtlasVaultActivationResult.activated);
+      expect(privatePersistence.isActive, isTrue);
+      expect(privatePersistence.calls, contains('activate'));
       expect(controller.savedSearches, isEmpty);
       expect(controller.trackerRecords, isEmpty);
     },
@@ -1726,6 +1727,13 @@ void main() {
     () async {
       final originalAuthority = Uri.parse('http://atlas.test:8765');
       final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final enteredDeactivation = Completer<void>();
+      final releaseDeactivation = Completer<void>();
+      addTearDown(() {
+        if (!releaseDeactivation.isCompleted) {
+          releaseDeactivation.complete();
+        }
+      });
       final originalTransport = _RecordingTransport();
       final replacementTransport = _RecordingTransport()
         ..savedSearchStore.add(<String, Object?>{
@@ -1739,23 +1747,26 @@ void main() {
           'status': 'saved',
           'updated_at': '2026-07-02T00:00:00Z',
         });
-      final privatePersistence = _FakePrivateStatePersistence(
-        activationSnapshot: AtlasVaultPrivateStateSnapshot(
-          savedSearches: <AtlasSavedSearch>[
-            AtlasSavedSearch(
-              name: 'Encrypted search',
-              request: const AtlasSearchRequest(text: 'encrypted'),
-            ),
-          ],
-          trackerRecords: <AtlasApplicationRecord>[
-            AtlasApplicationRecord(
-              id: 'encrypted-record',
-              jobKey: 'undp:encrypted',
-              status: 'saved',
-            ),
-          ],
-        ),
-      );
+      final privatePersistence =
+          _FakePrivateStatePersistence(
+              activationSnapshot: AtlasVaultPrivateStateSnapshot(
+                savedSearches: <AtlasSavedSearch>[
+                  AtlasSavedSearch(
+                    name: 'Encrypted search',
+                    request: const AtlasSearchRequest(text: 'encrypted'),
+                  ),
+                ],
+                trackerRecords: <AtlasApplicationRecord>[
+                  AtlasApplicationRecord(
+                    id: 'encrypted-record',
+                    jobKey: 'undp:encrypted',
+                    status: 'saved',
+                  ),
+                ],
+              ),
+            )
+            ..enteredDeactivation = enteredDeactivation
+            ..releaseDeactivation = releaseDeactivation;
       final controller = AtlasAppController(
         initialBaseURL: originalAuthority,
         clientFactory: (baseURL) => AtlasAPIClient(
@@ -1772,7 +1783,15 @@ void main() {
         AtlasVaultActivationResult.activated,
       );
 
-      await controller.saveAndReload(replacementAuthority);
+      final reload = controller.saveAndReload(replacementAuthority);
+      await enteredDeactivation.future;
+
+      expect(controller.baseURL, originalAuthority);
+      expect(replacementTransport.savedSearchReadCount, 0);
+      expect(replacementTransport.trackerReadCount, 0);
+
+      releaseDeactivation.complete();
+      await reload;
 
       expect(controller.baseURL, replacementAuthority);
       expect(privatePersistence.isActive, isFalse);

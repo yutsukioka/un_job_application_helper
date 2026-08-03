@@ -618,6 +618,8 @@ class AtlasAppController extends ChangeNotifier
       final health = await client.health();
       _requireCurrentConnectionOperation(operation, client);
       healthSummary = health;
+      await _preparePrivateAuthorityChange(operation, client);
+      _requireCurrentConnectionOperation(operation, client);
       baseURL = operation.sourceAuthority;
       connectionStatus = 'Connected';
       final refreshed = await _refreshSearch(client, operation);
@@ -1733,6 +1735,35 @@ class AtlasAppController extends ChangeNotifier
   void _completeConnectionOperation(_AtlasConnectionOperation operation) {
     if (identical(_activeConnectionOperation, operation)) {
       _activeConnectionOperation = null;
+    }
+  }
+
+  Future<void> _preparePrivateAuthorityChange(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient client,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
+    if (_requiredNormalizedBaseURL(baseURL) == operation.sourceAuthority) {
+      return;
+    }
+    if (_privateActivationInProgress ||
+        _recoveryImportAdmissionInProgress ||
+        _recoveryImportBlocksLegacyPrivateAuthority ||
+        (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
+            false)) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    final deactivation = _privateDeactivationOperation;
+    if (deactivation != null) {
+      await deactivation;
+      _requireCurrentConnectionOperation(operation, client);
+    }
+    if (_privateStatePersistence?.isActive ?? false) {
+      await deactivateAtlasVault();
+      _requireCurrentConnectionOperation(operation, client);
+    }
+    if (_privateStateProtectionActive) {
+      throw const AtlasVaultPrivateStateException();
     }
   }
 

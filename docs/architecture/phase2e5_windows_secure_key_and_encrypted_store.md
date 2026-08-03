@@ -225,7 +225,8 @@ drains a retained compatibility mutation before reading that source, preventing
 a just-committed compatibility record from being hidden by encrypted authority.
 Activation captures the normalized compatibility authority and revalidates it
 after every admission or persistence await; a concurrent server selection
-invalidates activation before DPAPI or encrypted-store access.
+is rejected before the new authority is committed, so activation remains bound
+to the captured authority.
 Existing plaintext remains untouched.
 
 ## 41. Encrypted Saved-Search Writes
@@ -242,6 +243,10 @@ unrelated encrypted records.
 
 Active saved-search and tracker reads and writes never use compatibility
 private endpoints. There is no fallback after encrypted failure.
+Changing to a different configured server while encrypted authority is active
+first drains explicit deactivation, clears encrypted projections, and only then
+commits the new authority and admits its compatibility private state. A switch
+during activation fails closed without changing the configured authority.
 
 ## 44. Public-Only Cache
 
@@ -318,6 +323,9 @@ returns `migrationRequired`, and makes zero Windows storage calls.
 The next cycle binds this admission to the captured normalized server authority
 and rejects a concurrent `saveAndReload` authority change before persistence
 activation.
+The final authority regression proves an active encrypted runtime is fully
+deactivated before a different server becomes authoritative, preventing that
+server's compatibility private records from being silently hidden.
 
 ## 56. Verification
 
