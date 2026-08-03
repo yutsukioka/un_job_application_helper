@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "atlas_vault_windows_storage.h"
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -25,6 +26,8 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  atlas_vault_storage_ = std::make_unique<AtlasVaultWindowsStorage>(
+      flutter_controller_->engine()->messenger(), "atlas/vault_windows");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +43,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  atlas_vault_storage_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

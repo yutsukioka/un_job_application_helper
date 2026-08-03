@@ -541,6 +541,35 @@ void main() {
         }
       },
     );
+
+    test('Windows assembly retains the guarded public cache authority', () {
+      final source = File(
+        'lib/features/app_shell/atlas_app.dart',
+      ).readAsStringSync();
+      final windowsStart = source.indexOf('if (Platform.isWindows) {');
+      final fallbackStart = source.indexOf(
+        'if (!Platform.isAndroid)',
+        windowsStart < 0 ? 0 : windowsStart,
+      );
+
+      expect(windowsStart, isNonNegative);
+      expect(fallbackStart, greaterThan(windowsStart));
+      final windowsAssembly = source.substring(windowsStart, fallbackStart);
+      expect(
+        windowsAssembly,
+        contains('localCacheStoreFactory: _defaultCacheStore'),
+      );
+      expect(
+        source,
+        contains(
+          'privateStateProtectionActive: () => _privateStateProtectionActive',
+        ),
+      );
+      expect(
+        windowsAssembly,
+        isNot(contains('AtlasAndroidSelectedVaultStore')),
+      );
+    });
   });
 }
 

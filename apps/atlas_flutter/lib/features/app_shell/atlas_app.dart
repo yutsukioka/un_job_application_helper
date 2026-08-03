@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:atlas/atlas.dart';
 import 'package:atlas/atlas_vault_android.dart';
+import 'package:atlas/atlas_vault_windows.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -72,6 +73,7 @@ class AtlasAppController extends ChangeNotifier
     AtlasLocalCacheStore? localCacheStore,
     AtlasCacheStoreFactory? localCacheStoreFactory,
     AtlasVaultPrivateStatePersistence? privateStatePersistence,
+    Future<bool> Function()? compatibilityPrivateStateAdmission,
     Future<bool> Function()? recoveryImportPending,
     DateTime Function()? now,
     Timer Function(Duration, void Function())? searchDebounceTimerFactory,
@@ -86,6 +88,8 @@ class AtlasAppController extends ChangeNotifier
        // Keep the compatibility constructor side-effect free.
        // ignore: prefer_initializing_formals
        _privateStatePersistence = privateStatePersistence,
+       // ignore: prefer_initializing_formals
+       _compatibilityPrivateStateAdmission = compatibilityPrivateStateAdmission,
        // ignore: prefer_initializing_formals
        _recoveryImportPending = recoveryImportPending,
        _now = now ?? DateTime.now,
@@ -128,6 +132,7 @@ class AtlasAppController extends ChangeNotifier
   AtlasLocalCacheStore? _localCacheStore;
   final AtlasCacheStoreFactory? _localCacheStoreFactory;
   final AtlasVaultPrivateStatePersistence? _privateStatePersistence;
+  final Future<bool> Function()? _compatibilityPrivateStateAdmission;
   final Future<bool> Function()? _recoveryImportPending;
   final DateTime Function() _now;
   final Timer Function(Duration, void Function()) _searchDebounceTimerFactory;
@@ -330,25 +335,54 @@ class AtlasAppController extends ChangeNotifier
     _privateActivationInProgress = true;
     _cancelSearchDebounce(rescheduleAfterTransition: true);
     try {
+      final activationAuthority = _requiredNormalizedBaseURL(baseURL);
       if (savedSearches.isNotEmpty || trackerRecords.isNotEmpty) {
         return AtlasVaultActivationResult.migrationRequired;
       }
-      await _drainCacheWriteForActivation(activationGeneration);
+      await _drainPlaintextOperationsForActivation(
+        activationGeneration,
+        activationAuthority,
+      );
+      final compatibilityPrivateStateAdmission =
+          _compatibilityPrivateStateAdmission;
+      if (compatibilityPrivateStateAdmission != null) {
+        final containsCompatibilityPrivateState =
+            await compatibilityPrivateStateAdmission();
+        _requireCurrentPrivateActivation(
+          activationGeneration,
+          activationAuthority,
+        );
+        if (containsCompatibilityPrivateState) {
+          return AtlasVaultActivationResult.migrationRequired;
+        }
+      }
       final cacheStore = await _ensureLocalCacheStore();
-      _requireCurrentPrivateActivation(activationGeneration);
+      _requireCurrentPrivateActivation(
+        activationGeneration,
+        activationAuthority,
+      );
       final containsPersistedPrivateState =
           await cacheStore?.containsPersistedPrivateState() ?? false;
-      _requireCurrentPrivateActivation(activationGeneration);
+      _requireCurrentPrivateActivation(
+        activationGeneration,
+        activationAuthority,
+      );
       if (containsPersistedPrivateState) {
         return AtlasVaultActivationResult.migrationRequired;
       }
       final result = await persistence.activateExisting(vaultId);
-      _requireCurrentPrivateActivation(activationGeneration);
+      _requireCurrentPrivateActivation(
+        activationGeneration,
+        activationAuthority,
+      );
       if (result != AtlasVaultActivationResult.activated) {
         return result;
       }
       final snapshot = await persistence.read();
-      _requireCurrentPrivateActivation(activationGeneration);
+      _requireCurrentPrivateActivation(
+        activationGeneration,
+        activationAuthority,
+      );
       if (!persistence.isActive) {
         throw const AtlasVaultPrivateStateException();
       }
@@ -584,6 +618,8 @@ class AtlasAppController extends ChangeNotifier
       final health = await client.health();
       _requireCurrentConnectionOperation(operation, client);
       healthSummary = health;
+      await _preparePrivateAuthorityChange(operation, client);
+      _requireCurrentConnectionOperation(operation, client);
       baseURL = operation.sourceAuthority;
       connectionStatus = 'Connected';
       final refreshed = await _refreshSearch(client, operation);
@@ -1555,17 +1591,12 @@ class AtlasAppController extends ChangeNotifier
     await store.write(snapshot);
   }
 
-  Future<void> _drainCacheWriteForActivation(int activationGeneration) async {
-    final operation = _cacheMutationOperation;
-    if (operation == null) {
-      return;
-    }
-    try {
-      await operation;
-    } catch (_) {
-      // Activation preflight re-reads the authoritative cache state.
-    }
-    _requireCurrentPrivateActivation(activationGeneration);
+  Future<void> _drainPlaintextOperationsForActivation(
+    int activationGeneration,
+    Uri activationAuthority,
+  ) async {
+    await drainAdmittedPlaintextOperations();
+    _requireCurrentPrivateActivation(activationGeneration, activationAuthority);
   }
 
   Future<void> _drainCacheWriteForMigration() async {
@@ -1707,6 +1738,35 @@ class AtlasAppController extends ChangeNotifier
     }
   }
 
+  Future<void> _preparePrivateAuthorityChange(
+    _AtlasConnectionOperation operation,
+    AtlasAPIClient client,
+  ) async {
+    _requireCurrentConnectionOperation(operation, client);
+    if (_requiredNormalizedBaseURL(baseURL) == operation.sourceAuthority) {
+      return;
+    }
+    if (_privateActivationInProgress ||
+        _recoveryImportAdmissionInProgress ||
+        _recoveryImportBlocksLegacyPrivateAuthority ||
+        (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
+            false)) {
+      throw const AtlasVaultPrivateStateException();
+    }
+    final deactivation = _privateDeactivationOperation;
+    if (deactivation != null) {
+      await deactivation;
+      _requireCurrentConnectionOperation(operation, client);
+    }
+    if (_privateStatePersistence?.isActive ?? false) {
+      await deactivateAtlasVault();
+      _requireCurrentConnectionOperation(operation, client);
+    }
+    if (_privateStateProtectionActive) {
+      throw const AtlasVaultPrivateStateException();
+    }
+  }
+
   Uri? _legacyPrivateProjectionAuthority() {
     final savedAuthority = savedSearches.isEmpty
         ? null
@@ -1790,10 +1850,14 @@ class AtlasAppController extends ChangeNotifier
         _privateAuthorityGeneration == authorityGeneration;
   }
 
-  void _requireCurrentPrivateActivation(int authorityGeneration) {
+  void _requireCurrentPrivateActivation(
+    int authorityGeneration,
+    Uri expectedAuthority,
+  ) {
     if (!_privateActivationInProgress ||
         _privateDeactivationInProgress ||
-        _privateAuthorityGeneration != authorityGeneration) {
+        _privateAuthorityGeneration != authorityGeneration ||
+        _requiredNormalizedBaseURL(baseURL) != expectedAuthority) {
       throw const AtlasVaultPrivateStateException();
     }
   }
@@ -2569,6 +2633,28 @@ final class _AtlasDefaultControllerAssembly {
 }
 
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
+  if (Platform.isWindows) {
+    final keyStore = AtlasWindowsVaultSecureKeyStore();
+    final localStore = AtlasWindowsVaultLocalStoreIO();
+    final runtime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
+    );
+    late final AtlasAppController controller;
+    controller = AtlasAppController(
+      localCacheStoreFactory: _defaultCacheStore,
+      privateStatePersistence: runtime,
+      compatibilityPrivateStateAdmission: () async {
+        final privateState = await _AtlasControllerCompatibilityMigrationSource(
+          controller,
+        ).readCompatibilityPrivateState();
+        return privateState.savedSearches.isNotEmpty ||
+            privateState.trackerRecords.isNotEmpty;
+      },
+    );
+    return _AtlasDefaultControllerAssembly(controller: controller);
+  }
+
   if (!Platform.isAndroid) {
     return _AtlasDefaultControllerAssembly(
       controller: AtlasAppController(

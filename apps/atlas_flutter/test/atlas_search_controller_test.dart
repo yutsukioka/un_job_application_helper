@@ -1477,7 +1477,9 @@ void main() {
       final transport = _RecordingTransport()
         ..enteredCompatibilitySaveSearch = entered
         ..releaseCompatibilitySaveSearch = release;
-      final privatePersistence = _FakePrivateStatePersistence();
+      final enteredActivation = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence()
+        ..enteredActivation = enteredActivation;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
         clientFactory: (baseURL) =>
@@ -1488,11 +1490,13 @@ void main() {
 
       final compatibilitySave = controller.saveCurrentSearch();
       await entered.future;
-      expect(
-        await controller.activateExistingAtlasVault('vault-alpha'),
-        AtlasVaultActivationResult.activated,
-      );
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await Future<void>.delayed(Duration.zero);
+      expect(enteredActivation.isCompleted, isFalse);
+
       release.complete();
+      await enteredActivation.future;
+      expect(await activation, AtlasVaultActivationResult.activated);
       await compatibilitySave;
 
       expect(privatePersistence.isActive, isTrue);
@@ -1510,7 +1514,9 @@ void main() {
       final transport = _RecordingTransport()
         ..enteredCompatibilitySaveJob = entered
         ..releaseCompatibilitySaveJob = release;
-      final privatePersistence = _FakePrivateStatePersistence();
+      final enteredActivation = Completer<void>();
+      final privatePersistence = _FakePrivateStatePersistence()
+        ..enteredActivation = enteredActivation;
       final controller = AtlasAppController(
         initialBaseURL: Uri.parse('http://atlas.test:8765'),
         clientFactory: (baseURL) =>
@@ -1523,11 +1529,13 @@ void main() {
         JobSearchResult.fromJson(_jobJson),
       );
       await entered.future;
-      expect(
-        await controller.activateExistingAtlasVault('vault-alpha'),
-        AtlasVaultActivationResult.activated,
-      );
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await Future<void>.delayed(Duration.zero);
+      expect(enteredActivation.isCompleted, isFalse);
+
       release.complete();
+      await enteredActivation.future;
+      expect(await activation, AtlasVaultActivationResult.activated);
       await compatibilitySave;
 
       expect(privatePersistence.isActive, isTrue);
@@ -1670,6 +1678,134 @@ void main() {
       'undp:encrypted',
     ]);
   });
+
+  test(
+    'authority change fails closed during private activation admission',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final admissionEntered = Completer<void>();
+      final releaseAdmission = Completer<void>();
+      addTearDown(() {
+        if (!releaseAdmission.isCompleted) {
+          releaseAdmission.complete();
+        }
+      });
+      final transport = _RecordingTransport();
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        privateStatePersistence: privatePersistence,
+        compatibilityPrivateStateAdmission: () async {
+          admissionEntered.complete();
+          await releaseAdmission.future;
+          return false;
+        },
+      );
+      addTearDown(controller.dispose);
+
+      final activation = controller.activateExistingAtlasVault('vault-alpha');
+      await admissionEntered.future;
+      await controller.saveAndReload(replacementAuthority);
+      expect(controller.baseURL, originalAuthority);
+      expect(controller.connectionStatus, 'Not connected');
+
+      releaseAdmission.complete();
+
+      expect(await activation, AtlasVaultActivationResult.activated);
+      expect(privatePersistence.isActive, isTrue);
+      expect(privatePersistence.calls, contains('activate'));
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+    },
+  );
+
+  test(
+    'switching authorities deactivates encrypted private state before reload',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final enteredDeactivation = Completer<void>();
+      final releaseDeactivation = Completer<void>();
+      addTearDown(() {
+        if (!releaseDeactivation.isCompleted) {
+          releaseDeactivation.complete();
+        }
+      });
+      final originalTransport = _RecordingTransport();
+      final replacementTransport = _RecordingTransport()
+        ..savedSearchStore.add(<String, Object?>{
+          'name': 'Replacement compatibility search',
+          'request': const <String, Object?>{},
+          'created_at': '2026-07-02T00:00:00Z',
+        })
+        ..trackerStore.add(<String, Object?>{
+          'id': 'replacement-record',
+          'job_key': 'undp:replacement',
+          'status': 'saved',
+          'updated_at': '2026-07-02T00:00:00Z',
+        });
+      final privatePersistence =
+          _FakePrivateStatePersistence(
+              activationSnapshot: AtlasVaultPrivateStateSnapshot(
+                savedSearches: <AtlasSavedSearch>[
+                  AtlasSavedSearch(
+                    name: 'Encrypted search',
+                    request: const AtlasSearchRequest(text: 'encrypted'),
+                  ),
+                ],
+                trackerRecords: <AtlasApplicationRecord>[
+                  AtlasApplicationRecord(
+                    id: 'encrypted-record',
+                    jobKey: 'undp:encrypted',
+                    status: 'saved',
+                  ),
+                ],
+              ),
+            )
+            ..enteredDeactivation = enteredDeactivation
+            ..releaseDeactivation = releaseDeactivation;
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) => AtlasAPIClient(
+          baseURL: baseURL,
+          transport: baseURL == replacementAuthority
+              ? replacementTransport
+              : originalTransport,
+        ),
+        privateStatePersistence: privatePersistence,
+      );
+      addTearDown(controller.dispose);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      final reload = controller.saveAndReload(replacementAuthority);
+      await enteredDeactivation.future;
+
+      expect(controller.baseURL, originalAuthority);
+      expect(replacementTransport.savedSearchReadCount, 0);
+      expect(replacementTransport.trackerReadCount, 0);
+
+      releaseDeactivation.complete();
+      await reload;
+
+      expect(controller.baseURL, replacementAuthority);
+      expect(privatePersistence.isActive, isFalse);
+      expect(privatePersistence.calls, contains('deactivate'));
+      expect(replacementTransport.savedSearchReadCount, 1);
+      expect(replacementTransport.trackerReadCount, 1);
+      expect(controller.savedSearches.map((value) => value.name), <String>[
+        'Replacement compatibility search',
+      ]);
+      expect(controller.trackerRecords.map((value) => value.jobKey), <String>[
+        'undp:replacement',
+      ]);
+    },
+  );
 
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
@@ -2736,6 +2872,40 @@ void main() {
       throwsA(isA<AtlasVaultPlaintextMigrationException>()),
     );
     expect(secondCoordinator.calls, isEmpty);
+  });
+
+  test('Windows default assembly is explicit and migration-UI-free', () {
+    final source = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+    final windowsStart = source.indexOf('if (Platform.isWindows) {');
+    final fallbackStart = source.indexOf(
+      'if (!Platform.isAndroid)',
+      windowsStart < 0 ? 0 : windowsStart,
+    );
+
+    expect(windowsStart, isNonNegative);
+    expect(fallbackStart, greaterThan(windowsStart));
+    final windowsAssembly = source.substring(windowsStart, fallbackStart);
+    expect(windowsAssembly, contains('AtlasWindowsVaultSecureKeyStore()'));
+    expect(windowsAssembly, contains('AtlasWindowsVaultLocalStoreIO()'));
+    expect(windowsAssembly, contains('AtlasVaultPrivateStateRuntime('));
+    expect(windowsAssembly, contains('privateStatePersistence: runtime'));
+    expect(
+      windowsAssembly,
+      contains('_AtlasControllerCompatibilityMigrationSource'),
+    );
+    expect(windowsAssembly, isNot(contains('activateExistingAtlasVault(')));
+    expect(windowsAssembly, isNot(contains('SelectedVault')));
+    expect(
+      windowsAssembly,
+      isNot(contains('AtlasVaultPlaintextMigrationCoordinator')),
+    );
+    expect(
+      windowsAssembly,
+      isNot(contains('AtlasVaultPlaintextMigrationPresentationOwner')),
+    );
+    expect(windowsAssembly, isNot(contains('Interoperability')));
   });
 }
 
