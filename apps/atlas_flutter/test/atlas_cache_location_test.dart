@@ -479,6 +479,62 @@ void main() {
 
       expect(await location.privateMigrationIntentFile.exists(), isFalse);
     });
+
+    test(
+      'cleanup preserves durable public data and retires retained legacy data',
+      () async {
+        final snapshot = _migrationCacheSnapshot();
+        await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+        await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+        final source = AtlasWindowsDesktopCacheMigrationSource(location);
+        final inventory = await source.readPrivateStateForMigration();
+
+        await source.removePrivateStateForMigration(
+          expectedPrivateSha256: inventory.privateSha256!,
+        );
+
+        final durable = await AtlasLocalCacheStore(
+          file: location.cacheFile,
+          now: () => DateTime.utc(2025, 1, 3),
+        ).read();
+        final completed = await source.readPrivateStateForMigration();
+        expect(durable, isNotNull);
+        expect(durable!.baseURL, Uri.parse('http://atlas.test:8765'));
+        expect(durable.searchResponse.total, 0);
+        expect(durable.savedSearches, isEmpty);
+        expect(durable.trackerRecords, isEmpty);
+        expect(await location.legacyImportRetiredFile.exists(), isTrue);
+        expect(await location.legacyFile.exists(), isFalse);
+        expect(await location.privateMigrationIntentFile.exists(), isFalse);
+        expect(completed.savedSearches, isEmpty);
+        expect(completed.trackerRecords, isEmpty);
+        expect(completed.privateSha256, isNull);
+        expect(completed.durablePrivateSha256, isNull);
+        expect(completed.legacyPrivateSha256, isNull);
+        expect(completed.retainedLegacyCachePresent, isFalse);
+        expect(completed.cacheCleanupPending, isFalse);
+        expect(completed.cacheCleanupComplete, isTrue);
+      },
+    );
+
+    test('digest mismatch starts no cache cleanup transaction', () async {
+      final snapshot = _migrationCacheSnapshot();
+      await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+      await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+      final durableBefore = await location.cacheFile.readAsBytes();
+      final legacyBefore = await location.legacyFile.readAsBytes();
+      final source = AtlasWindowsDesktopCacheMigrationSource(location);
+
+      await expectLater(
+        source.removePrivateStateForMigration(expectedPrivateSha256: '0' * 64),
+        throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+
+      expect(await location.cacheFile.readAsBytes(), durableBefore);
+      expect(await location.legacyFile.readAsBytes(), legacyBefore);
+      expect(await location.privateMigrationIntentFile.exists(), isFalse);
+      expect(await location.legacyImportRetiredFile.exists(), isFalse);
+    });
   });
 }
 

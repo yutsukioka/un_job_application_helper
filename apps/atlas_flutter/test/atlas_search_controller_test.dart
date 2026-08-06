@@ -2874,7 +2874,7 @@ void main() {
     expect(secondCoordinator.calls, isEmpty);
   });
 
-  test('Windows default assembly is explicit and migration-UI-free', () {
+  test('Windows default assembly owns explicit migration without auto-run', () {
     final source = File(
       'lib/features/app_shell/atlas_app.dart',
     ).readAsStringSync();
@@ -2895,16 +2895,38 @@ void main() {
       windowsAssembly,
       contains('_AtlasControllerCompatibilityMigrationSource'),
     );
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsProtectedMigrationJournalStore()'),
+    );
+    expect(windowsAssembly, contains('AtlasWindowsSelectedVaultStore()'));
+    expect(
+      windowsAssembly,
+      contains('AtlasVaultPlaintextMigrationCoordinator('),
+    );
+    expect(
+      windowsAssembly,
+      contains('profile: AtlasVaultPlaintextMigrationProfile.windows'),
+    );
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsDesktopCacheMigrationSource'),
+    );
+    expect(
+      windowsAssembly,
+      contains('AtlasVaultPlaintextMigrationPresentationOwner('),
+    );
+    expect(windowsAssembly, contains('attachPlaintextMigrationContext('));
+    expect(
+      windowsAssembly,
+      contains(
+        'platform: AtlasVaultPlaintextMigrationPresentationPlatform.windows',
+      ),
+    );
     expect(windowsAssembly, isNot(contains('activateExistingAtlasVault(')));
-    expect(windowsAssembly, isNot(contains('SelectedVault')));
-    expect(
-      windowsAssembly,
-      isNot(contains('AtlasVaultPlaintextMigrationCoordinator')),
-    );
-    expect(
-      windowsAssembly,
-      isNot(contains('AtlasVaultPlaintextMigrationPresentationOwner')),
-    );
+    expect(windowsAssembly, isNot(contains('.inventory(')));
+    expect(windowsAssembly, isNot(contains('.prepare(')));
+    expect(windowsAssembly, isNot(contains('.resume(')));
     expect(windowsAssembly, isNot(contains('Interoperability')));
   });
 }
