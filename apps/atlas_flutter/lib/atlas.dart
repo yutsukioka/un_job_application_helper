@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'src/cache_file_replacement.dart';
 import 'src/atlas_vault/canonical_json.dart' as vault_json;
 import 'src/atlas_vault/crypto.dart' as vault_crypto;
 import 'src/atlas_vault/payloads.dart' as vault_payloads;
@@ -1168,13 +1169,29 @@ final class AtlasLocalCacheStore {
     required this.file,
     DateTime Function()? now,
     bool Function()? privateStateProtectionActive,
+    Future<bool> Function()? retainedLegacyPrivateStateAdmission,
+    Future<void> Function()? prepareForClear,
+    Future<void> Function(Future<void> Function())? mutationCoordinator,
   }) : _now = now ?? DateTime.now,
        _privateStateProtectionActive =
-           privateStateProtectionActive ?? _privateStateProtectionDisabled;
+           privateStateProtectionActive ?? _privateStateProtectionDisabled,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _retainedLegacyPrivateStateAdmission =
+           retainedLegacyPrivateStateAdmission,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _prepareForClear = prepareForClear,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _mutationCoordinator = mutationCoordinator;
 
   final File file;
   final DateTime Function() _now;
   final bool Function() _privateStateProtectionActive;
+  final Future<bool> Function()? _retainedLegacyPrivateStateAdmission;
+  final Future<void> Function()? _prepareForClear;
+  final Future<void> Function(Future<void> Function())? _mutationCoordinator;
 
   Future<AtlasLocalCacheSnapshot?> read() async {
     try {
@@ -1190,17 +1207,24 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> write(AtlasLocalCacheSnapshot snapshot) async {
-    final temporaryFile = File('${file.path}.tmp');
+    // Fail before waiting for a coordinator. The checks inside the coordinated
+    // write intentionally revalidate protection after asynchronous boundaries.
     _requirePlaintextWriteAllowed(snapshot);
+    await _coordinateMutation(() => _writeUnderCoordinator(snapshot));
+  }
+
+  Future<void> _writeUnderCoordinator(AtlasLocalCacheSnapshot snapshot) async {
+    final temporaryFile = cacheReplacementTemporaryFile(file);
     try {
       await file.parent.create(recursive: true);
+      await recoverInterruptedCacheReplacement(file);
       _requirePlaintextWriteAllowed(snapshot);
       final snapshotJson = snapshot.toJson();
       final encoded = await Isolate.run(() => jsonEncode(snapshotJson));
       _requirePlaintextWriteAllowed(snapshot);
       await temporaryFile.writeAsString(encoded, flush: true);
       _requirePlaintextWriteAllowed(snapshot);
-      await temporaryFile.rename(file.path);
+      await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
     } catch (_) {
       try {
         if (await temporaryFile.exists()) {
@@ -1214,27 +1238,40 @@ final class AtlasLocalCacheStore {
   }
 
   Future<void> clear() async {
-    if (await file.exists()) {
-      await file.delete();
+    await _coordinateMutation(() async {
+      if (_prepareForClear != null) {
+        await file.parent.create(recursive: true);
+      }
+      await _prepareForClear?.call();
+      await deleteCacheReplacementArtifacts(file);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    });
+  }
+
+  Future<void> _coordinateMutation(Future<void> Function() operation) {
+    final coordinator = _mutationCoordinator;
+    if (coordinator == null) {
+      return operation();
     }
-    final temporaryFile = File('${file.path}.tmp');
-    if (await temporaryFile.exists()) {
-      await temporaryFile.delete();
-    }
+    return coordinator(operation);
   }
 
   Future<bool> containsPersistedPrivateState() async {
     try {
-      if (!await file.exists()) {
-        return false;
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
+        final value = _map(decoded);
+        if (value == null) {
+          return true;
+        }
+        if (_persistedPrivateListIsPresent(value['saved_searches']) ||
+            _persistedPrivateListIsPresent(value['tracker_records'])) {
+          return true;
+        }
       }
-      final decoded = jsonDecode(await file.readAsString());
-      final value = _map(decoded);
-      if (value == null) {
-        return true;
-      }
-      return _persistedPrivateListIsPresent(value['saved_searches']) ||
-          _persistedPrivateListIsPresent(value['tracker_records']);
+      return await _retainedLegacyPrivateStateAdmission?.call() ?? false;
     } catch (_) {
       return true;
     }
@@ -1263,7 +1300,7 @@ final class AtlasLocalCacheStore {
   Future<void> removePrivateStateForMigration({
     required String expectedPrivateSha256,
   }) async {
-    final temporaryFile = File('${file.path}.tmp');
+    final temporaryFile = cacheReplacementTemporaryFile(file);
     try {
       if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(expectedPrivateSha256)) {
         throw const AtlasLocalCacheMigrationException();
@@ -1282,8 +1319,9 @@ final class AtlasLocalCacheStore {
       final encoded = vault_json.encodeCanonicalJson(updated);
       try {
         await file.parent.create(recursive: true);
+        await recoverInterruptedCacheReplacement(file);
         await temporaryFile.writeAsBytes(encoded, flush: true);
-        await temporaryFile.rename(file.path);
+        await replaceCacheFile(targetFile: file, stagedFile: temporaryFile);
       } finally {
         encoded.fillRange(0, encoded.length, 0);
       }

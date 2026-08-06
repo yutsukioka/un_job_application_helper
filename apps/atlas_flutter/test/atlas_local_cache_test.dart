@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/features/app_shell/atlas_cache_location.dart';
+import 'package:atlas/src/cache_file_replacement.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final _fixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
@@ -99,6 +102,121 @@ void main() {
       expect(await File('${cacheFile.path}.tmp').exists(), isFalse);
       expect(await store.read(), isNull);
     });
+
+    test('clear preserves the snapshot when clear preparation fails', () async {
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        now: () => _fixtureReadAt,
+        prepareForClear: () async {
+          throw const FileSystemException('retirement marker failed');
+        },
+      );
+      await store.write(_snapshot(savedAt: _fixtureSavedAt));
+
+      await expectLater(store.clear(), throwsA(isA<FileSystemException>()));
+
+      expect(await cacheFile.exists(), isTrue);
+      expect(await store.read(), isNotNull);
+    });
+
+    test(
+      'clear prepares a fresh cache directory before its callback',
+      () async {
+        final freshCacheFile = File(
+          '${tempDir.path}/fresh/nested/atlas-local-cache.json',
+        );
+        final retirementMarker = File(
+          '${freshCacheFile.parent.path}/legacy-import-retired',
+        );
+        final store = AtlasLocalCacheStore(
+          file: freshCacheFile,
+          prepareForClear: () => retirementMarker.writeAsString('retired'),
+        );
+
+        await store.clear();
+
+        expect(await retirementMarker.readAsString(), 'retired');
+        expect(await freshCacheFile.exists(), isFalse);
+      },
+    );
+
+    test(
+      'retired legacy private state remains activation admission evidence',
+      () async {
+        final legacyFile = File('${tempDir.path}/legacy/cache.json');
+        final retirementMarker = File('${tempDir.path}/legacy-retired');
+        final location = AtlasPersistentCacheLocation(
+          cacheFile: cacheFile,
+          legacyFile: legacyFile,
+          legacyImportRetiredFile: retirementMarker,
+        );
+        await AtlasLocalCacheStore(
+          file: legacyFile,
+        ).write(_snapshot(savedAt: _fixtureSavedAt));
+        await location.prepareForClearUnderMutationLock();
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          retainedLegacyPrivateStateAdmission: () => AtlasLocalCacheStore(
+            file: location.legacyFile,
+          ).containsPersistedPrivateState(),
+        );
+
+        expect(await cacheFile.exists(), isFalse);
+        expect(await retirementMarker.exists(), isTrue);
+        expect(await store.containsPersistedPrivateState(), isTrue);
+        expect(await legacyFile.exists(), isTrue);
+      },
+    );
+
+    test('write waits for the persistent mutation coordinator', () async {
+      final location = AtlasPersistentCacheLocation(
+        cacheFile: cacheFile,
+        legacyFile: File('${tempDir.path}/legacy.json'),
+        legacyImportRetiredFile: File('${tempDir.path}/legacy-retired'),
+      );
+      final lockEntered = Completer<void>();
+      final releaseLock = Completer<void>();
+      final lockHolder = location.coordinateMutation(() async {
+        lockEntered.complete();
+        await releaseLock.future;
+      });
+      await lockEntered.future;
+      final store = AtlasLocalCacheStore(
+        file: cacheFile,
+        mutationCoordinator: location.coordinateMutation,
+      );
+      var writeCompleted = false;
+      final write = store
+          .write(_snapshot(savedAt: _fixtureSavedAt))
+          .whenComplete(() => writeCompleted = true);
+
+      await Future<void>.delayed(Duration.zero);
+      expect(writeCompleted, isFalse);
+      expect(await cacheFile.exists(), isFalse);
+
+      releaseLock.complete();
+      await lockHolder;
+      await write;
+      expect(await cacheFile.exists(), isTrue);
+    });
+
+    test(
+      'Windows replacement protocol commits and cleans its journal',
+      () async {
+        final stagedFile = cacheReplacementTemporaryFile(cacheFile);
+        await cacheFile.writeAsString('old', flush: true);
+        await stagedFile.writeAsString('new', flush: true);
+
+        await replaceCacheFile(
+          targetFile: cacheFile,
+          stagedFile: stagedFile,
+          useWindowsRecoveryProtocol: true,
+        );
+
+        expect(await cacheFile.readAsString(), 'new');
+        expect(await hasCacheReplacementArtifacts(cacheFile), isFalse);
+      },
+    );
 
     test('private-state detection and public-only copy are immutable', () {
       final snapshot = _snapshot(savedAt: _fixtureSavedAt);
@@ -565,6 +683,8 @@ void main() {
           'privateStateProtectionActive: () => _privateStateProtectionActive',
         ),
       );
+      expect(source, contains('retainedLegacyPrivateStateAdmission: () =>'));
+      expect(source, contains('file: cacheLocation.legacyFile'));
       expect(
         windowsAssembly,
         isNot(contains('AtlasAndroidSelectedVaultStore')),

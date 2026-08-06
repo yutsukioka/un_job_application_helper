@@ -8,6 +8,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'atlas_cache_location.dart';
+
 typedef AtlasClientFactory = AtlasAPIClient Function(Uri baseURL);
 typedef AtlasCacheStoreFactory =
     Future<AtlasLocalCacheStore?> Function({
@@ -36,8 +38,8 @@ const MethodChannel _storageChannel = MethodChannel('atlas/storage');
 Future<AtlasLocalCacheStore?> _defaultCacheStore({
   bool Function()? privateStateProtectionActive,
 }) async {
-  try {
-    if (Platform.isAndroid) {
+  if (Platform.isAndroid) {
+    try {
       // coverage:ignore-start
       final directoryPath = await _storageChannel.invokeMethod<String>(
         'appFilesDir',
@@ -49,17 +51,35 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
         );
       }
       // coverage:ignore-end
+    } catch (_) {
+      // Android has no temporary-directory fallback if native storage fails.
     }
-  } catch (_) {
-    // Fall through to a local development/test fallback.
   }
-  final fallbackDirectory = Directory(
-    '${Directory.systemTemp.path}/atlas_flutter',
-  );
-  return AtlasLocalCacheStore(
-    file: File('${fallbackDirectory.path}/atlas-local-cache-v1.json'),
-    privateStateProtectionActive: privateStateProtectionActive,
-  );
+  if (isAtlasLegacyTemporaryCachePlatform()) {
+    return AtlasLocalCacheStore(
+      file: resolveAtlasLegacyTemporaryCacheFile(),
+      privateStateProtectionActive: privateStateProtectionActive,
+    );
+  }
+  if (!isAtlasPersistentDesktopCachePlatform()) {
+    return null;
+  }
+  try {
+    final cacheLocation = await resolveAtlasPersistentCacheLocation();
+    return AtlasLocalCacheStore(
+      file: cacheLocation.cacheFile,
+      privateStateProtectionActive: privateStateProtectionActive,
+      retainedLegacyPrivateStateAdmission: () => AtlasLocalCacheStore(
+        file: cacheLocation.legacyFile,
+      ).containsPersistedPrivateState(),
+      prepareForClear: cacheLocation.prepareForClearUnderMutationLock,
+      mutationCoordinator: cacheLocation.coordinateMutation,
+    );
+  } catch (_) {
+    // A persistent cache is optional. Never fall back to an OS-managed
+    // temporary directory because it cannot provide reliable offline storage.
+    return null;
+  }
 }
 
 class AtlasAppController extends ChangeNotifier
