@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:atlas/atlas_vault_windows.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,12 +12,18 @@ void main() {
 
   late AtlasVaultWindowsMethodCallRecorder recorder;
   late AtlasWindowsVaultSecureKeyStore storage;
+  late AtlasWindowsProtectedMigrationJournalStore journal;
+  late AtlasWindowsSelectedVaultStore selection;
 
   setUp(() {
     recorder = AtlasVaultWindowsMethodCallRecorder(
       channelName: atlasVaultWindowsMethodChannelName,
     )..install();
     storage = AtlasWindowsVaultSecureKeyStore(channel: recorder.channel);
+    journal = AtlasWindowsProtectedMigrationJournalStore(
+      channel: recorder.channel,
+    );
+    selection = AtlasWindowsSelectedVaultStore(channel: recorder.channel);
   });
 
   tearDown(() {
@@ -23,6 +32,141 @@ void main() {
 
   test('construction performs no platform call', () {
     expect(recorder.calls, isEmpty);
+  });
+
+  test(
+    'protected migration journal uses exact create read and CAS methods',
+    () async {
+      final bytes = Uint8List.fromList(
+        utf8.encode(
+          '{"format":"atlasvault-windows-plaintext-migration","version":1}',
+        ),
+      );
+      var stored = Uint8List.fromList(bytes);
+      recorder.handler = (call) async {
+        switch (call.method) {
+          case 'createPlaintextMigrationJournal':
+            expect(call.arguments, <String, Object?>{'journal_bytes': bytes});
+            return null;
+          case 'readPlaintextMigrationJournal':
+            expect(call.arguments, isNull);
+            return Uint8List.fromList(stored);
+          case 'replacePlaintextMigrationJournal':
+            final arguments = call.arguments! as Map<Object?, Object?>;
+            expect(arguments.keys, <Object?>[
+              'journal_bytes',
+              'expected_sha256',
+            ]);
+            expect(arguments['journal_bytes'], orderedEquals(bytes));
+            expect(arguments['expected_sha256'], 'a' * 64);
+            stored = Uint8List.fromList(
+              arguments['journal_bytes']! as Uint8List,
+            );
+            return null;
+          case 'deletePlaintextMigrationJournal':
+            expect(call.arguments, <String, Object?>{
+              'expected_sha256': 'b' * 64,
+              'allow_absent': false,
+            });
+            return null;
+          default:
+            fail('Unexpected Windows journal method.');
+        }
+      };
+
+      await journal.create(bytes);
+      expect(await journal.read(), orderedEquals(bytes));
+      await journal.replace(bytes, expectedSha256: 'a' * 64);
+      await journal.delete(expectedSha256: 'b' * 64);
+
+      expect(recorder.calls.map((call) => call.method), <String>[
+        'createPlaintextMigrationJournal',
+        'readPlaintextMigrationJournal',
+        'replacePlaintextMigrationJournal',
+        'deletePlaintextMigrationJournal',
+      ]);
+    },
+  );
+
+  test(
+    'protected migration journal rejects noncanonical bytes before call',
+    () async {
+      final bytes = Uint8List.fromList(
+        utf8.encode(
+          '{ "version": 1, "format": '
+          '"atlasvault-windows-plaintext-migration" }',
+        ),
+      );
+
+      await expectLater(
+        journal.create(bytes),
+        throwsA(isA<AtlasVaultWindowsStorageException>()),
+      );
+      await expectLater(
+        journal.replace(bytes, expectedSha256: 'a' * 64),
+        throwsA(isA<AtlasVaultWindowsStorageException>()),
+      );
+      expect(recorder.calls, isEmpty);
+    },
+  );
+
+  test(
+    'selected vault uses strict create-only read and clear methods',
+    () async {
+      recorder.handler = (call) async {
+        switch (call.method) {
+          case 'readSelectedVault':
+            expect(call.arguments, isNull);
+            return 'vault-alpha';
+          case 'createSelectedVault':
+            expect(call.arguments, <String, Object?>{
+              'vault_id': 'vault-alpha',
+            });
+            return null;
+          case 'clearSelectedVault':
+            expect(call.arguments, <String, Object?>{
+              'expected_vault_id': 'vault-alpha',
+            });
+            return null;
+          default:
+            fail('Unexpected Windows selection method.');
+        }
+      };
+
+      expect(await selection.read(), 'vault-alpha');
+      await selection.create('vault-alpha');
+      await selection.clear('vault-alpha');
+      expect(recorder.calls.map((call) => call.method), <String>[
+        'readSelectedVault',
+        'createSelectedVault',
+        'clearSelectedVault',
+      ]);
+    },
+  );
+
+  test('native bridge declares protected migration metadata boundaries', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final token in <String>[
+      'AVWBLB01',
+      'plaintext-private-state-migration',
+      'selected-vault',
+      'readPlaintextMigrationJournal',
+      'createPlaintextMigrationJournal',
+      'replacePlaintextMigrationJournal',
+      'deletePlaintextMigrationJournal',
+      'readSelectedVault',
+      'createSelectedVault',
+      'clearSelectedVault',
+      'migrations',
+      'selection',
+    ]) {
+      expect(source, contains(token));
+    }
+    expect(source, contains('CRYPTPROTECT_UI_FORBIDDEN'));
+    expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
   });
 
   test('invalid vault IDs make no platform call', () async {

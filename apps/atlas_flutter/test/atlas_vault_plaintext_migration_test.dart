@@ -809,6 +809,57 @@ void main() {
   });
 
   test(
+    'Windows journal profile is strict and rejects Android journal bytes',
+    () async {
+      final windows = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await windows.coordinator.inventory();
+      await windows.coordinator.prepare();
+
+      final windowsBytes = windows.journal.bytes!;
+      final windowsJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        windowsBytes,
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      expect(
+        windowsJournal.toJson()['format'],
+        'atlasvault-windows-plaintext-migration',
+      );
+      expect(windowsJournal.durableCachePrivateSha256, isNotNull);
+      expect(windowsJournal.legacyCachePrivateSha256, isNotNull);
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.decodeBytes(windowsBytes),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      final android = _MigrationFixture();
+      await android.coordinator.inventory();
+      await android.coordinator.prepare();
+      final androidBytes = android.journal.bytes!;
+      final androidJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        androidBytes,
+        profile: AtlasVaultPlaintextMigrationProfile.android,
+      );
+      expect(
+        androidJournal.toJson()['format'],
+        'atlasvault-android-plaintext-migration',
+      );
+      expect(
+        androidJournal.toJson().containsKey('durable_cache_private_sha256'),
+        isFalse,
+      );
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.decodeBytes(
+          androidBytes,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+    },
+  );
+
+  test(
     'finalization removes plaintext before selection and clears journal last',
     () async {
       final fixture = _MigrationFixture();
@@ -1121,7 +1172,9 @@ final class _CapturingLegacyPrivateStateRestorer
 }
 
 final class _MigrationFixture {
-  _MigrationFixture() {
+  _MigrationFixture({
+    this.profile = AtlasVaultPlaintextMigrationProfile.android,
+  }) {
     final state = AtlasVaultPlaintextPrivateState(
       savedSearches: <AtlasSavedSearch>[_savedSearch()],
       trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
@@ -1133,6 +1186,14 @@ final class _MigrationFixture {
       savedSearches: state.savedSearches,
       trackerRecords: state.trackerRecords,
       privateSha256: '1' * 64,
+      durablePrivateSha256:
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+          ? '2' * 64
+          : null,
+      legacyPrivateSha256:
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+          ? '3' * 64
+          : null,
       authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
     coordinator = AtlasVaultPlaintextMigrationCoordinator(
@@ -1145,6 +1206,7 @@ final class _MigrationFixture {
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       privateAuthority: privateAuthority,
+      profile: profile,
       now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
       uuidProvider: _ids.call,
       vaultKeyProvider: () =>
@@ -1165,6 +1227,7 @@ final class _MigrationFixture {
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       privateAuthority: privateAuthority,
+      profile: profile,
       now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
       uuidProvider: () => throw StateError('Unexpected UUID request.'),
       vaultKeyProvider: () => throw StateError('Unexpected key request.'),
@@ -1173,6 +1236,7 @@ final class _MigrationFixture {
   }
 
   final events = <String>[];
+  final AtlasVaultPlaintextMigrationProfile profile;
   final admission = _OperationAdmission();
   final memory = _MemorySource();
   final compatibility = _CompatibilitySource();

@@ -385,6 +385,139 @@ void main() {
       );
     });
   });
+
+  group('AtlasWindowsDesktopCacheMigrationSource', () {
+    late Directory sandbox;
+    late Directory supportDirectory;
+    late Directory legacySystemTemporaryDirectory;
+    late AtlasPersistentCacheLocation location;
+
+    setUp(() async {
+      sandbox = await Directory.systemTemp.createTemp(
+        'atlas_windows_cache_migration_test_',
+      );
+      supportDirectory = Directory(
+        _joinTestPath(sandbox.path, 'application-support'),
+      );
+      legacySystemTemporaryDirectory = Directory(
+        _joinTestPath(sandbox.path, 'legacy-system-temp'),
+      );
+      location = await resolveAtlasPersistentCacheLocation(
+        applicationSupportDirectoryProvider: () async => supportDirectory,
+        legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+      );
+    });
+
+    tearDown(() async {
+      if (await sandbox.exists()) {
+        await sandbox.delete(recursive: true);
+      }
+    });
+
+    test(
+      'inventories durable and retained legacy cache as one read-only authority',
+      () async {
+        final snapshot = _migrationCacheSnapshot();
+        await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+        await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+        final durableBefore = await location.cacheFile.readAsBytes();
+        final legacyBefore = await location.legacyFile.readAsBytes();
+        final source = AtlasWindowsDesktopCacheMigrationSource(location);
+
+        final state = await source.readPrivateStateForMigration();
+
+        expect(state.savedSearches, hasLength(1));
+        expect(state.trackerRecords, hasLength(1));
+        expect(state.durablePrivateSha256, isNotNull);
+        expect(state.legacyPrivateSha256, isNotNull);
+        expect(state.privateSha256, isNotNull);
+        expect(state.retainedLegacyCachePresent, isTrue);
+        expect(state.cacheCleanupPending, isFalse);
+        expect(state.cacheCleanupComplete, isFalse);
+        expect(await location.cacheFile.readAsBytes(), durableBefore);
+        expect(await location.legacyFile.readAsBytes(), legacyBefore);
+        expect(await location.privateMigrationIntentFile.exists(), isFalse);
+      },
+    );
+
+    test(
+      'fails closed when durable and retained legacy values conflict',
+      () async {
+        await AtlasLocalCacheStore(
+          file: location.cacheFile,
+        ).write(_migrationCacheSnapshot(requestText: 'DURABLE_PRIVATE_QUERY'));
+        await AtlasLocalCacheStore(
+          file: location.legacyFile,
+        ).write(_migrationCacheSnapshot(requestText: 'LEGACY_PRIVATE_QUERY'));
+        final source = AtlasWindowsDesktopCacheMigrationSource(location);
+
+        await expectLater(
+          source.readPrivateStateForMigration(),
+          throwsA(isA<AtlasLocalCacheMigrationException>()),
+        );
+
+        expect(await location.privateMigrationIntentFile.exists(), isFalse);
+        expect(await location.legacyImportRetiredFile.exists(), isFalse);
+      },
+    );
+
+    test('fails closed on malformed retained legacy cache', () async {
+      await AtlasLocalCacheStore(
+        file: location.cacheFile,
+      ).write(_migrationCacheSnapshot());
+      await location.legacyFile.parent.create(recursive: true);
+      await location.legacyFile.writeAsString(
+        '{"saved_searches":[',
+        flush: true,
+      );
+      final source = AtlasWindowsDesktopCacheMigrationSource(location);
+
+      await expectLater(
+        source.readPrivateStateForMigration(),
+        throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+
+      expect(await location.privateMigrationIntentFile.exists(), isFalse);
+    });
+  });
+}
+
+AtlasLocalCacheSnapshot _migrationCacheSnapshot({
+  String requestText = 'WINDOWS_PRIVATE_QUERY',
+}) {
+  return AtlasLocalCacheSnapshot(
+    schemaVersion: AtlasLocalCacheSnapshot.currentSchemaVersion,
+    baseURL: Uri.parse('http://atlas.test:8765'),
+    savedAt: DateTime.utc(2025, 1, 2, 3, 4, 5),
+    searchRequest: const AtlasSearchRequest(),
+    searchResponse: AtlasSearchResponse(
+      total: 0,
+      limit: 50,
+      offset: 0,
+      results: const <JobSearchResult>[],
+      facets: const <String, Map<String, int>>{},
+      facetLabels: const <String, Map<String, String>>{},
+      unclassifiedCount: 0,
+    ),
+    savedSearches: <AtlasSavedSearch>[
+      AtlasSavedSearch(
+        name: 'Windows migration search',
+        description: 'private description',
+        request: AtlasSearchRequest(text: requestText),
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-02T00:00:00Z',
+      ),
+    ],
+    trackerRecords: <AtlasApplicationRecord>[
+      AtlasApplicationRecord(
+        id: 'windows-tracker-record',
+        jobKey: 'windows:private-job',
+        status: 'saved',
+        notes: 'WINDOWS_PRIVATE_NOTE',
+        updatedAt: '2026-08-02T00:00:00Z',
+      ),
+    ],
+  );
 }
 
 String _joinTestPath(String parent, String child) {

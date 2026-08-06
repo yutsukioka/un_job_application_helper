@@ -10,12 +10,22 @@ void main() {
     AtlasVaultLocalStoreIO? localStore;
     AtlasVaultWindowsCapabilities? capabilities;
     AtlasVaultPrivateStatePersistence? persistence;
+    AtlasVaultProtectedMigrationJournalStore? journalStore;
+    AtlasVaultSelectedVaultStore? selectedVaultStore;
+    AtlasWindowsProtectedMigrationJournalStore? windowsJournalStore;
+    AtlasWindowsSelectedVaultStore? windowsSelectedVaultStore;
+    AtlasVaultPlaintextMigrationProfile? migrationProfile;
     Future<Uint8List?> Function(String)? load;
 
     expect(keyStore, isNull);
     expect(localStore, isNull);
     expect(capabilities, isNull);
     expect(persistence, isNull);
+    expect(journalStore, isNull);
+    expect(selectedVaultStore, isNull);
+    expect(windowsJournalStore, isNull);
+    expect(windowsSelectedVaultStore, isNull);
+    expect(migrationProfile, isNull);
     expect(load, isNull);
     expect(atlasVaultWindowsMethodChannelName, 'atlas/vault_windows');
   });
