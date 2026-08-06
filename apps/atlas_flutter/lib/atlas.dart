@@ -1149,6 +1149,7 @@ final class AtlasLocalCacheMigrationPrivateState {
     this.retainedLegacyCachePresent = false,
     this.cacheCleanupPending = false,
     this.cacheCleanupComplete = false,
+    this.requiresPhysicalCleanup = false,
     this.authorityBaseURL,
     this.cachePresent = true,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
@@ -1164,6 +1165,7 @@ final class AtlasLocalCacheMigrationPrivateState {
   final bool retainedLegacyCachePresent;
   final bool cacheCleanupPending;
   final bool cacheCleanupComplete;
+  final bool requiresPhysicalCleanup;
   final Uri? authorityBaseURL;
   final bool cachePresent;
 

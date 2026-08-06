@@ -197,6 +197,12 @@ abstract interface class AtlasLocalCacheMigrationSource {
   });
 }
 
+abstract interface class AtlasLocalCacheMigrationCleanupSource {
+  Future<void> completePrivateStateCleanupForMigration({
+    required String? expectedPrivateSha256,
+  });
+}
+
 final class AtlasLocalCacheMigrationStoreSource
     implements AtlasLocalCacheMigrationSource {
   const AtlasLocalCacheMigrationStoreSource(this.store);
@@ -1408,15 +1414,22 @@ final class AtlasVaultPlaintextMigrationCoordinator
           cache.privateSha256 == null &&
           cache.savedSearches.isEmpty &&
           cache.trackerRecords.isEmpty;
+      final cleanupPending =
+          _profile == AtlasVaultPlaintextMigrationProfile.windows &&
+          cache.cacheCleanupPending;
       if (!cache.cachePresent ||
           (!cachePrivateAbsent &&
-              cache.privateSha256 != initialJournal.cachePrivateSha256)) {
+              cache.privateSha256 != initialJournal.cachePrivateSha256 &&
+              !cleanupPending)) {
         throw const AtlasVaultPlaintextMigrationException();
+      }
+      if (cleanupPending) {
+        _requireWindowsCacheCleanupProgress(initialJournal, cache);
       }
       _requireCacheCompatibilityAuthority(
         cache,
         initialJournal.compatibilityAuthority,
-        required: true,
+        required: !cachePrivateAbsent,
       );
     }
     var journal = initialJournal;
@@ -1538,10 +1551,40 @@ final class AtlasVaultPlaintextMigrationCoordinator
     if (journal.cacheCleared) {
       if ((expectedDigest != null && !current.cachePresent) ||
           privatePresent ||
-          current.privateSha256 != null) {
+          current.privateSha256 != null ||
+          !_windowsCacheCleanupIsComplete(current)) {
         throw const AtlasVaultPlaintextMigrationException();
       }
       return journal;
+    }
+    if (_profile == AtlasVaultPlaintextMigrationProfile.windows &&
+        _cacheSource is AtlasLocalCacheMigrationCleanupSource) {
+      if (current.cacheCleanupPending) {
+        _requireWindowsCacheCleanupProgress(journal, current);
+      } else if (!current.cacheCleanupComplete) {
+        if (current.privateSha256 != expectedDigest ||
+            current.durablePrivateSha256 != journal.durableCachePrivateSha256 ||
+            current.legacyPrivateSha256 != journal.legacyCachePrivateSha256) {
+          throw const AtlasVaultPlaintextMigrationException();
+        }
+      }
+      if (!current.cacheCleanupComplete) {
+        await (_cacheSource as AtlasLocalCacheMigrationCleanupSource)
+            .completePrivateStateCleanupForMigration(
+              expectedPrivateSha256: expectedDigest,
+            );
+      }
+      final restored = await _cacheSource.readPrivateStateForMigration();
+      if (restored.privateSha256 != null ||
+          restored.savedSearches.isNotEmpty ||
+          restored.trackerRecords.isNotEmpty ||
+          !_windowsCacheCleanupIsComplete(restored)) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      return _replaceJournal(
+        journal,
+        journal.withCommitProgress(cacheCleared: true),
+      );
     }
     if (expectedDigest == null) {
       if (privatePresent || current.privateSha256 != null) {
@@ -1584,7 +1627,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
     if ((journal.cachePrivateSha256 != null && !cache.cachePresent) ||
         cache.privateSha256 != null ||
         cache.savedSearches.isNotEmpty ||
-        cache.trackerRecords.isNotEmpty) {
+        cache.trackerRecords.isNotEmpty ||
+        !_windowsCacheCleanupIsComplete(cache)) {
       throw const AtlasVaultPlaintextMigrationException();
     }
     final memory = await _inMemorySource.readPlaintextPrivateState();
@@ -1634,7 +1678,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
     if ((journal.cachePrivateSha256 != null && !cache.cachePresent) ||
         cache.privateSha256 != null ||
         cache.savedSearches.isNotEmpty ||
-        cache.trackerRecords.isNotEmpty) {
+        cache.trackerRecords.isNotEmpty ||
+        !_windowsCacheCleanupIsComplete(cache)) {
       throw const AtlasVaultPlaintextMigrationException();
     }
     await _activateAndVerify(journal);
@@ -2082,6 +2127,10 @@ final class AtlasVaultPlaintextMigrationCoordinator
                 : keyOrder;
           });
       if (_profile == AtlasVaultPlaintextMigrationProfile.windows &&
+          cache.cacheCleanupPending) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      if (_profile == AtlasVaultPlaintextMigrationProfile.windows &&
           cache.privateSha256 != null &&
           cache.durablePrivateSha256 == null &&
           cache.legacyPrivateSha256 == null) {
@@ -2136,6 +2185,33 @@ final class AtlasVaultPlaintextMigrationCoordinator
         cacheAuthority.toString() != compatibilityAuthority) {
       throw const AtlasVaultPlaintextMigrationException();
     }
+  }
+
+  void _requireWindowsCacheCleanupProgress(
+    AtlasVaultPlaintextMigrationJournal journal,
+    AtlasLocalCacheMigrationPrivateState cache,
+  ) {
+    if (_profile != AtlasVaultPlaintextMigrationProfile.windows ||
+        !cache.cacheCleanupPending ||
+        (cache.durablePrivateSha256 != null &&
+            cache.durablePrivateSha256 != journal.durableCachePrivateSha256) ||
+        (cache.legacyPrivateSha256 != null &&
+            cache.legacyPrivateSha256 != journal.legacyCachePrivateSha256)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
+
+  bool _windowsCacheCleanupIsComplete(
+    AtlasLocalCacheMigrationPrivateState cache,
+  ) {
+    if (_profile != AtlasVaultPlaintextMigrationProfile.windows ||
+        _cacheSource is! AtlasLocalCacheMigrationCleanupSource) {
+      return true;
+    }
+    return cache.cacheCleanupComplete &&
+        !cache.cacheCleanupPending &&
+        !cache.requiresPhysicalCleanup &&
+        !cache.retainedLegacyCachePresent;
   }
 
   void _requireInMemoryCompatibilityAuthority(

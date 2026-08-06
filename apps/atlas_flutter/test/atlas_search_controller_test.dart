@@ -2887,6 +2887,16 @@ void main() {
     expect(windowsStart, isNonNegative);
     expect(fallbackStart, greaterThan(windowsStart));
     final windowsAssembly = source.substring(windowsStart, fallbackStart);
+    final helperStart = source.indexOf(
+      'AtlasVaultPlaintextMigrationPresentationOwner _attachWindowsMigration({',
+    );
+    final helperEnd = source.indexOf(
+      '_AtlasDefaultControllerAssembly _buildDefaultControllerAssembly()',
+      helperStart < 0 ? 0 : helperStart,
+    );
+    expect(helperStart, isNonNegative);
+    expect(helperEnd, greaterThan(helperStart));
+    final migrationAssembly = source.substring(helperStart, helperEnd);
     expect(windowsAssembly, contains('AtlasWindowsVaultSecureKeyStore()'));
     expect(windowsAssembly, contains('AtlasWindowsVaultLocalStoreIO()'));
     expect(windowsAssembly, contains('AtlasVaultPrivateStateRuntime('));
@@ -2895,39 +2905,44 @@ void main() {
       windowsAssembly,
       contains('_AtlasControllerCompatibilityMigrationSource'),
     );
+    expect(windowsAssembly, contains('_attachWindowsMigration('));
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('AtlasWindowsProtectedMigrationJournalStore()'),
     );
-    expect(windowsAssembly, contains('AtlasWindowsSelectedVaultStore()'));
+    expect(migrationAssembly, contains('AtlasWindowsSelectedVaultStore()'));
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('AtlasVaultPlaintextMigrationCoordinator('),
     );
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('profile: AtlasVaultPlaintextMigrationProfile.windows'),
     );
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('AtlasWindowsDesktopCacheMigrationSource'),
     );
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('AtlasVaultPlaintextMigrationPresentationOwner('),
     );
-    expect(windowsAssembly, contains('attachPlaintextMigrationContext('));
+    expect(migrationAssembly, contains('attachPlaintextMigrationContext('));
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains(
         'platform: AtlasVaultPlaintextMigrationPresentationPlatform.windows',
       ),
     );
-    expect(windowsAssembly, isNot(contains('activateExistingAtlasVault(')));
-    expect(windowsAssembly, isNot(contains('.inventory(')));
-    expect(windowsAssembly, isNot(contains('.prepare(')));
-    expect(windowsAssembly, isNot(contains('.resume(')));
-    expect(windowsAssembly, isNot(contains('Interoperability')));
+    final sideEffectFreeAssembly = '$windowsAssembly\n$migrationAssembly';
+    expect(
+      sideEffectFreeAssembly,
+      isNot(contains('activateExistingAtlasVault(')),
+    );
+    expect(sideEffectFreeAssembly, isNot(contains('.inventory(')));
+    expect(sideEffectFreeAssembly, isNot(contains('.prepare(')));
+    expect(sideEffectFreeAssembly, isNot(contains('.resume(')));
+    expect(sideEffectFreeAssembly, isNot(contains('Interoperability')));
   });
 }
 

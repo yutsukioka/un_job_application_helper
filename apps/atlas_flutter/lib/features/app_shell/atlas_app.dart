@@ -2652,6 +2652,52 @@ final class _AtlasDefaultControllerAssembly {
   final AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
 }
 
+AtlasVaultPlaintextMigrationPresentationOwner _attachWindowsMigration({
+  required AtlasAppController controller,
+  required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasWindowsVaultSecureKeyStore keyStore,
+  required AtlasWindowsVaultLocalStoreIO localStore,
+}) {
+  final selectedVaultStore = AtlasWindowsSelectedVaultStore();
+  final migrationJournalStore = AtlasWindowsProtectedMigrationJournalStore();
+  final inMemorySource = _AtlasControllerPlaintextMigrationSource(controller);
+  final compatibilitySource = _AtlasControllerCompatibilityMigrationSource(
+    controller,
+  );
+  final cacheSource = _AtlasResolvedLocalCacheMigrationSource(() async {
+    await controller._drainCacheWriteForMigration();
+    return AtlasWindowsDesktopCacheMigrationSource(
+      await resolveAtlasPersistentCacheLocation(),
+    );
+  });
+  final coordinator = AtlasVaultPlaintextMigrationCoordinator(
+    profile: AtlasVaultPlaintextMigrationProfile.windows,
+    inMemorySource: inMemorySource,
+    compatibilitySource: compatibilitySource,
+    cacheSource: cacheSource,
+    operationAdmission: controller,
+    journalStore: migrationJournalStore,
+    selectedVaultStore: selectedVaultStore,
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    privateAuthority: _AtlasControllerMigrationPrivateAuthority(
+      controller: controller,
+      runtime: runtime,
+    ),
+  );
+  final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+    coordinator: coordinator,
+    legacyPrivateStateRestorer: controller,
+  );
+  controller.attachPlaintextMigrationContext(
+    AtlasVaultPlaintextMigrationContext(
+      owner: owner,
+      platform: AtlasVaultPlaintextMigrationPresentationPlatform.windows,
+    ),
+  );
+  return owner;
+}
+
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   if (Platform.isWindows) {
     final keyStore = AtlasWindowsVaultSecureKeyStore();
@@ -2672,7 +2718,16 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
             privateState.trackerRecords.isNotEmpty;
       },
     );
-    return _AtlasDefaultControllerAssembly(controller: controller);
+    final owner = _attachWindowsMigration(
+      controller: controller,
+      runtime: runtime,
+      keyStore: keyStore,
+      localStore: localStore,
+    );
+    return _AtlasDefaultControllerAssembly(
+      controller: controller,
+      migrationOwner: owner,
+    );
   }
 
   if (!Platform.isAndroid) {
@@ -2848,6 +2903,44 @@ final class _AtlasControllerCacheMigrationSource
     await store.removePrivateStateForMigration(
       expectedPrivateSha256: expectedPrivateSha256,
     );
+  }
+}
+
+final class _AtlasResolvedLocalCacheMigrationSource
+    implements
+        AtlasLocalCacheMigrationSource,
+        AtlasLocalCacheMigrationCleanupSource {
+  const _AtlasResolvedLocalCacheMigrationSource(this._resolve);
+
+  final Future<AtlasLocalCacheMigrationSource> Function() _resolve;
+
+  @override
+  Future<AtlasLocalCacheMigrationPrivateState>
+  readPrivateStateForMigration() async {
+    return (await _resolve()).readPrivateStateForMigration();
+  }
+
+  @override
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) async {
+    await (await _resolve()).removePrivateStateForMigration(
+      expectedPrivateSha256: expectedPrivateSha256,
+    );
+  }
+
+  @override
+  Future<void> completePrivateStateCleanupForMigration({
+    required String? expectedPrivateSha256,
+  }) async {
+    final source = await _resolve();
+    if (source is! AtlasLocalCacheMigrationCleanupSource) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    await (source as AtlasLocalCacheMigrationCleanupSource)
+        .completePrivateStateCleanupForMigration(
+          expectedPrivateSha256: expectedPrivateSha256,
+        );
   }
 }
 
@@ -5879,7 +5972,10 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
             _SettingsSection(
               title: 'AtlasVault',
               children: <Widget>[
-                AtlasVaultPlaintextMigrationPanel(owner: context.owner),
+                AtlasVaultPlaintextMigrationPanel(
+                  owner: context.owner,
+                  platform: context.platform,
+                ),
               ],
             ),
           ],

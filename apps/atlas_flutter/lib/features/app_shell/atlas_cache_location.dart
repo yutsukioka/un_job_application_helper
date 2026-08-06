@@ -76,7 +76,9 @@ final class AtlasPersistentCacheLocation {
 }
 
 final class AtlasWindowsDesktopCacheMigrationSource
-    implements AtlasLocalCacheMigrationSource {
+    implements
+        AtlasLocalCacheMigrationSource,
+        AtlasLocalCacheMigrationCleanupSource {
   const AtlasWindowsDesktopCacheMigrationSource(this.location);
 
   final AtlasPersistentCacheLocation location;
@@ -92,7 +94,7 @@ final class AtlasWindowsDesktopCacheMigrationSource
         final legacy = await AtlasLocalCacheStore(
           file: location.legacyFile,
         ).readPrivateStateForMigration();
-        final intentPresent = await _validateCleanupIntentIfPresent(
+        final intent = await _readCleanupIntentIfPresent(
           location.privateMigrationIntentFile,
         );
         final merged = _mergeCachePrivateState(durable, legacy);
@@ -105,7 +107,7 @@ final class AtlasWindowsDesktopCacheMigrationSource
             !legacy.cachePresent &&
             !durable.containsPrivateState &&
             durable.privateSha256 == null &&
-            !intentPresent;
+            intent == null;
         return AtlasLocalCacheMigrationPrivateState(
           savedSearches: merged.savedSearches,
           trackerRecords: merged.trackerRecords,
@@ -113,8 +115,9 @@ final class AtlasWindowsDesktopCacheMigrationSource
           durablePrivateSha256: durable.privateSha256,
           legacyPrivateSha256: legacy.privateSha256,
           retainedLegacyCachePresent: legacy.cachePresent,
-          cacheCleanupPending: intentPresent,
+          cacheCleanupPending: intent != null,
           cacheCleanupComplete: cleanupComplete,
+          requiresPhysicalCleanup: !cleanupComplete,
           authorityBaseURL: merged.authorityBaseURL,
           cachePresent: durable.cachePresent || legacy.cachePresent,
         );
@@ -130,7 +133,138 @@ final class AtlasWindowsDesktopCacheMigrationSource
   Future<void> removePrivateStateForMigration({
     required String expectedPrivateSha256,
   }) {
-    return Future<void>.error(const AtlasLocalCacheMigrationException());
+    if (!_isSha256(expectedPrivateSha256)) {
+      return Future<void>.error(const AtlasLocalCacheMigrationException());
+    }
+    return completePrivateStateCleanupForMigration(
+      expectedPrivateSha256: expectedPrivateSha256,
+    );
+  }
+
+  @override
+  Future<void> completePrivateStateCleanupForMigration({
+    required String? expectedPrivateSha256,
+  }) {
+    return location.coordinateMutation(() async {
+      try {
+        if (!_nullableSha256(expectedPrivateSha256)) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+        await recoverInterruptedCacheReplacement(location.cacheFile);
+        var intent = await _readCleanupIntentIfPresent(
+          location.privateMigrationIntentFile,
+        );
+        if (intent == null) {
+          final durable = await _readMigrationCache(location.cacheFile);
+          final legacy = await _readMigrationCache(location.legacyFile);
+          _mergeCachePrivateState(durable, legacy);
+          final combined = await _combinedCachePrivateDigest(
+            durable.privateSha256,
+            legacy.privateSha256,
+          );
+          if (combined != expectedPrivateSha256) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          intent = _CachePrivateMigrationIntent(
+            expectedCombinedPrivateSha256: expectedPrivateSha256,
+            durablePrivateSha256: durable.privateSha256,
+            legacyPrivateSha256: legacy.privateSha256,
+          );
+          await _writeCleanupIntent(
+            location.privateMigrationIntentFile,
+            intent,
+            createOnly: true,
+          );
+        } else if (intent.expectedCombinedPrivateSha256 !=
+            expectedPrivateSha256) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+
+        if (!intent.durableCleared) {
+          final durable = await _readMigrationCache(location.cacheFile);
+          if (durable.privateSha256 != null) {
+            if (durable.privateSha256 != intent.durablePrivateSha256) {
+              throw const AtlasLocalCacheMigrationException();
+            }
+            await AtlasLocalCacheStore(
+              file: location.cacheFile,
+            ).removePrivateStateForMigration(
+              expectedPrivateSha256: durable.privateSha256!,
+            );
+          } else if (intent.durablePrivateSha256 != null &&
+              !durable.cachePresent) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          final verified = await _readMigrationCache(location.cacheFile);
+          if (verified.privateSha256 != null ||
+              verified.containsPrivateState ||
+              (intent.durablePrivateSha256 != null && !verified.cachePresent)) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          intent = intent.copyWith(durableCleared: true);
+          await _writeCleanupIntent(
+            location.privateMigrationIntentFile,
+            intent,
+          );
+        } else {
+          final durable = await _readMigrationCache(location.cacheFile);
+          if (durable.privateSha256 != null || durable.containsPrivateState) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+        }
+
+        if (!intent.legacyRetired) {
+          await location.prepareForClearUnderMutationLock();
+          if (!await location.legacyImportRetiredFile.exists()) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          intent = intent.copyWith(legacyRetired: true);
+          await _writeCleanupIntent(
+            location.privateMigrationIntentFile,
+            intent,
+          );
+        } else if (!await location.legacyImportRetiredFile.exists()) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+
+        if (!intent.legacyDeleted) {
+          final legacy = await _readMigrationCache(location.legacyFile);
+          if (legacy.cachePresent &&
+              legacy.privateSha256 != intent.legacyPrivateSha256) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          if (await location.legacyFile.exists()) {
+            await location.legacyFile.delete();
+          }
+          if (await location.legacyFile.exists()) {
+            throw const AtlasLocalCacheMigrationException();
+          }
+          intent = intent.copyWith(legacyDeleted: true);
+          await _writeCleanupIntent(
+            location.privateMigrationIntentFile,
+            intent,
+          );
+        } else if (await location.legacyFile.exists()) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+
+        final durable = await _readMigrationCache(location.cacheFile);
+        if (durable.privateSha256 != null ||
+            durable.containsPrivateState ||
+            !await location.legacyImportRetiredFile.exists() ||
+            await location.legacyFile.exists()) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+        await location.privateMigrationIntentFile.delete();
+        if (await location.privateMigrationIntentFile.exists()) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+      } on AtlasLocalCacheMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    });
   }
 
   @override
@@ -222,59 +356,175 @@ bool _cacheJsonEqual(Object? left, Object? right) {
   }
 }
 
-Future<bool> _validateCleanupIntentIfPresent(File file) async {
-  if (!await file.exists()) {
-    return false;
+Future<AtlasLocalCacheMigrationPrivateState> _readMigrationCache(File file) {
+  return AtlasLocalCacheStore(file: file).readPrivateStateForMigration();
+}
+
+final class _CachePrivateMigrationIntent {
+  const _CachePrivateMigrationIntent({
+    required this.expectedCombinedPrivateSha256,
+    required this.durablePrivateSha256,
+    required this.legacyPrivateSha256,
+    this.durableCleared = false,
+    this.legacyRetired = false,
+    this.legacyDeleted = false,
+  });
+
+  static const format = 'atlasvault-windows-cache-private-migration';
+  static const version = 1;
+
+  final String? expectedCombinedPrivateSha256;
+  final String? durablePrivateSha256;
+  final String? legacyPrivateSha256;
+  final bool durableCleared;
+  final bool legacyRetired;
+  final bool legacyDeleted;
+
+  _CachePrivateMigrationIntent copyWith({
+    bool? durableCleared,
+    bool? legacyRetired,
+    bool? legacyDeleted,
+  }) {
+    return _CachePrivateMigrationIntent(
+      expectedCombinedPrivateSha256: expectedCombinedPrivateSha256,
+      durablePrivateSha256: durablePrivateSha256,
+      legacyPrivateSha256: legacyPrivateSha256,
+      durableCleared: durableCleared ?? this.durableCleared,
+      legacyRetired: legacyRetired ?? this.legacyRetired,
+      legacyDeleted: legacyDeleted ?? this.legacyDeleted,
+    );
   }
-  try {
-    final decoded = jsonDecode(await file.readAsString());
-    if (decoded is! Map<String, Object?>) {
-      throw const AtlasLocalCacheMigrationException();
-    }
-    const expectedKeys = <String>{
-      'format',
-      'version',
-      'expected_combined_private_sha256',
-      'durable_private_sha256',
-      'legacy_private_sha256',
-      'durable_cleared',
-      'legacy_retired',
-      'legacy_deleted',
-    };
-    if (decoded.keys.length != expectedKeys.length ||
-        !decoded.keys.every(expectedKeys.contains) ||
-        decoded['format'] != 'atlasvault-windows-cache-private-migration' ||
-        decoded['version'] != 1 ||
-        !_nullableSha256(decoded['expected_combined_private_sha256']) ||
-        !_nullableSha256(decoded['durable_private_sha256']) ||
-        !_nullableSha256(decoded['legacy_private_sha256']) ||
-        decoded['durable_cleared'] is! bool ||
-        decoded['legacy_retired'] is! bool ||
-        decoded['legacy_deleted'] is! bool) {
-      throw const AtlasLocalCacheMigrationException();
-    }
-    final canonical = encodeCanonicalJson(decoded);
-    final actual = await file.readAsBytes();
+
+  Uint8List canonicalBytes() {
+    return encodeCanonicalJson(<String, Object?>{
+      'format': format,
+      'version': version,
+      'expected_combined_private_sha256': expectedCombinedPrivateSha256,
+      'durable_private_sha256': durablePrivateSha256,
+      'legacy_private_sha256': legacyPrivateSha256,
+      'durable_cleared': durableCleared,
+      'legacy_retired': legacyRetired,
+      'legacy_deleted': legacyDeleted,
+    });
+  }
+
+  static _CachePrivateMigrationIntent decode(Uint8List bytes) {
     try {
-      if (!_cacheBytesEqual(canonical, actual)) {
+      final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: false));
+      if (decoded is! Map<String, Object?>) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      const expectedKeys = <String>{
+        'format',
+        'version',
+        'expected_combined_private_sha256',
+        'durable_private_sha256',
+        'legacy_private_sha256',
+        'durable_cleared',
+        'legacy_retired',
+        'legacy_deleted',
+      };
+      if (decoded.keys.length != expectedKeys.length ||
+          !decoded.keys.every(expectedKeys.contains) ||
+          decoded['format'] != format ||
+          decoded['version'] != version ||
+          !_nullableSha256(decoded['expected_combined_private_sha256']) ||
+          !_nullableSha256(decoded['durable_private_sha256']) ||
+          !_nullableSha256(decoded['legacy_private_sha256']) ||
+          decoded['durable_cleared'] is! bool ||
+          decoded['legacy_retired'] is! bool ||
+          decoded['legacy_deleted'] is! bool) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final intent = _CachePrivateMigrationIntent(
+        expectedCombinedPrivateSha256:
+            decoded['expected_combined_private_sha256'] as String?,
+        durablePrivateSha256: decoded['durable_private_sha256'] as String?,
+        legacyPrivateSha256: decoded['legacy_private_sha256'] as String?,
+        durableCleared: decoded['durable_cleared']! as bool,
+        legacyRetired: decoded['legacy_retired']! as bool,
+        legacyDeleted: decoded['legacy_deleted']! as bool,
+      );
+      if ((intent.legacyRetired && !intent.durableCleared) ||
+          (intent.legacyDeleted && !intent.legacyRetired)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      final canonical = intent.canonicalBytes();
+      try {
+        if (!_cacheBytesEqual(canonical, bytes)) {
+          throw const AtlasLocalCacheMigrationException();
+        }
+      } finally {
+        canonical.fillRange(0, canonical.length, 0);
+      }
+      return intent;
+    } on AtlasLocalCacheMigrationException {
+      rethrow;
+    } catch (_) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+  }
+}
+
+Future<_CachePrivateMigrationIntent?> _readCleanupIntentIfPresent(
+  File file,
+) async {
+  await recoverInterruptedCacheReplacement(file);
+  if (!await file.exists()) {
+    return null;
+  }
+  final bytes = await file.readAsBytes();
+  try {
+    return _CachePrivateMigrationIntent.decode(bytes);
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
+}
+
+Future<void> _writeCleanupIntent(
+  File target,
+  _CachePrivateMigrationIntent intent, {
+  bool createOnly = false,
+}) async {
+  await recoverInterruptedCacheReplacement(target);
+  if (createOnly && await target.exists()) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+  final staged = cacheReplacementTemporaryFile(target);
+  final bytes = intent.canonicalBytes();
+  try {
+    await target.parent.create(recursive: true);
+    await staged.writeAsBytes(bytes, flush: true);
+    if (createOnly && await target.exists()) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    await replaceCacheFile(
+      targetFile: target,
+      stagedFile: staged,
+      useWindowsRecoveryProtocol: true,
+    );
+    final restored = await target.readAsBytes();
+    try {
+      if (!_cacheBytesEqual(bytes, restored)) {
         throw const AtlasLocalCacheMigrationException();
       }
     } finally {
-      canonical.fillRange(0, canonical.length, 0);
-      actual.fillRange(0, actual.length, 0);
+      restored.fillRange(0, restored.length, 0);
     }
-    return true;
-  } on AtlasLocalCacheMigrationException {
-    rethrow;
-  } catch (_) {
-    throw const AtlasLocalCacheMigrationException();
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+    if (await staged.exists()) {
+      await staged.delete();
+    }
   }
 }
 
 bool _nullableSha256(Object? value) {
-  return value == null ||
-      (value is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(value));
+  return value == null || _isSha256(value);
 }
+
+bool _isSha256(Object? value) =>
+    value is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(value);
 
 bool _cacheBytesEqual(Uint8List left, Uint8List right) {
   var difference = left.length ^ right.length;

@@ -891,6 +891,61 @@ void main() {
   );
 
   test(
+    'Windows finalization completes physical cache cleanup before selection',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final result = await fixture.coordinator.finalizeAndActivate();
+
+      expect(result.stage, isNull);
+      expect(fixture.cache.cleanupCalls, 1);
+      expect(fixture.cache.state.cacheCleanupComplete, isTrue);
+      expect(fixture.cache.state.cacheCleanupPending, isFalse);
+      expect(fixture.cache.state.requiresPhysicalCleanup, isFalse);
+      expect(fixture.cache.state.retainedLegacyCachePresent, isFalse);
+      expect(
+        fixture.events.indexOf('selection.create'),
+        greaterThan(fixture.events.indexOf('cache.cleanup')),
+      );
+      expect(fixture.events.last, 'journal.delete');
+    },
+  );
+
+  test(
+    'Windows resume completes an interrupted two-file cache cleanup',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.cache.failAfterNextCleanup = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.cache.state.cacheCleanupPending, isTrue);
+      expect(fixture.cache.state.durablePrivateSha256, isNull);
+      expect(fixture.cache.state.legacyPrivateSha256, '3' * 64);
+      expect(fixture.selection.createCalls, 0);
+
+      final result = await fixture.restartCoordinator().resume();
+
+      expect(result.stage, isNull);
+      expect(fixture.cache.cleanupCalls, 2);
+      expect(fixture.cache.state.cacheCleanupComplete, isTrue);
+      expect(fixture.selection.createCalls, 1);
+      expect(fixture.journal.bytes, isNull);
+    },
+  );
+
+  test(
     'resume adopts an acknowledged cache scrub with its authority intact',
     () async {
       final fixture = _MigrationFixture();
@@ -1194,6 +1249,11 @@ final class _MigrationFixture {
           profile == AtlasVaultPlaintextMigrationProfile.windows
           ? '3' * 64
           : null,
+      retainedLegacyCachePresent:
+          profile == AtlasVaultPlaintextMigrationProfile.windows,
+      cacheCleanupComplete: false,
+      requiresPhysicalCleanup:
+          profile == AtlasVaultPlaintextMigrationProfile.windows,
       authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
     coordinator = AtlasVaultPlaintextMigrationCoordinator(
@@ -1402,7 +1462,10 @@ final class _CompatibilitySource
   }
 }
 
-final class _CacheSource implements AtlasLocalCacheMigrationSource {
+final class _CacheSource
+    implements
+        AtlasLocalCacheMigrationSource,
+        AtlasLocalCacheMigrationCleanupSource {
   _CacheSource(this.events);
 
   final List<String> events;
@@ -1415,7 +1478,9 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
       );
   int readCalls = 0;
   int removeCalls = 0;
+  int cleanupCalls = 0;
   bool failAfterNextRemove = false;
+  bool failAfterNextCleanup = false;
 
   @override
   Future<AtlasLocalCacheMigrationPrivateState>
@@ -1441,6 +1506,48 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
       failAfterNextRemove = false;
       throw StateError('interrupted after cache scrub');
     }
+  }
+
+  @override
+  Future<void> completePrivateStateCleanupForMigration({
+    required String? expectedPrivateSha256,
+  }) async {
+    cleanupCalls += 1;
+    events.add('cache.cleanup');
+    if (state.privateSha256 != null &&
+        state.privateSha256 != expectedPrivateSha256 &&
+        !state.cacheCleanupPending) {
+      throw StateError('stale');
+    }
+    final authorityBaseURL = state.authorityBaseURL;
+    if (failAfterNextCleanup) {
+      failAfterNextCleanup = false;
+      state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: state.trackerRecords,
+        privateSha256: '4' * 64,
+        durablePrivateSha256: null,
+        legacyPrivateSha256: state.legacyPrivateSha256,
+        retainedLegacyCachePresent: true,
+        cacheCleanupPending: true,
+        cacheCleanupComplete: false,
+        requiresPhysicalCleanup: true,
+        authorityBaseURL: authorityBaseURL,
+      );
+      throw StateError('interrupted during cache cleanup');
+    }
+    state = AtlasLocalCacheMigrationPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+      privateSha256: null,
+      durablePrivateSha256: null,
+      legacyPrivateSha256: null,
+      retainedLegacyCachePresent: false,
+      cacheCleanupPending: false,
+      cacheCleanupComplete: true,
+      requiresPhysicalCleanup: false,
+      authorityBaseURL: authorityBaseURL,
+    );
   }
 }
 

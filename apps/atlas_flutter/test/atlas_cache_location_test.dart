@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:atlas/atlas.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
 import 'package:atlas/src/cache_file_replacement.dart';
+import 'package:atlas/src/atlas_vault/canonical_json.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -535,7 +536,144 @@ void main() {
       expect(await location.privateMigrationIntentFile.exists(), isFalse);
       expect(await location.legacyImportRetiredFile.exists(), isFalse);
     });
+
+    test(
+      'cleanup resumes after the durable cache was already scrubbed',
+      () async {
+        final snapshot = _migrationCacheSnapshot();
+        await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+        await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+        final source = AtlasWindowsDesktopCacheMigrationSource(location);
+        final inventory = await source.readPrivateStateForMigration();
+        await AtlasLocalCacheStore(
+          file: location.cacheFile,
+        ).removePrivateStateForMigration(
+          expectedPrivateSha256: inventory.durablePrivateSha256!,
+        );
+        await _writeCleanupIntentFixture(
+          location: location,
+          inventory: inventory,
+        );
+
+        await source.removePrivateStateForMigration(
+          expectedPrivateSha256: inventory.privateSha256!,
+        );
+
+        final completed = await source.readPrivateStateForMigration();
+        expect(completed.cacheCleanupComplete, isTrue);
+        expect(await location.legacyFile.exists(), isFalse);
+        expect(await location.privateMigrationIntentFile.exists(), isFalse);
+      },
+    );
+
+    test('cleanup resumes after legacy retirement and deletion', () async {
+      final snapshot = _migrationCacheSnapshot();
+      await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+      await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+      final source = AtlasWindowsDesktopCacheMigrationSource(location);
+      final inventory = await source.readPrivateStateForMigration();
+      await AtlasLocalCacheStore(
+        file: location.cacheFile,
+      ).removePrivateStateForMigration(
+        expectedPrivateSha256: inventory.durablePrivateSha256!,
+      );
+      await location.prepareForClearUnderMutationLock();
+      await location.legacyFile.delete();
+      await _writeCleanupIntentFixture(
+        location: location,
+        inventory: inventory,
+        durableCleared: true,
+        legacyRetired: true,
+      );
+
+      await source.removePrivateStateForMigration(
+        expectedPrivateSha256: inventory.privateSha256!,
+      );
+
+      final completed = await source.readPrivateStateForMigration();
+      expect(completed.cacheCleanupComplete, isTrue);
+      expect(await location.legacyImportRetiredFile.exists(), isTrue);
+      expect(await location.legacyFile.exists(), isFalse);
+      expect(await location.privateMigrationIntentFile.exists(), isFalse);
+    });
+
+    test('noncanonical cleanup intent fails closed', () async {
+      final snapshot = _migrationCacheSnapshot();
+      await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+      await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+      final source = AtlasWindowsDesktopCacheMigrationSource(location);
+      final inventory = await source.readPrivateStateForMigration();
+      await location.privateMigrationIntentFile.parent.create(recursive: true);
+      await location.privateMigrationIntentFile.writeAsString(
+        '{ "format": "atlasvault-windows-cache-private-migration", '
+        '"version": 1, "expected_combined_private_sha256": '
+        '"${inventory.privateSha256}" }',
+        flush: true,
+      );
+
+      await expectLater(
+        source.readPrivateStateForMigration(),
+        throwsA(isA<AtlasLocalCacheMigrationException>()),
+      );
+
+      expect(await location.cacheFile.exists(), isTrue);
+      expect(await location.legacyFile.exists(), isTrue);
+      expect(await location.legacyImportRetiredFile.exists(), isFalse);
+    });
+
+    test(
+      'public-only caches still retire the retained legacy authority',
+      () async {
+        final publicSnapshot = _migrationCacheSnapshot().withoutPrivateState();
+        await AtlasLocalCacheStore(
+          file: location.cacheFile,
+        ).write(publicSnapshot);
+        await AtlasLocalCacheStore(
+          file: location.legacyFile,
+        ).write(publicSnapshot);
+        final source = AtlasWindowsDesktopCacheMigrationSource(location);
+        final inventory = await source.readPrivateStateForMigration();
+
+        expect(inventory.privateSha256, isNull);
+        expect(inventory.requiresPhysicalCleanup, isTrue);
+        await source.completePrivateStateCleanupForMigration(
+          expectedPrivateSha256: null,
+        );
+
+        final completed = await source.readPrivateStateForMigration();
+        expect(completed.cacheCleanupComplete, isTrue);
+        expect(completed.requiresPhysicalCleanup, isFalse);
+        expect(await location.cacheFile.exists(), isTrue);
+        expect(await location.legacyFile.exists(), isFalse);
+        expect(await location.legacyImportRetiredFile.exists(), isTrue);
+      },
+    );
   });
+}
+
+Future<void> _writeCleanupIntentFixture({
+  required AtlasPersistentCacheLocation location,
+  required AtlasLocalCacheMigrationPrivateState inventory,
+  bool durableCleared = false,
+  bool legacyRetired = false,
+  bool legacyDeleted = false,
+}) async {
+  final bytes = encodeCanonicalJson(<String, Object?>{
+    'format': 'atlasvault-windows-cache-private-migration',
+    'version': 1,
+    'expected_combined_private_sha256': inventory.privateSha256,
+    'durable_private_sha256': inventory.durablePrivateSha256,
+    'legacy_private_sha256': inventory.legacyPrivateSha256,
+    'durable_cleared': durableCleared,
+    'legacy_retired': legacyRetired,
+    'legacy_deleted': legacyDeleted,
+  });
+  try {
+    await location.privateMigrationIntentFile.parent.create(recursive: true);
+    await location.privateMigrationIntentFile.writeAsBytes(bytes, flush: true);
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
 }
 
 AtlasLocalCacheSnapshot _migrationCacheSnapshot({

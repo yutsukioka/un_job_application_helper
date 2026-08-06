@@ -23,10 +23,16 @@ enum AtlasVaultPlaintextMigrationPresentationStatus {
   unsupported,
 }
 
+enum AtlasVaultPlaintextMigrationPresentationPlatform { android, windows }
+
 final class AtlasVaultPlaintextMigrationContext {
-  const AtlasVaultPlaintextMigrationContext({required this.owner});
+  const AtlasVaultPlaintextMigrationContext({
+    required this.owner,
+    this.platform = AtlasVaultPlaintextMigrationPresentationPlatform.android,
+  });
 
   final AtlasVaultPlaintextMigrationPresentationOwner owner;
+  final AtlasVaultPlaintextMigrationPresentationPlatform platform;
 
   @override
   String toString() => 'AtlasVaultPlaintextMigrationContext(<redacted>)';
@@ -516,9 +522,14 @@ final class AtlasVaultPlaintextMigrationPresentationOwner
 }
 
 final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
-  const AtlasVaultPlaintextMigrationPanel({super.key, required this.owner});
+  const AtlasVaultPlaintextMigrationPanel({
+    super.key,
+    required this.owner,
+    this.platform = AtlasVaultPlaintextMigrationPresentationPlatform.android,
+  });
 
   final AtlasVaultPlaintextMigrationPresentationOwner owner;
+  final AtlasVaultPlaintextMigrationPresentationPlatform platform;
 
   @override
   Widget build(BuildContext context) {
@@ -656,11 +667,7 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Prepare Encrypted Migration?'),
-        content: const Text(
-          'An encrypted Android AtlasVault copy will be created and verified. '
-          'Plaintext data remains unchanged and the prepared migration may be '
-          'discarded before finalization.',
-        ),
+        content: Text(_preparationWarning),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -683,14 +690,7 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Remove Plaintext & Activate AtlasVault?'),
-        content: const Text(
-          'The encrypted copy has been verified. Plaintext deletion begins '
-          'only after this confirmation, and rollback will no longer be '
-          'available. An interrupted migration remains resumable. Protection '
-          'is device-local Android protection. Flutter encrypted export/import '
-          'interoperability is not implemented yet. Windows secure storage is '
-          'not implemented yet.',
-        ),
+        content: Text(_finalizationWarning),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -706,6 +706,37 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
     if (confirmed == true) {
       await owner.finalizeMigration();
     }
+  }
+
+  String get _preparationWarning {
+    return switch (platform) {
+      AtlasVaultPlaintextMigrationPresentationPlatform.android =>
+        'An encrypted Android AtlasVault copy will be created and verified. '
+            'Plaintext data remains unchanged and the prepared migration may '
+            'be discarded before finalization.',
+      AtlasVaultPlaintextMigrationPresentationPlatform.windows =>
+        'An encrypted AtlasVault copy protected by current-user Windows DPAPI '
+            'will be created and verified. Plaintext data remains unchanged '
+            'and the prepared migration may be discarded before finalization.',
+    };
+  }
+
+  String get _finalizationWarning {
+    return switch (platform) {
+      AtlasVaultPlaintextMigrationPresentationPlatform.android =>
+        'The encrypted copy has been verified. Plaintext deletion begins only '
+            'after this confirmation, and rollback will no longer be '
+            'available. An interrupted migration remains resumable. '
+            'Protection is device-local Android protection. Flutter encrypted '
+            'export/import interoperability is not implemented yet. Windows '
+            'secure storage is not implemented yet.',
+      AtlasVaultPlaintextMigrationPresentationPlatform.windows =>
+        'The encrypted read-back is complete; plaintext deletion will begin '
+            'after this confirmation and rollback becomes unavailable. The '
+            'migration can resume after interruption. Protection uses '
+            'current-user Windows DPAPI. Windows encrypted import/export is '
+            'not yet implemented.',
+    };
   }
 }
 

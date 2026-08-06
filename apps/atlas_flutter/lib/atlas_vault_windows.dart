@@ -6,9 +6,28 @@ export 'src/atlas_vault/models.dart'
     show AtlasVaultEncryptedRecord, AtlasVaultLocalStore;
 export 'src/atlas_vault/plaintext_migration.dart'
     show
+        AtlasLocalCacheMigrationCleanupSource,
+        AtlasLocalCacheMigrationSource,
+        AtlasVaultCompatibilityPrivateSource,
+        AtlasVaultLegacyPrivateStateRestoring,
+        AtlasVaultPlaintextMigrationCoordinator,
+        AtlasVaultPlaintextMigrationCoordinating,
+        AtlasVaultPlaintextMigrationException,
+        AtlasVaultPlaintextMigrationOperationAdmission,
         AtlasVaultPlaintextMigrationProfile,
+        AtlasVaultPlaintextMigrationPrivateAuthority,
+        AtlasVaultPlaintextMigrationStage,
+        AtlasVaultPlaintextMigrationSummary,
+        AtlasVaultPlaintextStateSource,
         AtlasVaultProtectedMigrationJournalStore,
         AtlasVaultSelectedVaultStore;
+export 'src/atlas_vault/plaintext_migration_view.dart'
+    show
+        AtlasVaultPlaintextMigrationContext,
+        AtlasVaultPlaintextMigrationPanel,
+        AtlasVaultPlaintextMigrationPresentationOwner,
+        AtlasVaultPlaintextMigrationPresentationPlatform,
+        AtlasVaultPlaintextMigrationPresentationStatus;
 export 'src/atlas_vault/private_state_runtime.dart'
     show
         AtlasVaultActivationResult,

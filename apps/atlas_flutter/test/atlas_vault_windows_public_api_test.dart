@@ -15,6 +15,10 @@ void main() {
     AtlasWindowsProtectedMigrationJournalStore? windowsJournalStore;
     AtlasWindowsSelectedVaultStore? windowsSelectedVaultStore;
     AtlasVaultPlaintextMigrationProfile? migrationProfile;
+    AtlasLocalCacheMigrationCleanupSource? cacheCleanupSource;
+    AtlasVaultPlaintextMigrationCoordinating? migrationCoordinator;
+    AtlasVaultPlaintextMigrationPresentationPlatform? presentationPlatform;
+    AtlasVaultPlaintextMigrationPresentationOwner? presentationOwner;
     Future<Uint8List?> Function(String)? load;
 
     expect(keyStore, isNull);
@@ -26,6 +30,10 @@ void main() {
     expect(windowsJournalStore, isNull);
     expect(windowsSelectedVaultStore, isNull);
     expect(migrationProfile, isNull);
+    expect(cacheCleanupSource, isNull);
+    expect(migrationCoordinator, isNull);
+    expect(presentationPlatform, isNull);
+    expect(presentationOwner, isNull);
     expect(load, isNull);
     expect(atlasVaultWindowsMethodChannelName, 'atlas/vault_windows');
   });

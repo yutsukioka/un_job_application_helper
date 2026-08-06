@@ -246,8 +246,55 @@ void main() {
       expect(cacheAfterRollback.trackerRecords.single.notes, trackerSentinel);
       expect(compatibility.deleteCalls, 0);
       expect(memory.state.savedSearches.single.request.text, searchSentinel);
+
+      final finalCoordinator = buildCoordinator();
+      await finalCoordinator.inventory();
+      final finalPrepared = await finalCoordinator.prepare();
+      expect(
+        finalPrepared.stage,
+        AtlasVaultPlaintextMigrationStage.encryptedVerified,
+      );
+      final finalJournalBytes = await journalStore.read();
+      expect(finalJournalBytes, isNotNull);
+      final finalJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        finalJournalBytes!,
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      finalJournalBytes.fillRange(0, finalJournalBytes.length, 0);
+      stagedVaultId = finalJournal.vaultId;
+
+      final completed = await finalCoordinator.finalizeAndActivate();
+
+      expect(completed.stage, isNull);
+      expect(compatibility.state.savedSearches, isEmpty);
+      expect(compatibility.state.trackerRecords, isEmpty);
+      expect(compatibility.deleteCalls, 2);
+      final migratedCache = await AtlasWindowsDesktopCacheMigrationSource(
+        location,
+      ).readPrivateStateForMigration();
+      expect(migratedCache.savedSearches, isEmpty);
+      expect(migratedCache.trackerRecords, isEmpty);
+      expect(migratedCache.cacheCleanupComplete, isTrue);
+      expect(await location.cacheFile.exists(), isTrue);
+      expect(await location.legacyFile.exists(), isFalse);
+      expect(await location.legacyImportRetiredFile.exists(), isTrue);
+      expect(await location.privateMigrationIntentFile.exists(), isFalse);
+      expect(await selectedStore.read(), finalJournal.vaultId);
+      expect(await journalStore.read(), isNull);
+
+      await runtimes.last.deactivate();
+      final relaunched = buildCoordinator();
+      expect(
+        await relaunched.inspectAuthority(),
+        AtlasVaultPlaintextAuthorityState.encryptedSelectedInactive,
+      );
+      final activated = await relaunched.activateSelected();
+      expect(activated.stage, isNull);
+      expect(activated.savedSearchCount, 1);
+      expect(activated.trackerRecordCount, 1);
       tester.printToConsole(
-        'AtlasVault Windows DPAPI migration preparation and rollback passed.',
+        'AtlasVault Windows DPAPI migration rollback, finalization, and '
+        'explicit reactivation passed.',
       );
     },
   );
@@ -332,13 +379,27 @@ final class _CompatibilitySource
   @override
   Future<bool> deleteSavedSearch(String name) async {
     deleteCalls += 1;
-    return false;
+    final present = state.savedSearches.any((value) => value.name == name);
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    return present;
   }
 
   @override
   Future<bool> deleteTrackerRecord(String recordId) async {
     deleteCalls += 1;
-    return false;
+    final present = state.trackerRecords.any((value) => value.id == recordId);
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != recordId)
+          .toList(growable: false),
+    );
+    return present;
   }
 }
 
