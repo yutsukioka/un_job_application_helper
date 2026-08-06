@@ -69,6 +69,9 @@ Future<AtlasLocalCacheStore?> _defaultCacheStore({
     return AtlasLocalCacheStore(
       file: cacheLocation.cacheFile,
       privateStateProtectionActive: privateStateProtectionActive,
+      retainedLegacyPrivateStateAdmission: () => AtlasLocalCacheStore(
+        file: cacheLocation.legacyFile,
+      ).containsPersistedPrivateState(),
       prepareForClear: cacheLocation.prepareForClearUnderMutationLock,
       mutationCoordinator: cacheLocation.coordinateMutation,
     );

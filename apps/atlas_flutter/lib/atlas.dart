@@ -1169,11 +1169,16 @@ final class AtlasLocalCacheStore {
     required this.file,
     DateTime Function()? now,
     bool Function()? privateStateProtectionActive,
+    Future<bool> Function()? retainedLegacyPrivateStateAdmission,
     Future<void> Function()? prepareForClear,
     Future<void> Function(Future<void> Function())? mutationCoordinator,
   }) : _now = now ?? DateTime.now,
        _privateStateProtectionActive =
            privateStateProtectionActive ?? _privateStateProtectionDisabled,
+       // Keep the public constructor parameter descriptive for callers.
+       // ignore: prefer_initializing_formals
+       _retainedLegacyPrivateStateAdmission =
+           retainedLegacyPrivateStateAdmission,
        // Keep the public constructor parameter descriptive for callers.
        // ignore: prefer_initializing_formals
        _prepareForClear = prepareForClear,
@@ -1184,6 +1189,7 @@ final class AtlasLocalCacheStore {
   final File file;
   final DateTime Function() _now;
   final bool Function() _privateStateProtectionActive;
+  final Future<bool> Function()? _retainedLegacyPrivateStateAdmission;
   final Future<void> Function()? _prepareForClear;
   final Future<void> Function(Future<void> Function())? _mutationCoordinator;
 
@@ -1254,16 +1260,18 @@ final class AtlasLocalCacheStore {
 
   Future<bool> containsPersistedPrivateState() async {
     try {
-      if (!await file.exists()) {
-        return false;
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
+        final value = _map(decoded);
+        if (value == null) {
+          return true;
+        }
+        if (_persistedPrivateListIsPresent(value['saved_searches']) ||
+            _persistedPrivateListIsPresent(value['tracker_records'])) {
+          return true;
+        }
       }
-      final decoded = jsonDecode(await file.readAsString());
-      final value = _map(decoded);
-      if (value == null) {
-        return true;
-      }
-      return _persistedPrivateListIsPresent(value['saved_searches']) ||
-          _persistedPrivateListIsPresent(value['tracker_records']);
+      return await _retainedLegacyPrivateStateAdmission?.call() ?? false;
     } catch (_) {
       return true;
     }

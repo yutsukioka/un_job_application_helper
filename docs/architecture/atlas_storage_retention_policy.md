@@ -1,7 +1,7 @@
 # Atlas Storage Retention and Cache Policy
 
 Status: Accepted design record with staged follow-up work
-Last updated: 2026-08-01
+Last updated: 2026-08-06
 
 ## Purpose
 
@@ -223,6 +223,11 @@ removes the persistent cache. Atlas keeps the legacy temporary file as rollback
 evidence, but the marker permanently makes that file ineligible for automatic
 import. This prevents a later launch from resurrecting data the user explicitly
 cleared while preserving the one-time migration evidence for manual recovery.
+The retained file remains a plaintext private-state authority for migration
+admission: Windows AtlasVault activation fails closed while that file contains
+saved searches or tracker records, even when the durable cache is absent and the
+retirement marker exists. A later explicit migration must scrub or retire both
+physical cache copies before encrypted authority can be committed.
 
 ## Follow-up Order
 

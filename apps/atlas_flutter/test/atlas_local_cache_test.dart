@@ -140,6 +140,34 @@ void main() {
       },
     );
 
+    test(
+      'retired legacy private state remains activation admission evidence',
+      () async {
+        final legacyFile = File('${tempDir.path}/legacy/cache.json');
+        final retirementMarker = File('${tempDir.path}/legacy-retired');
+        final location = AtlasPersistentCacheLocation(
+          cacheFile: cacheFile,
+          legacyFile: legacyFile,
+          legacyImportRetiredFile: retirementMarker,
+        );
+        await AtlasLocalCacheStore(
+          file: legacyFile,
+        ).write(_snapshot(savedAt: _fixtureSavedAt));
+        await location.prepareForClearUnderMutationLock();
+        final store = AtlasLocalCacheStore(
+          file: cacheFile,
+          retainedLegacyPrivateStateAdmission: () => AtlasLocalCacheStore(
+            file: location.legacyFile,
+          ).containsPersistedPrivateState(),
+        );
+
+        expect(await cacheFile.exists(), isFalse);
+        expect(await retirementMarker.exists(), isTrue);
+        expect(await store.containsPersistedPrivateState(), isTrue);
+        expect(await legacyFile.exists(), isTrue);
+      },
+    );
+
     test('write waits for the persistent mutation coordinator', () async {
       final location = AtlasPersistentCacheLocation(
         cacheFile: cacheFile,
@@ -655,6 +683,8 @@ void main() {
           'privateStateProtectionActive: () => _privateStateProtectionActive',
         ),
       );
+      expect(source, contains('retainedLegacyPrivateStateAdmission: () =>'));
+      expect(source, contains('file: cacheLocation.legacyFile'));
       expect(
         windowsAssembly,
         isNot(contains('AtlasAndroidSelectedVaultStore')),
