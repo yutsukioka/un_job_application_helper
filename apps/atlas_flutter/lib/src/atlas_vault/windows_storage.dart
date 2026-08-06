@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 
 import '../../atlas_vault.dart';
 import 'android_storage.dart' show AtlasVaultSecureKeyStore;
+import 'canonical_json.dart';
 import 'local_store_io.dart';
+import 'plaintext_migration.dart';
 
 const String atlasVaultWindowsMethodChannelName = 'atlas/vault_windows';
 
@@ -274,6 +276,164 @@ final class AtlasWindowsVaultLocalStoreIO implements AtlasVaultLocalStoreIO {
   String toString() => 'AtlasWindowsVaultLocalStoreIO(<redacted>)';
 }
 
+final class AtlasWindowsProtectedMigrationJournalStore
+    implements AtlasVaultProtectedMigrationJournalStore {
+  AtlasWindowsProtectedMigrationJournalStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumJournalByteCount = 16 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> read() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'readPlaintextMigrationJournal',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = _copyBytes(value);
+    try {
+      _validateJournalBytes(bytes);
+      return Uint8List.fromList(bytes);
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    final bytes = _validatedJournalCopy(canonicalBytes);
+    try {
+      await _invoke<void>(
+        _channel,
+        'createPlaintextMigrationJournal',
+        <String, Object?>{'journal_bytes': bytes},
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    _validateSha256(expectedSha256);
+    final bytes = _validatedJournalCopy(canonicalBytes);
+    try {
+      await _invoke<void>(
+        _channel,
+        'replacePlaintextMigrationJournal',
+        <String, Object?>{
+          'journal_bytes': bytes,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    _validateSha256(expectedSha256);
+    await _invoke<void>(
+      _channel,
+      'deletePlaintextMigrationJournal',
+      <String, Object?>{
+        'expected_sha256': expectedSha256,
+        'allow_absent': allowAbsent,
+      },
+    );
+  }
+
+  Uint8List _validatedJournalCopy(Uint8List source) {
+    _validateJournalBytes(source);
+    return Uint8List.fromList(source);
+  }
+
+  void _validateJournalBytes(Uint8List source) {
+    if (source.isEmpty || source.length > maximumJournalByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    Uint8List? canonical;
+    try {
+      final decoded = jsonDecode(utf8.decode(source, allowMalformed: false));
+      if (decoded is! Map) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      final value = <String, Object?>{};
+      for (final entry in decoded.entries) {
+        if (entry.key is! String) {
+          throw const AtlasVaultWindowsStorageException();
+        }
+        value[entry.key as String] = entry.value;
+      }
+      canonical = encodeCanonicalJson(value);
+      if (!_constantTimeEquals(source, canonical)) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+    } catch (_) {
+      throw const AtlasVaultWindowsStorageException();
+    } finally {
+      if (canonical != null) {
+        _wipe(canonical);
+      }
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsProtectedMigrationJournalStore(<redacted>)';
+}
+
+final class AtlasWindowsSelectedVaultStore
+    implements AtlasVaultSelectedVaultStore {
+  AtlasWindowsSelectedVaultStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<String?> read() async {
+    final value = await _invoke<Object?>(_channel, 'readSelectedVault', null);
+    if (value == null) {
+      return null;
+    }
+    if (value is! String) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    _validateVaultId(value);
+    return value;
+  }
+
+  @override
+  Future<void> create(String vaultId) async {
+    _validateVaultId(vaultId);
+    await _invoke<void>(_channel, 'createSelectedVault', <String, Object?>{
+      'vault_id': vaultId,
+    });
+  }
+
+  @override
+  Future<void> clear(String expectedVaultId) async {
+    _validateVaultId(expectedVaultId);
+    await _invoke<void>(_channel, 'clearSelectedVault', <String, Object?>{
+      'expected_vault_id': expectedVaultId,
+    });
+  }
+
+  @override
+  String toString() => 'AtlasWindowsSelectedVaultStore(<redacted>)';
+}
+
 void _validateVaultId(String value) {
   const reserved = <String>{
     'saved_search',
@@ -286,6 +446,12 @@ void _validateVaultId(String value) {
       value.length > 96 ||
       !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(value) ||
       reserved.contains(value.toLowerCase())) {
+    throw const AtlasVaultWindowsStorageException();
+  }
+}
+
+void _validateSha256(String value) {
+  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
     throw const AtlasVaultWindowsStorageException();
   }
 }

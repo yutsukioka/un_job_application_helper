@@ -4,6 +4,11 @@ export 'src/atlas_vault/android_storage.dart' show AtlasVaultSecureKeyStore;
 export 'src/atlas_vault/local_store_io.dart' show AtlasVaultLocalStoreIO;
 export 'src/atlas_vault/models.dart'
     show AtlasVaultEncryptedRecord, AtlasVaultLocalStore;
+export 'src/atlas_vault/plaintext_migration.dart'
+    show
+        AtlasVaultPlaintextMigrationProfile,
+        AtlasVaultProtectedMigrationJournalStore,
+        AtlasVaultSelectedVaultStore;
 export 'src/atlas_vault/private_state_runtime.dart'
     show
         AtlasVaultActivationResult,
@@ -16,5 +21,7 @@ export 'src/atlas_vault/windows_storage.dart'
         atlasVaultWindowsMethodChannelName,
         AtlasVaultWindowsCapabilities,
         AtlasVaultWindowsStorageException,
+        AtlasWindowsProtectedMigrationJournalStore,
+        AtlasWindowsSelectedVaultStore,
         AtlasWindowsVaultLocalStoreIO,
         AtlasWindowsVaultSecureKeyStore;

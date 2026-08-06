@@ -1144,6 +1144,11 @@ final class AtlasLocalCacheMigrationPrivateState {
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
     required this.privateSha256,
+    this.durablePrivateSha256,
+    this.legacyPrivateSha256,
+    this.retainedLegacyCachePresent = false,
+    this.cacheCleanupPending = false,
+    this.cacheCleanupComplete = false,
     this.authorityBaseURL,
     this.cachePresent = true,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
@@ -1154,6 +1159,11 @@ final class AtlasLocalCacheMigrationPrivateState {
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
   final String? privateSha256;
+  final String? durablePrivateSha256;
+  final String? legacyPrivateSha256;
+  final bool retainedLegacyCachePresent;
+  final bool cacheCleanupPending;
+  final bool cacheCleanupComplete;
   final Uri? authorityBaseURL;
   final bool cachePresent;
 

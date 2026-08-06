@@ -33,11 +33,19 @@ final class FakeAtlasVaultWindowsPlatform {
   final AtlasVaultWindowsMethodCallRecorder recorder;
   Uint8List? _vaultKey;
   Uint8List? _localStoreBytes;
+  Uint8List? _migrationJournalBytes;
+  String? _selectedVaultId;
 
   List<MethodCall> get calls => List<MethodCall>.unmodifiable(recorder.calls);
 
   Uint8List? get localStoreBytes =>
       _localStoreBytes == null ? null : Uint8List.fromList(_localStoreBytes!);
+
+  Uint8List? get migrationJournalBytes => _migrationJournalBytes == null
+      ? null
+      : Uint8List.fromList(_migrationJournalBytes!);
+
+  String? get selectedVaultId => _selectedVaultId;
 
   void seedVaultKey(Uint8List value) {
     _vaultKey = Uint8List.fromList(value);
@@ -59,6 +67,9 @@ final class FakeAtlasVaultWindowsPlatform {
     _vaultKey?.fillRange(0, _vaultKey!.length, 0);
     _vaultKey = null;
     _localStoreBytes = null;
+    _migrationJournalBytes?.fillRange(0, _migrationJournalBytes!.length, 0);
+    _migrationJournalBytes = null;
+    _selectedVaultId = null;
   }
 
   Future<Object?> _handle(MethodCall call) async {
@@ -116,6 +127,58 @@ final class FakeAtlasVaultWindowsPlatform {
         return null;
       case 'deleteLocalStore':
         _localStoreBytes = null;
+        return null;
+      case 'readPlaintextMigrationJournal':
+        return _migrationJournalBytes == null
+            ? null
+            : Uint8List.fromList(_migrationJournalBytes!);
+      case 'createPlaintextMigrationJournal':
+        if (_migrationJournalBytes != null) {
+          throw PlatformException(code: 'already_exists');
+        }
+        _migrationJournalBytes = Uint8List.fromList(
+          arguments['journal_bytes']! as Uint8List,
+        );
+        return null;
+      case 'replacePlaintextMigrationJournal':
+        final current = _migrationJournalBytes;
+        if (current == null ||
+            arguments['expected_sha256'] !=
+                await atlasVaultSha256Hex(current)) {
+          throw PlatformException(code: 'stale_digest');
+        }
+        _migrationJournalBytes = Uint8List.fromList(
+          arguments['journal_bytes']! as Uint8List,
+        );
+        return null;
+      case 'deletePlaintextMigrationJournal':
+        final current = _migrationJournalBytes;
+        if (current == null) {
+          if (arguments['allow_absent'] == true) {
+            return null;
+          }
+          throw PlatformException(code: 'storage_failed');
+        }
+        if (arguments['expected_sha256'] !=
+            await atlasVaultSha256Hex(current)) {
+          throw PlatformException(code: 'stale_digest');
+        }
+        current.fillRange(0, current.length, 0);
+        _migrationJournalBytes = null;
+        return null;
+      case 'readSelectedVault':
+        return _selectedVaultId;
+      case 'createSelectedVault':
+        if (_selectedVaultId != null) {
+          throw PlatformException(code: 'already_exists');
+        }
+        _selectedVaultId = arguments['vault_id']! as String;
+        return null;
+      case 'clearSelectedVault':
+        if (_selectedVaultId != arguments['expected_vault_id']) {
+          throw PlatformException(code: 'storage_failed');
+        }
+        _selectedVaultId = null;
         return null;
       default:
         throw PlatformException(code: 'not_implemented');

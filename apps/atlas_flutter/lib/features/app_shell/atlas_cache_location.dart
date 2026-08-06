@@ -1,15 +1,23 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
 import '../../src/cache_file_replacement.dart';
+import '../../atlas.dart';
+import '../../atlas_vault.dart' show atlasVaultSha256Hex;
+import '../../src/atlas_vault/canonical_json.dart';
+import '../../src/atlas_vault/plaintext_migration.dart';
 
 const atlasLocalCacheFileName = 'atlas-local-cache-v1.json';
 const atlasApplicationSupportDirectoryName = 'Atlas';
 const atlasLegacyTemporaryDirectoryName = 'atlas_flutter';
 const atlasLegacyImportRetiredFileName =
     '$atlasLocalCacheFileName.legacy-import-retired';
+const atlasPrivateMigrationIntentFileName =
+    '$atlasLocalCacheFileName.private-migration.intent';
 
 typedef AtlasApplicationSupportDirectoryProvider = Future<Directory> Function();
 
@@ -48,7 +56,11 @@ final class AtlasPersistentCacheLocation {
   final File legacyFile;
   final File legacyImportRetiredFile;
 
-  Future<void> coordinateMutation(Future<void> Function() operation) {
+  File get privateMigrationIntentFile => File(
+    _joinPath(cacheFile.parent.path, atlasPrivateMigrationIntentFileName),
+  );
+
+  Future<T> coordinateMutation<T>(Future<T> Function() operation) {
     return _withMigrationLocks(targetFile: cacheFile, operation: operation);
   }
 
@@ -61,6 +73,218 @@ final class AtlasPersistentCacheLocation {
       flush: true,
     );
   }
+}
+
+final class AtlasWindowsDesktopCacheMigrationSource
+    implements AtlasLocalCacheMigrationSource {
+  const AtlasWindowsDesktopCacheMigrationSource(this.location);
+
+  final AtlasPersistentCacheLocation location;
+
+  @override
+  Future<AtlasLocalCacheMigrationPrivateState> readPrivateStateForMigration() {
+    return location.coordinateMutation(() async {
+      try {
+        await recoverInterruptedCacheReplacement(location.cacheFile);
+        final durable = await AtlasLocalCacheStore(
+          file: location.cacheFile,
+        ).readPrivateStateForMigration();
+        final legacy = await AtlasLocalCacheStore(
+          file: location.legacyFile,
+        ).readPrivateStateForMigration();
+        final intentPresent = await _validateCleanupIntentIfPresent(
+          location.privateMigrationIntentFile,
+        );
+        final merged = _mergeCachePrivateState(durable, legacy);
+        final combinedDigest = await _combinedCachePrivateDigest(
+          durable.privateSha256,
+          legacy.privateSha256,
+        );
+        final cleanupComplete =
+            await location.legacyImportRetiredFile.exists() &&
+            !legacy.cachePresent &&
+            !durable.containsPrivateState &&
+            durable.privateSha256 == null &&
+            !intentPresent;
+        return AtlasLocalCacheMigrationPrivateState(
+          savedSearches: merged.savedSearches,
+          trackerRecords: merged.trackerRecords,
+          privateSha256: combinedDigest,
+          durablePrivateSha256: durable.privateSha256,
+          legacyPrivateSha256: legacy.privateSha256,
+          retainedLegacyCachePresent: legacy.cachePresent,
+          cacheCleanupPending: intentPresent,
+          cacheCleanupComplete: cleanupComplete,
+          authorityBaseURL: merged.authorityBaseURL,
+          cachePresent: durable.cachePresent || legacy.cachePresent,
+        );
+      } on AtlasLocalCacheMigrationException {
+        rethrow;
+      } catch (_) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    });
+  }
+
+  @override
+  Future<void> removePrivateStateForMigration({
+    required String expectedPrivateSha256,
+  }) {
+    return Future<void>.error(const AtlasLocalCacheMigrationException());
+  }
+
+  @override
+  String toString() => 'AtlasWindowsDesktopCacheMigrationSource(<redacted>)';
+}
+
+AtlasLocalCacheMigrationPrivateState _mergeCachePrivateState(
+  AtlasLocalCacheMigrationPrivateState durable,
+  AtlasLocalCacheMigrationPrivateState legacy,
+) {
+  final savedSearches = <String, AtlasSavedSearch>{};
+  final trackerRecords = <String, AtlasApplicationRecord>{};
+  for (final state in <AtlasLocalCacheMigrationPrivateState>[durable, legacy]) {
+    for (final value in state.savedSearches) {
+      final current = savedSearches[value.name];
+      if (current != null &&
+          !_cacheJsonEqual(current.toJson(), value.toJson())) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      savedSearches[value.name] = value;
+    }
+    for (final value in state.trackerRecords) {
+      final current = trackerRecords[value.jobKey];
+      if (current != null &&
+          !_cacheJsonEqual(current.toJson(), value.toJson())) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      trackerRecords[value.jobKey] = value;
+    }
+  }
+  final durableHasPrivate = durable.containsPrivateState;
+  final legacyHasPrivate = legacy.containsPrivateState;
+  final durableAuthority = durableHasPrivate ? durable.authorityBaseURL : null;
+  final legacyAuthority = legacyHasPrivate ? legacy.authorityBaseURL : null;
+  if ((durableHasPrivate && durableAuthority == null) ||
+      (legacyHasPrivate && legacyAuthority == null) ||
+      (durableAuthority != null &&
+          legacyAuthority != null &&
+          durableAuthority.toString() != legacyAuthority.toString())) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+  final sortedSearches = savedSearches.values.toList(growable: false)
+    ..sort((left, right) => left.name.compareTo(right.name));
+  final sortedTrackers = trackerRecords.values.toList(growable: false)
+    ..sort((left, right) => left.jobKey.compareTo(right.jobKey));
+  return AtlasLocalCacheMigrationPrivateState(
+    savedSearches: sortedSearches,
+    trackerRecords: sortedTrackers,
+    privateSha256: null,
+    authorityBaseURL: durableAuthority ?? legacyAuthority,
+  );
+}
+
+Future<String?> _combinedCachePrivateDigest(
+  String? durableDigest,
+  String? legacyDigest,
+) async {
+  if (durableDigest == null && legacyDigest == null) {
+    return null;
+  }
+  final bytes = encodeCanonicalJson(<String, Object?>{
+    'durable_private_sha256': durableDigest,
+    'legacy_private_sha256': legacyDigest,
+  });
+  try {
+    return await atlasVaultSha256Hex(bytes);
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
+}
+
+bool _cacheJsonEqual(Object? left, Object? right) {
+  Uint8List? leftBytes;
+  Uint8List? rightBytes;
+  try {
+    leftBytes = encodeCanonicalJson(left);
+    rightBytes = encodeCanonicalJson(right);
+    if (leftBytes.length != rightBytes.length) {
+      return false;
+    }
+    var difference = 0;
+    for (var index = 0; index < leftBytes.length; index += 1) {
+      difference |= leftBytes[index] ^ rightBytes[index];
+    }
+    return difference == 0;
+  } finally {
+    leftBytes?.fillRange(0, leftBytes.length, 0);
+    rightBytes?.fillRange(0, rightBytes.length, 0);
+  }
+}
+
+Future<bool> _validateCleanupIntentIfPresent(File file) async {
+  if (!await file.exists()) {
+    return false;
+  }
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, Object?>) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    const expectedKeys = <String>{
+      'format',
+      'version',
+      'expected_combined_private_sha256',
+      'durable_private_sha256',
+      'legacy_private_sha256',
+      'durable_cleared',
+      'legacy_retired',
+      'legacy_deleted',
+    };
+    if (decoded.keys.length != expectedKeys.length ||
+        !decoded.keys.every(expectedKeys.contains) ||
+        decoded['format'] != 'atlasvault-windows-cache-private-migration' ||
+        decoded['version'] != 1 ||
+        !_nullableSha256(decoded['expected_combined_private_sha256']) ||
+        !_nullableSha256(decoded['durable_private_sha256']) ||
+        !_nullableSha256(decoded['legacy_private_sha256']) ||
+        decoded['durable_cleared'] is! bool ||
+        decoded['legacy_retired'] is! bool ||
+        decoded['legacy_deleted'] is! bool) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    final canonical = encodeCanonicalJson(decoded);
+    final actual = await file.readAsBytes();
+    try {
+      if (!_cacheBytesEqual(canonical, actual)) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+    } finally {
+      canonical.fillRange(0, canonical.length, 0);
+      actual.fillRange(0, actual.length, 0);
+    }
+    return true;
+  } on AtlasLocalCacheMigrationException {
+    rethrow;
+  } catch (_) {
+    throw const AtlasLocalCacheMigrationException();
+  }
+}
+
+bool _nullableSha256(Object? value) {
+  return value == null ||
+      (value is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(value));
+}
+
+bool _cacheBytesEqual(Uint8List left, Uint8List right) {
+  var difference = left.length ^ right.length;
+  final maximum = left.length > right.length ? left.length : right.length;
+  for (var index = 0; index < maximum; index += 1) {
+    difference |=
+        (index < left.length ? left[index] : 0) ^
+        (index < right.length ? right[index] : 0);
+  }
+  return difference == 0;
 }
 
 /// Resolves Atlas's durable local-cache file and imports the legacy temporary
