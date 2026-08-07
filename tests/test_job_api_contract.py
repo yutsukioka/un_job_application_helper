@@ -29,6 +29,7 @@ from job_api.models import (  # noqa: E402
 )
 from jobagg.classification import classify_database  # noqa: E402
 from jobagg.db import JobDatabase  # noqa: E402
+from jobagg.filters.saved_searches import save_search  # noqa: E402
 from jobagg.filters.schemas import VacancySearchRequest  # noqa: E402
 from jobagg.models import OrganizationSource  # noqa: E402
 from jobagg.normalize import build_job  # noqa: E402
@@ -186,6 +187,62 @@ def test_saved_search_conditional_delete_exact_absent_and_legacy(
 
     _saved_search_snapshot(client)
     assert client.delete("/api/saved-searches/programme").json() == {"deleted": True}
+
+
+def test_saved_search_conditional_delete_preserves_integer_confidence(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    save_search(
+        _settings(tmp_path).saved_searches_path,
+        name="programme",
+        request=VacancySearchRequest(
+            text="PRIVATE_QUERY_SENTINEL",
+            min_location_confidence=1,
+        ),
+        description="PRIVATE_DESCRIPTION_SENTINEL",
+    )
+    expected = client.get("/api/saved-searches").json()[0]
+
+    assert type(expected["request"]["min_location_confidence"]) is int
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("min_location_confidence", "NaN"),
+        ("min_grade_confidence", "Infinity"),
+        ("min_location_confidence", True),
+        ("min_grade_confidence", "1"),
+    ],
+    ids=["nan", "infinity", "boolean", "numeric-string"],
+)
+def test_saved_search_conditional_delete_rejects_non_strict_confidence(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    client = _client(tmp_path)
+    current = _saved_search_snapshot(client)
+    invalid = deepcopy(current)
+    invalid["request"][field] = value
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": invalid},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_QUERY_SENTINEL" not in response.text
+    assert client.get("/api/saved-searches").json() == [current]
 
 
 def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(
