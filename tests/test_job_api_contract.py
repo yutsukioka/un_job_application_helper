@@ -125,7 +125,10 @@ def _saved_search_snapshot(
 
 
 def _tracker_snapshot(
-    client: TestClient, *, record_id: str = "record-1"
+    client: TestClient,
+    *,
+    record_id: str = "record-1",
+    notes: str = "PRIVATE_NOTES_SENTINEL",
 ) -> dict[str, object]:
     response = client.post(
         "/api/tracker",
@@ -133,7 +136,7 @@ def _tracker_snapshot(
             "id": record_id,
             "job_key": "PRIVATE_JOB_KEY_SENTINEL",
             "status": "saved",
-            "notes": "PRIVATE_NOTES_SENTINEL",
+            "notes": notes,
         },
     )
     assert response.status_code == 200
@@ -264,6 +267,34 @@ def test_saved_search_invalid_request_error_does_not_echo_private_input(
     assert "PRIVATE_SHAPE_SENTINEL" not in wrong_shape.text
 
 
+@pytest.mark.parametrize(
+    "mutate_request",
+    [
+        lambda request: request.pop("sort"),
+        lambda request: request.update({"include_facets": True}),
+    ],
+    ids=["missing-stored-field", "nonstored-api-field"],
+)
+def test_saved_search_conditional_delete_requires_exact_stored_request_shape(
+    tmp_path: Path,
+    mutate_request: Any,
+) -> None:
+    client = _client(tmp_path)
+    current = _saved_search_snapshot(client)
+    incomplete = deepcopy(current)
+    mutate_request(incomplete["request"])
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": incomplete},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_QUERY_SENTINEL" not in response.text
+    assert client.get("/api/saved-searches").json() == [current]
+
+
 def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> None:
     client = _client(tmp_path)
     expected = _tracker_snapshot(client)
@@ -380,6 +411,30 @@ def test_tracker_invalid_request_error_does_not_echo_private_input(
     assert wrong_shape.status_code == 422
     assert wrong_shape.json() == {"detail": "Conditional delete request is invalid."}
     assert "PRIVATE_SHAPE_SENTINEL" not in wrong_shape.text
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["status", "notes", "applied_at", "updated_at"],
+)
+def test_tracker_conditional_delete_requires_complete_stored_snapshot(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    client = _client(tmp_path)
+    current = _tracker_snapshot(client, notes="")
+    incomplete = deepcopy(current)
+    incomplete.pop(missing_field)
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": incomplete},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_JOB_KEY_SENTINEL" not in response.text
+    assert client.get("/api/tracker").json() == [current]
 
 
 def test_tracker_upsert_and_conditional_delete_share_one_lock(
