@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import importlib
 import json
 import threading
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -242,3 +244,85 @@ def test_atomic_store_has_posix_and_windows_lock_paths() -> None:
     assert "LK_LOCK" in source
     assert "LK_UNLCK" in source
     assert "mutation.lock" in source
+
+
+@pytest.mark.parametrize(
+    "mutate_payload",
+    [
+        lambda payload: payload.update({"future_private_field": "PRIVATE_SENTINEL"}),
+        lambda payload: payload["request"].update(
+            {"future_private_filter": "PRIVATE_SENTINEL"}
+        ),
+        lambda payload: payload["request"].pop("sort"),
+        lambda payload: payload.update({"request": ["PRIVATE_SENTINEL"]}),
+    ],
+    ids=["payload-extra", "request-extra", "request-missing", "request-shape"],
+)
+def test_saved_search_unsupported_or_incomplete_content_is_never_deleted(
+    tmp_path: Path,
+    mutate_payload: Any,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    expected = _save(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    mutate_payload(document["saved_searches"][expected.name])
+    path.write_text(json.dumps(document), encoding="utf-8")
+    changed_bytes = path.read_bytes()
+
+    with pytest.raises(ValueError, match="invalid") as failure:
+        _compare_and_remove(path, expected)
+
+    assert "PRIVATE_SENTINEL" not in str(failure.value)
+    assert path.read_bytes() == changed_bytes
+
+
+def test_saved_search_non_object_entry_fails_fixed_without_being_hidden(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "saved_searches": {"programme": "PRIVATE_SENTINEL"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid") as failure:
+        saved_searches.load_saved_searches(path)
+
+    assert "PRIVATE_SENTINEL" not in str(failure.value)
+
+
+def test_windows_lock_retries_contention_until_acquired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    atomic_store = _atomic_store_module()
+    lock_path = tmp_path / "windows.lock"
+    lock_path.write_bytes(b"\0")
+    calls: list[tuple[int, int]] = []
+    waits: list[float] = []
+
+    def locking(_descriptor: int, mode: int, length: int) -> None:
+        calls.append((mode, length))
+        if len(calls) == 1:
+            raise OSError(errno.EACCES, "contended")
+
+    fake_msvcrt = SimpleNamespace(
+        LK_NBLCK=1,
+        LK_UNLCK=2,
+        locking=locking,
+    )
+    monkeypatch.setattr(atomic_store, "msvcrt", fake_msvcrt, raising=False)
+    monkeypatch.setattr(atomic_store.os, "name", "nt")
+    monkeypatch.setattr(atomic_store.time, "sleep", waits.append)
+
+    with lock_path.open("r+b") as lock_file:
+        atomic_store._acquire_platform_lock(lock_file)
+
+    assert calls == [(fake_msvcrt.LK_NBLCK, 1)] * 2
+    assert len(waits) == 1
+    assert waits[0] > 0

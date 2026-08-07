@@ -450,6 +450,79 @@ def test_tracker_upsert_and_conditional_delete_share_one_lock(
     json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_tracker_duplicate_ids_are_rejected_without_deletion(tmp_path: Path) -> None:
+    path = tmp_path / "tracker.json"
+    expected = tracker_store.upsert_record(
+        path,
+        ApplicationRecord(id="record-1", job_key="job-1", notes="reviewed"),
+    ).model_copy(deep=True)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    duplicate = deepcopy(document[0])
+    duplicate["notes"] = "PRIVATE_CHANGED_DUPLICATE"
+    document.append(duplicate)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    changed_bytes = path.read_bytes()
+
+    with pytest.raises(ValueError, match="invalid") as failure:
+        tracker_store.compare_and_delete_record(
+            path,
+            record_id=expected.id,
+            expected=expected,
+        )
+
+    assert "PRIVATE_CHANGED_DUPLICATE" not in str(failure.value)
+    assert path.read_bytes() == changed_bytes
+
+
+def test_tracker_unknown_content_is_rejected_without_deletion(tmp_path: Path) -> None:
+    path = tmp_path / "tracker.json"
+    expected = tracker_store.upsert_record(
+        path,
+        ApplicationRecord(id="record-1", job_key="job-1", notes="reviewed"),
+    ).model_copy(deep=True)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document[0]["future_private_field"] = "PRIVATE_CHANGED_FIELD"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    changed_bytes = path.read_bytes()
+
+    with pytest.raises(ValueError, match="invalid") as failure:
+        tracker_store.compare_and_delete_record(
+            path,
+            record_id=expected.id,
+            expected=expected,
+        )
+
+    assert "PRIVATE_CHANGED_FIELD" not in str(failure.value)
+    assert path.read_bytes() == changed_bytes
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/saved-searches/programme/conditional-delete",
+        "/api/tracker/record-1/conditional-delete",
+    ],
+)
+def test_conditional_delete_parser_failures_are_fixed_and_private_free(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    client = _client(tmp_path)
+
+    missing = client.post(path)
+    malformed = client.post(
+        path,
+        content=b'{"expected":"PRIVATE_PARSE_SENTINEL"',
+        headers={"content-type": "application/json"},
+    )
+
+    assert missing.status_code == 422
+    assert missing.json() == {"detail": "Conditional delete request is invalid."}
+    assert malformed.status_code == 422
+    assert malformed.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_PARSE_SENTINEL" not in malformed.text
+
+
 def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     db = JobDatabase(settings.db_path)
