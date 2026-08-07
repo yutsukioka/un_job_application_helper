@@ -5,6 +5,7 @@ import json
 import sys
 import threading
 from copy import deepcopy
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 from job_api import tracker as tracker_store  # noqa: E402
 from job_api.app import create_app  # noqa: E402
 from job_api.config import ApiSettings  # noqa: E402
-from job_api.models import ApplicationRecord  # noqa: E402
+from job_api.models import (  # noqa: E402
+    ApplicationRecord,
+    SavedSearchStoredRequest,
+    StrictApplicationRecord,
+)
 from jobagg.classification import classify_database  # noqa: E402
 from jobagg.db import JobDatabase  # noqa: E402
+from jobagg.filters.schemas import VacancySearchRequest  # noqa: E402
 from jobagg.models import OrganizationSource  # noqa: E402
 from jobagg.normalize import build_job  # noqa: E402
 
@@ -143,6 +149,21 @@ def _tracker_snapshot(
     return response.json()
 
 
+def test_conditional_snapshot_models_require_exact_stored_fields() -> None:
+    saved_request_fields = {field.name for field in fields(VacancySearchRequest)}
+
+    assert set(SavedSearchStoredRequest.model_fields) == saved_request_fields
+    assert all(
+        field.is_required() for field in SavedSearchStoredRequest.model_fields.values()
+    )
+    assert set(StrictApplicationRecord.model_fields) == set(
+        ApplicationRecord.model_fields
+    )
+    assert all(
+        field.is_required() for field in StrictApplicationRecord.model_fields.values()
+    )
+
+
 def test_saved_search_conditional_delete_exact_absent_and_legacy(
     tmp_path: Path,
 ) -> None:
@@ -192,7 +213,7 @@ def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(
     "field,value",
     [
         ("description", "changed-description"),
-        ("request", {"text": "changed-query"}),
+        ("request.text", "changed-query"),
         ("created_at", "2099-01-01T00:00:00+00:00"),
         ("updated_at", "2099-01-01T00:00:00+00:00"),
     ],
@@ -205,7 +226,10 @@ def test_saved_search_conditional_delete_mismatch_is_private_free(
     client = _client(tmp_path)
     current = _saved_search_snapshot(client)
     expected = deepcopy(current)
-    expected[field] = value
+    if field == "request.text":
+        expected["request"]["text"] = value
+    else:
+        expected[field] = value
 
     response = client.post(
         "/api/saved-searches/programme/conditional-delete",

@@ -75,7 +75,7 @@ POST /api/saved-searches/{name}/conditional-delete
 POST /api/tracker/{record_id}/conditional-delete
 ```
 
-POST command routes are used because request bodies on DELETE are not handled consistently by all clients and intermediaries. Each request contains exactly one `expected` snapshot. Unknown model fields are rejected.
+POST command routes are used because request bodies on DELETE are not handled consistently by all clients and intermediaries. Each request contains exactly one `expected` snapshot. Every stored snapshot field is required, even when its value equals a normal model default. The saved-search request model contains only the exact persisted request fields, and tracker snapshots redeclare every persisted field without defaults. Missing, unknown, and API-only fields are rejected.
 
 The path identifier must equal the expected snapshot identifier. An identity mismatch returns fixed HTTP 400. Exact current content is deleted and returns `{"outcome":"deleted"}`. A missing current record is idempotent and returns `{"outcome":"absent"}`. Changed current content returns fixed HTTP 412 and remains untouched.
 

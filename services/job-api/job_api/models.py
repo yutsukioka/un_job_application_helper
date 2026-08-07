@@ -71,26 +71,68 @@ class SavedSearchModel(BaseModel):
     updated_at: datetime | None = None
 
 
+ApplicationStatus = Literal[
+    "saved",
+    "interested",
+    "drafting",
+    "applied",
+    "interview",
+    "offer",
+    "rejected",
+    "withdrawn",
+]
+
+
 class ApplicationRecord(BaseModel):
     id: str
     job_key: str
-    status: Literal[
-        "saved",
-        "interested",
-        "drafting",
-        "applied",
-        "interview",
-        "offer",
-        "rejected",
-        "withdrawn",
-    ] = "saved"
+    status: ApplicationStatus = "saved"
     notes: str = ""
     applied_at: datetime | None = None
     updated_at: datetime | None = None
 
 
-class SavedSearchStoredRequest(SearchRequest):
+class SavedSearchStoredRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    text: str | None
+    status: list[str]
+    organizations: list[str]
+    source_ids: list[str]
+    ats_families: list[str]
+    cities: list[str]
+    countries_iso3: list[str]
+    regions: list[str]
+    location_types: list[str]
+    national_international: list[str]
+    contract_categories: list[str]
+    grade_systems: list[str]
+    grade_families: list[str]
+    grade_codes: list[str]
+    ccog_codes: list[str]
+    ccog_families: list[str]
+    occupational_family_codes: list[str]
+    occupational_medium_codes: list[str]
+    mandate_network_codes: list[str]
+    mandate_family_codes: list[str]
+    capability_tags: list[str]
+    contract_groups: list[str]
+    seniority_groups: list[str]
+    work_modalities: list[str]
+    volunteer_kinds: list[str]
+    unv_categories: list[str]
+    unv_volunteer_types: list[str]
+    closing_date_from: str | None
+    closing_date_to: str | None
+    posted_date_from: str | None
+    posted_date_to: str | None
+    min_location_confidence: float
+    min_grade_confidence: float
+    include_low_confidence: bool
+    exclude_expired_open: bool
+    limit: int
+    offset: int
+    sort: str
 
 
 class SavedSearchStoredSnapshot(BaseModel):
@@ -109,10 +151,15 @@ class SavedSearchConditionalDeleteRequest(BaseModel):
     expected: SavedSearchStoredSnapshot
 
 
-class StrictApplicationRecord(ApplicationRecord):
+class StrictApplicationRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
+    job_key: str
+    status: ApplicationStatus
+    notes: str
+    applied_at: datetime | None
+    updated_at: datetime | None
 
 
 class TrackerConditionalDeleteRequest(BaseModel):
