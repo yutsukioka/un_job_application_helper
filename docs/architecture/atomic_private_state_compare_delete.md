@@ -49,7 +49,7 @@ Conditional comparison includes:
 - created timestamp;
 - updated timestamp.
 
-Every persisted entry and its complete request are validated against the exact stored schema. Unknown fields, missing fields, wrong shapes, and map-key/name disagreement fail closed with a fixed error. Comparison uses canonical JSON bytes for the complete raw stored and expected payloads, so reconstruction cannot drop or default content before comparison. The operation returns `deleted`, `absent`, or `mismatch`. A mismatch performs no write.
+Every persisted entry and its complete request are validated against the exact stored schema. Unknown fields, unsupported missing fields, wrong shapes, and map-key/name disagreement fail closed with a fixed error. Historical version-1 files may legitimately omit only `volunteer_kinds` and `exclude_expired_open`, which were introduced without a store-version increment. Reads and mutations upgrade those omissions to the current interpreted defaults inside the same mutation lock, atomically persist the upgraded representation, and expose only that complete representation for review. A failed upgrade replacement preserves the original file. Comparison then uses canonical JSON bytes for the complete raw stored and expected payloads, so reconstruction cannot drop or default content before comparison. The operation returns `deleted`, `absent`, or `mismatch`.
 
 ## Tracker Records
 
@@ -91,6 +91,7 @@ Deterministic thread gates intercept lock acquisition and the locked read bounda
 - resulting JSON remains valid;
 - a pre-replace failure preserves the previous target, removes temporary files, and releases the lock.
 - unsupported saved-search fields and duplicate or extended tracker records cannot be deleted;
+- historical version-1 saved searches are atomically upgraded before review;
 - Windows lock contention retries until acquisition;
 - parser failures use the fixed private-free command error.
 

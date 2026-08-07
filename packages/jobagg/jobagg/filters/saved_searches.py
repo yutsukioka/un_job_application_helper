@@ -20,6 +20,7 @@ _SAVED_SEARCH_KEYS = frozenset(
 _REQUEST_FIELDS = tuple(fields(VacancySearchRequest))
 _REQUEST_KEYS = frozenset(field.name for field in _REQUEST_FIELDS)
 _REQUEST_DEFAULTS = VacancySearchRequest()
+_LEGACY_REQUEST_KEYS = frozenset({"volunteer_kinds", "exclude_expired_open"})
 
 
 @dataclass(slots=True)
@@ -97,10 +98,10 @@ def remove_saved_search(path: str | Path, name: str) -> bool:
     store_path = Path(path)
 
     def mutation(data: dict[str, Any]) -> tuple[bool, bool]:
-        _normalize_store(data)
+        normalized = _normalize_store(data)
         searches = data["saved_searches"]
         if name not in searches:
-            return False, False
+            return False, normalized
         del searches[name]
         return True, True
 
@@ -118,17 +119,17 @@ def compare_and_remove_saved_search(
     def mutation(
         data: dict[str, Any],
     ) -> tuple[Literal["deleted", "absent", "mismatch"], bool]:
-        _normalize_store(data)
+        normalized = _normalize_store(data)
         searches = data["saved_searches"]
         if name not in searches:
-            return "absent", False
+            return "absent", normalized
         payload = searches[name]
         expected_payload = expected.to_dict()
         if expected.name != name:
-            return "mismatch", False
+            return "mismatch", normalized
         _validate_saved_search_payload(name, expected_payload)
         if _canonical_payload(payload) != _canonical_payload(expected_payload):
-            return "mismatch", False
+            return "mismatch", normalized
         del searches[name]
         return "deleted", True
 
@@ -160,9 +161,10 @@ def _saved_search_from_dict(name: str, payload: dict[str, Any]) -> SavedSearch:
 
 
 def _load_store(path: Path) -> dict[str, Any]:
-    data = _store(path).read()
-    _normalize_store(data)
-    return data
+    def mutation(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        return data, _normalize_store(data)
+
+    return _store(path).mutate(mutation)
 
 
 def _store(path: Path) -> AtomicJsonStore[dict[str, Any]]:
@@ -188,10 +190,15 @@ def _validate_store(data: Any) -> None:
     if not isinstance(searches, dict):
         raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
     for name, payload in searches.items():
-        _validate_saved_search_payload(name, payload)
+        _validate_saved_search_payload(name, payload, allow_legacy=True)
 
 
-def _validate_saved_search_payload(name: Any, payload: Any) -> None:
+def _validate_saved_search_payload(
+    name: Any,
+    payload: Any,
+    *,
+    allow_legacy: bool = False,
+) -> None:
     if not isinstance(name, str) or not isinstance(payload, dict):
         raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
     if set(payload) != _SAVED_SEARCH_KEYS or payload["name"] != name:
@@ -206,13 +213,21 @@ def _validate_saved_search_payload(name: Any, payload: Any) -> None:
         payload["updated_at"], str
     ):
         raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
-    _validate_request_payload(payload["request"])
+    _validate_request_payload(payload["request"], allow_legacy=allow_legacy)
 
 
-def _validate_request_payload(payload: Any) -> None:
-    if not isinstance(payload, dict) or set(payload) != _REQUEST_KEYS:
+def _validate_request_payload(payload: Any, *, allow_legacy: bool = False) -> None:
+    if not isinstance(payload, dict):
+        raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
+    payload_keys = set(payload)
+    missing = _REQUEST_KEYS - payload_keys
+    if payload_keys - _REQUEST_KEYS or (
+        missing and (not allow_legacy or not missing <= _LEGACY_REQUEST_KEYS)
+    ):
         raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
     for field in _REQUEST_FIELDS:
+        if field.name not in payload:
+            continue
         value = payload[field.name]
         default = getattr(_REQUEST_DEFAULTS, field.name)
         if isinstance(default, list):
@@ -250,6 +265,21 @@ def _canonical_payload(payload: dict[str, Any]) -> bytes:
         raise AtomicJsonStoreError("Saved-search JSON store is invalid.") from None
 
 
-def _normalize_store(data: dict[str, Any]) -> None:
-    data.setdefault("version", STORE_VERSION)
-    data.setdefault("saved_searches", {})
+def _normalize_store(data: dict[str, Any]) -> bool:
+    changed = False
+    if "version" not in data:
+        data["version"] = STORE_VERSION
+        changed = True
+    if "saved_searches" not in data:
+        data["saved_searches"] = {}
+        changed = True
+    for payload in data["saved_searches"].values():
+        request = payload["request"]
+        for key in _LEGACY_REQUEST_KEYS:
+            if key in request:
+                continue
+            default = getattr(_REQUEST_DEFAULTS, key)
+            request[key] = list(default) if isinstance(default, list) else default
+            changed = True
+        _validate_request_payload(request)
+    return changed
