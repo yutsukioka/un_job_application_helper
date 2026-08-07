@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import tempfile
+import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +19,7 @@ else:
 
 
 MAX_JSON_STORE_BYTES = 16 * 1024 * 1024
+WINDOWS_LOCK_RETRY_SECONDS = 0.05
 
 Document = TypeVar("Document")
 Outcome = TypeVar("Outcome")
@@ -156,7 +159,16 @@ def _exclusive_json_lock(target: Path) -> Any:
 def _acquire_platform_lock(lock_file: BinaryIO) -> None:
     lock_file.seek(0)
     if os.name == "nt":
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        contention_errors = {errno.EACCES, errno.EAGAIN}
+        while True:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno not in contention_errors:
+                    raise
+                time.sleep(WINDOWS_LOCK_RETRY_SECONDS)
+                lock_file.seek(0)
     else:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 

@@ -20,7 +20,7 @@ Existing identifier-only DELETE routes remain available for legacy callers. Phas
 
 ## Atomic JSON Store
 
-Each JSON target has one adjacent `<target>.mutation.lock` file. The lock contains no private content. POSIX hosts use an exclusive `fcntl.flock`; Windows uses `msvcrt.locking` over one fixed byte. Acquisition and release occur in a `finally`-safe context.
+Each JSON target has one adjacent `<target>.mutation.lock` file. The lock contains no private content. POSIX hosts use an exclusive `fcntl.flock`; Windows repeatedly attempts a nonblocking `msvcrt.locking` operation over one fixed byte until contention clears. This explicit retry gives Windows the same wait-for-serialization behavior as POSIX even when a transaction exceeds the platform helper's bounded blocking interval. Acquisition and release occur in a `finally`-safe context.
 
 Every read obtains the same lock and therefore observes one coherent committed snapshot. Every mutation performs one non-recursive transaction:
 
@@ -49,7 +49,7 @@ Conditional comparison includes:
 - created timestamp;
 - updated timestamp.
 
-The operation returns `deleted`, `absent`, or `mismatch`. A mismatch performs no write.
+Every persisted entry and its complete request are validated against the exact stored schema. Unknown fields, missing fields, wrong shapes, and map-key/name disagreement fail closed with a fixed error. Comparison uses canonical JSON bytes for the complete raw stored and expected payloads, so reconstruction cannot drop or default content before comparison. The operation returns `deleted`, `absent`, or `mismatch`. A mismatch performs no write.
 
 ## Tracker Records
 
@@ -64,7 +64,7 @@ Conditional comparison includes:
 - applied timestamp;
 - updated timestamp.
 
-The operation returns `deleted`, `absent`, or `mismatch`. A mismatch preserves the current record.
+Stored tracker objects must contain exactly the reviewed application-record fields and unique, nonempty IDs. Each raw object must round-trip through the model without normalization. Conditional deletion compares the complete raw object and removes exactly one validated record. Unknown fields, missing fields, coercible aliases, and duplicate IDs fail closed without rewriting. The operation returns `deleted`, `absent`, or `mismatch`. A mismatch preserves the current record.
 
 ## HTTP Contract
 
@@ -79,7 +79,7 @@ POST command routes are used because request bodies on DELETE are not handled co
 
 The path identifier must equal the expected snapshot identifier. An identity mismatch returns fixed HTTP 400. Exact current content is deleted and returns `{"outcome":"deleted"}`. A missing current record is idempotent and returns `{"outcome":"absent"}`. Changed current content returns fixed HTTP 412 and remains untouched.
 
-Responses and errors never return current private content. Store failures use a fixed private-state operation error rather than exposing a path or malformed value.
+Responses and errors never return current private content. Missing bodies, malformed JSON, and strict-model validation failures on the two command routes all use the same fixed 422 response. Validation failures on unrelated routes retain FastAPI's existing behavior. Store failures use a fixed private-state operation error rather than exposing a path or malformed value.
 
 ## Concurrency Evidence
 
@@ -90,6 +90,9 @@ Deterministic thread gates intercept lock acquisition and the locked read bounda
 - tracker upsert and conditional delete serialize through the same lock;
 - resulting JSON remains valid;
 - a pre-replace failure preserves the previous target, removes temporary files, and releases the lock.
+- unsupported saved-search fields and duplicate or extended tracker records cannot be deleted;
+- Windows lock contention retries until acquisition;
+- parser failures use the fixed private-free command error.
 
 The tests use synchronization events rather than sleep-based race assumptions. The source test also requires both POSIX and Windows lock implementations. The Windows branch is exercised when the Python suite runs on Windows.
 
@@ -105,7 +108,7 @@ This package is a backend prerequisite for Phase 2E-6. It adds no Flutter code, 
 
 The red checkpoint was committed before production changes. It collected 27 tests with 24 expected failures and 3 existing passes. A red-only correction then added deterministic tracker ordering coverage. The failures identified the absent atomic helper, absent conditional store functions, and absent command routes.
 
-The implementation checkpoint requires the focused contract suite, complete `packages/jobagg/tests`, complete repository `tests`, the repository Python CI mirror, exact eight-file scope, and protected-path and artifact hygiene.
+The implementation checkpoint requires the focused contract suite, complete `packages/jobagg/tests`, complete repository `tests`, the repository Python CI mirror, exact eight-file scope, and protected-path and artifact hygiene. A review-fix red checkpoint added ten deterministic failures for complete raw comparison, deep validation, duplicate-ID rejection, Windows contention retry, and parser-error normalization before those corrections were implemented.
 
 ## Go/No-Go
 

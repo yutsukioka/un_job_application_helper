@@ -12,6 +12,8 @@ from jobagg.atomic_json_store import AtomicJsonStore, AtomicJsonStoreError
 
 from job_api.models import ApplicationRecord
 
+_RECORD_KEYS = frozenset(ApplicationRecord.model_fields)
+
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
@@ -86,15 +88,16 @@ def compare_and_delete_record(
     def mutation(
         raw: list[Any],
     ) -> tuple[Literal["deleted", "absent", "mismatch"], bool]:
-        records = _decode_records(raw)
-        current = next((record for record in records if record.id == record_id), None)
-        if current is None:
-            return "absent", False
-        if expected.id != record_id or current != expected:
-            return "mismatch", False
-        raw[:] = _encode_records(
-            [record for record in records if record.id != record_id]
+        index = next(
+            (index for index, payload in enumerate(raw) if payload["id"] == record_id),
+            None,
         )
+        if index is None:
+            return "absent", False
+        expected_payload = expected.model_dump(mode="json")
+        if expected.id != record_id or raw[index] != expected_payload:
+            return "mismatch", False
+        del raw[index]
         return "deleted", True
 
     return _store(path).mutate(mutation)
@@ -112,6 +115,19 @@ def _store(path: Path) -> AtomicJsonStore[list[Any]]:
 def _validate_store(raw: Any) -> None:
     if not isinstance(raw, list):
         raise AtomicJsonStoreError("Tracker JSON store must contain an array.")
+    record_ids: set[str] = set()
+    for payload in raw:
+        if not isinstance(payload, dict) or set(payload) != _RECORD_KEYS:
+            raise AtomicJsonStoreError("Tracker JSON store is invalid.")
+        try:
+            record = ApplicationRecord.model_validate(payload)
+        except (TypeError, ValueError):
+            raise AtomicJsonStoreError("Tracker JSON store is invalid.") from None
+        if payload != record.model_dump(mode="json"):
+            raise AtomicJsonStoreError("Tracker JSON store is invalid.")
+        if not record.id or record.id in record_ids:
+            raise AtomicJsonStoreError("Tracker JSON store is invalid.")
+        record_ids.add(record.id)
 
 
 def _decode_records(raw: list[Any]) -> list[ApplicationRecord]:

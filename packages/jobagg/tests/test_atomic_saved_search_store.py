@@ -241,7 +241,7 @@ def test_atomic_store_has_posix_and_windows_lock_paths() -> None:
 
     assert "fcntl.flock" in source
     assert "msvcrt.locking" in source
-    assert "LK_LOCK" in source
+    assert "LK_NBLCK" in source
     assert "LK_UNLCK" in source
     assert "mutation.lock" in source
 

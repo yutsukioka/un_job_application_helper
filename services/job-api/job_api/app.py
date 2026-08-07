@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from jobagg.atomic_json_store import AtomicJsonStoreError
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs
@@ -46,10 +49,28 @@ from job_api.tracker import (
     upsert_record,
 )
 
+_CONDITIONAL_DELETE_PATH = re.compile(
+    r"^/api/(?:saved-searches/[^/]+|tracker/[^/]+)/conditional-delete$"
+)
+
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+
+    @app.exception_handler(RequestValidationError)
+    async def conditional_delete_validation_error(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> Any:
+        if request.method == "POST" and _CONDITIONAL_DELETE_PATH.fullmatch(
+            request.url.path
+        ):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Conditional delete request is invalid."},
+            )
+        return await request_validation_exception_handler(request, exc)
 
     def db() -> JobDatabase:
         return JobDatabase(settings.db_path)
