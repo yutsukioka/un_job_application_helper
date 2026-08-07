@@ -43,6 +43,16 @@ def _atomic_store_module() -> Any:
     return importlib.import_module("jobagg.atomic_json_store")
 
 
+def _strip_legacy_request_fields(path: Path) -> bytes:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    request = document["saved_searches"]["programme"]["request"]
+    request.pop("volunteer_kinds")
+    request.pop("exclude_expired_open")
+    legacy = json.dumps(document, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    path.write_bytes(legacy)
+    return legacy
+
+
 def test_exact_saved_search_compare_and_remove_is_idempotent(tmp_path: Path) -> None:
     path = tmp_path / "saved-searches.json"
     expected = _save(path)
@@ -294,6 +304,56 @@ def test_saved_search_non_object_entry_fails_fixed_without_being_hidden(
         saved_searches.load_saved_searches(path)
 
     assert "PRIVATE_SENTINEL" not in str(failure.value)
+
+
+def test_legacy_version_one_request_is_atomically_upgraded_before_read(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    _save(path)
+    legacy = _strip_legacy_request_fields(path)
+
+    loaded = saved_searches.get_saved_search(path, "programme")
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    request = upgraded["saved_searches"]["programme"]["request"]
+
+    assert path.read_bytes() != legacy
+    assert request["volunteer_kinds"] == []
+    assert request["exclude_expired_open"] is True
+    assert loaded.request.volunteer_kinds == []
+    assert loaded.request.exclude_expired_open is True
+
+
+def test_legacy_version_one_request_upgrades_inside_conditional_delete(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    expected = _save(path)
+    _strip_legacy_request_fields(path)
+
+    assert _compare_and_remove(path, expected) == "deleted"
+    assert saved_searches.load_saved_searches(path) == {}
+
+
+def test_legacy_upgrade_replace_failure_preserves_original_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    _save(path)
+    legacy = _strip_legacy_request_fields(path)
+    atomic_store = _atomic_store_module()
+
+    def fail_replace(_source: object, _destination: object) -> None:
+        raise OSError("injected upgrade failure")
+
+    monkeypatch.setattr(atomic_store.os, "replace", fail_replace)
+
+    with pytest.raises(ValueError, match="write failed"):
+        saved_searches.load_saved_searches(path)
+
+    assert path.read_bytes() == legacy
+    assert list(tmp_path.glob(f".{path.name}.*.tmp")) == []
 
 
 def test_windows_lock_retries_contention_until_acquired(
