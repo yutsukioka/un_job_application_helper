@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,176 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
     assert saved_again.status_code == 200
     assert saved_again.json()["status"] == "applied"
     assert len(client.get("/api/tracker").json()) == 1
+
+
+def _saved_search_snapshot(client: TestClient, *, name: str = "programme") -> dict[str, object]:
+    response = client.post(
+        "/api/saved-searches",
+        json={
+            "name": name,
+            "summary": "PRIVATE_DESCRIPTION_SENTINEL",
+            "request": {"text": "PRIVATE_QUERY_SENTINEL"},
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _tracker_snapshot(client: TestClient, *, record_id: str = "record-1") -> dict[str, object]:
+    response = client.post(
+        "/api/tracker",
+        json={
+            "id": record_id,
+            "job_key": "PRIVATE_JOB_KEY_SENTINEL",
+            "status": "saved",
+            "notes": "PRIVATE_NOTES_SENTINEL",
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_saved_search_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client)
+
+    deleted = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+    absent = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"outcome": "deleted"}
+    assert absent.status_code == 200
+    assert absent.json() == {"outcome": "absent"}
+
+    _saved_search_snapshot(client)
+    assert client.delete("/api/saved-searches/programme").json() == {"deleted": True}
+
+
+def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client)
+
+    identity = client.post(
+        "/api/saved-searches/different/conditional-delete",
+        json={"expected": expected},
+    )
+    extra = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected, "unexpected": True},
+    )
+
+    assert identity.status_code == 400
+    assert identity.json() == {"detail": "Conditional delete identity mismatch."}
+    assert extra.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("description", "changed-description"),
+        ("request", {"text": "changed-query"}),
+        ("created_at", "2099-01-01T00:00:00+00:00"),
+        ("updated_at", "2099-01-01T00:00:00+00:00"),
+    ],
+)
+def test_saved_search_conditional_delete_mismatch_is_private_free(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    client = _client(tmp_path)
+    current = _saved_search_snapshot(client)
+    expected = deepcopy(current)
+    expected[field] = value
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 412
+    assert response.json() == {"detail": "Conditional delete precondition failed."}
+    assert "PRIVATE_DESCRIPTION_SENTINEL" not in response.text
+    assert "PRIVATE_QUERY_SENTINEL" not in response.text
+    assert client.get("/api/saved-searches").json() == [current]
+
+
+def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    expected = _tracker_snapshot(client)
+
+    deleted = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": expected},
+    )
+    absent = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"outcome": "deleted"}
+    assert absent.status_code == 200
+    assert absent.json() == {"outcome": "absent"}
+
+    _tracker_snapshot(client)
+    assert client.delete("/api/tracker/record-1").json() == {"deleted": True}
+
+
+def test_tracker_conditional_delete_rejects_identity_and_extra_fields(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    expected = _tracker_snapshot(client)
+
+    identity = client.post(
+        "/api/tracker/different/conditional-delete",
+        json={"expected": expected},
+    )
+    extra = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": expected, "unexpected": True},
+    )
+
+    assert identity.status_code == 400
+    assert identity.json() == {"detail": "Conditional delete identity mismatch."}
+    assert extra.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("job_key", "changed-job-key"),
+        ("status", "applied"),
+        ("notes", "changed-notes"),
+        ("applied_at", "2099-01-01T00:00:00Z"),
+        ("updated_at", "2099-01-01T00:00:00Z"),
+    ],
+)
+def test_tracker_conditional_delete_mismatch_is_private_free(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    client = _client(tmp_path)
+    current = _tracker_snapshot(client)
+    expected = deepcopy(current)
+    expected[field] = value
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 412
+    assert response.json() == {"detail": "Conditional delete precondition failed."}
+    assert "PRIVATE_JOB_KEY_SENTINEL" not in response.text
+    assert "PRIVATE_NOTES_SENTINEL" not in response.text
+    assert client.get("/api/tracker").json() == [current]
 
 
 def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
