@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SearchRequest(BaseModel):
@@ -87,6 +87,44 @@ class ApplicationRecord(BaseModel):
     notes: str = ""
     applied_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class SavedSearchStoredRequest(SearchRequest):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SavedSearchStoredSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    description: str | None
+    request: SavedSearchStoredRequest
+    created_at: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+
+
+class SavedSearchConditionalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected: SavedSearchStoredSnapshot
+
+
+class StrictApplicationRecord(ApplicationRecord):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+
+
+class TrackerConditionalDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected: StrictApplicationRecord
+
+
+class ConditionalDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["deleted", "absent"]
 
 
 class AssistantRunRequest(BaseModel):

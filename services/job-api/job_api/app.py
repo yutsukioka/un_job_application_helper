@@ -7,13 +7,16 @@ import re
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import unquote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
+from jobagg.atomic_json_store import AtomicJsonStoreError
 from jobagg.db import JobDatabase
 from jobagg.filters.query import search_collected_jobs
 from jobagg.filters.saved_searches import (
+    SavedSearch,
+    compare_and_remove_saved_search,
     get_saved_search,
     list_saved_searches,
     remove_saved_search,
@@ -21,17 +24,27 @@ from jobagg.filters.saved_searches import (
 )
 from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
+from pydantic import ValidationError
 
 from job_api.config import ApiSettings, load_settings
 from job_api.models import (
     ApplicationRecord,
     AssistantRunRequest,
     AssistantRunResult,
+    ConditionalDeleteResponse,
+    SavedSearchConditionalDeleteRequest,
     SavedSearchModel,
     SearchRequest,
     SearchResponse,
+    TrackerConditionalDeleteRequest,
 )
-from job_api.tracker import create_record, delete_record, list_records, upsert_record
+from job_api.tracker import (
+    compare_and_delete_record,
+    create_record,
+    delete_record,
+    list_records,
+    upsert_record,
+)
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
@@ -145,6 +158,48 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def delete_saved_search(name: str) -> dict[str, bool]:
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
+    @app.post(
+        "/api/saved-searches/{name}/conditional-delete",
+        response_model=ConditionalDeleteResponse,
+    )
+    def conditional_delete_saved_search(
+        name: str,
+        body: Annotated[Any, Body()],
+    ) -> ConditionalDeleteResponse:
+        try:
+            request = SavedSearchConditionalDeleteRequest.model_validate(body)
+        except ValidationError:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            ) from None
+        expected = request.expected
+        if name != expected.name:
+            raise HTTPException(
+                status_code=400, detail="Conditional delete identity mismatch."
+            )
+        expected_search = SavedSearch(
+            name=expected.name,
+            description=expected.description,
+            request=_to_jobagg_request(expected.request),
+            created_at=expected.created_at,
+            updated_at=expected.updated_at,
+        )
+        try:
+            outcome = compare_and_remove_saved_search(
+                settings.saved_searches_path,
+                name=name,
+                expected=expected_search,
+            )
+        except AtomicJsonStoreError:
+            raise HTTPException(
+                status_code=500, detail="Private-state store operation failed."
+            ) from None
+        if outcome == "mismatch":
+            raise HTTPException(
+                status_code=412, detail="Conditional delete precondition failed."
+            )
+        return ConditionalDeleteResponse(outcome=outcome)
+
     @app.get("/api/updates")
     def updates() -> dict[str, Any]:
         _require_db(settings.db_path)
@@ -189,6 +244,41 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.delete("/api/tracker/{record_id}")
     def remove_tracker_record(record_id: str) -> dict[str, bool]:
         return {"deleted": delete_record(settings.tracker_path, record_id)}
+
+    @app.post(
+        "/api/tracker/{record_id}/conditional-delete",
+        response_model=ConditionalDeleteResponse,
+    )
+    def conditional_delete_tracker_record(
+        record_id: str,
+        body: Annotated[Any, Body()],
+    ) -> ConditionalDeleteResponse:
+        try:
+            request = TrackerConditionalDeleteRequest.model_validate(body)
+        except ValidationError:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            ) from None
+        expected = ApplicationRecord(**request.expected.model_dump())
+        if not record_id or record_id != expected.id:
+            raise HTTPException(
+                status_code=400, detail="Conditional delete identity mismatch."
+            )
+        try:
+            outcome = compare_and_delete_record(
+                settings.tracker_path,
+                record_id=record_id,
+                expected=expected,
+            )
+        except AtomicJsonStoreError:
+            raise HTTPException(
+                status_code=500, detail="Private-state store operation failed."
+            ) from None
+        if outcome == "mismatch":
+            raise HTTPException(
+                status_code=412, detail="Conditional delete precondition failed."
+            )
+        return ConditionalDeleteResponse(outcome=outcome)
 
     @app.post("/api/assistant/runs", response_model=AssistantRunResult)
     def create_assistant_run(request: AssistantRunRequest) -> AssistantRunResult:

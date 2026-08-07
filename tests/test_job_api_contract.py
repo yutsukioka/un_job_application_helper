@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "jobagg"))
 sys.path.insert(0, str(ROOT / "services" / "job-api"))
@@ -19,10 +18,10 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from job_api import tracker as tracker_store  # noqa: E402
 from job_api.app import create_app  # noqa: E402
 from job_api.config import ApiSettings  # noqa: E402
 from job_api.models import ApplicationRecord  # noqa: E402
-from job_api import tracker as tracker_store  # noqa: E402
 from jobagg.classification import classify_database  # noqa: E402
 from jobagg.db import JobDatabase  # noqa: E402
 from jobagg.models import OrganizationSource  # noqa: E402
@@ -85,7 +84,11 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
 
     saved = client.post(
         "/api/saved-searches",
-        json={"name": "programme", "summary": "Programme roles", "request": {"text": "Programme"}},
+        json={
+            "name": "programme",
+            "summary": "Programme roles",
+            "request": {"text": "Programme"},
+        },
     )
     assert saved.status_code == 200
     assert client.post("/api/saved-searches/programme/run").json()["total"] == 1
@@ -106,7 +109,9 @@ def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -
     assert len(client.get("/api/tracker").json()) == 1
 
 
-def _saved_search_snapshot(client: TestClient, *, name: str = "programme") -> dict[str, object]:
+def _saved_search_snapshot(
+    client: TestClient, *, name: str = "programme"
+) -> dict[str, object]:
     response = client.post(
         "/api/saved-searches",
         json={
@@ -119,7 +124,9 @@ def _saved_search_snapshot(client: TestClient, *, name: str = "programme") -> di
     return response.json()
 
 
-def _tracker_snapshot(client: TestClient, *, record_id: str = "record-1") -> dict[str, object]:
+def _tracker_snapshot(
+    client: TestClient, *, record_id: str = "record-1"
+) -> dict[str, object]:
     response = client.post(
         "/api/tracker",
         json={
@@ -133,7 +140,9 @@ def _tracker_snapshot(client: TestClient, *, record_id: str = "record-1") -> dic
     return response.json()
 
 
-def test_saved_search_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> None:
+def test_saved_search_conditional_delete_exact_absent_and_legacy(
+    tmp_path: Path,
+) -> None:
     client = _client(tmp_path)
     expected = _saved_search_snapshot(client)
 
@@ -155,7 +164,9 @@ def test_saved_search_conditional_delete_exact_absent_and_legacy(tmp_path: Path)
     assert client.delete("/api/saved-searches/programme").json() == {"deleted": True}
 
 
-def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(tmp_path: Path) -> None:
+def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(
+    tmp_path: Path,
+) -> None:
     client = _client(tmp_path)
     expected = _saved_search_snapshot(client)
 
@@ -171,6 +182,7 @@ def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(tmp_p
     assert identity.status_code == 400
     assert identity.json() == {"detail": "Conditional delete identity mismatch."}
     assert extra.status_code == 422
+    assert extra.json() == {"detail": "Conditional delete request is invalid."}
 
 
 @pytest.mark.parametrize(
@@ -204,6 +216,54 @@ def test_saved_search_conditional_delete_mismatch_is_private_free(
     assert client.get("/api/saved-searches").json() == [current]
 
 
+def test_saved_search_changed_after_review_survives_conditional_delete(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    reviewed = _saved_search_snapshot(client)
+    changed = client.post(
+        "/api/saved-searches",
+        json={
+            "name": "programme",
+            "summary": "changed-after-review",
+            "request": {"text": "changed-after-review"},
+        },
+    ).json()
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": reviewed},
+    )
+
+    assert response.status_code == 412
+    assert client.get("/api/saved-searches").json() == [changed]
+
+
+def test_saved_search_invalid_request_error_does_not_echo_private_input(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client)
+    expected["unexpected"] = "PRIVATE_VALIDATION_SENTINEL"
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_VALIDATION_SENTINEL" not in response.text
+
+    wrong_shape = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json=["PRIVATE_SHAPE_SENTINEL"],
+    )
+    assert wrong_shape.status_code == 422
+    assert wrong_shape.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_SHAPE_SENTINEL" not in wrong_shape.text
+
+
 def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> None:
     client = _client(tmp_path)
     expected = _tracker_snapshot(client)
@@ -226,7 +286,9 @@ def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> N
     assert client.delete("/api/tracker/record-1").json() == {"deleted": True}
 
 
-def test_tracker_conditional_delete_rejects_identity_and_extra_fields(tmp_path: Path) -> None:
+def test_tracker_conditional_delete_rejects_identity_and_extra_fields(
+    tmp_path: Path,
+) -> None:
     client = _client(tmp_path)
     expected = _tracker_snapshot(client)
 
@@ -242,6 +304,7 @@ def test_tracker_conditional_delete_rejects_identity_and_extra_fields(tmp_path: 
     assert identity.status_code == 400
     assert identity.json() == {"detail": "Conditional delete identity mismatch."}
     assert extra.status_code == 422
+    assert extra.json() == {"detail": "Conditional delete request is invalid."}
 
 
 @pytest.mark.parametrize(
@@ -274,6 +337,49 @@ def test_tracker_conditional_delete_mismatch_is_private_free(
     assert "PRIVATE_JOB_KEY_SENTINEL" not in response.text
     assert "PRIVATE_NOTES_SENTINEL" not in response.text
     assert client.get("/api/tracker").json() == [current]
+
+
+def test_tracker_changed_after_review_survives_conditional_delete(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    reviewed = _tracker_snapshot(client)
+    changed_request = deepcopy(reviewed)
+    changed_request["notes"] = "changed-after-review"
+    changed = client.post("/api/tracker", json=changed_request).json()
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": reviewed},
+    )
+
+    assert response.status_code == 412
+    assert client.get("/api/tracker").json() == [changed]
+
+
+def test_tracker_invalid_request_error_does_not_echo_private_input(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    expected = _tracker_snapshot(client)
+    expected["unexpected"] = "PRIVATE_VALIDATION_SENTINEL"
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_VALIDATION_SENTINEL" not in response.text
+
+    wrong_shape = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json=["PRIVATE_SHAPE_SENTINEL"],
+    )
+    assert wrong_shape.status_code == 422
+    assert wrong_shape.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_SHAPE_SENTINEL" not in wrong_shape.text
 
 
 def test_tracker_upsert_and_conditional_delete_share_one_lock(

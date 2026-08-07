@@ -6,10 +6,10 @@ import json
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from jobagg.atomic_json_store import AtomicJsonStore, AtomicJsonStoreError
 from jobagg.filters.schemas import VacancySearchRequest
-
 
 STORE_VERSION = 1
 
@@ -34,7 +34,7 @@ class SavedSearch:
 
 def load_saved_searches(path: str | Path) -> dict[str, SavedSearch]:
     data = _load_store(Path(path))
-    searches = data.get("saved_searches") or {}
+    searches = data["saved_searches"]
     return {
         name: _saved_search_from_dict(name, payload)
         for name, payload in searches.items()
@@ -56,22 +56,26 @@ def save_search(
     overwrite: bool = False,
 ) -> SavedSearch:
     store_path = Path(path)
-    data = _load_store(store_path)
-    searches = data.setdefault("saved_searches", {})
-    if name in searches and not overwrite:
-        raise ValueError(f"Saved search {name!r} already exists; use --overwrite to replace it")
-    now = datetime.now(tz=UTC).isoformat()
-    created_at = searches.get(name, {}).get("created_at", now) if isinstance(searches.get(name), dict) else now
-    search = SavedSearch(
-        name=name,
-        description=description,
-        request=request,
-        created_at=created_at,
-        updated_at=now,
-    )
-    searches[name] = search.to_dict()
-    _write_store(store_path, data)
-    return search
+
+    def mutation(data: dict[str, Any]) -> tuple[SavedSearch, bool]:
+        _normalize_store(data)
+        searches = data["saved_searches"]
+        if name in searches and not overwrite:
+            raise ValueError(f"Saved search {name!r} already exists; use --overwrite to replace it")
+        now = datetime.now(tz=UTC).isoformat()
+        current = searches.get(name)
+        created_at = current.get("created_at", now) if isinstance(current, dict) else now
+        search = SavedSearch(
+            name=name,
+            description=description,
+            request=request,
+            created_at=created_at,
+            updated_at=now,
+        )
+        searches[name] = search.to_dict()
+        return search, True
+
+    return _store(store_path).mutate(mutation)
 
 
 def get_saved_search(path: str | Path, name: str) -> SavedSearch:
@@ -84,13 +88,43 @@ def get_saved_search(path: str | Path, name: str) -> SavedSearch:
 
 def remove_saved_search(path: str | Path, name: str) -> bool:
     store_path = Path(path)
-    data = _load_store(store_path)
-    searches = data.setdefault("saved_searches", {})
-    if name not in searches:
-        return False
-    del searches[name]
-    _write_store(store_path, data)
-    return True
+
+    def mutation(data: dict[str, Any]) -> tuple[bool, bool]:
+        _normalize_store(data)
+        searches = data["saved_searches"]
+        if name not in searches:
+            return False, False
+        del searches[name]
+        return True, True
+
+    return _store(store_path).mutate(mutation)
+
+
+def compare_and_remove_saved_search(
+    path: str | Path,
+    *,
+    name: str,
+    expected: SavedSearch,
+) -> Literal["deleted", "absent", "mismatch"]:
+    store_path = Path(path)
+
+    def mutation(
+        data: dict[str, Any],
+    ) -> tuple[Literal["deleted", "absent", "mismatch"], bool]:
+        _normalize_store(data)
+        searches = data["saved_searches"]
+        if name not in searches:
+            return "absent", False
+        payload = searches[name]
+        if not isinstance(payload, dict):
+            return "mismatch", False
+        current = _saved_search_from_dict(name, payload)
+        if expected.name != name or current != expected:
+            return "mismatch", False
+        del searches[name]
+        return "deleted", True
+
+    return _store(store_path).mutate(mutation)
 
 
 def request_to_dict(request: VacancySearchRequest) -> dict[str, Any]:
@@ -118,19 +152,29 @@ def _saved_search_from_dict(name: str, payload: dict[str, Any]) -> SavedSearch:
 
 
 def _load_store(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"version": STORE_VERSION, "saved_searches": {}}
-    data = json.loads(path.read_text(encoding="utf-8") or "{}")
-    if not isinstance(data, dict):
-        raise ValueError(f"Saved searches file must contain a JSON object: {path}")
-    data.setdefault("version", STORE_VERSION)
-    data.setdefault("saved_searches", {})
+    data = _store(path).read()
+    _normalize_store(data)
     return data
 
 
-def _write_store(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
-        encoding="utf-8",
+def _store(path: Path) -> AtomicJsonStore[dict[str, Any]]:
+    return AtomicJsonStore(
+        path,
+        default_factory=lambda: {"version": STORE_VERSION, "saved_searches": {}},
+        validator=_validate_store,
+        encoder=lambda data: (
+            json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        ).encode("utf-8"),
     )
+
+
+def _validate_store(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise AtomicJsonStoreError("Saved-search JSON store must contain an object.")
+    if "saved_searches" in data and not isinstance(data["saved_searches"], dict):
+        raise AtomicJsonStoreError("Saved-search JSON store is invalid.")
+
+
+def _normalize_store(data: dict[str, Any]) -> None:
+    data.setdefault("version", STORE_VERSION)
+    data.setdefault("saved_searches", {})
