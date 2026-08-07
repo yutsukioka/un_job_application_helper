@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib
+import json
 import sys
+import threading
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,6 +21,8 @@ pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 from job_api.app import create_app  # noqa: E402
 from job_api.config import ApiSettings  # noqa: E402
+from job_api.models import ApplicationRecord  # noqa: E402
+from job_api import tracker as tracker_store  # noqa: E402
 from jobagg.classification import classify_database  # noqa: E402
 from jobagg.db import JobDatabase  # noqa: E402
 from jobagg.models import OrganizationSource  # noqa: E402
@@ -268,6 +274,74 @@ def test_tracker_conditional_delete_mismatch_is_private_free(
     assert "PRIVATE_JOB_KEY_SENTINEL" not in response.text
     assert "PRIVATE_NOTES_SENTINEL" not in response.text
     assert client.get("/api/tracker").json() == [current]
+
+
+def test_tracker_upsert_and_conditional_delete_share_one_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "tracker.json"
+    current = tracker_store.upsert_record(
+        path,
+        ApplicationRecord(id="record-1", job_key="job-1", notes="version-a"),
+    ).model_copy(deep=True)
+    atomic_store: Any = importlib.import_module("jobagg.atomic_json_store")
+    update_loaded = threading.Event()
+    delete_attempted = threading.Event()
+    real_read = atomic_store.AtomicJsonStore._read_unlocked
+    real_acquire = atomic_store._acquire_platform_lock
+
+    def gated_read(store: object) -> object:
+        data = real_read(store)
+        if threading.current_thread().name == "tracker-update":
+            update_loaded.set()
+            assert delete_attempted.wait(5)
+        return data
+
+    def observed_acquire(lock_file: object) -> None:
+        if threading.current_thread().name == "tracker-delete":
+            delete_attempted.set()
+        real_acquire(lock_file)
+
+    monkeypatch.setattr(atomic_store.AtomicJsonStore, "_read_unlocked", gated_read)
+    monkeypatch.setattr(atomic_store, "_acquire_platform_lock", observed_acquire)
+    outcomes: list[str] = []
+
+    update = threading.Thread(
+        name="tracker-update",
+        target=lambda: tracker_store.upsert_record(
+            path,
+            ApplicationRecord(
+                id="record-1",
+                job_key="job-1",
+                status="applied",
+                notes="version-b",
+            ),
+        ),
+    )
+    delete = threading.Thread(
+        name="tracker-delete",
+        target=lambda: outcomes.append(
+            tracker_store.compare_and_delete_record(
+                path,
+                record_id=current.id,
+                expected=current,
+            )
+        ),
+    )
+    update.start()
+    assert update_loaded.wait(5)
+    delete.start()
+    update.join(5)
+    delete.join(5)
+
+    assert not update.is_alive()
+    assert not delete.is_alive()
+    assert outcomes == ["mismatch"]
+    records = tracker_store.list_records(path)
+    assert len(records) == 1
+    assert records[0].notes == "version-b"
+    json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
