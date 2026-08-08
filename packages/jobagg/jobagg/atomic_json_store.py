@@ -79,7 +79,7 @@ class AtomicJsonStore(Generic[Document]):
             raise AtomicJsonStoreError("JSON store is invalid.")
         try:
             document = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError, RecursionError):
             raise AtomicJsonStoreError("JSON store is invalid.") from None
         try:
             self._validator(document)

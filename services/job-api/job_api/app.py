@@ -11,7 +11,10 @@ from typing import Annotated, Any
 from urllib.parse import unquote
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from jobagg.atomic_json_store import AtomicJsonStoreError
@@ -28,6 +31,7 @@ from jobagg.filters.saved_searches import (
 from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
 from pydantic import ValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from job_api.config import ApiSettings, load_settings
 from job_api.models import (
@@ -71,6 +75,23 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 content={"detail": "Conditional delete request is invalid."},
             )
         return await request_validation_exception_handler(request, exc)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def conditional_delete_body_decode_error(
+        request: Request,
+        exc: StarletteHTTPException,
+    ) -> Any:
+        if (
+            request.method == "POST"
+            and _CONDITIONAL_DELETE_PATH.fullmatch(request.url.path)
+            and exc.status_code == 400
+            and exc.detail == "There was an error parsing the body"
+        ):
+            return JSONResponse(
+                status_code=422,
+                content={"detail": "Conditional delete request is invalid."},
+            )
+        return await http_exception_handler(request, exc)
 
     def db() -> JobDatabase:
         return JobDatabase(settings.db_path)
