@@ -214,6 +214,32 @@ def test_saved_search_conditional_delete_preserves_integer_confidence(
     assert response.json() == {"outcome": "deleted"}
 
 
+def test_saved_search_conditional_delete_handles_large_integer_confidence(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    large_confidence = 10**400
+    save_search(
+        _settings(tmp_path).saved_searches_path,
+        name="programme",
+        request=VacancySearchRequest(
+            text="PRIVATE_QUERY_SENTINEL",
+            min_location_confidence=large_confidence,
+        ),
+        description="PRIVATE_DESCRIPTION_SENTINEL",
+    )
+    expected = client.get("/api/saved-searches").json()[0]
+
+    assert expected["request"]["min_location_confidence"] == large_confidence
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
