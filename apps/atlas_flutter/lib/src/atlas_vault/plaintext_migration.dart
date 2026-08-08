@@ -492,11 +492,15 @@ final class AtlasVaultPlaintextMigrationJournal {
       ];
       final remoteSavedSearches = <AtlasSavedSearch>[
         for (final item in _requiredList(value['remote_saved_searches']))
-          _savedSearchFromJournal(_stringMap(item)),
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+              ? _windowsRemoteSavedSearchFromJournal(_stringMap(item))
+              : _savedSearchFromJournal(_stringMap(item)),
       ];
       final remoteTrackerRecords = <AtlasApplicationRecord>[
         for (final item in _requiredList(value['remote_tracker_records']))
-          _trackerFromJournal(_stringMap(item)),
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+              ? _windowsRemoteTrackerFromJournal(_stringMap(item))
+              : _trackerFromJournal(_stringMap(item)),
       ];
       final remoteSavedSearchNames = <String>[
         for (final item in _requiredList(value['remote_saved_search_names']))
@@ -700,10 +704,12 @@ final class AtlasVaultPlaintextMigrationJournal {
       for (final value in trackerRecords) _trackerJson(value),
     ],
     'remote_saved_searches': <Object?>[
-      for (final value in remoteSavedSearches) _savedSearchJson(value),
+      for (final value in remoteSavedSearches)
+        _remoteSavedSearchJson(value, profile),
     ],
     'remote_tracker_records': <Object?>[
-      for (final value in remoteTrackerRecords) _trackerJson(value),
+      for (final value in remoteTrackerRecords)
+        _remoteTrackerJson(value, profile),
     ],
     'remote_saved_search_names': List<String>.from(remoteSavedSearchNames),
     'remote_tracker_handles': <Object?>[
@@ -753,6 +759,12 @@ final class AtlasVaultPlaintextMigrationJournal {
     _requireSortedUnique(
       trackerRecords.map((value) => value.jobKey).toList(growable: false),
     );
+    for (final value in remoteSavedSearches) {
+      _remoteSavedSearchJson(value, profile);
+    }
+    for (final value in remoteTrackerRecords) {
+      _remoteTrackerJson(value, profile);
+    }
     final remoteSearchNames = remoteSavedSearches
         .map((value) => value.name)
         .toList(growable: false);
@@ -1036,7 +1048,7 @@ final class AtlasVaultPlaintextMigrationCoordinator
           throw const AtlasVaultPlaintextMigrationException();
         }
         final current = await _readInventory();
-        if (!_sameInventory(reviewed, current)) {
+        if (!_sameInventory(reviewed, current, _profile)) {
           throw const AtlasVaultPlaintextMigrationException();
         }
         final journal = AtlasVaultPlaintextMigrationJournal._prepared(
@@ -1611,8 +1623,13 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final expected = expectedSearches[value.name];
       if (expected == null ||
           !_jsonEqual(
-            _savedSearchJson(expected),
-            _savedSearchJson(_savedSearchFromJournal(_savedSearchJson(value))),
+            _remoteSavedSearchJson(expected, journal.profile),
+            _remoteSavedSearchJson(
+              journal.profile == AtlasVaultPlaintextMigrationProfile.windows
+                  ? _windowsRemoteSavedSearchFromJournal(value.toJson())
+                  : _savedSearchFromJournal(_savedSearchJson(value)),
+              journal.profile,
+            ),
           )) {
         throw const AtlasVaultPlaintextMigrationException();
       }
@@ -1634,8 +1651,13 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final expected = expectedTrackers[value.id];
       if (expected == null ||
           !_jsonEqual(
-            _trackerJson(expected),
-            _trackerJson(_trackerFromJournal(_trackerJson(value))),
+            _remoteTrackerJson(expected, journal.profile),
+            _remoteTrackerJson(
+              journal.profile == AtlasVaultPlaintextMigrationProfile.windows
+                  ? _windowsRemoteTrackerFromJournal(value.toJson())
+                  : _trackerFromJournal(_trackerJson(value)),
+              journal.profile,
+            ),
           )) {
         throw const AtlasVaultPlaintextMigrationException();
       }
@@ -2191,7 +2213,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
         ..sort((left, right) => left.jobKey.compareTo(right.jobKey));
       final remoteSavedSearches = <AtlasSavedSearch>[
         for (final value in compatibility.savedSearches)
-          _savedSearchFromJournal(_savedSearchJson(value)),
+          _profile == AtlasVaultPlaintextMigrationProfile.windows
+              ? _windowsRemoteSavedSearchFromJournal(value.toJson())
+              : _savedSearchFromJournal(_savedSearchJson(value)),
       ]..sort((left, right) => left.name.compareTo(right.name));
       final remoteSavedSearchNames = remoteSavedSearches
           .map((value) => value.name)
@@ -2200,7 +2224,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final remoteTrackerRecords =
           <AtlasApplicationRecord>[
             for (final value in compatibility.trackerRecords)
-              _trackerFromJournal(_trackerJson(value)),
+              _profile == AtlasVaultPlaintextMigrationProfile.windows
+                  ? _windowsRemoteTrackerFromJournal(value.toJson())
+                  : _trackerFromJournal(_trackerJson(value)),
           ]..sort((left, right) {
             final keyOrder = left.jobKey.compareTo(right.jobKey);
             return keyOrder == 0 ? left.id.compareTo(right.id) : keyOrder;
@@ -2612,6 +2638,28 @@ AtlasSavedSearch _savedSearchFromJournal(Map<String, Object?> value) {
   );
 }
 
+AtlasSavedSearch _windowsRemoteSavedSearchFromJournal(
+  Map<String, Object?> value,
+) {
+  _requireExactKeys(value, const <String>{
+    'name',
+    'description',
+    'request',
+    'created_at',
+    'updated_at',
+  });
+  final request = vault.AtlasSearchRequest.fromJson(
+    _stringMap(value['request']),
+  );
+  return AtlasSavedSearch(
+    name: _requiredText(value['name']),
+    description: _optionalText(value['description']),
+    request: AtlasSearchRequest.fromJson(request.toJson()),
+    createdAt: _preserveLegacyUtc(value['created_at'], required: true),
+    updatedAt: _preserveLegacyUtc(value['updated_at'], required: true),
+  );
+}
+
 AtlasApplicationRecord _trackerFromJournal(Map<String, Object?> value) {
   _requireExactKeys(value, const <String>{
     'id',
@@ -2631,6 +2679,27 @@ AtlasApplicationRecord _trackerFromJournal(Map<String, Object?> value) {
   );
 }
 
+AtlasApplicationRecord _windowsRemoteTrackerFromJournal(
+  Map<String, Object?> value,
+) {
+  _requireExactKeys(value, const <String>{
+    'id',
+    'job_key',
+    'status',
+    'notes',
+    'applied_at',
+    'updated_at',
+  });
+  return AtlasApplicationRecord(
+    id: _requiredText(value['id']),
+    jobKey: _requiredText(value['job_key']),
+    status: _requiredText(value['status']),
+    notes: _optionalText(value['notes']),
+    appliedAt: _preserveLegacyUtc(value['applied_at']),
+    updatedAt: _preserveLegacyUtc(value['updated_at']),
+  );
+}
+
 Map<String, Object?> _savedSearchJson(AtlasSavedSearch value) {
   return <String, Object?>{
     'name': value.name,
@@ -2643,6 +2712,24 @@ Map<String, Object?> _savedSearchJson(AtlasSavedSearch value) {
   };
 }
 
+Map<String, Object?> _remoteSavedSearchJson(
+  AtlasSavedSearch value,
+  AtlasVaultPlaintextMigrationProfile profile,
+) {
+  if (profile == AtlasVaultPlaintextMigrationProfile.android) {
+    return _savedSearchJson(value);
+  }
+  return <String, Object?>{
+    'name': value.name,
+    'description': value.description,
+    'request': vault.AtlasSearchRequest.fromJson(
+      value.request.toJson(),
+    ).toJson(),
+    'created_at': _preserveLegacyUtc(value.createdAt, required: true),
+    'updated_at': _preserveLegacyUtc(value.updatedAt, required: true),
+  };
+}
+
 Map<String, Object?> _trackerJson(AtlasApplicationRecord value) {
   return <String, Object?>{
     'id': value.id,
@@ -2651,6 +2738,23 @@ Map<String, Object?> _trackerJson(AtlasApplicationRecord value) {
     'notes': value.notes,
     'applied_at': _normalizeLegacyUtc(value.appliedAt),
     'updated_at': _normalizeLegacyUtc(value.updatedAt),
+  };
+}
+
+Map<String, Object?> _remoteTrackerJson(
+  AtlasApplicationRecord value,
+  AtlasVaultPlaintextMigrationProfile profile,
+) {
+  if (profile == AtlasVaultPlaintextMigrationProfile.android) {
+    return _trackerJson(value);
+  }
+  return <String, Object?>{
+    'id': value.id,
+    'job_key': value.jobKey,
+    'status': value.status,
+    'notes': value.notes,
+    'applied_at': _preserveLegacyUtc(value.appliedAt),
+    'updated_at': _preserveLegacyUtc(value.updatedAt),
   };
 }
 
@@ -2741,20 +2845,21 @@ bool _journalMatchesInventory(
       _jsonEqual(
         <Object?>[
           for (final value in journal.remoteSavedSearches)
-            _savedSearchJson(value),
+            _remoteSavedSearchJson(value, journal.profile),
         ],
         <Object?>[
           for (final value in inventory.remoteSavedSearches)
-            _savedSearchJson(value),
+            _remoteSavedSearchJson(value, journal.profile),
         ],
       ) &&
       _jsonEqual(
         <Object?>[
-          for (final value in journal.remoteTrackerRecords) _trackerJson(value),
+          for (final value in journal.remoteTrackerRecords)
+            _remoteTrackerJson(value, journal.profile),
         ],
         <Object?>[
           for (final value in inventory.remoteTrackerRecords)
-            _trackerJson(value),
+            _remoteTrackerJson(value, journal.profile),
         ],
       ) &&
       _jsonEqual(
@@ -2795,7 +2900,11 @@ bool _samePrivateValues(_MigrationInventory left, _MigrationInventory right) {
   );
 }
 
-bool _sameInventory(_MigrationInventory left, _MigrationInventory right) {
+bool _sameInventory(
+  _MigrationInventory left,
+  _MigrationInventory right,
+  AtlasVaultPlaintextMigrationProfile profile,
+) {
   return _samePrivateInventory(left, right) &&
       left.compatibilityAuthority == right.compatibilityAuthority &&
       left.cachePrivateSha256 == right.cachePrivateSha256 &&
@@ -2806,19 +2915,22 @@ bool _sameInventory(_MigrationInventory left, _MigrationInventory right) {
       _jsonEqual(left.remoteSavedSearchNames, right.remoteSavedSearchNames) &&
       _jsonEqual(
         <Object?>[
-          for (final value in left.remoteSavedSearches) _savedSearchJson(value),
+          for (final value in left.remoteSavedSearches)
+            _remoteSavedSearchJson(value, profile),
         ],
         <Object?>[
           for (final value in right.remoteSavedSearches)
-            _savedSearchJson(value),
+            _remoteSavedSearchJson(value, profile),
         ],
       ) &&
       _jsonEqual(
         <Object?>[
-          for (final value in left.remoteTrackerRecords) _trackerJson(value),
+          for (final value in left.remoteTrackerRecords)
+            _remoteTrackerJson(value, profile),
         ],
         <Object?>[
-          for (final value in right.remoteTrackerRecords) _trackerJson(value),
+          for (final value in right.remoteTrackerRecords)
+            _remoteTrackerJson(value, profile),
         ],
       ) &&
       _jsonEqual(
@@ -2922,6 +3034,18 @@ String? _optionalUtc(Object? value) {
   } catch (_) {
     throw const AtlasVaultPlaintextMigrationException();
   }
+}
+
+String? _preserveLegacyUtc(Object? value, {bool required = false}) {
+  if (value == null) {
+    if (required) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return null;
+  }
+  final text = _requiredText(value);
+  _normalizeLegacyUtc(text);
+  return text;
 }
 
 String? _normalizeLegacyUtc(String? value) {

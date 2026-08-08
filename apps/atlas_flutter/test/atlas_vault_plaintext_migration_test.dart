@@ -259,6 +259,79 @@ void main() {
       expect(journal.savedSearches.single.updatedAt, '2026-07-02T02:03:04Z');
       expect(journal.trackerRecords.single.appliedAt, '2026-07-03T03:04:05Z');
       expect(journal.trackerRecords.single.updatedAt, '2026-07-04T04:05:06Z');
+      expect(
+        journal.remoteSavedSearches.single.createdAt,
+        '2026-07-01T01:02:03Z',
+      );
+      expect(
+        journal.remoteTrackerRecords.single.updatedAt,
+        '2026-07-04T04:05:06Z',
+      );
+    },
+  );
+
+  test(
+    'Windows journal preserves exact remote timestamps for conditional delete',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      final state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          _savedSearch(
+            createdAt: '2026-07-01T01:02:03.456789+00:00',
+            updatedAt: '2026-07-02T02:03:04.125Z',
+          ),
+        ],
+        trackerRecords: <AtlasApplicationRecord>[
+          _trackerRecord(
+            appliedAt: '2026-07-03T03:04:05.500000+00:00',
+            updatedAt: '2026-07-04T18:05:06.999999+14:00',
+          ),
+        ],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      fixture.memory.state = state;
+      fixture.compatibility.state = state;
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: state.trackerRecords,
+        privateSha256: '1' * 64,
+        durablePrivateSha256: '2' * 64,
+        legacyPrivateSha256: '3' * 64,
+        retainedLegacyCachePresent: true,
+        cacheCleanupComplete: false,
+        requiresPhysicalCleanup: true,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      expect(journal.savedSearches.single.createdAt, '2026-07-01T01:02:03Z');
+      expect(
+        journal.remoteSavedSearches.single.createdAt,
+        '2026-07-01T01:02:03.456789+00:00',
+      );
+      expect(
+        journal.remoteTrackerRecords.single.updatedAt,
+        '2026-07-04T18:05:06.999999+14:00',
+      );
+      fixture.encryptedState = AtlasVaultPlaintextPrivateState(
+        savedSearches: journal.savedSearches,
+        trackerRecords: journal.trackerRecords,
+      );
+
+      final completed = await fixture.coordinator.finalizeAndActivate();
+
+      expect(completed.stage, isNull);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.compatibility.state.trackerRecords, isEmpty);
+      expect(fixture.selection.value, isNotNull);
     },
   );
 
@@ -1425,6 +1498,11 @@ final class _MigrationFixture {
   late final _SelectedVaultStore selection = _SelectedVaultStore(events);
   late final _SecureKeyStore keyStore = _SecureKeyStore(events);
   late final _LocalStoreIO localStore = _LocalStoreIO(events);
+  AtlasVaultPlaintextPrivateState encryptedState =
+      AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[_savedSearch()],
+        trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+      );
   late final TestAtlasVaultPlaintextMigrationPrivateAuthority privateAuthority =
       TestAtlasVaultPlaintextMigrationPrivateAuthority(
         events: events,
@@ -1434,10 +1512,7 @@ final class _MigrationFixture {
             trackerRecords: const <AtlasApplicationRecord>[],
           );
         },
-        readEncryptedState: () async => AtlasVaultPlaintextPrivateState(
-          savedSearches: <AtlasSavedSearch>[_savedSearch()],
-          trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
-        ),
+        readEncryptedState: () async => encryptedState,
       );
   final _ids = _SequenceIds(<String>[
     '11111111-1111-4111-8111-111111111111',

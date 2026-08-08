@@ -185,7 +185,12 @@ as the complete `expected` body to
 `deleted`; prior deletion returns `absent`; a changed record returns HTTP 412.
 Only verified absence is CAS-journaled. A 412, unknown name, or new row after a
 successful delete forces recovery before selection and preserves the changed
-content. API and Dart errors are fixed and private-free.
+content. The Windows protected journal preserves every validated compatibility
+timestamp string exactly, including fractional seconds and explicit UTC
+offsets, so the request precondition matches the stored server row rather than
+the normalized encrypted-payload timestamp. Android journal encoding retains
+its existing normalized whole-second behavior. API and Dart errors are fixed
+and private-free.
 
 ## 28. Compatibility Tracker Deletion
 
