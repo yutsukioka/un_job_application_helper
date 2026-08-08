@@ -32,6 +32,16 @@ constexpr size_t kStoreMaximumLength = 128 * 1024 * 1024;
 constexpr size_t kKeyEnvelopeFixedLength = 8 + 4 + 2 + 4 + 32;
 constexpr char kKeyEnvelopeMagic[] = "AVWKEY01";
 constexpr uint32_t kKeyEnvelopeVersion = 1;
+constexpr size_t kProtectedMetadataPlaintextMaximumLength = 16 * 1024 * 1024;
+constexpr size_t kProtectedMetadataBlobMaximumLength =
+    kProtectedMetadataPlaintextMaximumLength + 1024 * 1024;
+constexpr size_t kSelectedVaultPlaintextMaximumLength = 256;
+constexpr size_t kProtectedBlobEnvelopeFixedLength = 8 + 4 + 2 + 4 + 4 + 32;
+constexpr char kProtectedBlobEnvelopeMagic[] = "AVWBLB01";
+constexpr uint32_t kProtectedBlobEnvelopeVersion = 1;
+constexpr char kMigrationJournalPurpose[] =
+    "plaintext-private-state-migration";
+constexpr char kSelectedVaultPurpose[] = "selected-vault";
 constexpr char kCapabilityProbeVaultId[] = "capability_probe_v1";
 
 enum class OperationResult {
@@ -110,6 +120,23 @@ struct KeyEnvelope {
   std::array<uint8_t, 32> key_sha256{};
   std::string vault_id;
   std::vector<uint8_t> protected_blob;
+};
+
+struct ProtectedBlobEnvelope {
+  std::array<uint8_t, 32> plaintext_sha256{};
+  uint32_t plaintext_length = 0;
+  std::string purpose;
+  std::vector<uint8_t> protected_blob;
+};
+
+struct ProtectedMetadataPaths {
+  std::wstring migrations_directory;
+  std::wstring selection_directory;
+  std::wstring lock_directory;
+  std::wstring migration_journal_path;
+  std::wstring migration_lock_path;
+  std::wstring selection_path;
+  std::wstring selection_lock_path;
 };
 
 struct StorageCapabilities {
@@ -340,6 +367,54 @@ bool PrepareVaultPaths(const std::string& vault_id, VaultPaths* output) {
       JoinPath(output->vault_directory, L"atlasvault-local-store.json");
   output->lock_path =
       JoinPath(output->lock_directory, hash_name + L".lock");
+  return true;
+}
+
+bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
+  if (output == nullptr) {
+    return false;
+  }
+
+  PWSTR local_app_data = nullptr;
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT,
+                                  nullptr, &local_app_data)) ||
+      local_app_data == nullptr) {
+    if (local_app_data != nullptr) {
+      CoTaskMemFree(local_app_data);
+    }
+    return false;
+  }
+  const std::wstring local_root(local_app_data);
+  CoTaskMemFree(local_app_data);
+  if (!IsLocalAbsolutePath(local_root) || !IsSafeDirectory(local_root)) {
+    return false;
+  }
+
+  const std::wstring organization =
+      JoinPath(local_root, L"UNApplications");
+  const std::wstring atlas_vault = JoinPath(organization, L"AtlasVault");
+  const std::wstring version = JoinPath(atlas_vault, L"v1");
+  output->migrations_directory = JoinPath(version, L"migrations");
+  output->selection_directory = JoinPath(version, L"selection");
+  output->lock_directory = JoinPath(version, L"locks");
+  if (!EnsureSafeDirectory(organization) ||
+      !EnsureSafeDirectory(atlas_vault) || !EnsureSafeDirectory(version) ||
+      !EnsureSafeDirectory(output->migrations_directory) ||
+      !EnsureSafeDirectory(output->selection_directory) ||
+      !EnsureSafeDirectory(output->lock_directory)) {
+    return false;
+  }
+
+  output->migration_journal_path =
+      JoinPath(output->migrations_directory,
+               L"plaintext-private-state.bin");
+  output->migration_lock_path =
+      JoinPath(output->lock_directory,
+               L"plaintext-private-state-migration.lock");
+  output->selection_path =
+      JoinPath(output->selection_directory, L"selected-vault.bin");
+  output->selection_lock_path =
+      JoinPath(output->lock_directory, L"selected-vault.lock");
   return true;
 }
 
@@ -677,6 +752,133 @@ bool UnprotectVaultKey(const KeyEnvelope& envelope,
   return valid;
 }
 
+std::vector<uint8_t> ProtectedBlobEntropy(const std::string& purpose,
+                                          bool* succeeded) {
+  const std::string input =
+      std::string("atlasvault-windows-protected-blob-v1:") +
+      "UNApplications:" + "AtlasVault:" + purpose;
+  std::array<uint8_t, 32> hash{};
+  *succeeded =
+      Sha256(reinterpret_cast<const uint8_t*>(input.data()), input.size(),
+             &hash);
+  std::vector<uint8_t> result;
+  if (*succeeded) {
+    result.assign(hash.begin(), hash.end());
+  }
+  SecureZeroMemory(hash.data(), hash.size());
+  return result;
+}
+
+bool ProtectMetadata(const std::string& purpose,
+                     const std::vector<uint8_t>& plaintext,
+                     size_t maximum_plaintext_length,
+                     ProtectedBlobEnvelope* envelope) {
+  if (envelope == nullptr || plaintext.empty() ||
+      plaintext.size() > maximum_plaintext_length ||
+      plaintext.size() > kProtectedMetadataPlaintextMaximumLength ||
+      plaintext.size() >
+          static_cast<size_t>(std::numeric_limits<DWORD>::max()) ||
+      purpose.empty() || purpose.size() >
+          static_cast<size_t>(std::numeric_limits<uint16_t>::max()) ||
+      !Sha256(plaintext, &envelope->plaintext_sha256)) {
+    return false;
+  }
+
+  bool entropy_succeeded = false;
+  std::vector<uint8_t> entropy =
+      ProtectedBlobEntropy(purpose, &entropy_succeeded);
+  if (!entropy_succeeded) {
+    return false;
+  }
+  std::vector<uint8_t> plaintext_copy(plaintext);
+  DATA_BLOB input{static_cast<DWORD>(plaintext_copy.size()),
+                  plaintext_copy.data()};
+  DATA_BLOB optional_entropy{static_cast<DWORD>(entropy.size()),
+                             entropy.data()};
+  DATA_BLOB output{};
+  const BOOL protected_result = CryptProtectData(
+      &input, nullptr, &optional_entropy, nullptr, nullptr,
+      CRYPTPROTECT_UI_FORBIDDEN, &output);
+  if (protected_result != FALSE && output.pbData != nullptr &&
+      output.cbData > 0 &&
+      static_cast<size_t>(output.cbData) <=
+          kProtectedMetadataBlobMaximumLength) {
+    envelope->plaintext_length =
+        static_cast<uint32_t>(plaintext_copy.size());
+    envelope->purpose = purpose;
+    envelope->protected_blob.assign(output.pbData,
+                                    output.pbData + output.cbData);
+  }
+  if (output.pbData != nullptr) {
+    LocalFree(output.pbData);
+  }
+  Wipe(&plaintext_copy);
+  Wipe(&entropy);
+  if (protected_result == FALSE || envelope->protected_blob.empty()) {
+    SecureZeroMemory(envelope->plaintext_sha256.data(),
+                     envelope->plaintext_sha256.size());
+    envelope->plaintext_length = 0;
+    envelope->purpose.clear();
+    Wipe(&envelope->protected_blob);
+    return false;
+  }
+  return true;
+}
+
+bool UnprotectMetadata(const ProtectedBlobEnvelope& envelope,
+                       size_t maximum_plaintext_length,
+                       std::vector<uint8_t>* plaintext) {
+  if (plaintext == nullptr || envelope.purpose.empty() ||
+      envelope.plaintext_length == 0 ||
+      static_cast<size_t>(envelope.plaintext_length) >
+          maximum_plaintext_length ||
+      envelope.protected_blob.empty() ||
+      envelope.protected_blob.size() >
+          kProtectedMetadataBlobMaximumLength ||
+      envelope.protected_blob.size() >
+          static_cast<size_t>(std::numeric_limits<DWORD>::max())) {
+    return false;
+  }
+
+  bool entropy_succeeded = false;
+  std::vector<uint8_t> entropy =
+      ProtectedBlobEntropy(envelope.purpose, &entropy_succeeded);
+  if (!entropy_succeeded) {
+    return false;
+  }
+  DATA_BLOB input{
+      static_cast<DWORD>(envelope.protected_blob.size()),
+      const_cast<BYTE*>(envelope.protected_blob.data())};
+  DATA_BLOB optional_entropy{static_cast<DWORD>(entropy.size()),
+                             entropy.data()};
+  DATA_BLOB output{};
+  const BOOL unprotected = CryptUnprotectData(
+      &input, nullptr, &optional_entropy, nullptr, nullptr,
+      CRYPTPROTECT_UI_FORBIDDEN, &output);
+
+  bool valid = false;
+  if (unprotected != FALSE && output.pbData != nullptr &&
+      output.cbData == envelope.plaintext_length && output.cbData > 0 &&
+      static_cast<size_t>(output.cbData) <= maximum_plaintext_length) {
+    std::array<uint8_t, 32> recovered_hash{};
+    valid =
+        Sha256(output.pbData, output.cbData, &recovered_hash) &&
+        ConstantTimeEquals(recovered_hash.data(), recovered_hash.size(),
+                           envelope.plaintext_sha256.data(),
+                           envelope.plaintext_sha256.size());
+    SecureZeroMemory(recovered_hash.data(), recovered_hash.size());
+    if (valid) {
+      plaintext->assign(output.pbData, output.pbData + output.cbData);
+    }
+  }
+  if (output.pbData != nullptr) {
+    SecureZeroMemory(output.pbData, output.cbData);
+    LocalFree(output.pbData);
+  }
+  Wipe(&entropy);
+  return valid;
+}
+
 void AppendUint16(std::vector<uint8_t>* output, uint16_t value) {
   output->push_back(static_cast<uint8_t>(value & 0xff));
   output->push_back(static_cast<uint8_t>((value >> 8) & 0xff));
@@ -714,6 +916,283 @@ bool ReadUint32(const std::vector<uint8_t>& input,
             (static_cast<uint32_t>(input[*offset + 3]) << 24);
   *offset += 4;
   return true;
+}
+
+std::vector<uint8_t> SerializeProtectedBlobEnvelope(
+    const ProtectedBlobEnvelope& envelope) {
+  std::vector<uint8_t> output;
+  output.reserve(kProtectedBlobEnvelopeFixedLength + envelope.purpose.size() +
+                 envelope.protected_blob.size());
+  output.insert(output.end(), kProtectedBlobEnvelopeMagic,
+                kProtectedBlobEnvelopeMagic + 8);
+  AppendUint32(&output, kProtectedBlobEnvelopeVersion);
+  AppendUint16(&output, static_cast<uint16_t>(envelope.purpose.size()));
+  AppendUint32(&output, envelope.plaintext_length);
+  AppendUint32(&output,
+               static_cast<uint32_t>(envelope.protected_blob.size()));
+  output.insert(output.end(), envelope.plaintext_sha256.begin(),
+                envelope.plaintext_sha256.end());
+  output.insert(output.end(), envelope.purpose.begin(),
+                envelope.purpose.end());
+  output.insert(output.end(), envelope.protected_blob.begin(),
+                envelope.protected_blob.end());
+  return output;
+}
+
+bool ParseProtectedBlobEnvelope(const std::vector<uint8_t>& input,
+                                const std::string& expected_purpose,
+                                size_t maximum_plaintext_length,
+                                ProtectedBlobEnvelope* output) {
+  if (output == nullptr || expected_purpose.empty() ||
+      input.size() <
+          kProtectedBlobEnvelopeFixedLength + expected_purpose.size() + 1 ||
+      input.size() >
+          kProtectedBlobEnvelopeFixedLength + expected_purpose.size() +
+              kProtectedMetadataBlobMaximumLength ||
+      !ConstantTimeEquals(
+          input.data(), 8,
+          reinterpret_cast<const uint8_t*>(kProtectedBlobEnvelopeMagic), 8)) {
+    return false;
+  }
+
+  size_t offset = 8;
+  uint32_t version = 0;
+  uint16_t purpose_length = 0;
+  uint32_t plaintext_length = 0;
+  uint32_t protected_blob_length = 0;
+  if (!ReadUint32(input, &offset, &version) ||
+      !ReadUint16(input, &offset, &purpose_length) ||
+      !ReadUint32(input, &offset, &plaintext_length) ||
+      !ReadUint32(input, &offset, &protected_blob_length) ||
+      version != kProtectedBlobEnvelopeVersion || purpose_length == 0 ||
+      static_cast<size_t>(purpose_length) != expected_purpose.size() ||
+      plaintext_length == 0 ||
+      static_cast<size_t>(plaintext_length) > maximum_plaintext_length ||
+      protected_blob_length == 0 ||
+      static_cast<size_t>(protected_blob_length) >
+          kProtectedMetadataBlobMaximumLength ||
+      input.size() - offset < output->plaintext_sha256.size()) {
+    return false;
+  }
+  std::copy_n(input.data() + offset, output->plaintext_sha256.size(),
+              output->plaintext_sha256.data());
+  offset += output->plaintext_sha256.size();
+  const size_t expected_remaining =
+      static_cast<size_t>(purpose_length) +
+      static_cast<size_t>(protected_blob_length);
+  if (input.size() - offset != expected_remaining) {
+    return false;
+  }
+  output->purpose.assign(
+      reinterpret_cast<const char*>(input.data() + offset), purpose_length);
+  offset += purpose_length;
+  if (!ConstantTimeEquals(
+          reinterpret_cast<const uint8_t*>(output->purpose.data()),
+          output->purpose.size(),
+          reinterpret_cast<const uint8_t*>(expected_purpose.data()),
+          expected_purpose.size())) {
+    return false;
+  }
+  output->plaintext_length = plaintext_length;
+  output->protected_blob.assign(input.data() + offset, input.data() + input.size());
+  return true;
+}
+
+size_t ProtectedMetadataEnvelopeMaximum(const std::string& purpose) {
+  return kProtectedBlobEnvelopeFixedLength + purpose.size() +
+         kProtectedMetadataBlobMaximumLength;
+}
+
+OperationResult ReadProtectedMetadata(const std::wstring& path,
+                                      const std::string& purpose,
+                                      size_t maximum_plaintext_length,
+                                      std::vector<uint8_t>* plaintext) {
+  std::vector<uint8_t> envelope_bytes;
+  const OperationResult read_result =
+      ReadRegularFile(path, ProtectedMetadataEnvelopeMaximum(purpose),
+                      &envelope_bytes);
+  if (read_result != OperationResult::kSuccess) {
+    return read_result;
+  }
+  ProtectedBlobEnvelope envelope;
+  const bool valid =
+      ParseProtectedBlobEnvelope(envelope_bytes, purpose,
+                                 maximum_plaintext_length, &envelope) &&
+      UnprotectMetadata(envelope, maximum_plaintext_length, plaintext);
+  Wipe(&envelope_bytes);
+  Wipe(&envelope.protected_blob);
+  SecureZeroMemory(envelope.plaintext_sha256.data(),
+                   envelope.plaintext_sha256.size());
+  return valid ? OperationResult::kSuccess : OperationResult::kFailed;
+}
+
+OperationResult CreateProtectedMetadata(
+    const std::wstring& directory,
+    const std::wstring& path,
+    const std::string& purpose,
+    const std::vector<uint8_t>& plaintext,
+    size_t maximum_plaintext_length) {
+  ProtectedBlobEnvelope envelope;
+  if (!ProtectMetadata(purpose, plaintext, maximum_plaintext_length,
+                       &envelope)) {
+    return OperationResult::kFailed;
+  }
+  std::vector<uint8_t> envelope_bytes =
+      SerializeProtectedBlobEnvelope(envelope);
+  Wipe(&envelope.protected_blob);
+  SecureZeroMemory(envelope.plaintext_sha256.data(),
+                   envelope.plaintext_sha256.size());
+  const OperationResult create_result = AtomicCreate(
+      directory, path, envelope_bytes,
+      ProtectedMetadataEnvelopeMaximum(purpose));
+  Wipe(&envelope_bytes);
+  if (create_result != OperationResult::kSuccess) {
+    return create_result;
+  }
+
+  std::vector<uint8_t> restored;
+  const OperationResult restore_result =
+      ReadProtectedMetadata(path, purpose, maximum_plaintext_length,
+                            &restored);
+  const bool equal =
+      restore_result == OperationResult::kSuccess &&
+      ConstantTimeEquals(plaintext.data(), plaintext.size(), restored.data(),
+                         restored.size());
+  Wipe(&restored);
+  return equal ? OperationResult::kSuccess : OperationResult::kFailed;
+}
+
+OperationResult ReplaceProtectedMetadata(
+    const std::wstring& directory,
+    const std::wstring& path,
+    const std::string& purpose,
+    const std::vector<uint8_t>& plaintext,
+    const std::string& expected_plaintext_sha256,
+    size_t maximum_plaintext_length) {
+  if (!IsLowerSha256(expected_plaintext_sha256)) {
+    return OperationResult::kFailed;
+  }
+
+  std::vector<uint8_t> current_envelope;
+  const OperationResult current_read = ReadRegularFile(
+      path, ProtectedMetadataEnvelopeMaximum(purpose), &current_envelope);
+  if (current_read != OperationResult::kSuccess) {
+    return current_read;
+  }
+  ProtectedBlobEnvelope current;
+  std::vector<uint8_t> current_plaintext;
+  const bool current_valid =
+      ParseProtectedBlobEnvelope(current_envelope, purpose,
+                                 maximum_plaintext_length, &current) &&
+      UnprotectMetadata(current, maximum_plaintext_length,
+                        &current_plaintext);
+  Wipe(&current.protected_blob);
+  SecureZeroMemory(current.plaintext_sha256.data(),
+                   current.plaintext_sha256.size());
+  std::array<uint8_t, 32> current_plaintext_digest{};
+  std::array<uint8_t, 32> current_envelope_digest{};
+  const bool digest_valid =
+      current_valid && Sha256(current_plaintext, &current_plaintext_digest) &&
+      Sha256(current_envelope, &current_envelope_digest);
+  Wipe(&current_plaintext);
+  if (!digest_valid) {
+    Wipe(&current_envelope);
+    return OperationResult::kFailed;
+  }
+  const std::string current_plaintext_sha256 = HexLower(
+      current_plaintext_digest.data(), current_plaintext_digest.size());
+  const bool expected_matches = ConstantTimeEquals(
+      reinterpret_cast<const uint8_t*>(current_plaintext_sha256.data()),
+      current_plaintext_sha256.size(),
+      reinterpret_cast<const uint8_t*>(expected_plaintext_sha256.data()),
+      expected_plaintext_sha256.size());
+  SecureZeroMemory(current_plaintext_digest.data(),
+                   current_plaintext_digest.size());
+  if (!expected_matches) {
+    Wipe(&current_envelope);
+    SecureZeroMemory(current_envelope_digest.data(),
+                     current_envelope_digest.size());
+    return OperationResult::kStale;
+  }
+
+  ProtectedBlobEnvelope replacement;
+  if (!ProtectMetadata(purpose, plaintext, maximum_plaintext_length,
+                       &replacement)) {
+    Wipe(&current_envelope);
+    SecureZeroMemory(current_envelope_digest.data(),
+                     current_envelope_digest.size());
+    return OperationResult::kFailed;
+  }
+  std::vector<uint8_t> replacement_bytes =
+      SerializeProtectedBlobEnvelope(replacement);
+  Wipe(&replacement.protected_blob);
+  SecureZeroMemory(replacement.plaintext_sha256.data(),
+                   replacement.plaintext_sha256.size());
+  const std::string expected_envelope_sha256 =
+      HexLower(current_envelope_digest.data(), current_envelope_digest.size());
+  Wipe(&current_envelope);
+  SecureZeroMemory(current_envelope_digest.data(),
+                   current_envelope_digest.size());
+  const OperationResult replace_result = AtomicReplace(
+      directory, path, replacement_bytes, expected_envelope_sha256,
+      ProtectedMetadataEnvelopeMaximum(purpose));
+  Wipe(&replacement_bytes);
+  if (replace_result != OperationResult::kSuccess) {
+    return replace_result;
+  }
+
+  std::vector<uint8_t> restored;
+  const OperationResult restore_result =
+      ReadProtectedMetadata(path, purpose, maximum_plaintext_length,
+                            &restored);
+  const bool equal =
+      restore_result == OperationResult::kSuccess &&
+      ConstantTimeEquals(plaintext.data(), plaintext.size(), restored.data(),
+                         restored.size());
+  Wipe(&restored);
+  return equal ? OperationResult::kSuccess : OperationResult::kFailed;
+}
+
+OperationResult DeleteProtectedMetadata(
+    const std::wstring& path,
+    const std::string& purpose,
+    const std::string& expected_plaintext_sha256,
+    bool allow_absent,
+    size_t maximum_plaintext_length) {
+  if (!IsLowerSha256(expected_plaintext_sha256)) {
+    return OperationResult::kFailed;
+  }
+  std::vector<uint8_t> plaintext;
+  const OperationResult read_result =
+      ReadProtectedMetadata(path, purpose, maximum_plaintext_length,
+                            &plaintext);
+  if (read_result == OperationResult::kNotFound) {
+    return allow_absent ? OperationResult::kSuccess
+                        : OperationResult::kFailed;
+  }
+  if (read_result != OperationResult::kSuccess) {
+    return read_result;
+  }
+  std::array<uint8_t, 32> digest{};
+  const bool digest_ok = Sha256(plaintext, &digest);
+  Wipe(&plaintext);
+  if (!digest_ok) {
+    return OperationResult::kFailed;
+  }
+  const std::string actual_sha256 = HexLower(digest.data(), digest.size());
+  SecureZeroMemory(digest.data(), digest.size());
+  if (!ConstantTimeEquals(
+          reinterpret_cast<const uint8_t*>(actual_sha256.data()),
+          actual_sha256.size(),
+          reinterpret_cast<const uint8_t*>(expected_plaintext_sha256.data()),
+          expected_plaintext_sha256.size())) {
+    return OperationResult::kStale;
+  }
+  const OperationResult delete_result = DeleteRegularFile(path);
+  return delete_result == OperationResult::kSuccess &&
+                 InspectRegularFile(path) == OperationResult::kNotFound
+             ? OperationResult::kSuccess
+             : OperationResult::kFailed;
 }
 
 std::vector<uint8_t> SerializeKeyEnvelope(
@@ -804,6 +1283,53 @@ bool IsValidVaultId(const std::string& value) {
   return lower != "saved_search" && lower != "saved_job" &&
          lower != "application_note" && lower != "profile_snippet" &&
          lower != "draft_metadata";
+}
+
+std::vector<uint8_t> SelectedVaultPlaintext(const std::string& vault_id) {
+  const std::string value =
+      std::string("{\"format\":\"atlasvault-windows-selected-vault\",") +
+      "\"vault_id\":\"" + vault_id + "\",\"version\":1}";
+  return std::vector<uint8_t>(value.begin(), value.end());
+}
+
+bool ParseSelectedVaultPlaintext(const std::vector<uint8_t>& plaintext,
+                                 std::string* vault_id) {
+  if (vault_id == nullptr || plaintext.empty() ||
+      plaintext.size() > kSelectedVaultPlaintextMaximumLength) {
+    return false;
+  }
+  constexpr char kPrefix[] =
+      "{\"format\":\"atlasvault-windows-selected-vault\","
+      "\"vault_id\":\"";
+  constexpr char kSuffix[] = "\",\"version\":1}";
+  constexpr size_t kPrefixLength = sizeof(kPrefix) - 1;
+  constexpr size_t kSuffixLength = sizeof(kSuffix) - 1;
+  if (plaintext.size() <= kPrefixLength + kSuffixLength ||
+      !ConstantTimeEquals(
+          plaintext.data(), kPrefixLength,
+          reinterpret_cast<const uint8_t*>(kPrefix), kPrefixLength) ||
+      !ConstantTimeEquals(
+          plaintext.data() + plaintext.size() - kSuffixLength,
+          kSuffixLength, reinterpret_cast<const uint8_t*>(kSuffix),
+          kSuffixLength)) {
+    return false;
+  }
+  const size_t vault_id_length =
+      plaintext.size() - kPrefixLength - kSuffixLength;
+  vault_id->assign(
+      reinterpret_cast<const char*>(plaintext.data() + kPrefixLength),
+      vault_id_length);
+  if (!IsValidVaultId(*vault_id)) {
+    vault_id->clear();
+    return false;
+  }
+  const std::vector<uint8_t> canonical = SelectedVaultPlaintext(*vault_id);
+  const bool matches = ConstantTimeEquals(
+      plaintext.data(), plaintext.size(), canonical.data(), canonical.size());
+  if (!matches) {
+    vault_id->clear();
+  }
+  return matches;
 }
 
 bool ProbeCurrentUserDpapi() {
@@ -938,6 +1464,14 @@ const std::vector<uint8_t>* BytesArgument(
              : std::get_if<std::vector<uint8_t>>(&iterator->second);
 }
 
+const bool* BooleanArgument(const flutter::EncodableMap& arguments,
+                            const std::string& key) {
+  const auto iterator = arguments.find(flutter::EncodableValue(key));
+  return iterator == arguments.end()
+             ? nullptr
+             : std::get_if<bool>(&iterator->second);
+}
+
 void ReturnFailure(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result,
     OperationResult failure = OperationResult::kFailed) {
@@ -971,16 +1505,26 @@ void ReturnBytes(
   }
 }
 
-void WipeVaultKeyArgument(const std::string& method,
-                          flutter::EncodableValue* arguments) {
-  if (method != "createVaultKey" || arguments == nullptr) {
+void WipeSensitiveArgument(const std::string& method,
+                           flutter::EncodableValue* arguments) {
+  if (arguments == nullptr) {
     return;
   }
   auto* values = std::get_if<flutter::EncodableMap>(arguments);
   if (values == nullptr) {
     return;
   }
-  const auto iterator = values->find(flutter::EncodableValue("vault_key"));
+  const char* key = nullptr;
+  if (method == "createVaultKey") {
+    key = "vault_key";
+  } else if (method == "createPlaintextMigrationJournal" ||
+             method == "replacePlaintextMigrationJournal") {
+    key = "journal_bytes";
+  }
+  if (key == nullptr) {
+    return;
+  }
+  const auto iterator = values->find(flutter::EncodableValue(key));
   if (iterator == values->end()) {
     return;
   }
@@ -988,18 +1532,18 @@ void WipeVaultKeyArgument(const std::string& method,
   Wipe(bytes);
 }
 
-class ScopedVaultKeyArgumentWiper {
+class ScopedSensitiveArgumentWiper {
  public:
-  ScopedVaultKeyArgumentWiper(const std::string& method,
-                              flutter::EncodableValue* arguments)
+  ScopedSensitiveArgumentWiper(const std::string& method,
+                               flutter::EncodableValue* arguments)
       : method_(method), arguments_(arguments) {}
-  ~ScopedVaultKeyArgumentWiper() {
-    WipeVaultKeyArgument(method_, arguments_);
+  ~ScopedSensitiveArgumentWiper() {
+    WipeSensitiveArgument(method_, arguments_);
   }
 
-  ScopedVaultKeyArgumentWiper(const ScopedVaultKeyArgumentWiper&) = delete;
-  ScopedVaultKeyArgumentWiper& operator=(
-      const ScopedVaultKeyArgumentWiper&) = delete;
+  ScopedSensitiveArgumentWiper(const ScopedSensitiveArgumentWiper&) = delete;
+  ScopedSensitiveArgumentWiper& operator=(
+      const ScopedSensitiveArgumentWiper&) = delete;
 
  private:
   const std::string& method_;
@@ -1145,7 +1689,7 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
   flutter::EncodableValue* argument_value = encoded_arguments.get();
   flutter::MethodCall<flutter::EncodableValue> call(method_name,
                                                     std::move(encoded_arguments));
-  ScopedVaultKeyArgumentWiper argument_wiper(method_name, argument_value);
+  ScopedSensitiveArgumentWiper argument_wiper(method_name, argument_value);
   const std::string& method = call.method_name();
   if (method == "capabilities") {
     if (!HasNoArguments(call)) {
@@ -1169,6 +1713,238 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
     };
     result->Success(flutter::EncodableValue(capabilities));
     return;
+  }
+
+  const bool migration_metadata_method =
+      method == "readPlaintextMigrationJournal" ||
+      method == "createPlaintextMigrationJournal" ||
+      method == "replacePlaintextMigrationJournal" ||
+      method == "deletePlaintextMigrationJournal";
+  const bool selected_vault_method =
+      method == "readSelectedVault" || method == "createSelectedVault" ||
+      method == "clearSelectedVault";
+  if (migration_metadata_method || selected_vault_method) {
+    ProtectedMetadataPaths paths;
+    if (!PrepareProtectedMetadataPaths(&paths)) {
+      ReturnFailure(std::move(result));
+      return;
+    }
+    ScopedVaultLock lock;
+    const std::wstring& lock_path = migration_metadata_method
+                                        ? paths.migration_lock_path
+                                        : paths.selection_lock_path;
+    if (!lock.Acquire(lock_path)) {
+      ReturnFailure(std::move(result));
+      return;
+    }
+
+    if (method == "readPlaintextMigrationJournal") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.migration_journal_path, kMigrationJournalPurpose,
+          kProtectedMetadataPlaintextMaximumLength, &journal);
+      if (read_result == OperationResult::kNotFound) {
+        result->Success(flutter::EncodableValue());
+        return;
+      }
+      if (read_result != OperationResult::kSuccess) {
+        Wipe(&journal);
+        ReturnFailure(std::move(result));
+        return;
+      }
+      ReturnBytes(std::move(result), &journal, true);
+      return;
+    }
+
+    if (method == "createPlaintextMigrationJournal") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"journal_bytes"});
+      const std::vector<uint8_t>* supplied =
+          arguments == nullptr
+              ? nullptr
+              : BytesArgument(*arguments, "journal_bytes");
+      if (supplied == nullptr || supplied->empty() ||
+          supplied->size() > kProtectedMetadataPlaintextMaximumLength) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal(*supplied);
+      const OperationResult create_result = CreateProtectedMetadata(
+          paths.migrations_directory, paths.migration_journal_path,
+          kMigrationJournalPurpose, journal,
+          kProtectedMetadataPlaintextMaximumLength);
+      Wipe(&journal);
+      if (create_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), create_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "replacePlaintextMigrationJournal") {
+      const flutter::EncodableMap* arguments = ExactArguments(
+          call, {"journal_bytes", "expected_sha256"});
+      const std::vector<uint8_t>* supplied =
+          arguments == nullptr
+              ? nullptr
+              : BytesArgument(*arguments, "journal_bytes");
+      const std::string* expected_sha256 =
+          arguments == nullptr
+              ? nullptr
+              : StringArgument(*arguments, "expected_sha256");
+      if (supplied == nullptr || expected_sha256 == nullptr ||
+          supplied->empty() ||
+          supplied->size() > kProtectedMetadataPlaintextMaximumLength ||
+          !IsLowerSha256(*expected_sha256)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal(*supplied);
+      const OperationResult replace_result = ReplaceProtectedMetadata(
+          paths.migrations_directory, paths.migration_journal_path,
+          kMigrationJournalPurpose, journal, *expected_sha256,
+          kProtectedMetadataPlaintextMaximumLength);
+      Wipe(&journal);
+      if (replace_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), replace_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "deletePlaintextMigrationJournal") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"expected_sha256", "allow_absent"});
+      const std::string* expected_sha256 =
+          arguments == nullptr
+              ? nullptr
+              : StringArgument(*arguments, "expected_sha256");
+      const bool* allow_absent =
+          arguments == nullptr
+              ? nullptr
+              : BooleanArgument(*arguments, "allow_absent");
+      if (expected_sha256 == nullptr || allow_absent == nullptr ||
+          !IsLowerSha256(*expected_sha256)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      const OperationResult delete_result = DeleteProtectedMetadata(
+          paths.migration_journal_path, kMigrationJournalPurpose,
+          *expected_sha256, *allow_absent,
+          kProtectedMetadataPlaintextMaximumLength);
+      if (delete_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), delete_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "readSelectedVault") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> plaintext;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.selection_path, kSelectedVaultPurpose,
+          kSelectedVaultPlaintextMaximumLength, &plaintext);
+      if (read_result == OperationResult::kNotFound) {
+        result->Success(flutter::EncodableValue());
+        return;
+      }
+      std::string vault_id;
+      const bool valid = read_result == OperationResult::kSuccess &&
+                         ParseSelectedVaultPlaintext(plaintext, &vault_id);
+      Wipe(&plaintext);
+      if (!valid) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      result->Success(flutter::EncodableValue(vault_id));
+      return;
+    }
+
+    if (method == "createSelectedVault") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"vault_id"});
+      const std::string* vault_id =
+          arguments == nullptr ? nullptr
+                               : StringArgument(*arguments, "vault_id");
+      if (vault_id == nullptr || !IsValidVaultId(*vault_id)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> plaintext = SelectedVaultPlaintext(*vault_id);
+      const OperationResult create_result = CreateProtectedMetadata(
+          paths.selection_directory, paths.selection_path,
+          kSelectedVaultPurpose, plaintext,
+          kSelectedVaultPlaintextMaximumLength);
+      Wipe(&plaintext);
+      if (create_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), create_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "clearSelectedVault") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"expected_vault_id"});
+      const std::string* expected_vault_id =
+          arguments == nullptr
+              ? nullptr
+              : StringArgument(*arguments, "expected_vault_id");
+      if (expected_vault_id == nullptr ||
+          !IsValidVaultId(*expected_vault_id)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> plaintext;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.selection_path, kSelectedVaultPurpose,
+          kSelectedVaultPlaintextMaximumLength, &plaintext);
+      std::string current_vault_id;
+      const bool valid =
+          read_result == OperationResult::kSuccess &&
+          ParseSelectedVaultPlaintext(plaintext, &current_vault_id) &&
+          ConstantTimeEquals(
+              reinterpret_cast<const uint8_t*>(current_vault_id.data()),
+              current_vault_id.size(),
+              reinterpret_cast<const uint8_t*>(expected_vault_id->data()),
+              expected_vault_id->size());
+      if (!valid) {
+        Wipe(&plaintext);
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::array<uint8_t, 32> digest{};
+      const bool digest_ok = Sha256(plaintext, &digest);
+      Wipe(&plaintext);
+      if (!digest_ok) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      const std::string expected_sha256 =
+          HexLower(digest.data(), digest.size());
+      SecureZeroMemory(digest.data(), digest.size());
+      const OperationResult delete_result = DeleteProtectedMetadata(
+          paths.selection_path, kSelectedVaultPurpose, expected_sha256,
+          false, kSelectedVaultPlaintextMaximumLength);
+      if (delete_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), delete_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
   }
 
   const bool recognized =

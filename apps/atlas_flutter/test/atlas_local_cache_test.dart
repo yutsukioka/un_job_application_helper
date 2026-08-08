@@ -26,6 +26,20 @@ void main() {
       }
     });
 
+    test('migration state defaults to a single cache authority', () {
+      final state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: const <AtlasApplicationRecord>[],
+        privateSha256: null,
+      );
+
+      expect(state.durablePrivateSha256, isNull);
+      expect(state.legacyPrivateSha256, isNull);
+      expect(state.retainedLegacyCachePresent, isFalse);
+      expect(state.cacheCleanupPending, isFalse);
+      expect(state.cacheCleanupComplete, isFalse);
+    });
+
     test('writes and reads a full local search snapshot', () async {
       final store = AtlasLocalCacheStore(
         file: cacheFile,

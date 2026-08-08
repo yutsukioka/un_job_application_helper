@@ -155,8 +155,12 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Windows secure storage is not implemented'),
+      find.textContaining('Windows encrypted import/export is not implemented'),
       findsOneWidget,
+    );
+    expect(
+      find.textContaining('Windows secure storage is not implemented'),
+      findsNothing,
     );
     expect(coordinator.calls, <String>['inventory', 'prepare']);
 
@@ -165,6 +169,68 @@ void main() {
     expect(coordinator.calls, <String>['inventory', 'prepare', 'finalize']);
     expect(owner.status, AtlasVaultPlaintextMigrationPresentationStatus.active);
   });
+
+  testWidgets(
+    'Windows confirmations describe DPAPI and the rollback boundary',
+    (tester) async {
+      final coordinator = _FakeMigrationCoordinator();
+      final owner = AtlasVaultPlaintextMigrationPresentationOwner(
+        coordinator: coordinator,
+      );
+      addTearDown(owner.dispose);
+
+      await owner.reviewInventory();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AtlasVaultPlaintextMigrationPanel(
+              owner: owner,
+              platform:
+                  AtlasVaultPlaintextMigrationPresentationPlatform.windows,
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Prepare Encrypted Migration'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('current-user Windows DPAPI'), findsOneWidget);
+      expect(
+        find.textContaining('Plaintext data remains unchanged'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Android'), findsNothing);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Prepare'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove Plaintext & Activate AtlasVault'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('encrypted read-back is complete'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('plaintext deletion will begin'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('rollback becomes unavailable'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('resume after interruption'), findsOneWidget);
+      expect(find.textContaining('current-user Windows DPAPI'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'Windows encrypted import/export is not yet implemented',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Android'), findsNothing);
+      expect(find.text('PRIVATE_QUERY'), findsNothing);
+      expect(find.text('private tracker notes'), findsNothing);
+    },
+  );
 
   testWidgets(
     'prepared migration may be discarded but pending commit may not',

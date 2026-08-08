@@ -1144,6 +1144,12 @@ final class AtlasLocalCacheMigrationPrivateState {
     required List<AtlasSavedSearch> savedSearches,
     required List<AtlasApplicationRecord> trackerRecords,
     required this.privateSha256,
+    this.durablePrivateSha256,
+    this.legacyPrivateSha256,
+    this.retainedLegacyCachePresent = false,
+    this.cacheCleanupPending = false,
+    this.cacheCleanupComplete = false,
+    this.requiresPhysicalCleanup = false,
     this.authorityBaseURL,
     this.cachePresent = true,
   }) : savedSearches = List<AtlasSavedSearch>.unmodifiable(savedSearches),
@@ -1154,6 +1160,12 @@ final class AtlasLocalCacheMigrationPrivateState {
   final List<AtlasSavedSearch> savedSearches;
   final List<AtlasApplicationRecord> trackerRecords;
   final String? privateSha256;
+  final String? durablePrivateSha256;
+  final String? legacyPrivateSha256;
+  final bool retainedLegacyCachePresent;
+  final bool cacheCleanupPending;
+  final bool cacheCleanupComplete;
+  final bool requiresPhysicalCleanup;
   final Uri? authorityBaseURL;
   final bool cachePresent;
 
@@ -1748,9 +1760,39 @@ AtlasSavedSearch _strictMigrationSavedSearch(Object? source) {
 }
 
 AtlasSavedSearch _strictMigrationCompatibilitySavedSearch(Object? source) {
-  return _strictMigrationSavedSearchWithRequest(
-    source,
-    _strictMigrationCompatibilitySearchRequest,
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'name',
+    'description',
+    'request',
+    'created_at',
+    'updated_at',
+  });
+  final decodedRequest = _strictMigrationCompatibilitySearchRequest(
+    value['request'],
+  );
+  return AtlasSavedSearch(
+    name: vault_strict.requireAtlasVaultString(
+      value['name'],
+      field: 'migration.saved_search.name',
+      allowEmpty: false,
+    ),
+    description: _migrationOptionalString(
+      value['description'],
+      field: 'migration.saved_search.description',
+    ),
+    request: decodedRequest.request,
+    reviewedCompatibilityRequest: decodedRequest.storedRequest,
+    createdAt: _migrationPreservedUtc(
+      value['created_at'],
+      field: 'migration.saved_search.created_at',
+      required: true,
+    ),
+    updatedAt: _migrationPreservedUtc(
+      value['updated_at'],
+      field: 'migration.saved_search.updated_at',
+      required: true,
+    ),
   );
 }
 
@@ -1800,7 +1842,18 @@ AtlasSearchRequest _strictMigrationVaultSearchRequest(Object? source) {
   return AtlasSearchRequest.fromJson(request.toJson());
 }
 
-AtlasSearchRequest _strictMigrationCompatibilitySearchRequest(Object? source) {
+final class _StrictMigrationCompatibilitySearchRequest {
+  const _StrictMigrationCompatibilitySearchRequest({
+    required this.request,
+    required this.storedRequest,
+  });
+
+  final AtlasSearchRequest request;
+  final Map<String, Object?> storedRequest;
+}
+
+_StrictMigrationCompatibilitySearchRequest
+_strictMigrationCompatibilitySearchRequest(Object? source) {
   try {
     final value = _migrationStringMap(source);
     _requireMigrationExactKeys(value, const <String>{
@@ -1986,10 +2039,56 @@ AtlasSearchRequest _strictMigrationCompatibilitySearchRequest(Object? source) {
             allowEmpty: false,
           ),
         });
-    return AtlasSearchRequest.fromJson(request.toJson());
+    return _StrictMigrationCompatibilitySearchRequest(
+      request: AtlasSearchRequest.fromJson(request.toJson()),
+      storedRequest: _copyMigrationJsonObject(value),
+    );
   } catch (_) {
     throw const AtlasLocalCacheMigrationException();
   }
+}
+
+AtlasApplicationRecord _strictMigrationCompatibilityTrackerRecord(
+  Object? source,
+) {
+  final value = _migrationStringMap(source);
+  _requireMigrationExactKeys(value, const <String>{
+    'id',
+    'job_key',
+    'status',
+    'notes',
+    'applied_at',
+    'updated_at',
+  });
+  return AtlasApplicationRecord(
+    id: vault_strict.requireAtlasVaultString(
+      value['id'],
+      field: 'migration.tracker.id',
+      allowEmpty: false,
+    ),
+    jobKey: vault_strict.requireAtlasVaultString(
+      value['job_key'],
+      field: 'migration.tracker.job_key',
+      allowEmpty: false,
+    ),
+    status: vault_strict.requireAtlasVaultString(
+      value['status'],
+      field: 'migration.tracker.status',
+      allowEmpty: false,
+    ),
+    notes: _migrationOptionalString(
+      value['notes'],
+      field: 'migration.tracker.notes',
+    ),
+    appliedAt: _migrationPreservedUtc(
+      value['applied_at'],
+      field: 'migration.tracker.applied_at',
+    ),
+    updatedAt: _migrationPreservedUtc(
+      value['updated_at'],
+      field: 'migration.tracker.updated_at',
+    ),
+  );
 }
 
 AtlasApplicationRecord _strictMigrationTrackerRecord(Object? source) {
@@ -2193,6 +2292,55 @@ String? _migrationOptionalUtcSeconds(Object? value, {required String field}) {
   }
 }
 
+String? _migrationPreservedUtc(
+  Object? value, {
+  required String field,
+  bool required = false,
+}) {
+  if (value == null) {
+    if (required) {
+      throw const AtlasLocalCacheMigrationException();
+    }
+    return null;
+  }
+  final original = vault_strict.requireAtlasVaultString(
+    value,
+    field: field,
+    allowEmpty: false,
+  );
+  _migrationOptionalUtcSeconds(original, field: field);
+  return original;
+}
+
+Map<String, Object?> _copyMigrationJsonObject(Map<String, Object?> source) {
+  return Map<String, Object?>.unmodifiable(<String, Object?>{
+    for (final entry in source.entries)
+      entry.key: _copyMigrationJsonValue(entry.value),
+  });
+}
+
+Object? _copyMigrationJsonValue(Object? value) {
+  if (value == null || value is String || value is num || value is bool) {
+    return value;
+  }
+  if (value is List) {
+    return List<Object?>.unmodifiable(
+      value.map<Object?>(_copyMigrationJsonValue),
+    );
+  }
+  if (value is Map) {
+    final result = <String, Object?>{};
+    for (final entry in value.entries) {
+      if (entry.key is! String) {
+        throw const AtlasLocalCacheMigrationException();
+      }
+      result[entry.key as String] = _copyMigrationJsonValue(entry.value);
+    }
+    return Map<String, Object?>.unmodifiable(result);
+  }
+  throw const AtlasLocalCacheMigrationException();
+}
+
 bool _migrationJsonEquals(Object? left, Object? right) {
   Uint8List? leftBytes;
   Uint8List? rightBytes;
@@ -2293,7 +2441,16 @@ final class AtlasSavedSearch {
     required this.request,
     this.createdAt,
     this.updatedAt,
-  });
+    Map<String, Object?>? reviewedCompatibilityRequest,
+  }) : _reviewedCompatibilityRequest = reviewedCompatibilityRequest == null
+           ? null
+           : _copyMigrationJsonObject(reviewedCompatibilityRequest);
+
+  factory AtlasSavedSearch.fromPlaintextMigrationCompatibilityJson(
+    Map<String, Object?> json,
+  ) {
+    return _strictMigrationCompatibilitySavedSearch(json);
+  }
 
   factory AtlasSavedSearch.fromJson(Map<String, Object?> json) {
     return AtlasSavedSearch(
@@ -2312,6 +2469,7 @@ final class AtlasSavedSearch {
   final AtlasSearchRequest request;
   final String? createdAt;
   final String? updatedAt;
+  final Map<String, Object?>? _reviewedCompatibilityRequest;
 
   Map<String, Object?> toJson() {
     return {
@@ -2322,6 +2480,63 @@ final class AtlasSavedSearch {
       'updated_at': updatedAt,
     };
   }
+
+  Map<String, Object?> toCompatibilityStoredSnapshotJson() {
+    return <String, Object?>{
+      'name': name,
+      'description': description,
+      'request':
+          _reviewedCompatibilityRequest ??
+          _storedCompatibilityRequestFromSearchRequest(request),
+      'created_at': createdAt,
+      'updated_at': updatedAt,
+    };
+  }
+}
+
+Map<String, Object?> _storedCompatibilityRequestFromSearchRequest(
+  AtlasSearchRequest request,
+) {
+  return <String, Object?>{
+    'text': request.text,
+    'status': List<String>.from(request.status),
+    'organizations': List<String>.from(request.organizations),
+    'source_ids': List<String>.from(request.sourceIDs),
+    'ats_families': <String>[],
+    'cities': List<String>.from(request.cities),
+    'countries_iso3': List<String>.from(request.countriesISO3),
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': List<String>.from(request.nationalInternational),
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': List<String>.from(request.gradeCodes),
+    'ccog_codes': <String>[],
+    'ccog_families': List<String>.from(request.ccogFamilies),
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': List<String>.from(request.capabilityTags),
+    'contract_groups': List<String>.from(request.contractGroups),
+    'seniority_groups': List<String>.from(request.seniorityGroups),
+    'work_modalities': List<String>.from(request.workModalities),
+    'volunteer_kinds': List<String>.from(request.volunteerKinds),
+    'unv_categories': List<String>.from(request.unvCategories),
+    'unv_volunteer_types': List<String>.from(request.unvVolunteerTypes),
+    'closing_date_from': null,
+    'closing_date_to': request.closingDateTo,
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': request.includeLowConfidence,
+    'exclude_expired_open': true,
+    'limit': request.limit,
+    'offset': request.offset,
+    'sort': request.sort,
+  };
 }
 
 final class AtlasApplicationRecord {
@@ -3126,6 +3341,8 @@ final class AtlasRequest {
   final Map<String, Object?>? jsonBody;
 }
 
+enum AtlasConditionalDeleteOutcome { deleted, absent, preconditionFailed }
+
 abstract interface class AtlasTransport {
   Future<Object?> send(AtlasRequest request);
 }
@@ -3282,6 +3499,25 @@ final class AtlasAPIClient {
     return _bool(json['deleted']) ?? false;
   }
 
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) {
+    if (expected.name.isEmpty ||
+        expected.createdAt == null ||
+        expected.createdAt!.isEmpty ||
+        expected.updatedAt == null ||
+        expected.updatedAt!.isEmpty) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'saved-searches',
+      identifier: expected.name,
+      expected: expected.toCompatibilityStoredSnapshotJson(),
+    );
+  }
+
   Future<AtlasApplicationRecord> saveJob(String jobKey) async {
     final json = await _requestMap(
       AtlasRequest(
@@ -3305,7 +3541,7 @@ final class AtlasAPIClient {
   trackerRecordsForPlaintextMigration() async {
     return _strictPlaintextMigrationList(
       const AtlasRequest(method: 'GET', path: 'api/tracker'),
-      _strictMigrationTrackerRecord,
+      _strictMigrationCompatibilityTrackerRecord,
     );
   }
 
@@ -3317,6 +3553,21 @@ final class AtlasAPIClient {
       ),
     );
     return _bool(json['deleted']) ?? false;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) {
+    if (expected.id.isEmpty || expected.notes == null) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'tracker',
+      identifier: expected.id,
+      expected: expected.toJson(),
+    );
   }
 
   Future<List<AtlasSourceRun>> updates() async {
@@ -3362,21 +3613,71 @@ final class AtlasAPIClient {
       throw const AtlasAPIException.invalidResponse();
     }
   }
+
+  Future<AtlasConditionalDeleteOutcome> _conditionalDelete({
+    required String family,
+    required String identifier,
+    required Map<String, Object?> expected,
+  }) async {
+    try {
+      final response = await _requestMap(
+        AtlasRequest(
+          method: 'POST',
+          path:
+              'api/$family/${await _conditionalDeleteIdentifier(identifier)}'
+              '/conditional-delete',
+          jsonBody: <String, Object?>{'expected': expected},
+        ),
+      );
+      if (response.length != 1 || response['outcome'] is! String) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      return switch (response['outcome']) {
+        'deleted' => AtlasConditionalDeleteOutcome.deleted,
+        'absent' => AtlasConditionalDeleteOutcome.absent,
+        _ => throw const AtlasAPIException.invalidResponse(),
+      };
+    } on AtlasAPIException catch (error) {
+      if (error.statusCode == 412) {
+        return AtlasConditionalDeleteOutcome.preconditionFailed;
+      }
+      throw const AtlasAPIException.invalidResponse();
+    } catch (_) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+  }
 }
 
 final class AtlasAPIException implements Exception {
   const AtlasAPIException.invalidResponse()
-    : message = 'The server returned an invalid response.';
+    : statusCode = null,
+      message = 'The server returned an invalid response.';
 
   const AtlasAPIException.http(int statusCode, String body)
-    : message = body == ''
+    : statusCode = statusCode,
+      message = body == ''
           ? 'The server returned HTTP $statusCode.'
           : 'The server returned HTTP $statusCode: $body';
 
+  final int? statusCode;
   final String message;
 
   @override
   String toString() => message;
+}
+
+Future<String> _conditionalDeleteIdentifier(String value) async {
+  final bytes = Uint8List(value.codeUnits.length * 2);
+  for (var index = 0; index < value.codeUnits.length; index += 1) {
+    final codeUnit = value.codeUnits[index];
+    bytes[index * 2] = codeUnit >> 8;
+    bytes[index * 2 + 1] = codeUnit & 0xff;
+  }
+  try {
+    return '~sha256-${await vault_crypto.atlasVaultSha256Hex(bytes)}';
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
 }
 
 String displayAtlasFilterValue(String value) {

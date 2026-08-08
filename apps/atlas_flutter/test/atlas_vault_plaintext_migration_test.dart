@@ -18,6 +18,26 @@ void main() {
     expect(fixture.totalDependencyCalls, 0);
   });
 
+  test('Windows coordinator requires admission and conditional deletion', () {
+    final fixture = _MigrationFixture();
+
+    expect(
+      () => AtlasVaultPlaintextMigrationCoordinator(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+        inMemorySource: fixture.memory,
+        compatibilitySource: fixture.compatibility,
+        cacheSource: fixture.cache,
+        journalStore: fixture.journal,
+        selectedVaultStore: fixture.selection,
+        secureKeyStore: fixture.keyStore,
+        localStoreIO: fixture.localStore,
+        privateAuthority: fixture.privateAuthority,
+      ),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+    expect(fixture.totalDependencyCalls, 0);
+  });
+
   test(
     'inventory waits for admitted plaintext operations before reading sources',
     () async {
@@ -239,6 +259,122 @@ void main() {
       expect(journal.savedSearches.single.updatedAt, '2026-07-02T02:03:04Z');
       expect(journal.trackerRecords.single.appliedAt, '2026-07-03T03:04:05Z');
       expect(journal.trackerRecords.single.updatedAt, '2026-07-04T04:05:06Z');
+      expect(
+        journal.remoteSavedSearches.single.createdAt,
+        '2026-07-01T01:02:03Z',
+      );
+      expect(
+        journal.remoteTrackerRecords.single.updatedAt,
+        '2026-07-04T04:05:06Z',
+      );
+    },
+  );
+
+  test(
+    'Windows journal preserves exact remote timestamps for conditional delete',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      final state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[
+          _savedSearch(
+            createdAt: '2026-07-01T01:02:03.456789+00:00',
+            updatedAt: '2026-07-02T02:03:04.125Z',
+          ),
+        ],
+        trackerRecords: <AtlasApplicationRecord>[
+          _trackerRecord(
+            appliedAt: '2026-07-03T03:04:05.500000+00:00',
+            updatedAt: '2026-07-04T18:05:06.999999+14:00',
+          ),
+        ],
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+      fixture.memory.state = state;
+      fixture.compatibility.state = state;
+      fixture.cache.state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: state.trackerRecords,
+        privateSha256: '1' * 64,
+        durablePrivateSha256: '2' * 64,
+        legacyPrivateSha256: '3' * 64,
+        retainedLegacyCachePresent: true,
+        cacheCleanupComplete: false,
+        requiresPhysicalCleanup: true,
+        authorityBaseURL: Uri.parse('http://atlas.test:8765'),
+      );
+
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        fixture.journal.bytes!,
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      expect(journal.savedSearches.single.createdAt, '2026-07-01T01:02:03Z');
+      expect(
+        journal.remoteSavedSearches.single.createdAt,
+        '2026-07-01T01:02:03.456789+00:00',
+      );
+      expect(
+        journal.remoteTrackerRecords.single.updatedAt,
+        '2026-07-04T18:05:06.999999+14:00',
+      );
+      fixture.encryptedState = AtlasVaultPlaintextPrivateState(
+        savedSearches: journal.savedSearches,
+        trackerRecords: journal.trackerRecords,
+      );
+
+      final completed = await fixture.coordinator.finalizeAndActivate();
+
+      expect(completed.stage, isNull);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.compatibility.state.trackerRecords, isEmpty);
+      expect(fixture.selection.value, isNotNull);
+    },
+  );
+
+  test(
+    'Windows journal preserves the complete reviewed saved-search request',
+    () async {
+      final storedRequest = _storedCompatibilitySearchRequest();
+      final storedSnapshot = <String, Object?>{
+        'name': 'UN roles',
+        'description': 'private description',
+        'request': storedRequest,
+        'created_at': '2026-07-01T00:00:00.123456+00:00',
+        'updated_at': '2026-07-02T00:00:00.654321Z',
+      };
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: _StoredSavedSearchTransport(storedSnapshot),
+      );
+      final reviewed =
+          (await client.savedSearchesForPlaintextMigration()).single;
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[reviewed],
+        trackerRecords: fixture.compatibility.state.trackerRecords,
+      );
+
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final journal =
+          jsonDecode(utf8.decode(fixture.journal.bytes!))
+              as Map<String, Object?>;
+      final remoteSavedSearch =
+          (journal['remote_saved_searches'] as List<Object?>).single
+              as Map<String, Object?>;
+      expect(
+        jsonDecode(remoteSavedSearch['compatibility_request_json']! as String),
+        storedRequest,
+      );
+      expect(remoteSavedSearch['created_at'], storedSnapshot['created_at']);
+      expect(remoteSavedSearch['updated_at'], storedSnapshot['updated_at']);
     },
   );
 
@@ -353,7 +489,7 @@ void main() {
       expect(result.stage, isNull);
       expect(fixture.compatibility.state.savedSearches, isEmpty);
       expect(fixture.compatibility.state.trackerRecords, isEmpty);
-      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 2);
       expect(fixture.selection.value, isNotNull);
       expect(fixture.journal.bytes, isNull);
     },
@@ -809,6 +945,90 @@ void main() {
   });
 
   test(
+    'Windows journal profile is strict and rejects Android journal bytes',
+    () async {
+      final windows = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await windows.coordinator.inventory();
+      await windows.coordinator.prepare();
+
+      final windowsBytes = windows.journal.bytes!;
+      final windowsJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        windowsBytes,
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      expect(
+        windowsJournal.toJson()['format'],
+        'atlasvault-windows-plaintext-migration',
+      );
+      expect(windowsJournal.durableCachePrivateSha256, isNotNull);
+      expect(windowsJournal.legacyCachePrivateSha256, isNotNull);
+      final noncanonicalSnapshot =
+          jsonDecode(jsonEncode(windowsJournal.toJson()))
+              as Map<String, Object?>;
+      final noncanonicalRemote =
+          (noncanonicalSnapshot['remote_saved_searches']! as List<Object?>)
+                  .single
+              as Map<String, Object?>;
+      noncanonicalRemote['compatibility_request_json'] =
+          ' ${noncanonicalRemote['compatibility_request_json']}';
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.fromJson(
+          noncanonicalSnapshot,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      final inconsistentSnapshot =
+          jsonDecode(jsonEncode(windowsJournal.toJson()))
+              as Map<String, Object?>;
+      final inconsistentRemote =
+          (inconsistentSnapshot['remote_saved_searches']! as List<Object?>)
+                  .single
+              as Map<String, Object?>;
+      final reducedRequest =
+          inconsistentRemote['request']! as Map<String, Object?>;
+      reducedRequest['text'] = 'different-reviewed-query';
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.fromJson(
+          inconsistentSnapshot,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.decodeBytes(windowsBytes),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      final android = _MigrationFixture();
+      await android.coordinator.inventory();
+      await android.coordinator.prepare();
+      final androidBytes = android.journal.bytes!;
+      final androidJournal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+        androidBytes,
+        profile: AtlasVaultPlaintextMigrationProfile.android,
+      );
+      expect(
+        androidJournal.toJson()['format'],
+        'atlasvault-android-plaintext-migration',
+      );
+      expect(
+        androidJournal.toJson().containsKey('durable_cache_private_sha256'),
+        isFalse,
+      );
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.decodeBytes(
+          androidBytes,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+    },
+  );
+
+  test(
     'finalization removes plaintext before selection and clears journal last',
     () async {
       final fixture = _MigrationFixture();
@@ -836,6 +1056,61 @@ void main() {
         greaterThan(fixture.events.indexOf('selection.create')),
       );
       expect(fixture.events.last, 'journal.delete');
+    },
+  );
+
+  test(
+    'Windows finalization completes physical cache cleanup before selection',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+
+      final result = await fixture.coordinator.finalizeAndActivate();
+
+      expect(result.stage, isNull);
+      expect(fixture.cache.cleanupCalls, 1);
+      expect(fixture.cache.state.cacheCleanupComplete, isTrue);
+      expect(fixture.cache.state.cacheCleanupPending, isFalse);
+      expect(fixture.cache.state.requiresPhysicalCleanup, isFalse);
+      expect(fixture.cache.state.retainedLegacyCachePresent, isFalse);
+      expect(
+        fixture.events.indexOf('selection.create'),
+        greaterThan(fixture.events.indexOf('cache.cleanup')),
+      );
+      expect(fixture.events.last, 'journal.delete');
+    },
+  );
+
+  test(
+    'Windows resume completes an interrupted two-file cache cleanup',
+    () async {
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.cache.failAfterNextCleanup = true;
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.cache.state.cacheCleanupPending, isTrue);
+      expect(fixture.cache.state.durablePrivateSha256, isNull);
+      expect(fixture.cache.state.legacyPrivateSha256, '3' * 64);
+      expect(fixture.selection.createCalls, 0);
+
+      final result = await fixture.restartCoordinator().resume();
+
+      expect(result.stage, isNull);
+      expect(fixture.cache.cleanupCalls, 2);
+      expect(fixture.cache.state.cacheCleanupComplete, isTrue);
+      expect(fixture.selection.createCalls, 1);
+      expect(fixture.journal.bytes, isNull);
     },
   );
 
@@ -912,7 +1187,7 @@ void main() {
 
       await fixture.coordinator.resume();
 
-      expect(fixture.compatibility.deleteSavedSearchCalls, 1);
+      expect(fixture.compatibility.deleteSavedSearchCalls, 2);
       expect(fixture.compatibility.state.trackerRecords, isEmpty);
       expect(fixture.cache.state.savedSearches, isEmpty);
       expect(fixture.selection.value, isNotNull);
@@ -953,6 +1228,99 @@ void main() {
       expect(fixture.compatibility.deleteSavedSearchCalls, 1);
       expect(fixture.selection.value, isNull);
       expect(fixture.journal.bytes, isNotNull);
+    },
+  );
+
+  test('changed saved search survives the review-to-delete race', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    final changed = AtlasSavedSearch(
+      name: 'UN roles',
+      description: 'changed after migration review',
+      request: const AtlasSearchRequest(text: 'CHANGED_PRIVATE_QUERY'),
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedAt: '2026-08-08T00:00:00Z',
+    );
+    fixture.compatibility.replaceSavedSearchBeforeNextDelete = changed;
+
+    await expectLater(
+      fixture.coordinator.finalizeAndActivate(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    expect(fixture.compatibility.state.savedSearches, <AtlasSavedSearch>[
+      changed,
+    ]);
+    expect(fixture.selection.value, isNull);
+    final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    expect(journal.deletedSavedSearchNames, isEmpty);
+  });
+
+  test('changed tracker survives the review-to-delete race', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    final changed = AtlasApplicationRecord(
+      id: 'tracker-record-1',
+      jobKey: 'unicef:private-job',
+      status: 'applied',
+      notes: 'changed after migration review',
+      appliedAt: '2026-08-07T00:00:00Z',
+      updatedAt: '2026-08-08T00:00:00Z',
+    );
+    fixture.compatibility.replaceTrackerBeforeNextDelete = changed;
+
+    await expectLater(
+      fixture.coordinator.finalizeAndActivate(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    expect(fixture.compatibility.state.trackerRecords, <AtlasApplicationRecord>[
+      changed,
+    ]);
+    expect(fixture.selection.value, isNull);
+    final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    expect(journal.deletedTrackerRecordIds, isEmpty);
+  });
+
+  test(
+    'plaintext creation after absence verification cannot commit selection',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      var legacyWriteRejected = false;
+      fixture.selection.beforeNextCreate = () async {
+        try {
+          await fixture.authorityAdmission.runLegacyPrivateOperation(() async {
+            fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+              savedSearches: <AtlasSavedSearch>[
+                AtlasSavedSearch(
+                  name: 'Concurrent private search',
+                  request: const AtlasSearchRequest(text: 'CONCURRENT_PRIVATE'),
+                  createdAt: '2026-08-08T00:00:00Z',
+                  updatedAt: '2026-08-08T00:00:00Z',
+                ),
+              ],
+              trackerRecords: const <AtlasApplicationRecord>[],
+            );
+          });
+        } on AtlasVaultPlaintextAuthorityAdmissionException {
+          legacyWriteRejected = true;
+        }
+      };
+
+      final completed = await fixture.coordinator.finalizeAndActivate();
+
+      expect(completed.stage, isNull);
+      expect(legacyWriteRejected, isTrue);
+      expect(fixture.compatibility.state.savedSearches, isEmpty);
+      expect(fixture.selection.value, isNotNull);
     },
   );
 
@@ -1106,6 +1474,62 @@ AtlasApplicationRecord _trackerRecord({
   );
 }
 
+Map<String, Object?> _storedCompatibilitySearchRequest() {
+  return <String, Object?>{
+    'text': 'PRIVATE_QUERY',
+    'status': <String>['open'],
+    'organizations': <String>['UNICEF'],
+    'source_ids': <String>[],
+    'ats_families': <String>[],
+    'cities': <String>[],
+    'countries_iso3': <String>['JPN'],
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': <String>[],
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': <String>[],
+    'ccog_codes': <String>[],
+    'ccog_families': <String>[],
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': <String>[],
+    'contract_groups': <String>[],
+    'seniority_groups': <String>[],
+    'work_modalities': <String>[],
+    'volunteer_kinds': <String>[],
+    'unv_categories': <String>[],
+    'unv_volunteer_types': <String>[],
+    'closing_date_from': null,
+    'closing_date_to': null,
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': false,
+    'exclude_expired_open': true,
+    'limit': 50,
+    'offset': 0,
+    'sort': 'closing_date_asc',
+  };
+}
+
+final class _StoredSavedSearchTransport implements AtlasTransport {
+  _StoredSavedSearchTransport(this.storedSnapshot);
+
+  final Map<String, Object?> storedSnapshot;
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    expect(request.method, 'GET');
+    expect(request.path, 'api/saved-searches');
+    return <Object?>[storedSnapshot];
+  }
+}
+
 final class _CapturingLegacyPrivateStateRestorer
     implements AtlasVaultLegacyPrivateStateRestoring {
   int calls = 0;
@@ -1121,7 +1545,9 @@ final class _CapturingLegacyPrivateStateRestorer
 }
 
 final class _MigrationFixture {
-  _MigrationFixture() {
+  _MigrationFixture({
+    this.profile = AtlasVaultPlaintextMigrationProfile.android,
+  }) {
     final state = AtlasVaultPlaintextPrivateState(
       savedSearches: <AtlasSavedSearch>[_savedSearch()],
       trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
@@ -1133,6 +1559,19 @@ final class _MigrationFixture {
       savedSearches: state.savedSearches,
       trackerRecords: state.trackerRecords,
       privateSha256: '1' * 64,
+      durablePrivateSha256:
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+          ? '2' * 64
+          : null,
+      legacyPrivateSha256:
+          profile == AtlasVaultPlaintextMigrationProfile.windows
+          ? '3' * 64
+          : null,
+      retainedLegacyCachePresent:
+          profile == AtlasVaultPlaintextMigrationProfile.windows,
+      cacheCleanupComplete: false,
+      requiresPhysicalCleanup:
+          profile == AtlasVaultPlaintextMigrationProfile.windows,
       authorityBaseURL: Uri.parse('http://atlas.test:8765'),
     );
     coordinator = AtlasVaultPlaintextMigrationCoordinator(
@@ -1140,11 +1579,15 @@ final class _MigrationFixture {
       compatibilitySource: compatibility,
       cacheSource: cache,
       operationAdmission: admission,
+      authorityAdmission: authorityAdmission,
+      conditionalSavedSearchDelete: compatibility.conditionalDeleteSavedSearch,
+      conditionalTrackerDelete: compatibility.conditionalDeleteTrackerRecord,
       journalStore: journal,
       selectedVaultStore: selection,
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       privateAuthority: privateAuthority,
+      profile: profile,
       now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
       uuidProvider: _ids.call,
       vaultKeyProvider: () =>
@@ -1160,11 +1603,15 @@ final class _MigrationFixture {
       compatibilitySource: compatibility,
       cacheSource: cache,
       operationAdmission: admission,
+      authorityAdmission: authorityAdmission,
+      conditionalSavedSearchDelete: compatibility.conditionalDeleteSavedSearch,
+      conditionalTrackerDelete: compatibility.conditionalDeleteTrackerRecord,
       journalStore: journal,
       selectedVaultStore: selection,
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       privateAuthority: privateAuthority,
+      profile: profile,
       now: () => DateTime.utc(2026, 7, 29, 1, 2, 3),
       uuidProvider: () => throw StateError('Unexpected UUID request.'),
       vaultKeyProvider: () => throw StateError('Unexpected key request.'),
@@ -1173,7 +1620,9 @@ final class _MigrationFixture {
   }
 
   final events = <String>[];
+  final AtlasVaultPlaintextMigrationProfile profile;
   final admission = _OperationAdmission();
+  final authorityAdmission = _AuthorityAdmission();
   final memory = _MemorySource();
   final compatibility = _CompatibilitySource();
   late final _CacheSource cache = _CacheSource(events);
@@ -1181,6 +1630,11 @@ final class _MigrationFixture {
   late final _SelectedVaultStore selection = _SelectedVaultStore(events);
   late final _SecureKeyStore keyStore = _SecureKeyStore(events);
   late final _LocalStoreIO localStore = _LocalStoreIO(events);
+  AtlasVaultPlaintextPrivateState encryptedState =
+      AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[_savedSearch()],
+        trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
+      );
   late final TestAtlasVaultPlaintextMigrationPrivateAuthority privateAuthority =
       TestAtlasVaultPlaintextMigrationPrivateAuthority(
         events: events,
@@ -1190,10 +1644,7 @@ final class _MigrationFixture {
             trackerRecords: const <AtlasApplicationRecord>[],
           );
         },
-        readEncryptedState: () async => AtlasVaultPlaintextPrivateState(
-          savedSearches: <AtlasSavedSearch>[_savedSearch()],
-          trackerRecords: <AtlasApplicationRecord>[_trackerRecord()],
-        ),
+        readEncryptedState: () async => encryptedState,
       );
   final _ids = _SequenceIds(<String>[
     '11111111-1111-4111-8111-111111111111',
@@ -1258,6 +1709,34 @@ final class _OperationAdmission
   }
 }
 
+final class _AuthorityAdmission
+    implements AtlasVaultPlaintextAuthorityAdmission {
+  bool _migrationTransactionActive = false;
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    if (_migrationTransactionActive) {
+      return Future<T>.error(
+        const AtlasVaultPlaintextAuthorityAdmissionException(),
+      );
+    }
+    return operation();
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) async {
+    if (_migrationTransactionActive) {
+      return operation();
+    }
+    _migrationTransactionActive = true;
+    try {
+      return await operation();
+    } finally {
+      _migrationTransactionActive = false;
+    }
+  }
+}
+
 final class _MemorySource implements AtlasVaultPlaintextStateSource {
   AtlasVaultPlaintextPrivateState state = AtlasVaultPlaintextPrivateState(
     savedSearches: const <AtlasSavedSearch>[],
@@ -1283,6 +1762,8 @@ final class _CompatibilitySource
   );
   bool failReads = false;
   bool failAfterNextSavedSearchDelete = false;
+  AtlasSavedSearch? replaceSavedSearchBeforeNextDelete;
+  AtlasApplicationRecord? replaceTrackerBeforeNextDelete;
   int readCalls = 0;
   int deleteSavedSearchCalls = 0;
   int deleteTrackerCalls = 0;
@@ -1300,6 +1781,14 @@ final class _CompatibilitySource
   @override
   Future<bool> deleteSavedSearch(String name) async {
     deleteSavedSearchCalls += 1;
+    final replacement = replaceSavedSearchBeforeNextDelete;
+    if (replacement != null) {
+      replaceSavedSearchBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[replacement],
+        trackerRecords: state.trackerRecords,
+      );
+    }
     final existing = state.savedSearches
         .where((value) => value.name == name)
         .toList(growable: false);
@@ -1319,9 +1808,51 @@ final class _CompatibilitySource
     return true;
   }
 
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) async {
+    deleteSavedSearchCalls += 1;
+    final replacement = replaceSavedSearchBeforeNextDelete;
+    if (replacement != null) {
+      replaceSavedSearchBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[replacement],
+        trackerRecords: state.trackerRecords,
+      );
+    }
+    final existing = state.savedSearches
+        .where((value) => value.name == expected.name)
+        .toList(growable: false);
+    if (existing.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (!_sameJson(existing.single.toJson(), expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != expected.name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    if (failAfterNextSavedSearchDelete) {
+      failAfterNextSavedSearchDelete = false;
+      throw StateError('interrupted');
+    }
+    return AtlasConditionalDeleteOutcome.deleted;
+  }
+
   @override
   Future<bool> deleteTrackerRecord(String recordId) async {
     deleteTrackerCalls += 1;
+    final replacement = replaceTrackerBeforeNextDelete;
+    if (replacement != null) {
+      replaceTrackerBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: <AtlasApplicationRecord>[replacement],
+      );
+    }
     final existing = state.trackerRecords
         .where((value) => value.id == recordId)
         .toList(growable: false);
@@ -1336,9 +1867,46 @@ final class _CompatibilitySource
     );
     return true;
   }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) async {
+    deleteTrackerCalls += 1;
+    final replacement = replaceTrackerBeforeNextDelete;
+    if (replacement != null) {
+      replaceTrackerBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: <AtlasApplicationRecord>[replacement],
+      );
+    }
+    final existing = state.trackerRecords
+        .where((value) => value.id == expected.id)
+        .toList(growable: false);
+    if (existing.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (!_sameJson(existing.single.toJson(), expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != expected.id)
+          .toList(growable: false),
+    );
+    return AtlasConditionalDeleteOutcome.deleted;
+  }
 }
 
-final class _CacheSource implements AtlasLocalCacheMigrationSource {
+bool _sameJson(Object? left, Object? right) {
+  return jsonEncode(left) == jsonEncode(right);
+}
+
+final class _CacheSource
+    implements
+        AtlasLocalCacheMigrationSource,
+        AtlasLocalCacheMigrationCleanupSource {
   _CacheSource(this.events);
 
   final List<String> events;
@@ -1351,7 +1919,9 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
       );
   int readCalls = 0;
   int removeCalls = 0;
+  int cleanupCalls = 0;
   bool failAfterNextRemove = false;
+  bool failAfterNextCleanup = false;
 
   @override
   Future<AtlasLocalCacheMigrationPrivateState>
@@ -1377,6 +1947,48 @@ final class _CacheSource implements AtlasLocalCacheMigrationSource {
       failAfterNextRemove = false;
       throw StateError('interrupted after cache scrub');
     }
+  }
+
+  @override
+  Future<void> completePrivateStateCleanupForMigration({
+    required String? expectedPrivateSha256,
+  }) async {
+    cleanupCalls += 1;
+    events.add('cache.cleanup');
+    if (state.privateSha256 != null &&
+        state.privateSha256 != expectedPrivateSha256 &&
+        !state.cacheCleanupPending) {
+      throw StateError('stale');
+    }
+    final authorityBaseURL = state.authorityBaseURL;
+    if (failAfterNextCleanup) {
+      failAfterNextCleanup = false;
+      state = AtlasLocalCacheMigrationPrivateState(
+        savedSearches: const <AtlasSavedSearch>[],
+        trackerRecords: state.trackerRecords,
+        privateSha256: '4' * 64,
+        durablePrivateSha256: null,
+        legacyPrivateSha256: state.legacyPrivateSha256,
+        retainedLegacyCachePresent: true,
+        cacheCleanupPending: true,
+        cacheCleanupComplete: false,
+        requiresPhysicalCleanup: true,
+        authorityBaseURL: authorityBaseURL,
+      );
+      throw StateError('interrupted during cache cleanup');
+    }
+    state = AtlasLocalCacheMigrationPrivateState(
+      savedSearches: const <AtlasSavedSearch>[],
+      trackerRecords: const <AtlasApplicationRecord>[],
+      privateSha256: null,
+      durablePrivateSha256: null,
+      legacyPrivateSha256: null,
+      retainedLegacyCachePresent: false,
+      cacheCleanupPending: false,
+      cacheCleanupComplete: true,
+      requiresPhysicalCleanup: false,
+      authorityBaseURL: authorityBaseURL,
+    );
   }
 }
 
@@ -1466,6 +2078,7 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
   int createCalls = 0;
   int clearCalls = 0;
   bool failAfterNextCreate = false;
+  Future<void> Function()? beforeNextCreate;
 
   @override
   Future<String?> read() async {
@@ -1476,6 +2089,8 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
   @override
   Future<void> create(String vaultId) async {
     createCalls += 1;
+    await beforeNextCreate?.call();
+    beforeNextCreate = null;
     if (value != null) {
       throw StateError('duplicate');
     }
