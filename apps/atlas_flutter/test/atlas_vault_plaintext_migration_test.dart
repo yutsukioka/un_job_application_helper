@@ -335,6 +335,45 @@ void main() {
     },
   );
 
+  test(
+    'Windows journal preserves the complete reviewed saved-search request',
+    () async {
+      final storedRequest = _storedCompatibilitySearchRequest();
+      final storedSnapshot = <String, Object?>{
+        'name': 'UN roles',
+        'description': 'private description',
+        'request': storedRequest,
+        'created_at': '2026-07-01T00:00:00.123456+00:00',
+        'updated_at': '2026-07-02T00:00:00.654321Z',
+      };
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: _StoredSavedSearchTransport(storedSnapshot),
+      );
+      final reviewed =
+          (await client.savedSearchesForPlaintextMigration()).single;
+      final fixture = _MigrationFixture(
+        profile: AtlasVaultPlaintextMigrationProfile.windows,
+      );
+      fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[reviewed],
+        trackerRecords: fixture.compatibility.state.trackerRecords,
+      );
+
+      await fixture.coordinator.prepare();
+
+      final journal =
+          jsonDecode(utf8.decode(fixture.journal.bytes!))
+              as Map<String, Object?>;
+      final remoteSavedSearch =
+          (journal['remote_saved_searches'] as List<Object?>).single
+              as Map<String, Object?>;
+      expect(remoteSavedSearch['request'], storedRequest);
+      expect(remoteSavedSearch['created_at'], storedSnapshot['created_at']);
+      expect(remoteSavedSearch['updated_at'], storedSnapshot['updated_at']);
+    },
+  );
+
   test('legacy timestamp normalization rejects ambiguous values', () async {
     for (final timestamp in <String>[
       '2026-07-01T01:02:03',
@@ -1396,6 +1435,62 @@ AtlasApplicationRecord _trackerRecord({
     appliedAt: appliedAt,
     updatedAt: updatedAt,
   );
+}
+
+Map<String, Object?> _storedCompatibilitySearchRequest() {
+  return <String, Object?>{
+    'text': 'PRIVATE_QUERY',
+    'status': <String>['open'],
+    'organizations': <String>['UNICEF'],
+    'source_ids': <String>[],
+    'ats_families': <String>[],
+    'cities': <String>[],
+    'countries_iso3': <String>['JPN'],
+    'regions': <String>[],
+    'location_types': <String>['primary', 'duty_station', 'outposted'],
+    'national_international': <String>[],
+    'contract_categories': <String>[],
+    'grade_systems': <String>[],
+    'grade_families': <String>[],
+    'grade_codes': <String>[],
+    'ccog_codes': <String>[],
+    'ccog_families': <String>[],
+    'occupational_family_codes': <String>[],
+    'occupational_medium_codes': <String>[],
+    'mandate_network_codes': <String>[],
+    'mandate_family_codes': <String>[],
+    'capability_tags': <String>[],
+    'contract_groups': <String>[],
+    'seniority_groups': <String>[],
+    'work_modalities': <String>[],
+    'volunteer_kinds': <String>[],
+    'unv_categories': <String>[],
+    'unv_volunteer_types': <String>[],
+    'closing_date_from': null,
+    'closing_date_to': null,
+    'posted_date_from': null,
+    'posted_date_to': null,
+    'min_location_confidence': 0.7,
+    'min_grade_confidence': 0.7,
+    'include_low_confidence': false,
+    'exclude_expired_open': true,
+    'limit': 50,
+    'offset': 0,
+    'sort': 'closing_date_asc',
+  };
+}
+
+final class _StoredSavedSearchTransport implements AtlasTransport {
+  _StoredSavedSearchTransport(this.storedSnapshot);
+
+  final Map<String, Object?> storedSnapshot;
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    expect(request.method, 'GET');
+    expect(request.path, 'api/saved-searches');
+    return <Object?>[storedSnapshot];
+  }
 }
 
 final class _CapturingLegacyPrivateStateRestorer
