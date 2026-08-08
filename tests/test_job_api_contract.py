@@ -152,7 +152,8 @@ def _tracker_snapshot(
 
 
 def _conditional_identifier_segment(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    identifier_bytes = value.encode("utf-16-be", errors="surrogatepass")
+    digest = hashlib.sha256(identifier_bytes).hexdigest()
     return f"~sha256-{digest}"
 
 
@@ -216,6 +217,30 @@ def test_saved_search_conditional_delete_supports_existing_names(
     assert response.status_code == 200
     assert response.json() == {"outcome": "deleted"}
     assert client.get("/api/saved-searches").json() == []
+
+
+def test_saved_search_conditional_delete_supports_surrogate_name(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    client = _client(tmp_path)
+    name = "\ud800"
+    expected = save_search(
+        settings.saved_searches_path,
+        name=name,
+        request=VacancySearchRequest(text="PRIVATE_QUERY_SENTINEL"),
+        description="PRIVATE_DESCRIPTION_SENTINEL",
+    ).to_dict()
+    body = json.dumps({"expected": expected}, ensure_ascii=True).encode("ascii")
+
+    response = client.post(
+        f"/api/saved-searches/{_conditional_identifier_segment(name)}/conditional-delete",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
 
 
 def test_saved_search_conditional_delete_preserves_integer_confidence(
@@ -502,6 +527,32 @@ def test_tracker_conditional_delete_supports_encoded_id(
     assert response.status_code == 200
     assert response.json() == {"outcome": "deleted"}
     assert client.get("/api/tracker").json() == []
+
+
+def test_tracker_conditional_delete_supports_surrogate_id(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    client = _client(tmp_path)
+    record_id = "\ud800"
+    expected = tracker_store.upsert_record(
+        settings.tracker_path,
+        ApplicationRecord(
+            id=record_id,
+            job_key="PRIVATE_JOB_KEY_SENTINEL",
+            notes="PRIVATE_NOTES_SENTINEL",
+        ),
+    ).model_dump(mode="json")
+    body = json.dumps({"expected": expected}, ensure_ascii=True).encode("ascii")
+
+    response = client.post(
+        f"/api/tracker/{_conditional_identifier_segment(record_id)}/conditional-delete",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
 
 
 def test_tracker_conditional_delete_rejects_normalized_timestamp_text(
