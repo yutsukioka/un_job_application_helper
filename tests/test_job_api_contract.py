@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 
@@ -187,6 +188,29 @@ def test_saved_search_conditional_delete_exact_absent_and_legacy(
 
     _saved_search_snapshot(client)
     assert client.delete("/api/saved-searches/programme").json() == {"deleted": True}
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Nairobi/Remote", ""],
+    ids=["encoded-slash", "empty"],
+)
+def test_saved_search_conditional_delete_supports_existing_names(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    client = _client(tmp_path)
+    expected = _saved_search_snapshot(client, name=name)
+    encoded_name = quote(name, safe="")
+
+    response = client.post(
+        f"/api/saved-searches/{encoded_name}/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
+    assert client.get("/api/saved-searches").json() == []
 
 
 def test_saved_search_conditional_delete_preserves_integer_confidence(
