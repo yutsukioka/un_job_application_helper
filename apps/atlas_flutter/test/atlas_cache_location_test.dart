@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/atlas_vault_windows.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
 import 'package:atlas/src/cache_file_replacement.dart';
 import 'package:atlas/src/atlas_vault/canonical_json.dart';
@@ -134,6 +136,26 @@ void main() {
       expect(await legacyFile.readAsString(), '{"historical_jobs":42}');
       expect(await File('${cacheFile.path}.migrating-$pid').exists(), isFalse);
     });
+
+    test(
+      'authority path resolution does not import legacy plaintext',
+      () async {
+        final legacyFile = resolveAtlasLegacyTemporaryCacheFile(
+          systemTemporaryDirectory: legacySystemTemporaryDirectory,
+        );
+        await legacyFile.parent.create(recursive: true);
+        await legacyFile.writeAsString('PRIVATE_LEGACY_CACHE', flush: true);
+
+        final location = await resolveAtlasPersistentCacheLocation(
+          applicationSupportDirectoryProvider: () async => supportDirectory,
+          legacySystemTemporaryDirectory: legacySystemTemporaryDirectory,
+          importLegacyCache: false,
+        );
+
+        expect(await location.cacheFile.exists(), isFalse);
+        expect(await legacyFile.readAsString(), 'PRIVATE_LEGACY_CACHE');
+      },
+    );
 
     test(
       'recovers a committed replacement before considering legacy import',
@@ -652,7 +674,7 @@ void main() {
 
   test(
     'Windows plaintext authority uses one scoped reentrant cache admission',
-    () {
+    () async {
       final cacheSource = File(
         'lib/features/app_shell/atlas_cache_location.dart',
       ).readAsStringSync();
@@ -670,8 +692,110 @@ void main() {
       expect(appSource, contains('plaintextAuthorityAdmission'));
       expect(appSource, contains('runLegacyPrivateOperation'));
       expect(migrationSource, contains('runMigrationTransaction'));
+
+      final sandbox = await Directory.systemTemp.createTemp(
+        'atlas_authority_admission_test_',
+      );
+      addTearDown(() async {
+        if (await sandbox.exists()) {
+          await sandbox.delete(recursive: true);
+        }
+      });
+      final location = AtlasPersistentCacheLocation(
+        cacheFile: File(_joinTestPath(sandbox.path, atlasLocalCacheFileName)),
+        legacyFile: File(_joinTestPath(sandbox.path, 'legacy-cache.json')),
+        legacyImportRetiredFile: File(
+          _joinTestPath(sandbox.path, atlasLegacyImportRetiredFileName),
+        ),
+      );
+      var nestedCalls = 0;
+      await location.coordinateMutation(() async {
+        await location.coordinateMutation(() async {
+          nestedCalls += 1;
+        });
+      });
+      expect(nestedCalls, 1);
+
+      final journal = _AdmissionJournalStore();
+      final selection = _AdmissionSelectedVaultStore();
+      final admission = AtlasWindowsPlaintextAuthorityAdmission(
+        locationProvider: () async => location,
+        journalStore: journal,
+        selectedVaultStore: selection,
+      );
+      var legacyCalls = 0;
+      await admission.runLegacyPrivateOperation(() async {
+        legacyCalls += 1;
+      });
+      journal.bytes = Uint8List.fromList(<int>[1]);
+      await expectLater(
+        admission.runLegacyPrivateOperation(() async {
+          legacyCalls += 1;
+        }),
+        throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+      );
+      expect(legacyCalls, 1);
+      journal.bytes = null;
+      selection.value = 'selected-vault';
+      await expectLater(
+        admission.runLegacyPrivateOperation(() async {
+          legacyCalls += 1;
+        }),
+        throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+      );
+      expect(legacyCalls, 1);
     },
   );
+}
+
+final class _AdmissionJournalStore
+    implements AtlasVaultProtectedMigrationJournalStore {
+  Uint8List? bytes;
+
+  @override
+  Future<Uint8List?> read() async {
+    final current = bytes;
+    return current == null ? null : Uint8List.fromList(current);
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    bytes = Uint8List.fromList(canonicalBytes);
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    bytes = Uint8List.fromList(canonicalBytes);
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    bytes = null;
+  }
+}
+
+final class _AdmissionSelectedVaultStore
+    implements AtlasVaultSelectedVaultStore {
+  String? value;
+
+  @override
+  Future<String?> read() async => value;
+
+  @override
+  Future<void> create(String vaultId) async {
+    value = vaultId;
+  }
+
+  @override
+  Future<void> clear(String expectedVaultId) async {
+    value = null;
+  }
 }
 
 Future<void> _writeCleanupIntentFixture({

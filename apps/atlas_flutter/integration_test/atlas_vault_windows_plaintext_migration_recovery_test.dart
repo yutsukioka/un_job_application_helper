@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -62,6 +64,66 @@ void main() {
           'verify separately for process-boundary evidence.',
         );
         return;
+      case 'admission-waiter':
+        leaveForFreshProcess = true;
+        await scenario.runLegacyAdmissionWaiter();
+        tester.printToConsole(
+          'An already-running Windows legacy process was blocked by the '
+          'journal and reopened only after rollback completed.',
+        );
+        return;
+      case 'admission-prepare':
+        leaveForFreshProcess = true;
+        await scenario.prepareAdmissionFence();
+        tester.printToConsole(
+          'Windows migration journal was prepared under cross-process '
+          'plaintext-authority admission.',
+        );
+        return;
+      case 'admission-rollback':
+        leaveForFreshProcess = true;
+        await scenario.rollbackAdmissionFence();
+        tester.printToConsole(
+          'Windows migration rollback removed staged resources and reopened '
+          'legacy admission atomically.',
+        );
+        return;
+      case 'finalization-waiter':
+        leaveForFreshProcess = true;
+        await scenario.runFinalizationWaiter();
+        tester.printToConsole(
+          'Concurrent Windows plaintext writes stayed excluded through '
+          'selected-vault commitment.',
+        );
+        return;
+      case 'finalization-run':
+        leaveForFreshProcess = true;
+        await scenario.runFinalizationFence();
+        tester.printToConsole(
+          'Windows finalization held plaintext admission continuously through '
+          'selected-vault read-back.',
+        );
+        return;
+      case 'crash-holder':
+        leaveForFreshProcess = true;
+        await scenario.holdAdmissionUntilProcessTermination();
+        return;
+      case 'crash-verify':
+        leaveForFreshProcess = true;
+        await scenario.verifyAdmissionAfterProcessCrash();
+        tester.printToConsole(
+          'Windows released the cache admission lock after process '
+          'termination.',
+        );
+        return;
+      case 'cleanup':
+        leaveForFreshProcess = true;
+        await scenario.cleanTestResources();
+        await scenario.cleanCoordinationResources();
+        tester.printToConsole(
+          'Windows migration fence test resources cleaned.',
+        );
+        return;
       default:
         fail('Unsupported fixed Windows migration recovery test stage.');
     }
@@ -73,6 +135,11 @@ final class _RecoveryScenario {
     : root = Directory(
         '${Directory.systemTemp.path}${Platform.pathSeparator}'
         'atlas_windows_migration_recovery_'
+        '${vaultId.replaceAll('-', '')}',
+      ),
+      coordinationRoot = Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}'
+        'atlas_windows_migration_coordination_'
         '${vaultId.replaceAll('-', '')}',
       ) {
     location = AtlasPersistentCacheLocation(
@@ -93,6 +160,7 @@ final class _RecoveryScenario {
 
   final String vaultId;
   final Directory root;
+  final Directory coordinationRoot;
   late final AtlasPersistentCacheLocation location;
   final keyStore = AtlasWindowsVaultSecureKeyStore();
   final localStore = AtlasWindowsVaultLocalStoreIO();
@@ -258,11 +326,235 @@ final class _RecoveryScenario {
     expect(await localStore.read(vaultId), isNull);
   }
 
+  Future<void> runLegacyAdmissionWaiter() async {
+    await _signal('legacy-ready');
+    await _waitForSignal('journal-ready');
+    final cacheBefore = await location.cacheFile.readAsBytes();
+    final admission = _authorityAdmission(selectedStore);
+    var compatibilityWrites = 0;
+    var cacheWrites = 0;
+    var publicSearches = 0;
+    publicSearches += 1;
+    await expectLater(
+      admission.runLegacyPrivateOperation(() async {
+        compatibilityWrites += 2;
+        await AtlasLocalCacheStore(
+          file: location.cacheFile,
+          mutationCoordinator: location.coordinateMutation,
+        ).write(_fixtureSnapshot());
+        cacheWrites += 1;
+      }),
+      throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+    );
+    expect(compatibilityWrites, 0);
+    expect(cacheWrites, 0);
+    expect(publicSearches, 1);
+    expect(await location.cacheFile.readAsBytes(), cacheBefore);
+    await _signal('legacy-blocked');
+
+    await _waitForSignal('rollback-complete');
+    await admission.runLegacyPrivateOperation(() async {
+      compatibilityWrites += 2;
+      await AtlasLocalCacheStore(
+        file: location.cacheFile,
+        mutationCoordinator: location.coordinateMutation,
+      ).write(_fixtureSnapshot());
+      cacheWrites += 1;
+    });
+    expect(compatibilityWrites, 2);
+    expect(cacheWrites, 1);
+    expect(await journalStore.read(), isNull);
+    expect(await selectedStore.read(), isNull);
+    await _signal('legacy-reopened');
+  }
+
+  Future<void> prepareAdmissionFence() async {
+    await _waitForSignal('legacy-ready');
+    await requireAbsent();
+    await _writeFixtureCaches();
+    final plaintext = _fixturePlaintext();
+    final memory = _MemorySource(plaintext);
+    final compatibility = _CompatibilitySource(plaintext);
+    final coordinator = _coordinator(
+      memory: memory,
+      compatibility: compatibility,
+      cache: AtlasWindowsDesktopCacheMigrationSource(location),
+      journal: journalStore,
+      ids: _initialIds(vaultId),
+    );
+    await coordinator.inventory();
+    final prepared = await coordinator.prepare();
+    expect(prepared.stage, AtlasVaultPlaintextMigrationStage.encryptedVerified);
+    expect(await journalStore.read(), isNotNull);
+    await _signal('journal-ready');
+  }
+
+  Future<void> rollbackAdmissionFence() async {
+    await _waitForSignal('legacy-blocked');
+    final plaintext = _fixturePlaintext();
+    final coordinator = _coordinator(
+      memory: _MemorySource(plaintext),
+      compatibility: _CompatibilitySource(plaintext),
+      cache: AtlasWindowsDesktopCacheMigrationSource(location),
+      journal: journalStore,
+    );
+    await coordinator.discardPrepared();
+    await coordinator.restoreReviewedLegacyPrivateState(
+      _RecoveryLegacyRestorer(),
+    );
+    expect(await journalStore.read(), isNull);
+    expect(await selectedStore.read(), isNull);
+    expect(await keyStore.containsVaultKey(vaultId), isFalse);
+    expect(await localStore.read(vaultId), isNull);
+    await _signal('rollback-complete');
+    await _waitForSignal('legacy-reopened');
+  }
+
+  Future<void> runFinalizationWaiter() async {
+    await _signal('finalization-waiter-ready');
+    await _waitForSignal('plaintext-absence-verified');
+    final cacheBefore = await location.cacheFile.readAsBytes();
+    final admission = _authorityAdmission(selectedStore);
+    var compatibilityWrites = 0;
+    var cacheWrites = 0;
+    var publicSearches = 0;
+    publicSearches += 1;
+    await _signal('finalization-write-attempted');
+    await expectLater(
+      admission.runLegacyPrivateOperation(() async {
+        compatibilityWrites += 2;
+        await AtlasLocalCacheStore(
+          file: location.cacheFile,
+          mutationCoordinator: location.coordinateMutation,
+        ).write(_fixtureSnapshot());
+        cacheWrites += 1;
+      }),
+      throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+    );
+    expect(compatibilityWrites, 0);
+    expect(cacheWrites, 0);
+    expect(publicSearches, 1);
+    expect(await location.cacheFile.readAsBytes(), cacheBefore);
+    expect(await selectedStore.read(), vaultId);
+    await _signal('finalization-write-blocked');
+  }
+
+  Future<void> runFinalizationFence() async {
+    await _waitForSignal('finalization-waiter-ready');
+    await requireAbsent();
+    await _writeFixtureCaches();
+    final plaintext = _fixturePlaintext();
+    final memory = _MemorySource(plaintext);
+    final compatibility = _CompatibilitySource(plaintext);
+    final coordinatedSelection = _CoordinatedSelectedVaultStore(
+      store: selectedStore,
+      beforeCreate: () async {
+        await _signal('plaintext-absence-verified');
+        await _waitForSignal('finalization-write-attempted');
+      },
+    );
+    final coordinator = _coordinator(
+      memory: memory,
+      compatibility: compatibility,
+      cache: AtlasWindowsDesktopCacheMigrationSource(location),
+      journal: journalStore,
+      selected: coordinatedSelection,
+      ids: _initialIds(vaultId),
+    );
+    await coordinator.inventory();
+    await coordinator.prepare();
+    final completed = await coordinator.finalizeAndActivate();
+    expect(completed.stage, isNull);
+    expect(await selectedStore.read(), vaultId);
+    expect(await journalStore.read(), isNull);
+    await _waitForSignal('finalization-write-blocked');
+  }
+
+  Future<void> holdAdmissionUntilProcessTermination() async {
+    await location.coordinateMutation(() async {
+      await _signal('crash-lock-held');
+      await Completer<void>().future;
+    });
+  }
+
+  Future<void> verifyAdmissionAfterProcessCrash() async {
+    await _waitForSignal('crash-lock-held');
+    var acquired = false;
+    await location.coordinateMutation(() async {
+      acquired = true;
+      await _signal('crash-lock-reacquired');
+    });
+    expect(acquired, isTrue);
+  }
+
+  AtlasVaultPlaintextPrivateState _fixturePlaintext() {
+    return AtlasVaultPlaintextPrivateState(
+      savedSearches: <AtlasSavedSearch>[search],
+      trackerRecords: <AtlasApplicationRecord>[tracker],
+      authorityBaseURL: Uri.parse(_authority),
+    );
+  }
+
+  AtlasLocalCacheSnapshot _fixtureSnapshot() {
+    return _snapshot(
+      savedSearches: <AtlasSavedSearch>[search],
+      trackerRecords: <AtlasApplicationRecord>[tracker],
+    );
+  }
+
+  Future<void> _writeFixtureCaches() async {
+    final snapshot = _fixtureSnapshot();
+    await AtlasLocalCacheStore(file: location.cacheFile).write(snapshot);
+    await AtlasLocalCacheStore(file: location.legacyFile).write(snapshot);
+  }
+
+  AtlasWindowsPlaintextAuthorityAdmission _authorityAdmission(
+    AtlasVaultSelectedVaultStore selection,
+  ) {
+    return AtlasWindowsPlaintextAuthorityAdmission(
+      locationProvider: () async => location,
+      journalStore: journalStore,
+      selectedVaultStore: selection,
+    );
+  }
+
+  File _signalFile(String name) =>
+      File('${coordinationRoot.path}${Platform.pathSeparator}$name.ready');
+
+  Future<void> _signal(String name) async {
+    await coordinationRoot.create(recursive: true);
+    await _signalFile(name).writeAsString('ready\n', flush: true);
+  }
+
+  Future<void> _waitForSignal(String name) async {
+    await coordinationRoot.create(recursive: true);
+    final file = _signalFile(name);
+    if (await file.exists()) {
+      return;
+    }
+    final ready = Completer<void>();
+    late final StreamSubscription<FileSystemEvent> subscription;
+    subscription = coordinationRoot.watch().listen((_) {
+      if (!ready.isCompleted && file.existsSync()) {
+        ready.complete();
+      }
+    });
+    if (await file.exists() && !ready.isCompleted) {
+      ready.complete();
+    }
+    try {
+      await ready.future;
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   AtlasVaultPlaintextMigrationCoordinator _coordinator({
     required _MemorySource memory,
     required _CompatibilitySource compatibility,
     required AtlasLocalCacheMigrationSource cache,
     required AtlasVaultProtectedMigrationJournalStore journal,
+    AtlasVaultSelectedVaultStore? selected,
     List<String>? ids,
   }) {
     final runtime = AtlasVaultPrivateStateRuntime(
@@ -271,13 +563,17 @@ final class _RecoveryScenario {
     );
     runtimes.add(runtime);
     final sequence = ids == null ? null : _SequenceIds(ids);
+    final effectiveSelection = selected ?? selectedStore;
     return AtlasVaultPlaintextMigrationCoordinator(
       profile: AtlasVaultPlaintextMigrationProfile.windows,
       inMemorySource: memory,
       compatibilitySource: compatibility,
       cacheSource: cache,
+      authorityAdmission: _authorityAdmission(effectiveSelection),
+      conditionalSavedSearchDelete: compatibility.conditionalDeleteSavedSearch,
+      conditionalTrackerDelete: compatibility.conditionalDeleteTrackerRecord,
       journalStore: journal,
-      selectedVaultStore: selectedStore,
+      selectedVaultStore: effectiveSelection,
       secureKeyStore: keyStore,
       localStoreIO: localStore,
       privateAuthority: _PrivateAuthority(memory: memory, runtime: runtime),
@@ -337,6 +633,43 @@ final class _RecoveryScenario {
       await root.delete(recursive: true);
     }
   }
+
+  Future<void> cleanCoordinationResources() async {
+    if (await coordinationRoot.exists()) {
+      await coordinationRoot.delete(recursive: true);
+    }
+  }
+}
+
+final class _CoordinatedSelectedVaultStore
+    implements AtlasVaultSelectedVaultStore {
+  const _CoordinatedSelectedVaultStore({
+    required this.store,
+    required this.beforeCreate,
+  });
+
+  final AtlasVaultSelectedVaultStore store;
+  final Future<void> Function() beforeCreate;
+
+  @override
+  Future<String?> read() => store.read();
+
+  @override
+  Future<void> create(String vaultId) async {
+    await beforeCreate();
+    await store.create(vaultId);
+  }
+
+  @override
+  Future<void> clear(String expectedVaultId) => store.clear(expectedVaultId);
+}
+
+final class _RecoveryLegacyRestorer
+    implements AtlasVaultLegacyPrivateStateRestoring {
+  @override
+  Future<void> restoreLegacyPrivateStateAfterRollback(
+    AtlasVaultPlaintextPrivateState reviewedState,
+  ) async {}
 }
 
 final class _FailAfterCleanupSource
@@ -460,6 +793,50 @@ final class _CompatibilitySource
           .toList(growable: false),
     );
     return present;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) async {
+    deleteCalls += 1;
+    final current = state.savedSearches
+        .where((value) => value.name == expected.name)
+        .toList(growable: false);
+    if (current.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (jsonEncode(current.single.toJson()) != jsonEncode(expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != expected.name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    return AtlasConditionalDeleteOutcome.deleted;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) async {
+    deleteCalls += 1;
+    final current = state.trackerRecords
+        .where((value) => value.id == expected.id)
+        .toList(growable: false);
+    if (current.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (jsonEncode(current.single.toJson()) != jsonEncode(expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != expected.id)
+          .toList(growable: false),
+    );
+    return AtlasConditionalDeleteOutcome.deleted;
   }
 }
 

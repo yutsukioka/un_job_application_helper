@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -79,6 +80,11 @@ void main() {
       final localStore = AtlasWindowsVaultLocalStoreIO();
       final journalStore = AtlasWindowsProtectedMigrationJournalStore();
       final selectedStore = AtlasWindowsSelectedVaultStore();
+      final authorityAdmission = AtlasWindowsPlaintextAuthorityAdmission(
+        locationProvider: () async => location,
+        journalStore: journalStore,
+        selectedVaultStore: selectedStore,
+      );
       final memory = _MemorySource(plaintext);
       final compatibility = _CompatibilitySource(plaintext);
       final runtimes = <AtlasVaultPrivateStateRuntime>[];
@@ -93,6 +99,11 @@ void main() {
           inMemorySource: memory,
           compatibilitySource: compatibility,
           cacheSource: AtlasWindowsDesktopCacheMigrationSource(location),
+          authorityAdmission: authorityAdmission,
+          conditionalSavedSearchDelete:
+              compatibility.conditionalDeleteSavedSearch,
+          conditionalTrackerDelete:
+              compatibility.conditionalDeleteTrackerRecord,
           journalStore: journalStore,
           selectedVaultStore: selectedStore,
           secureKeyStore: keyStore,
@@ -401,6 +412,54 @@ final class _CompatibilitySource
     );
     return present;
   }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) async {
+    deleteCalls += 1;
+    final current = state.savedSearches
+        .where((value) => value.name == expected.name)
+        .toList(growable: false);
+    if (current.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (!_sameJson(current.single.toJson(), expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches
+          .where((value) => value.name != expected.name)
+          .toList(growable: false),
+      trackerRecords: state.trackerRecords,
+    );
+    return AtlasConditionalDeleteOutcome.deleted;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) async {
+    deleteCalls += 1;
+    final current = state.trackerRecords
+        .where((value) => value.id == expected.id)
+        .toList(growable: false);
+    if (current.isEmpty) {
+      return AtlasConditionalDeleteOutcome.absent;
+    }
+    if (!_sameJson(current.single.toJson(), expected.toJson())) {
+      return AtlasConditionalDeleteOutcome.preconditionFailed;
+    }
+    state = AtlasVaultPlaintextPrivateState(
+      savedSearches: state.savedSearches,
+      trackerRecords: state.trackerRecords
+          .where((value) => value.id != expected.id)
+          .toList(growable: false),
+    );
+    return AtlasConditionalDeleteOutcome.deleted;
+  }
+}
+
+bool _sameJson(Object? left, Object? right) {
+  return jsonEncode(left) == jsonEncode(right);
 }
 
 final class _CapturingLegacyRestorer

@@ -3138,6 +3138,8 @@ final class AtlasRequest {
   final Map<String, Object?>? jsonBody;
 }
 
+enum AtlasConditionalDeleteOutcome { deleted, absent, preconditionFailed }
+
 abstract interface class AtlasTransport {
   Future<Object?> send(AtlasRequest request);
 }
@@ -3294,6 +3296,25 @@ final class AtlasAPIClient {
     return _bool(json['deleted']) ?? false;
   }
 
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteSavedSearch(
+    AtlasSavedSearch expected,
+  ) {
+    if (expected.name.isEmpty ||
+        expected.createdAt == null ||
+        expected.createdAt!.isEmpty ||
+        expected.updatedAt == null ||
+        expected.updatedAt!.isEmpty) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'saved-searches',
+      identifier: expected.name,
+      expected: expected.toJson(),
+    );
+  }
+
   Future<AtlasApplicationRecord> saveJob(String jobKey) async {
     final json = await _requestMap(
       AtlasRequest(
@@ -3329,6 +3350,21 @@ final class AtlasAPIClient {
       ),
     );
     return _bool(json['deleted']) ?? false;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> conditionalDeleteTrackerRecord(
+    AtlasApplicationRecord expected,
+  ) {
+    if (expected.id.isEmpty || expected.notes == null) {
+      return Future<AtlasConditionalDeleteOutcome>.error(
+        const AtlasAPIException.invalidResponse(),
+      );
+    }
+    return _conditionalDelete(
+      family: 'tracker',
+      identifier: expected.id,
+      expected: expected.toJson(),
+    );
   }
 
   Future<List<AtlasSourceRun>> updates() async {
@@ -3374,21 +3410,71 @@ final class AtlasAPIClient {
       throw const AtlasAPIException.invalidResponse();
     }
   }
+
+  Future<AtlasConditionalDeleteOutcome> _conditionalDelete({
+    required String family,
+    required String identifier,
+    required Map<String, Object?> expected,
+  }) async {
+    try {
+      final response = await _requestMap(
+        AtlasRequest(
+          method: 'POST',
+          path:
+              'api/$family/${await _conditionalDeleteIdentifier(identifier)}'
+              '/conditional-delete',
+          jsonBody: <String, Object?>{'expected': expected},
+        ),
+      );
+      if (response.length != 1 || response['outcome'] is! String) {
+        throw const AtlasAPIException.invalidResponse();
+      }
+      return switch (response['outcome']) {
+        'deleted' => AtlasConditionalDeleteOutcome.deleted,
+        'absent' => AtlasConditionalDeleteOutcome.absent,
+        _ => throw const AtlasAPIException.invalidResponse(),
+      };
+    } on AtlasAPIException catch (error) {
+      if (error.statusCode == 412) {
+        return AtlasConditionalDeleteOutcome.preconditionFailed;
+      }
+      throw const AtlasAPIException.invalidResponse();
+    } catch (_) {
+      throw const AtlasAPIException.invalidResponse();
+    }
+  }
 }
 
 final class AtlasAPIException implements Exception {
   const AtlasAPIException.invalidResponse()
-    : message = 'The server returned an invalid response.';
+    : statusCode = null,
+      message = 'The server returned an invalid response.';
 
   const AtlasAPIException.http(int statusCode, String body)
-    : message = body == ''
+    : statusCode = statusCode,
+      message = body == ''
           ? 'The server returned HTTP $statusCode.'
           : 'The server returned HTTP $statusCode: $body';
 
+  final int? statusCode;
   final String message;
 
   @override
   String toString() => message;
+}
+
+Future<String> _conditionalDeleteIdentifier(String value) async {
+  final bytes = Uint8List(value.codeUnits.length * 2);
+  for (var index = 0; index < value.codeUnits.length; index += 1) {
+    final codeUnit = value.codeUnits[index];
+    bytes[index * 2] = codeUnit >> 8;
+    bytes[index * 2 + 1] = codeUnit & 0xff;
+  }
+  try {
+    return '~sha256-${await vault_crypto.atlasVaultSha256Hex(bytes)}';
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
+  }
 }
 
 String displayAtlasFilterValue(String value) {

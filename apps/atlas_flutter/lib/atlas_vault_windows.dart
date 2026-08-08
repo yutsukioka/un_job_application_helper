@@ -13,6 +13,8 @@ export 'src/atlas_vault/plaintext_migration.dart'
         AtlasVaultPlaintextMigrationCoordinator,
         AtlasVaultPlaintextMigrationCoordinating,
         AtlasVaultPlaintextMigrationException,
+        AtlasVaultPlaintextAuthorityAdmission,
+        AtlasVaultPlaintextAuthorityAdmissionException,
         AtlasVaultPlaintextMigrationOperationAdmission,
         AtlasVaultPlaintextMigrationProfile,
         AtlasVaultPlaintextMigrationPrivateAuthority,

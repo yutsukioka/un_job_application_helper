@@ -58,6 +58,14 @@ final class AtlasVaultPlaintextMigrationException implements Exception {
   String toString() => 'AtlasVault plaintext migration operation failed.';
 }
 
+final class AtlasVaultPlaintextAuthorityAdmissionException
+    implements Exception {
+  const AtlasVaultPlaintextAuthorityAdmissionException();
+
+  @override
+  String toString() => 'AtlasVault plaintext authority is unavailable.';
+}
+
 final class AtlasVaultPlaintextPrivateState {
   AtlasVaultPlaintextPrivateState({
     required List<AtlasSavedSearch> savedSearches,
@@ -161,6 +169,12 @@ abstract interface class AtlasVaultPlaintextMigrationOperationAdmission {
   Future<void> drainAdmittedPlaintextOperations();
 }
 
+abstract interface class AtlasVaultPlaintextAuthorityAdmission {
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation);
+
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation);
+}
+
 abstract interface class AtlasVaultLegacyPrivateStateRestoring {
   Future<void> restoreLegacyPrivateStateAfterRollback(
     AtlasVaultPlaintextPrivateState reviewedState,
@@ -173,6 +187,21 @@ final class _NoopMigrationOperationAdmission
 
   @override
   Future<void> drainAdmittedPlaintextOperations() async {}
+}
+
+final class _NoopPlaintextAuthorityAdmission
+    implements AtlasVaultPlaintextAuthorityAdmission {
+  const _NoopPlaintextAuthorityAdmission();
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    return operation();
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) {
+    return operation();
+  }
 }
 
 abstract interface class AtlasVaultPlaintextStateSource {
@@ -188,6 +217,13 @@ abstract interface class AtlasVaultCompatibilityPrivateSource {
 
   Future<bool> deleteTrackerRecord(String recordId);
 }
+
+typedef AtlasVaultConditionalSavedSearchDelete =
+    Future<AtlasConditionalDeleteOutcome> Function(AtlasSavedSearch expected);
+typedef AtlasVaultConditionalTrackerDelete =
+    Future<AtlasConditionalDeleteOutcome> Function(
+      AtlasApplicationRecord expected,
+    );
 
 abstract interface class AtlasLocalCacheMigrationSource {
   Future<AtlasLocalCacheMigrationPrivateState> readPrivateStateForMigration();
@@ -814,6 +850,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
     required AtlasVaultCompatibilityPrivateSource compatibilitySource,
     required AtlasLocalCacheMigrationSource cacheSource,
     AtlasVaultPlaintextMigrationOperationAdmission? operationAdmission,
+    AtlasVaultPlaintextAuthorityAdmission? authorityAdmission,
+    AtlasVaultConditionalSavedSearchDelete? conditionalSavedSearchDelete,
+    AtlasVaultConditionalTrackerDelete? conditionalTrackerDelete,
     required AtlasVaultProtectedMigrationJournalStore journalStore,
     required AtlasVaultSelectedVaultStore selectedVaultStore,
     required AtlasVaultMigrationSecureKeyStore secureKeyStore,
@@ -834,6 +873,12 @@ final class AtlasVaultPlaintextMigrationCoordinator
        _cacheSource = cacheSource,
        _operationAdmission =
            operationAdmission ?? const _NoopMigrationOperationAdmission(),
+       _authorityAdmission =
+           authorityAdmission ?? const _NoopPlaintextAuthorityAdmission(),
+       // ignore: prefer_initializing_formals
+       _conditionalSavedSearchDelete = conditionalSavedSearchDelete,
+       // ignore: prefer_initializing_formals
+       _conditionalTrackerDelete = conditionalTrackerDelete,
        // ignore: prefer_initializing_formals
        _journalStore = journalStore,
        // ignore: prefer_initializing_formals
@@ -849,7 +894,14 @@ final class AtlasVaultPlaintextMigrationCoordinator
        _now = now ?? DateTime.now,
        _uuidProvider = uuidProvider ?? _secureUuidV4,
        _vaultKeyProvider = vaultKeyProvider ?? _secureVaultKey,
-       _nonceProvider = nonceProvider ?? _secureNonce;
+       _nonceProvider = nonceProvider ?? _secureNonce {
+    if (profile == AtlasVaultPlaintextMigrationProfile.windows &&
+        (authorityAdmission == null ||
+            conditionalSavedSearchDelete == null ||
+            conditionalTrackerDelete == null)) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+  }
 
   static const _recordKeyId = 'primary-android-local-key-v1';
 
@@ -857,6 +909,9 @@ final class AtlasVaultPlaintextMigrationCoordinator
   final AtlasVaultCompatibilityPrivateSource _compatibilitySource;
   final AtlasLocalCacheMigrationSource _cacheSource;
   final AtlasVaultPlaintextMigrationOperationAdmission _operationAdmission;
+  final AtlasVaultPlaintextAuthorityAdmission _authorityAdmission;
+  final AtlasVaultConditionalSavedSearchDelete? _conditionalSavedSearchDelete;
+  final AtlasVaultConditionalTrackerDelete? _conditionalTrackerDelete;
   final AtlasVaultProtectedMigrationJournalStore _journalStore;
   final AtlasVaultSelectedVaultStore _selectedVaultStore;
   final AtlasVaultMigrationSecureKeyStore _secureKeyStore;
@@ -1433,18 +1488,28 @@ final class AtlasVaultPlaintextMigrationCoordinator
       );
     }
     var journal = initialJournal;
+    final expectedSavedSearches = <String, AtlasSavedSearch>{
+      for (final value in journal.remoteSavedSearches) value.name: value,
+    };
     for (final name in journal.remoteSavedSearchNames) {
       var current = await _readBoundCompatibilityPrivateState(journal);
       _validateCompatibilityState(journal, current);
-      final present = current.savedSearches.any((value) => value.name == name);
-      if (present) {
-        _requireJournalCompatibilityAuthority(journal);
-        await _compatibilitySource.deleteSavedSearch(name);
-        current = await _readBoundCompatibilityPrivateState(journal);
-        _validateCompatibilityState(journal, current);
-        if (current.savedSearches.any((value) => value.name == name)) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
+      if (journal.deletedSavedSearchNames.contains(name)) {
+        continue;
+      }
+      final expected = expectedSavedSearches[name];
+      if (expected == null) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      _requireJournalCompatibilityAuthority(journal);
+      final outcome = await _deleteSavedSearchConditionally(expected);
+      if (outcome == AtlasConditionalDeleteOutcome.preconditionFailed) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      current = await _readBoundCompatibilityPrivateState(journal);
+      _validateCompatibilityState(journal, current);
+      if (current.savedSearches.any((value) => value.name == name)) {
+        throw const AtlasVaultPlaintextMigrationException();
       }
       if (!journal.deletedSavedSearchNames.contains(name)) {
         final completed = <String>[...journal.deletedSavedSearchNames, name]
@@ -1456,22 +1521,28 @@ final class AtlasVaultPlaintextMigrationCoordinator
       }
     }
 
+    final expectedTrackerRecords = <String, AtlasApplicationRecord>{
+      for (final value in journal.remoteTrackerRecords) value.id: value,
+    };
     for (final handle in journal.remoteTrackerHandles) {
       var current = await _readBoundCompatibilityPrivateState(journal);
       _validateCompatibilityState(journal, current);
-      final present = current.trackerRecords.any(
-        (value) => value.id == handle.recordId,
-      );
-      if (present) {
-        _requireJournalCompatibilityAuthority(journal);
-        await _compatibilitySource.deleteTrackerRecord(handle.recordId);
-        current = await _readBoundCompatibilityPrivateState(journal);
-        _validateCompatibilityState(journal, current);
-        if (current.trackerRecords.any(
-          (value) => value.id == handle.recordId,
-        )) {
-          throw const AtlasVaultPlaintextMigrationException();
-        }
+      if (journal.deletedTrackerRecordIds.contains(handle.recordId)) {
+        continue;
+      }
+      final expected = expectedTrackerRecords[handle.recordId];
+      if (expected == null || expected.jobKey != handle.jobKey) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      _requireJournalCompatibilityAuthority(journal);
+      final outcome = await _deleteTrackerConditionally(expected);
+      if (outcome == AtlasConditionalDeleteOutcome.preconditionFailed) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+      current = await _readBoundCompatibilityPrivateState(journal);
+      _validateCompatibilityState(journal, current);
+      if (current.trackerRecords.any((value) => value.id == handle.recordId)) {
+        throw const AtlasVaultPlaintextMigrationException();
       }
       if (!journal.deletedTrackerRecordIds.contains(handle.recordId)) {
         final completed = <String>[
@@ -1492,6 +1563,36 @@ final class AtlasVaultPlaintextMigrationCoordinator
       throw const AtlasVaultPlaintextMigrationException();
     }
     return journal;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> _deleteSavedSearchConditionally(
+    AtlasSavedSearch expected,
+  ) async {
+    final conditionalDelete = _conditionalSavedSearchDelete;
+    if (conditionalDelete != null) {
+      return conditionalDelete(expected);
+    }
+    if (_profile == AtlasVaultPlaintextMigrationProfile.windows) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return await _compatibilitySource.deleteSavedSearch(expected.name)
+        ? AtlasConditionalDeleteOutcome.deleted
+        : AtlasConditionalDeleteOutcome.absent;
+  }
+
+  Future<AtlasConditionalDeleteOutcome> _deleteTrackerConditionally(
+    AtlasApplicationRecord expected,
+  ) async {
+    final conditionalDelete = _conditionalTrackerDelete;
+    if (conditionalDelete != null) {
+      return conditionalDelete(expected);
+    }
+    if (_profile == AtlasVaultPlaintextMigrationProfile.windows) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return await _compatibilitySource.deleteTrackerRecord(expected.id)
+        ? AtlasConditionalDeleteOutcome.deleted
+        : AtlasConditionalDeleteOutcome.absent;
   }
 
   void _validateCompatibilityState(
@@ -1724,7 +1825,8 @@ final class AtlasVaultPlaintextMigrationCoordinator
     }
     _operating = true;
     try {
-      return await operation();
+      await _operationAdmission.drainAdmittedPlaintextOperations();
+      return await _authorityAdmission.runMigrationTransaction(operation);
     } finally {
       _operating = false;
     }
@@ -2045,7 +2147,6 @@ final class AtlasVaultPlaintextMigrationCoordinator
 
   Future<_MigrationInventory> _readInventory() async {
     try {
-      await _operationAdmission.drainAdmittedPlaintextOperations();
       final memory = await _inMemorySource.readPlaintextPrivateState();
       final cache = await _cacheSource.readPrivateStateForMigration();
       final compatibilityAuthority = _currentCompatibilityAuthority();

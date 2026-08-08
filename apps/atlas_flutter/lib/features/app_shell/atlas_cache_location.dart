@@ -20,8 +20,11 @@ const atlasPrivateMigrationIntentFileName =
     '$atlasLocalCacheFileName.private-migration.intent';
 
 typedef AtlasApplicationSupportDirectoryProvider = Future<Directory> Function();
+typedef AtlasPersistentCacheLocationProvider =
+    Future<AtlasPersistentCacheLocation> Function();
 
 Future<void> _migrationQueue = Future.value();
+final Object _migrationLeaseZoneKey = Object();
 
 bool isAtlasPersistentDesktopCachePlatform({String? operatingSystem}) {
   final value = operatingSystem ?? Platform.operatingSystem;
@@ -73,6 +76,70 @@ final class AtlasPersistentCacheLocation {
       flush: true,
     );
   }
+}
+
+final class AtlasWindowsPlaintextAuthorityAdmission
+    implements AtlasVaultPlaintextAuthorityAdmission {
+  AtlasWindowsPlaintextAuthorityAdmission({
+    required AtlasPersistentCacheLocationProvider locationProvider,
+    required AtlasVaultProtectedMigrationJournalStore journalStore,
+    required AtlasVaultSelectedVaultStore selectedVaultStore,
+  }) : // Keep public constructor parameter names stable.
+       // ignore: prefer_initializing_formals
+       _locationProvider = locationProvider,
+       // ignore: prefer_initializing_formals
+       _journalStore = journalStore,
+       // ignore: prefer_initializing_formals
+       _selectedVaultStore = selectedVaultStore;
+
+  final AtlasPersistentCacheLocationProvider _locationProvider;
+  final AtlasVaultProtectedMigrationJournalStore _journalStore;
+  final AtlasVaultSelectedVaultStore _selectedVaultStore;
+  Future<AtlasPersistentCacheLocation>? _location;
+
+  Future<AtlasPersistentCacheLocation> _resolveLocation() {
+    return _location ??= _locationProvider();
+  }
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) async {
+    final AtlasPersistentCacheLocation location;
+    try {
+      location = await _resolveLocation();
+    } catch (_) {
+      throw const AtlasVaultPlaintextAuthorityAdmissionException();
+    }
+    return location.coordinateMutation(() async {
+      Uint8List? journalBytes;
+      String? selectedVault;
+      try {
+        journalBytes = await _journalStore.read();
+        selectedVault = await _selectedVaultStore.read();
+      } catch (_) {
+        throw const AtlasVaultPlaintextAuthorityAdmissionException();
+      } finally {
+        journalBytes?.fillRange(0, journalBytes.length, 0);
+      }
+      if (journalBytes != null || selectedVault != null) {
+        throw const AtlasVaultPlaintextAuthorityAdmissionException();
+      }
+      return operation();
+    });
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) async {
+    final AtlasPersistentCacheLocation location;
+    try {
+      location = await _resolveLocation();
+    } catch (_) {
+      throw const AtlasVaultPlaintextAuthorityAdmissionException();
+    }
+    return location.coordinateMutation(operation);
+  }
+
+  @override
+  String toString() => 'AtlasWindowsPlaintextAuthorityAdmission(<redacted>)';
 }
 
 final class AtlasWindowsDesktopCacheMigrationSource
@@ -557,6 +624,7 @@ Future<File> resolveAtlasPersistentCacheFile({
 Future<AtlasPersistentCacheLocation> resolveAtlasPersistentCacheLocation({
   AtlasApplicationSupportDirectoryProvider? applicationSupportDirectoryProvider,
   Directory? legacySystemTemporaryDirectory,
+  bool importLegacyCache = true,
 }) async {
   final supportDirectory =
       await (applicationSupportDirectoryProvider ??
@@ -580,11 +648,13 @@ Future<AtlasPersistentCacheLocation> resolveAtlasPersistentCacheLocation({
     systemTemporaryDirectory: legacySystemTemporaryDirectory,
   );
 
-  await _copyLegacyCacheIfNeeded(
-    legacyFile: legacyFile,
-    targetFile: targetFile,
-    legacyImportRetiredFile: legacyImportRetiredFile,
-  );
+  if (importLegacyCache) {
+    await _copyLegacyCacheIfNeeded(
+      legacyFile: legacyFile,
+      targetFile: targetFile,
+      legacyImportRetiredFile: legacyImportRetiredFile,
+    );
+  }
   return AtlasPersistentCacheLocation(
     cacheFile: targetFile,
     legacyFile: legacyFile,
@@ -656,17 +726,29 @@ Future<T> _withMigrationLocks<T>({
   required File targetFile,
   required Future<T> Function() operation,
 }) {
+  final pathIdentity = _mutationPathIdentity(targetFile);
+  final inheritedLease = Zone.current[_migrationLeaseZoneKey];
+  if (inheritedLease is _CacheMutationLease &&
+      inheritedLease.active &&
+      inheritedLease.pathIdentity == pathIdentity) {
+    return operation();
+  }
   return _withInProcessMigrationLock(() async {
     await targetFile.parent.create(recursive: true);
     final migrationLock = await File(
       '${targetFile.path}.migration.lock',
     ).open(mode: FileMode.append);
     var lockAcquired = false;
+    final lease = _CacheMutationLease(pathIdentity);
     try {
       await migrationLock.lock(FileLock.exclusive);
       lockAcquired = true;
-      return await operation();
+      return await runZoned(
+        operation,
+        zoneValues: <Object, Object>{_migrationLeaseZoneKey: lease},
+      );
     } finally {
+      lease.active = false;
       try {
         if (lockAcquired) {
           await migrationLock.unlock();
@@ -676,6 +758,18 @@ Future<T> _withMigrationLocks<T>({
       }
     }
   });
+}
+
+final class _CacheMutationLease {
+  _CacheMutationLease(this.pathIdentity);
+
+  final String pathIdentity;
+  bool active = true;
+}
+
+String _mutationPathIdentity(File targetFile) {
+  final path = targetFile.absolute.path;
+  return Platform.isWindows ? path.toLowerCase() : path;
 }
 
 Future<T> _withInProcessMigrationLock<T>(Future<T> Function() operation) async {

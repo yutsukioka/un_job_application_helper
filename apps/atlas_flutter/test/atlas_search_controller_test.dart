@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:atlas/atlas.dart';
-import 'package:atlas/atlas_vault.dart' as vault;
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
@@ -31,17 +29,16 @@ void main() {
         updatedAt: '2026-08-02T00:00:00Z',
       );
 
-      final outcome = await (client as dynamic).conditionalDeleteSavedSearch(
-        expected,
-      );
+      final outcome = await client.conditionalDeleteSavedSearch(expected);
 
-      expect(outcome.toString(), endsWith('.deleted'));
+      expect(outcome, AtlasConditionalDeleteOutcome.deleted);
       expect(transport.requests, hasLength(1));
       final request = transport.requests.single;
       expect(request.method, 'POST');
       expect(
         request.path,
-        'api/saved-searches/${await _conditionalIdentifier(expected.name)}'
+        'api/saved-searches/'
+        '~sha256-14a89575e595c292e36023156d316eb2e09ae65b1d4d20cf679ca4b90c12f1d9'
         '/conditional-delete',
       );
       expect(request.jsonBody, <String, Object?>{
@@ -51,43 +48,37 @@ void main() {
     },
   );
 
-  test(
-    'conditional tracker deletion sends the exact reviewed record',
-    () async {
-      final transport = _ConditionalDeleteTransport(
-        response: const <String, Object?>{'outcome': 'absent'},
-      );
-      final client = AtlasAPIClient(
-        baseURL: Uri.parse('http://atlas.test:8765'),
-        transport: transport,
-      );
-      final expected = AtlasApplicationRecord(
-        id: 'tracker/private/reviewed',
-        jobKey: 'unicef:reviewed-private-job',
-        status: 'applied',
-        notes: 'reviewed private notes',
-        appliedAt: '2026-08-01T00:00:00Z',
-        updatedAt: '2026-08-02T00:00:00Z',
-      );
+  test('conditional tracker deletion sends the exact reviewed record', () async {
+    final transport = _ConditionalDeleteTransport(
+      response: const <String, Object?>{'outcome': 'absent'},
+    );
+    final client = AtlasAPIClient(
+      baseURL: Uri.parse('http://atlas.test:8765'),
+      transport: transport,
+    );
+    final expected = AtlasApplicationRecord(
+      id: 'tracker/private/reviewed',
+      jobKey: 'unicef:reviewed-private-job',
+      status: 'applied',
+      notes: 'reviewed private notes',
+      appliedAt: '2026-08-01T00:00:00Z',
+      updatedAt: '2026-08-02T00:00:00Z',
+    );
 
-      final outcome = await (client as dynamic).conditionalDeleteTrackerRecord(
-        expected,
-      );
+    final outcome = await client.conditionalDeleteTrackerRecord(expected);
 
-      expect(outcome.toString(), endsWith('.absent'));
-      final request = transport.requests.single;
-      expect(request.method, 'POST');
-      expect(
-        request.path,
-        'api/tracker/${await _conditionalIdentifier(expected.id)}'
-        '/conditional-delete',
-      );
-      expect(request.jsonBody, <String, Object?>{
-        'expected': expected.toJson(),
-      });
-      expect(request.path, isNot(contains(expected.id)));
-    },
-  );
+    expect(outcome, AtlasConditionalDeleteOutcome.absent);
+    final request = transport.requests.single;
+    expect(request.method, 'POST');
+    expect(
+      request.path,
+      'api/tracker/'
+      '~sha256-d680b1848ffccd6687f2310d2ba3c7da227ce8d54b0249d17352050898f7ddd4'
+      '/conditional-delete',
+    );
+    expect(request.jsonBody, <String, Object?>{'expected': expected.toJson()});
+    expect(request.path, isNot(contains(expected.id)));
+  });
 
   test(
     'conditional deletion maps HTTP 412 without exposing private content',
@@ -107,12 +98,86 @@ void main() {
         updatedAt: '2026-08-02T00:00:00Z',
       );
 
-      final outcome = await (client as dynamic).conditionalDeleteSavedSearch(
-        expected,
+      final outcome = await client.conditionalDeleteSavedSearch(expected);
+
+      expect(outcome, AtlasConditionalDeleteOutcome.preconditionFailed);
+      expect(outcome.toString(), isNot(contains(privateSentinel)));
+    },
+  );
+
+  test(
+    'Windows admission fences an already-running legacy controller and reopens',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'atlas_controller_authority_admission_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final cacheFile = File('${tempDir.path}/atlas-local-cache.json');
+      final transport = _RecordingTransport();
+      final admission = _ControllerPlaintextAuthorityAdmission();
+      final controller = AtlasAppController(
+        localCacheStore: AtlasLocalCacheStore(file: cacheFile),
+        plaintextAuthorityAdmission: admission,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+      );
+      addTearDown(controller.dispose);
+
+      await controller.saveAndReload(Uri.parse('http://atlas.test:8765'));
+      await controller.saveCurrentSearch();
+      final cacheBeforeFence = await cacheFile.readAsBytes();
+      transport.resetPrivateCounts();
+      admission.blocked = true;
+
+      await controller.saveCurrentSearch();
+      await controller.saveJob(JobSearchResult.fromAPIJson(_jobJson));
+      await controller.refreshLocalSave();
+
+      expect(transport.savedSearchNames, isEmpty);
+      expect(transport.savedJobKeys, isEmpty);
+      expect(transport.savedSearchReadCount, 0);
+      expect(transport.trackerReadCount, 0);
+      expect(await cacheFile.readAsBytes(), cacheBeforeFence);
+      expect(controller.results.single.title, 'Programme Analyst');
+      expect(controller.savedSearches, isEmpty);
+      expect(controller.trackerRecords, isEmpty);
+      expect(
+        controller.connectionMessage,
+        contains('AtlasVault migration is pending'),
       );
 
-      expect(outcome.toString(), endsWith('.preconditionFailed'));
-      expect(outcome.toString(), isNot(contains(privateSentinel)));
+      admission.blocked = false;
+      await controller.saveCurrentSearch();
+
+      expect(transport.savedSearchNames, <String>['Search 3']);
+      expect(controller.savedSearches.single.name, 'Search 3');
+      expect(admission.rejectedCalls, greaterThanOrEqualTo(3));
+    },
+  );
+
+  test(
+    'Windows admission rejects cache resolution before legacy import',
+    () async {
+      final admission = _ControllerPlaintextAuthorityAdmission()
+        ..blocked = true;
+      var cacheFactoryCalls = 0;
+      final controller = AtlasAppController(
+        plaintextAuthorityAdmission: admission,
+        localCacheStoreFactory: ({privateStateProtectionActive}) async {
+          cacheFactoryCalls += 1;
+          return null;
+        },
+      );
+      addTearDown(controller.dispose);
+
+      await controller.loadPersistedCache();
+
+      expect(cacheFactoryCalls, 0);
+      expect(admission.rejectedCalls, 1);
     },
   );
 
@@ -3012,10 +3077,14 @@ void main() {
     );
     expect(windowsAssembly, contains('_attachWindowsMigration('));
     expect(
-      migrationAssembly,
+      windowsAssembly,
       contains('AtlasWindowsProtectedMigrationJournalStore()'),
     );
-    expect(migrationAssembly, contains('AtlasWindowsSelectedVaultStore()'));
+    expect(windowsAssembly, contains('AtlasWindowsSelectedVaultStore()'));
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsPlaintextAuthorityAdmission('),
+    );
     expect(
       migrationAssembly,
       contains('AtlasVaultPlaintextMigrationCoordinator('),
@@ -3143,6 +3212,28 @@ final class _ControllerMigrationCoordinator
   Future<AtlasVaultPlaintextMigrationSummary> activateSelected() async {
     calls.add('activate-selected');
     return _summary(stage: AtlasVaultPlaintextMigrationStage.completionPending);
+  }
+}
+
+final class _ControllerPlaintextAuthorityAdmission
+    implements AtlasVaultPlaintextAuthorityAdmission {
+  bool blocked = false;
+  int rejectedCalls = 0;
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    if (blocked) {
+      rejectedCalls += 1;
+      return Future<T>.error(
+        const AtlasVaultPlaintextAuthorityAdmissionException(),
+      );
+    }
+    return operation();
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) {
+    return operation();
   }
 }
 
@@ -3664,20 +3755,6 @@ final class _FailingTransport implements AtlasTransport {
   @override
   Future<Object?> send(AtlasRequest request) async {
     throw const AtlasAPIException.http(503, 'job-api unavailable');
-  }
-}
-
-Future<String> _conditionalIdentifier(String value) async {
-  final bytes = Uint8List(value.codeUnits.length * 2);
-  for (var index = 0; index < value.codeUnits.length; index += 1) {
-    final codeUnit = value.codeUnits[index];
-    bytes[index * 2] = codeUnit >> 8;
-    bytes[index * 2 + 1] = codeUnit & 0xff;
-  }
-  try {
-    return '~sha256-${await vault.atlasVaultSha256Hex(bytes)}';
-  } finally {
-    bytes.fillRange(0, bytes.length, 0);
   }
 }
 

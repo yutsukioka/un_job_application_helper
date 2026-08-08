@@ -9,8 +9,10 @@ explicit, rollback-capable transaction.
 ## 2. Scope
 
 The phase adds Windows migration primitives, orchestration, presentation, cache
-cleanup, selected-vault state, recovery tests, and no import/export transport,
-cloud behavior, backend route, Apple code, or Android platform change.
+cleanup, selected-vault state, and recovery tests. The independent backend
+prerequisite was merged first through PR #95; this phase adds no backend file,
+import/export transport, cloud behavior, Apple code, or Android platform
+change.
 
 ## 3. Package A Durable-Cache Prerequisite
 
@@ -46,18 +48,37 @@ retired and deleted only after encrypted read-back and final confirmation.
 ## 8. Compatibility Saved-Search Authority
 
 Compatibility saved searches are inventoried and bound by canonical content.
-Expected records are deleted in deterministic name order and verified absent.
+PR #95 adds a shared server mutation lock and an atomic conditional command:
+the server locks, reads, compares the complete expected record, deletes, writes
+atomically, and unlocks as one transaction. Phase 2E-6 uses that command in
+deterministic name order and verifies absence afterward. It never uses the
+legacy identifier-only delete route for Windows migration.
 
 ## 9. Compatibility Tracker Authority
 
-Tracker records are bound by job key, record ID, and canonical content. Exact
-record IDs remain deletion handles; changed or unknown rows fail closed.
+Tracker records are bound by job key, record ID, and canonical content. The
+PR #95 tracker command performs the same lock/read/compare/delete/atomic-write
+transaction over the complete expected application record. Exact record IDs
+remain lookup handles, but changed or unknown rows fail closed and remain on
+the server.
 
 ## 10. No-Dual-Authority Rule
 
-Legacy operations are blocked while a protected journal exists. Selection is
-created only after every plaintext authority is absent, preventing silent
-plaintext and encrypted co-ownership.
+Every Windows legacy private operation and every migration transaction enters
+the durable cache's target-adjacent OS mutation lock. Under that lock a legacy
+operation reads the protected journal and selected-vault state, rejects either
+authority, and otherwise keeps the lock through its endpoint or private-cache
+operation. Migration keeps the same lock from final destructive inventory
+through selected-vault read-back and activation. Selection is created only
+after every plaintext authority is absent, preventing silent plaintext and
+encrypted co-ownership across already-running processes.
+
+Nested cache work in the same admitted async transaction uses a scoped Zone
+lease to avoid self-deadlock. The lease is path-bound, active only for the
+outer call, and invalidated before unlock; unrelated calls and other processes
+still acquire the OS lock. Admission path resolution itself does not import a
+legacy cache, so no plaintext write can occur before journal and selection
+checks.
 
 ## 11. Two Confirmations
 
@@ -69,13 +90,17 @@ only after a separate confirmation.
 
 The CAS transition to `commit_in_progress` is the point of no return. It occurs
 only after re-inventory agrees with the reviewed digest and prepared encrypted
-resources verify.
+resources verify. Finalization acquires the cross-process admission lock before
+that re-inventory and does not release it between plaintext-absence proof and
+selected-vault creation/read-back.
 
 ## 13. Rollback Boundary
 
-`prepared` and `encrypted_verified` permit discard. Rollback verifies resource
-digests, removes the exact staged store and key, preserves every plaintext
-source, and clears the protected journal last.
+`prepared` and `encrypted_verified` permit discard. Rollback acquires the same
+cross-process admission lock, verifies resource digests, removes the exact
+staged store and key, preserves every plaintext source, and clears and verifies
+the protected journal last. Legacy admission can reopen only after that lock is
+released.
 
 ## 14. Resume-Only Boundary
 
@@ -154,14 +179,21 @@ state, and deletes the journal last.
 
 ## 27. Compatibility Saved-Search Deletion
 
-Each expected name is re-read, compared with its journaled value, deleted, and
-verified absent before progress is CAS-journaled. Unknown names are preserved
-and force recovery.
+Each expected name is re-read and compared with its journaled value, then sent
+as the complete `expected` body to
+`POST /api/saved-searches/{opaque-id}/conditional-delete`. Exact match returns
+`deleted`; prior deletion returns `absent`; a changed record returns HTTP 412.
+Only verified absence is CAS-journaled. A 412, unknown name, or new row after a
+successful delete forces recovery before selection and preserves the changed
+content. API and Dart errors are fixed and private-free.
 
 ## 28. Compatibility Tracker Deletion
 
-Each expected record ID and job key is re-read, compared, deleted, and verified
-absent before progress is recorded. ABA changes fail closed.
+Each complete expected tracker record is sent to
+`POST /api/tracker/{opaque-id}/conditional-delete` after a bound re-read. The
+same `deleted`, `absent`, and HTTP 412 rules apply. Record ID, job key, status,
+notes, applied timestamp, and updated timestamp are compared atomically;
+identifier-only migration deletion is absent and ABA changes fail closed.
 
 ## 29. Durable-Cache Cleanup
 
@@ -195,7 +227,9 @@ legacy deletion, verifies final absence, and deletes the intent last.
 
 Before selection, compatibility lists, controller memory, durable private
 lists, retained legacy file, and cleanup intent must all be absent; the
-retirement marker and prepared encrypted hashes must verify.
+retirement marker and prepared encrypted hashes must verify. This proof and
+selected-vault creation are one admitted cross-process transaction, so another
+process cannot repopulate compatibility or cache plaintext in between.
 
 ## 35. Selected-Vault Commit Point
 
@@ -222,17 +256,24 @@ remains authoritative and resume retries verification and journal deletion.
 
 Startup inspects only journal and selected-vault presence. It does not
 inventory, call compatibility endpoints, load the DPAPI key, read the encrypted
-store, migrate, or activate automatically.
+store, migrate, or activate automatically. An already-running legacy process
+does not rely on stale in-memory authority: every subsequent private read,
+write, cache load, cache import, or clear re-enters the OS lock and rechecks
+journal and selection.
 
 ## 40. Selected-Inactive Behavior
 
 With selection and no journal, compatibility private operations remain blocked
-and the UI offers explicit encrypted activation without showing the vault ID.
+across processes and the UI offers explicit encrypted activation without
+showing the vault ID. Clearing the journal therefore cannot reopen legacy
+authority after commitment.
 
 ## 41. Explicit Later Activation
 
 `Activate Encrypted Private Data` reads the selected marker and activates the
-existing encrypted vault only after a user action.
+existing encrypted vault only after a user action. Migration preparation,
+rollback, finalization, and every resume operation use the shared transaction
+admission; neither confirmation is awaited while holding the lock.
 
 ## 42. Migration Presentation
 
@@ -288,8 +329,13 @@ selection, activation, later activation, and Windows integration coverage.
 
 The happy-path harness exercises real DPAPI preparation, rollback,
 finalization, cache retirement, encrypted activation, and explicit
-reactivation. The recovery harness supports separate `prepare` and `verify`
-process stages around `completion_pending` and cleans only its fake vault.
+reactivation. The recovery harness supports separate processes for journal
+blocking of an already-running legacy process, rollback reopening, finalization
+exclusion through selection, and OS lock release after forced process
+termination, in addition to `completion_pending` prepare/verify stages. Fixed
+handshake files coordinate stages without timing-only races. Dart tests also
+inject saved-search and tracker changes after review and prove HTTP-412-style
+precondition failure preserves each changed record and creates no selection.
 
 ## 52. Verification
 
@@ -316,6 +362,14 @@ scope, protected-path checks, and artifact checks.
 - Selected-vault commitment: implemented.
 - Explicit later activation: implemented.
 - Silent dual authority: prevented.
+- Backend atomic conditional deletion: implemented.
+- Changed-content deletion: prevented.
+- Cross-process journal admission: implemented.
+- Cross-process compatibility-write admission: implemented.
+- Cross-process cache-write admission: implemented.
+- Plaintext absence through selection: one admitted transaction.
+- Process crash recovery: implemented.
+- Identifier-only migration deletion: absent.
 - Automatic migration: not implemented.
 - Windows import/export: not implemented.
 - Cloud sync: not implemented.
