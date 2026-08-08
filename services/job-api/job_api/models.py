@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 
 StrictFiniteNumber = StrictInt | Annotated[float, Field(strict=True, allow_inf_nan=False)]
@@ -157,12 +157,19 @@ class SavedSearchConditionalDeleteRequest(BaseModel):
 class StrictApplicationRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    id: str = Field(min_length=1)
+    id: str
     job_key: str
     status: ApplicationStatus
     notes: str
     applied_at: str | None
     updated_at: str | None
+
+    @field_validator("id")
+    @classmethod
+    def validate_nonempty_id(cls, value: str) -> str:
+        if not value:
+            raise ValueError("identifier must not be empty")
+        return value
 
 
 class TrackerConditionalDeleteRequest(BaseModel):

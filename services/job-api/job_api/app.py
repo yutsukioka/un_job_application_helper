@@ -61,7 +61,8 @@ _CONDITIONAL_IDENTIFIER_PREFIX = "~sha256-"
 
 
 def _conditional_identifier_segment(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    identifier_bytes = value.encode("utf-16-be", errors="surrogatepass")
+    digest = hashlib.sha256(identifier_bytes).hexdigest()
     return f"{_CONDITIONAL_IDENTIFIER_PREFIX}{digest}"
 
 
