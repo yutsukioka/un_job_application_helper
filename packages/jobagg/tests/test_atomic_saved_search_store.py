@@ -121,6 +121,20 @@ def test_saved_search_store_normalizes_integer_digit_limit_failure(
     assert path.read_bytes() == malformed
 
 
+def test_saved_search_store_normalizes_json_recursion_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    depth = 100_000
+    malformed = (b"[" * depth) + b"0" + (b"]" * depth)
+    path.write_bytes(malformed)
+
+    with pytest.raises(AtomicJsonStoreError, match="invalid"):
+        saved_searches.load_saved_searches(path)
+
+    assert path.read_bytes() == malformed
+
+
 def test_saved_search_store_rejects_non_object_without_rewriting(tmp_path: Path) -> None:
     path = tmp_path / "saved-searches.json"
     malformed = b"[]"

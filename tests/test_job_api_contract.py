@@ -759,6 +759,43 @@ def test_conditional_delete_parser_failures_are_fixed_and_private_free(
     assert "PRIVATE_PARSE_SENTINEL" not in malformed.text
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/saved-searches/programme/conditional-delete",
+        "/api/tracker/record-1/conditional-delete",
+    ],
+)
+def test_conditional_delete_integer_limit_parser_failure_is_fixed_and_private_free(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    client = _client(tmp_path)
+    previous_limit = sys.get_int_max_str_digits()
+    active_limit = previous_limit or 4300
+    malformed = (
+        b'{"expected":{"private":"PRIVATE_INTEGER_SENTINEL","value":'
+        + (b"9" * (active_limit + 1))
+        + b"}}"
+    )
+    if previous_limit == 0:
+        sys.set_int_max_str_digits(active_limit)
+
+    try:
+        response = client.post(
+            path,
+            content=malformed,
+            headers={"content-type": "application/json"},
+        )
+    finally:
+        if previous_limit == 0:
+            sys.set_int_max_str_digits(0)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert "PRIVATE_INTEGER_SENTINEL" not in response.text
+
+
 def test_job_api_open_search_excludes_expired_open_rows(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     db = JobDatabase(settings.db_path)
