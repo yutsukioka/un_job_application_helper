@@ -192,8 +192,8 @@ def test_saved_search_conditional_delete_exact_absent_and_legacy(
 
 @pytest.mark.parametrize(
     "name",
-    ["Nairobi/Remote", ""],
-    ids=["encoded-slash", "empty"],
+    ["Nairobi/Remote", "Nairobi\nRemote", ""],
+    ids=["encoded-slash", "encoded-newline", "empty"],
 )
 def test_saved_search_conditional_delete_supports_existing_names(
     tmp_path: Path,
@@ -477,11 +477,16 @@ def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> N
     assert client.delete("/api/tracker/record-1").json() == {"deleted": True}
 
 
-def test_tracker_conditional_delete_supports_encoded_slash_id(
+@pytest.mark.parametrize(
+    "record_id",
+    ["team/record", "team/\nrecord"],
+    ids=["encoded-slash", "encoded-newline"],
+)
+def test_tracker_conditional_delete_supports_encoded_id(
     tmp_path: Path,
+    record_id: str,
 ) -> None:
     client = _client(tmp_path)
-    record_id = "team/record"
     expected = _tracker_snapshot(client, record_id=record_id)
 
     response = client.post(
