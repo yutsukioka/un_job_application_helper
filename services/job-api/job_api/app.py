@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.exception_handlers import (
@@ -31,6 +31,7 @@ from jobagg.filters.saved_searches import (
 from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
 from pydantic import ValidationError
+from starlette.convertors import Convertor, register_url_convertor
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from job_api.config import ApiSettings, load_settings
@@ -53,8 +54,21 @@ from job_api.tracker import (
     upsert_record,
 )
 
+class _AtlasIdentifierConvertor(Convertor[str]):
+    regex = r"[\s\S]*"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return quote(value, safe="")
+
+
+register_url_convertor("atlas_identifier", _AtlasIdentifierConvertor())
+
 _CONDITIONAL_DELETE_PATH = re.compile(
-    r"^/api/(?:saved-searches/.*|tracker/.+)/conditional-delete$"
+    r"^/api/(?:saved-searches/.*|tracker/.*)/conditional-delete$",
+    re.DOTALL,
 )
 
 
@@ -201,7 +215,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
     @app.post(
-        "/api/saved-searches/{name:path}/conditional-delete",
+        "/api/saved-searches/{name:atlas_identifier}/conditional-delete",
         response_model=ConditionalDeleteResponse,
     )
     def conditional_delete_saved_search(
@@ -288,7 +302,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return {"deleted": delete_record(settings.tracker_path, record_id)}
 
     @app.post(
-        "/api/tracker/{record_id:path}/conditional-delete",
+        "/api/tracker/{record_id:atlas_identifier}/conditional-delete",
         response_model=ConditionalDeleteResponse,
     )
     def conditional_delete_tracker_record(
