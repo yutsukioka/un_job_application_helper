@@ -54,7 +54,7 @@ from job_api.tracker import (
 )
 
 _CONDITIONAL_DELETE_PATH = re.compile(
-    r"^/api/(?:saved-searches/[^/]+|tracker/[^/]+)/conditional-delete$"
+    r"^/api/(?:saved-searches/.*|tracker/[^/]+)/conditional-delete$"
 )
 
 
@@ -201,7 +201,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
     @app.post(
-        "/api/saved-searches/{name}/conditional-delete",
+        "/api/saved-searches/{name:path}/conditional-delete",
         response_model=ConditionalDeleteResponse,
     )
     def conditional_delete_saved_search(

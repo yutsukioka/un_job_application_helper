@@ -77,6 +77,8 @@ POST /api/tracker/{record_id}/conditional-delete
 
 POST command routes are used because request bodies on DELETE are not handled consistently by all clients and intermediaries. Each request contains exactly one `expected` snapshot. Every stored snapshot field is required, even when its value equals a normal model default. The saved-search request model contains only the exact persisted request fields, and tracker snapshots redeclare every persisted field without defaults. Missing, unknown, and API-only fields are rejected.
 
+The saved-search command uses a full decoded path capture internally so historical names containing `/`, as well as the empty name accepted by the existing store, remain addressable after URL encoding. This does not normalize or reinterpret the name: the captured path value must still equal the exact expected snapshot name.
+
 The path identifier must equal the expected snapshot identifier. An identity mismatch returns fixed HTTP 400. Exact current content is deleted and returns `{"outcome":"deleted"}`. A missing current record is idempotent and returns `{"outcome":"absent"}`. Changed current content returns fixed HTTP 412 and remains untouched.
 
 Responses and errors never return current private content. Missing bodies, malformed JSON, and strict-model validation failures on the two command routes all use the same fixed 422 response. Validation failures on unrelated routes retain FastAPI's existing behavior. Store failures use a fixed private-state operation error rather than exposing a path or malformed value.

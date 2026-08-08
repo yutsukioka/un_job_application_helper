@@ -141,7 +141,7 @@ class SavedSearchStoredRequest(BaseModel):
 class SavedSearchStoredSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    name: str = Field(min_length=1)
+    name: str
     description: str | None
     request: SavedSearchStoredRequest
     created_at: str = Field(min_length=1)
