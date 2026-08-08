@@ -239,10 +239,8 @@ def _validate_request_payload(payload: Any, *, allow_legacy: bool = False) -> No
         elif isinstance(default, int):
             valid = type(value) is int
         elif isinstance(default, float):
-            valid = (
-                type(value) in {int, float}
-                and not isinstance(value, bool)
-                and math.isfinite(value)
+            valid = type(value) is int or (
+                type(value) is float and math.isfinite(value)
             )
         elif isinstance(default, str):
             valid = isinstance(value, str)
