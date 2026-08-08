@@ -1062,6 +1062,93 @@ void main() {
     },
   );
 
+  test('changed saved search survives the review-to-delete race', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    final changed = AtlasSavedSearch(
+      name: 'UN roles',
+      description: 'changed after migration review',
+      request: const AtlasSearchRequest(text: 'CHANGED_PRIVATE_QUERY'),
+      createdAt: '2026-07-01T00:00:00Z',
+      updatedAt: '2026-08-08T00:00:00Z',
+    );
+    fixture.compatibility.replaceSavedSearchBeforeNextDelete = changed;
+
+    await expectLater(
+      fixture.coordinator.finalizeAndActivate(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    expect(fixture.compatibility.state.savedSearches, <AtlasSavedSearch>[
+      changed,
+    ]);
+    expect(fixture.selection.value, isNull);
+    final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    expect(journal.deletedSavedSearchNames, isEmpty);
+  });
+
+  test('changed tracker survives the review-to-delete race', () async {
+    final fixture = _MigrationFixture();
+    await fixture.coordinator.inventory();
+    await fixture.coordinator.prepare();
+    final changed = AtlasApplicationRecord(
+      id: 'tracker-record-1',
+      jobKey: 'unicef:private-job',
+      status: 'applied',
+      notes: 'changed after migration review',
+      appliedAt: '2026-08-07T00:00:00Z',
+      updatedAt: '2026-08-08T00:00:00Z',
+    );
+    fixture.compatibility.replaceTrackerBeforeNextDelete = changed;
+
+    await expectLater(
+      fixture.coordinator.finalizeAndActivate(),
+      throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+    );
+
+    expect(fixture.compatibility.state.trackerRecords, <AtlasApplicationRecord>[
+      changed,
+    ]);
+    expect(fixture.selection.value, isNull);
+    final journal = AtlasVaultPlaintextMigrationJournal.decodeBytes(
+      fixture.journal.bytes!,
+    );
+    expect(journal.deletedTrackerRecordIds, isEmpty);
+  });
+
+  test(
+    'plaintext creation after absence verification cannot commit selection',
+    () async {
+      final fixture = _MigrationFixture();
+      await fixture.coordinator.inventory();
+      await fixture.coordinator.prepare();
+      fixture.selection.beforeNextCreate = () {
+        fixture.compatibility.state = AtlasVaultPlaintextPrivateState(
+          savedSearches: <AtlasSavedSearch>[
+            AtlasSavedSearch(
+              name: 'Concurrent private search',
+              request: const AtlasSearchRequest(text: 'CONCURRENT_PRIVATE'),
+              createdAt: '2026-08-08T00:00:00Z',
+              updatedAt: '2026-08-08T00:00:00Z',
+            ),
+          ],
+          trackerRecords: const <AtlasApplicationRecord>[],
+        );
+      };
+
+      await expectLater(
+        fixture.coordinator.finalizeAndActivate(),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+
+      expect(fixture.compatibility.state.savedSearches, isNotEmpty);
+      expect(fixture.selection.value, isNull);
+    },
+  );
+
   test(
     'unexpected cache disappearance after preparation fails closed',
     () async {
@@ -1407,6 +1494,8 @@ final class _CompatibilitySource
   );
   bool failReads = false;
   bool failAfterNextSavedSearchDelete = false;
+  AtlasSavedSearch? replaceSavedSearchBeforeNextDelete;
+  AtlasApplicationRecord? replaceTrackerBeforeNextDelete;
   int readCalls = 0;
   int deleteSavedSearchCalls = 0;
   int deleteTrackerCalls = 0;
@@ -1424,6 +1513,14 @@ final class _CompatibilitySource
   @override
   Future<bool> deleteSavedSearch(String name) async {
     deleteSavedSearchCalls += 1;
+    final replacement = replaceSavedSearchBeforeNextDelete;
+    if (replacement != null) {
+      replaceSavedSearchBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: <AtlasSavedSearch>[replacement],
+        trackerRecords: state.trackerRecords,
+      );
+    }
     final existing = state.savedSearches
         .where((value) => value.name == name)
         .toList(growable: false);
@@ -1446,6 +1543,14 @@ final class _CompatibilitySource
   @override
   Future<bool> deleteTrackerRecord(String recordId) async {
     deleteTrackerCalls += 1;
+    final replacement = replaceTrackerBeforeNextDelete;
+    if (replacement != null) {
+      replaceTrackerBeforeNextDelete = null;
+      state = AtlasVaultPlaintextPrivateState(
+        savedSearches: state.savedSearches,
+        trackerRecords: <AtlasApplicationRecord>[replacement],
+      );
+    }
     final existing = state.trackerRecords
         .where((value) => value.id == recordId)
         .toList(growable: false);
@@ -1637,6 +1742,7 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
   int createCalls = 0;
   int clearCalls = 0;
   bool failAfterNextCreate = false;
+  void Function()? beforeNextCreate;
 
   @override
   Future<String?> read() async {
@@ -1647,6 +1753,8 @@ final class _SelectedVaultStore implements AtlasVaultSelectedVaultStore {
   @override
   Future<void> create(String vaultId) async {
     createCalls += 1;
+    beforeNextCreate?.call();
+    beforeNextCreate = null;
     if (value != null) {
       throw StateError('duplicate');
     }

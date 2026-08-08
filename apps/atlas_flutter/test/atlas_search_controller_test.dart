@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/atlas_vault.dart' as vault;
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,109 @@ final _cacheFixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
 final _cacheFixtureNow = DateTime.utc(2026, 7, 3, 12);
 
 void main() {
+  test(
+    'conditional saved-search deletion sends the exact reviewed snapshot',
+    () async {
+      final transport = _ConditionalDeleteTransport(
+        response: const <String, Object?>{'outcome': 'deleted'},
+      );
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+      final expected = AtlasSavedSearch(
+        name: 'UN roles / reviewed',
+        description: 'reviewed private description',
+        request: const AtlasSearchRequest(text: 'reviewed-private-query'),
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-02T00:00:00Z',
+      );
+
+      final outcome = await (client as dynamic).conditionalDeleteSavedSearch(
+        expected,
+      );
+
+      expect(outcome.toString(), endsWith('.deleted'));
+      expect(transport.requests, hasLength(1));
+      final request = transport.requests.single;
+      expect(request.method, 'POST');
+      expect(
+        request.path,
+        'api/saved-searches/${await _conditionalIdentifier(expected.name)}'
+        '/conditional-delete',
+      );
+      expect(request.jsonBody, <String, Object?>{
+        'expected': expected.toJson(),
+      });
+      expect(request.path, isNot(contains(expected.name)));
+    },
+  );
+
+  test(
+    'conditional tracker deletion sends the exact reviewed record',
+    () async {
+      final transport = _ConditionalDeleteTransport(
+        response: const <String, Object?>{'outcome': 'absent'},
+      );
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+      final expected = AtlasApplicationRecord(
+        id: 'tracker/private/reviewed',
+        jobKey: 'unicef:reviewed-private-job',
+        status: 'applied',
+        notes: 'reviewed private notes',
+        appliedAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-02T00:00:00Z',
+      );
+
+      final outcome = await (client as dynamic).conditionalDeleteTrackerRecord(
+        expected,
+      );
+
+      expect(outcome.toString(), endsWith('.absent'));
+      final request = transport.requests.single;
+      expect(request.method, 'POST');
+      expect(
+        request.path,
+        'api/tracker/${await _conditionalIdentifier(expected.id)}'
+        '/conditional-delete',
+      );
+      expect(request.jsonBody, <String, Object?>{
+        'expected': expected.toJson(),
+      });
+      expect(request.path, isNot(contains(expected.id)));
+    },
+  );
+
+  test(
+    'conditional deletion maps HTTP 412 without exposing private content',
+    () async {
+      const privateSentinel = 'PRIVATE_CHANGED_SERVER_CONTENT';
+      final transport = _ConditionalDeleteTransport(
+        error: const AtlasAPIException.http(412, privateSentinel),
+      );
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+      final expected = AtlasSavedSearch(
+        name: 'Reviewed search',
+        request: const AtlasSearchRequest(text: 'PRIVATE_REVIEWED_QUERY'),
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-02T00:00:00Z',
+      );
+
+      final outcome = await (client as dynamic).conditionalDeleteSavedSearch(
+        expected,
+      );
+
+      expect(outcome.toString(), endsWith('.preconditionFailed'));
+      expect(outcome.toString(), isNot(contains(privateSentinel)));
+    },
+  );
+
   test('active filter chips use value equality', () {
     const openChip = AtlasActiveFilterChip(
       id: 'status.open',
@@ -3221,6 +3326,24 @@ final class _RecordingTransport implements AtlasTransport {
   }
 }
 
+final class _ConditionalDeleteTransport implements AtlasTransport {
+  _ConditionalDeleteTransport({this.response, this.error});
+
+  final Object? response;
+  final Object? error;
+  final List<AtlasRequest> requests = <AtlasRequest>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    requests.add(request);
+    final failure = error;
+    if (failure != null) {
+      throw failure;
+    }
+    return response;
+  }
+}
+
 final class _FakePrivateStatePersistence
     implements AtlasVaultPrivateStatePersistence {
   _FakePrivateStatePersistence({
@@ -3541,6 +3664,20 @@ final class _FailingTransport implements AtlasTransport {
   @override
   Future<Object?> send(AtlasRequest request) async {
     throw const AtlasAPIException.http(503, 'job-api unavailable');
+  }
+}
+
+Future<String> _conditionalIdentifier(String value) async {
+  final bytes = Uint8List(value.codeUnits.length * 2);
+  for (var index = 0; index < value.codeUnits.length; index += 1) {
+    final codeUnit = value.codeUnits[index];
+    bytes[index * 2] = codeUnit >> 8;
+    bytes[index * 2 + 1] = codeUnit & 0xff;
+  }
+  try {
+    return '~sha256-${await vault.atlasVaultSha256Hex(bytes)}';
+  } finally {
+    bytes.fillRange(0, bytes.length, 0);
   }
 }
 

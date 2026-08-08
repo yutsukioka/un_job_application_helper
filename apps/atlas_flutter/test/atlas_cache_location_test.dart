@@ -649,6 +649,29 @@ void main() {
       },
     );
   });
+
+  test(
+    'Windows plaintext authority uses one scoped reentrant cache admission',
+    () {
+      final cacheSource = File(
+        'lib/features/app_shell/atlas_cache_location.dart',
+      ).readAsStringSync();
+      final appSource = File(
+        'lib/features/app_shell/atlas_app.dart',
+      ).readAsStringSync();
+      final migrationSource = File(
+        'lib/src/atlas_vault/plaintext_migration.dart',
+      ).readAsStringSync();
+
+      expect(cacheSource, contains('runLegacyPrivateOperation'));
+      expect(cacheSource, contains('runMigrationTransaction'));
+      expect(cacheSource, contains('Zone.current'));
+      expect(cacheSource, contains('coordinateMutation'));
+      expect(appSource, contains('plaintextAuthorityAdmission'));
+      expect(appSource, contains('runLegacyPrivateOperation'));
+      expect(migrationSource, contains('runMigrationTransaction'));
+    },
+  );
 }
 
 Future<void> _writeCleanupIntentFixture({
