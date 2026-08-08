@@ -689,6 +689,14 @@ void main() {
       expect(cacheSource, contains('runMigrationTransaction'));
       expect(cacheSource, contains('Zone.current'));
       expect(cacheSource, contains('coordinateMutation'));
+      expect(
+        cacheSource,
+        contains('migrationLock.lock(FileLock.blockingExclusive)'),
+      );
+      expect(
+        cacheSource,
+        isNot(contains('migrationLock.lock(FileLock.exclusive)')),
+      );
       expect(appSource, contains('plaintextAuthorityAdmission'));
       expect(appSource, contains('runLegacyPrivateOperation'));
       expect(migrationSource, contains('runMigrationTransaction'));
@@ -746,6 +754,44 @@ void main() {
       expect(legacyCalls, 1);
     },
   );
+
+  test('Windows plaintext authority redacts admission lock failures', () async {
+    final sandbox = await Directory.systemTemp.createTemp(
+      'atlas_authority_admission_failure_test_',
+    );
+    addTearDown(() async {
+      if (await sandbox.exists()) {
+        await sandbox.delete(recursive: true);
+      }
+    });
+    final blockedParent = File(_joinTestPath(sandbox.path, 'blocked-parent'));
+    await blockedParent.writeAsString('not a directory');
+    final location = AtlasPersistentCacheLocation(
+      cacheFile: File(
+        _joinTestPath(blockedParent.path, atlasLocalCacheFileName),
+      ),
+      legacyFile: File(_joinTestPath(sandbox.path, 'legacy-cache.json')),
+      legacyImportRetiredFile: File(
+        _joinTestPath(sandbox.path, atlasLegacyImportRetiredFileName),
+      ),
+    );
+    final admission = AtlasWindowsPlaintextAuthorityAdmission(
+      locationProvider: () async => location,
+      journalStore: _AdmissionJournalStore(),
+      selectedVaultStore: _AdmissionSelectedVaultStore(),
+    );
+
+    Object? error;
+    try {
+      await admission.runLegacyPrivateOperation(() async {});
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error, isA<AtlasVaultPlaintextAuthorityAdmissionException>());
+    expect(error.toString(), 'AtlasVault plaintext authority is unavailable.');
+    expect(error.toString(), isNot(contains(sandbox.path)));
+  });
 }
 
 final class _AdmissionJournalStore

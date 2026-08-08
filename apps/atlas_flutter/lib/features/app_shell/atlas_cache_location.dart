@@ -109,22 +109,28 @@ final class AtlasWindowsPlaintextAuthorityAdmission
     } catch (_) {
       throw const AtlasVaultPlaintextAuthorityAdmissionException();
     }
-    return location.coordinateMutation(() async {
-      Uint8List? journalBytes;
-      String? selectedVault;
-      try {
-        journalBytes = await _journalStore.read();
-        selectedVault = await _selectedVaultStore.read();
-      } catch (_) {
-        throw const AtlasVaultPlaintextAuthorityAdmissionException();
-      } finally {
-        journalBytes?.fillRange(0, journalBytes.length, 0);
-      }
-      if (journalBytes != null || selectedVault != null) {
-        throw const AtlasVaultPlaintextAuthorityAdmissionException();
-      }
-      return operation();
-    });
+    try {
+      return await location.coordinateMutation(() async {
+        Uint8List? journalBytes;
+        String? selectedVault;
+        try {
+          journalBytes = await _journalStore.read();
+          selectedVault = await _selectedVaultStore.read();
+        } catch (_) {
+          throw const AtlasVaultPlaintextAuthorityAdmissionException();
+        } finally {
+          journalBytes?.fillRange(0, journalBytes.length, 0);
+        }
+        if (journalBytes != null || selectedVault != null) {
+          throw const AtlasVaultPlaintextAuthorityAdmissionException();
+        }
+        return operation();
+      });
+    } on AtlasVaultPlaintextAuthorityAdmissionException {
+      rethrow;
+    } on FileSystemException {
+      throw const AtlasVaultPlaintextAuthorityAdmissionException();
+    }
   }
 
   @override
@@ -135,7 +141,13 @@ final class AtlasWindowsPlaintextAuthorityAdmission
     } catch (_) {
       throw const AtlasVaultPlaintextAuthorityAdmissionException();
     }
-    return location.coordinateMutation(operation);
+    try {
+      return await location.coordinateMutation(operation);
+    } on AtlasVaultPlaintextAuthorityAdmissionException {
+      rethrow;
+    } on FileSystemException {
+      throw const AtlasVaultPlaintextAuthorityAdmissionException();
+    }
   }
 
   @override
@@ -741,7 +753,7 @@ Future<T> _withMigrationLocks<T>({
     var lockAcquired = false;
     final lease = _CacheMutationLease(pathIdentity);
     try {
-      await migrationLock.lock(FileLock.exclusive);
+      await migrationLock.lock(FileLock.blockingExclusive);
       lockAcquired = true;
       return await runZoned(
         operation,

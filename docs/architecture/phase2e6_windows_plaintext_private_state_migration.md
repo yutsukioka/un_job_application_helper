@@ -76,9 +76,11 @@ encrypted co-ownership across already-running processes.
 Nested cache work in the same admitted async transaction uses a scoped Zone
 lease to avoid self-deadlock. The lease is path-bound, active only for the
 outer call, and invalidated before unlock; unrelated calls and other processes
-still acquire the OS lock. Admission path resolution itself does not import a
-legacy cache, so no plaintext write can occur before journal and selection
-checks.
+still acquire the OS lock. Cross-process contenders use Dart's blocking
+exclusive file-lock mode, so Windows lock contention waits for authority state
+to become observable instead of exposing a lock violation or local path.
+Admission path resolution itself does not import a legacy cache, so no
+plaintext write can occur before journal and selection checks.
 
 ## 11. Two Confirmations
 
@@ -338,8 +340,10 @@ reactivation. The recovery harness supports separate processes for journal
 blocking of an already-running legacy process, rollback reopening, finalization
 exclusion through selection, and OS lock release after forced process
 termination, in addition to `completion_pending` prepare/verify stages. Fixed
-handshake files coordinate stages without timing-only races. Dart tests also
-inject saved-search and tracker changes after review and prove HTTP-412-style
+handshake files coordinate stages without timing-only races. A deterministic
+Windows contender verifies that blocking exclusive lock acquisition waits for
+finalization and then observes the selected-vault fence. Dart tests also inject
+saved-search and tracker changes after review and prove HTTP-412-style
 precondition failure preserves each changed record and creates no selection.
 
 ## 52. Verification
