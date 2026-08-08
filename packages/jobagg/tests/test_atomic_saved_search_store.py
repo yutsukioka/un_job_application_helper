@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import importlib
 import json
+import sys
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from jobagg.atomic_json_store import AtomicJsonStoreError
 from jobagg.filters import saved_searches
 from jobagg.filters.saved_searches import SavedSearch
 from jobagg.filters.schemas import VacancySearchRequest
@@ -90,6 +92,31 @@ def test_saved_search_store_rejects_malformed_json_without_rewriting(tmp_path: P
 
     with pytest.raises(ValueError, match="invalid"):
         _save(path)
+
+    assert path.read_bytes() == malformed
+
+
+def test_saved_search_store_normalizes_integer_digit_limit_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "saved-searches.json"
+    previous_limit = sys.get_int_max_str_digits()
+    active_limit = previous_limit or 4300
+    malformed = (
+        b'{"version":1,"saved_searches":'
+        + (b"9" * (active_limit + 1))
+        + b"}"
+    )
+    path.write_bytes(malformed)
+    if previous_limit == 0:
+        sys.set_int_max_str_digits(active_limit)
+
+    try:
+        with pytest.raises(AtomicJsonStoreError, match="invalid"):
+            saved_searches.load_saved_searches(path)
+    finally:
+        if previous_limit == 0:
+            sys.set_int_max_str_digits(0)
 
     assert path.read_bytes() == malformed
 
