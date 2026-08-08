@@ -1532,18 +1532,18 @@ void WipeSensitiveArgument(const std::string& method,
   Wipe(bytes);
 }
 
-class ScopedVaultKeyArgumentWiper {
+class ScopedSensitiveArgumentWiper {
  public:
-  ScopedVaultKeyArgumentWiper(const std::string& method,
-                              flutter::EncodableValue* arguments)
+  ScopedSensitiveArgumentWiper(const std::string& method,
+                               flutter::EncodableValue* arguments)
       : method_(method), arguments_(arguments) {}
-  ~ScopedVaultKeyArgumentWiper() {
+  ~ScopedSensitiveArgumentWiper() {
     WipeSensitiveArgument(method_, arguments_);
   }
 
-  ScopedVaultKeyArgumentWiper(const ScopedVaultKeyArgumentWiper&) = delete;
-  ScopedVaultKeyArgumentWiper& operator=(
-      const ScopedVaultKeyArgumentWiper&) = delete;
+  ScopedSensitiveArgumentWiper(const ScopedSensitiveArgumentWiper&) = delete;
+  ScopedSensitiveArgumentWiper& operator=(
+      const ScopedSensitiveArgumentWiper&) = delete;
 
  private:
   const std::string& method_;
@@ -1689,7 +1689,7 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
   flutter::EncodableValue* argument_value = encoded_arguments.get();
   flutter::MethodCall<flutter::EncodableValue> call(method_name,
                                                     std::move(encoded_arguments));
-  ScopedVaultKeyArgumentWiper argument_wiper(method_name, argument_value);
+  ScopedSensitiveArgumentWiper argument_wiper(method_name, argument_value);
   const std::string& method = call.method_name();
   if (method == "capabilities") {
     if (!HasNoArguments(call)) {

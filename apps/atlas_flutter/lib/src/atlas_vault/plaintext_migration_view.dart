@@ -729,7 +729,7 @@ final class AtlasVaultPlaintextMigrationPanel extends StatelessWidget {
             'available. An interrupted migration remains resumable. '
             'Protection is device-local Android protection. Flutter encrypted '
             'export/import interoperability is not implemented yet. Windows '
-            'secure storage is not implemented yet.',
+            'encrypted import/export is not implemented yet.',
       AtlasVaultPlaintextMigrationPresentationPlatform.windows =>
         'The encrypted read-back is complete; plaintext deletion will begin '
             'after this confirmation and rollback becomes unavailable. The '
