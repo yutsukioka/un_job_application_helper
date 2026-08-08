@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import sys
@@ -8,7 +9,6 @@ from copy import deepcopy
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import pytest
 
@@ -151,6 +151,11 @@ def _tracker_snapshot(
     return response.json()
 
 
+def _conditional_identifier_segment(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return f"~sha256-{digest}"
+
+
 def test_conditional_snapshot_models_require_exact_stored_fields() -> None:
     saved_request_fields = {field.name for field in fields(VacancySearchRequest)}
 
@@ -192,8 +197,8 @@ def test_saved_search_conditional_delete_exact_absent_and_legacy(
 
 @pytest.mark.parametrize(
     "name",
-    ["Nairobi/Remote", "Nairobi\nRemote", ""],
-    ids=["encoded-slash", "encoded-newline", "empty"],
+    ["Nairobi/Remote", "Nairobi\nRemote", "", ".", "..", "x" * 10_000],
+    ids=["slash", "newline", "empty", "dot", "dot-dot", "long"],
 )
 def test_saved_search_conditional_delete_supports_existing_names(
     tmp_path: Path,
@@ -201,10 +206,10 @@ def test_saved_search_conditional_delete_supports_existing_names(
 ) -> None:
     client = _client(tmp_path)
     expected = _saved_search_snapshot(client, name=name)
-    encoded_name = quote(name, safe="")
+    identifier_segment = _conditional_identifier_segment(name)
 
     response = client.post(
-        f"/api/saved-searches/{encoded_name}/conditional-delete",
+        f"/api/saved-searches/{identifier_segment}/conditional-delete",
         json={"expected": expected},
     )
 
@@ -479,8 +484,8 @@ def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     "record_id",
-    ["team/record", "team/\nrecord"],
-    ids=["encoded-slash", "encoded-newline"],
+    ["team/record", "team/\nrecord", ".", "..", "x" * 10_000],
+    ids=["slash", "newline", "dot", "dot-dot", "long"],
 )
 def test_tracker_conditional_delete_supports_encoded_id(
     tmp_path: Path,
@@ -490,7 +495,7 @@ def test_tracker_conditional_delete_supports_encoded_id(
     expected = _tracker_snapshot(client, record_id=record_id)
 
     response = client.post(
-        f"/api/tracker/{quote(record_id, safe='')}/conditional-delete",
+        f"/api/tracker/{_conditional_identifier_segment(record_id)}/conditional-delete",
         json={"expected": expected},
     )
 
