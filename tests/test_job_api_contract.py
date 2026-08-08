@@ -477,6 +477,23 @@ def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> N
     assert client.delete("/api/tracker/record-1").json() == {"deleted": True}
 
 
+def test_tracker_conditional_delete_supports_encoded_slash_id(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    record_id = "team/record"
+    expected = _tracker_snapshot(client, record_id=record_id)
+
+    response = client.post(
+        f"/api/tracker/{quote(record_id, safe='')}/conditional-delete",
+        json={"expected": expected},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": "deleted"}
+    assert client.get("/api/tracker").json() == []
+
+
 def test_tracker_conditional_delete_rejects_normalized_timestamp_text(
     tmp_path: Path,
 ) -> None:
