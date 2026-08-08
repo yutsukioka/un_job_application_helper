@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.exception_handlers import (
@@ -31,7 +32,6 @@ from jobagg.filters.saved_searches import (
 from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
 from pydantic import ValidationError
-from starlette.convertors import Convertor, register_url_convertor
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from job_api.config import ApiSettings, load_settings
@@ -54,22 +54,19 @@ from job_api.tracker import (
     upsert_record,
 )
 
-class _AtlasIdentifierConvertor(Convertor[str]):
-    regex = r"[\s\S]*"
-
-    def convert(self, value: str) -> str:
-        return value
-
-    def to_string(self, value: str) -> str:
-        return quote(value, safe="")
-
-
-register_url_convertor("atlas_identifier", _AtlasIdentifierConvertor())
-
 _CONDITIONAL_DELETE_PATH = re.compile(
-    r"^/api/(?:saved-searches/.*|tracker/.*)/conditional-delete$",
-    re.DOTALL,
+    r"^/api/(?:saved-searches/[^/]+|tracker/[^/]+)/conditional-delete$"
 )
+_CONDITIONAL_IDENTIFIER_PREFIX = "~sha256-"
+
+
+def _conditional_identifier_segment(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return f"{_CONDITIONAL_IDENTIFIER_PREFIX}{digest}"
+
+
+def _conditional_identifier_matches(segment: str, expected: str) -> bool:
+    return segment == expected or segment == _conditional_identifier_segment(expected)
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
@@ -215,7 +212,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return {"deleted": remove_saved_search(settings.saved_searches_path, name)}
 
     @app.post(
-        "/api/saved-searches/{name:atlas_identifier}/conditional-delete",
+        "/api/saved-searches/{name}/conditional-delete",
         response_model=ConditionalDeleteResponse,
     )
     def conditional_delete_saved_search(
@@ -229,10 +226,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=422, detail="Conditional delete request is invalid."
             ) from None
         expected = request.expected
-        if name != expected.name:
+        if not _conditional_identifier_matches(name, expected.name):
             raise HTTPException(
                 status_code=400, detail="Conditional delete identity mismatch."
             )
+        name = expected.name
         expected_search = SavedSearch(
             name=expected.name,
             description=expected.description,
@@ -302,7 +300,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return {"deleted": delete_record(settings.tracker_path, record_id)}
 
     @app.post(
-        "/api/tracker/{record_id:atlas_identifier}/conditional-delete",
+        "/api/tracker/{record_id}/conditional-delete",
         response_model=ConditionalDeleteResponse,
     )
     def conditional_delete_tracker_record(
@@ -321,10 +319,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="Conditional delete request is invalid."
             )
-        if not record_id or record_id != expected.id:
+        if not _conditional_identifier_matches(record_id, expected.id):
             raise HTTPException(
                 status_code=400, detail="Conditional delete identity mismatch."
             )
+        record_id = expected.id
         try:
             outcome = compare_and_delete_record(
                 settings.tracker_path,
