@@ -271,6 +271,35 @@ def test_saved_search_conditional_delete_rejects_non_strict_confidence(
     assert client.get("/api/saved-searches").json() == [current]
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("limit", "50"),
+        ("include_low_confidence", "false"),
+        ("offset", False),
+    ],
+    ids=["integer-string", "boolean-string", "boolean-integer-alias"],
+)
+def test_saved_search_conditional_delete_requires_strict_snapshot_scalars(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    client = _client(tmp_path)
+    current = _saved_search_snapshot(client)
+    invalid = deepcopy(current)
+    invalid["request"][field] = value
+
+    response = client.post(
+        "/api/saved-searches/programme/conditional-delete",
+        json={"expected": invalid},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert client.get("/api/saved-searches").json() == [current]
+
+
 def test_saved_search_conditional_delete_rejects_identity_and_extra_fields(
     tmp_path: Path,
 ) -> None:
@@ -422,6 +451,51 @@ def test_tracker_conditional_delete_exact_absent_and_legacy(tmp_path: Path) -> N
 
     _tracker_snapshot(client)
     assert client.delete("/api/tracker/record-1").json() == {"deleted": True}
+
+
+def test_tracker_conditional_delete_rejects_normalized_timestamp_text(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    current = _tracker_snapshot(client)
+    invalid = deepcopy(current)
+    invalid["updated_at"] = current["updated_at"].replace("T", " ", 1)
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": invalid},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert client.get("/api/tracker").json() == [current]
+
+
+def test_tracker_conditional_delete_rejects_numeric_timestamp_alias(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    current = client.post(
+        "/api/tracker",
+        json={
+            "id": "record-1",
+            "job_key": "PRIVATE_JOB_KEY_SENTINEL",
+            "status": "saved",
+            "notes": "PRIVATE_NOTES_SENTINEL",
+            "applied_at": "1970-01-01T00:00:00Z",
+        },
+    ).json()
+    invalid = deepcopy(current)
+    invalid["applied_at"] = 0
+
+    response = client.post(
+        "/api/tracker/record-1/conditional-delete",
+        json={"expected": invalid},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Conditional delete request is invalid."}
+    assert client.get("/api/tracker").json() == [current]
 
 
 def test_tracker_conditional_delete_rejects_identity_and_extra_fields(
