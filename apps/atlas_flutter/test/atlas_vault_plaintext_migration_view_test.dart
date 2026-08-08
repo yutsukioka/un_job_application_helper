@@ -155,8 +155,12 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining('Windows secure storage is not implemented'),
+      find.textContaining('Windows encrypted import/export is not implemented'),
       findsOneWidget,
+    );
+    expect(
+      find.textContaining('Windows secure storage is not implemented'),
+      findsNothing,
     );
     expect(coordinator.calls, <String>['inventory', 'prepare']);
 

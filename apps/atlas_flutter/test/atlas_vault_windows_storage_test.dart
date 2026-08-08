@@ -167,6 +167,9 @@ void main() {
     }
     expect(source, contains('CRYPTPROTECT_UI_FORBIDDEN'));
     expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
+    expect(source, contains('class ScopedSensitiveArgumentWiper'));
+    expect(source, contains('ScopedSensitiveArgumentWiper argument_wiper'));
+    expect(source, isNot(contains('ScopedVaultKeyArgumentWiper')));
   });
 
   test('invalid vault IDs make no platform call', () async {
