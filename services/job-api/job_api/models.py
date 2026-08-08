@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
+
+
+StrictFiniteNumber = StrictInt | Annotated[float, Field(strict=True, allow_inf_nan=False)]
 
 
 class SearchRequest(BaseModel):
@@ -126,8 +129,8 @@ class SavedSearchStoredRequest(BaseModel):
     closing_date_to: str | None
     posted_date_from: str | None
     posted_date_to: str | None
-    min_location_confidence: float
-    min_grade_confidence: float
+    min_location_confidence: StrictFiniteNumber
+    min_grade_confidence: StrictFiniteNumber
     include_low_confidence: bool
     exclude_expired_open: bool
     limit: int
