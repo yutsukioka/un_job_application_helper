@@ -96,7 +96,7 @@ class ApplicationRecord(BaseModel):
 
 
 class SavedSearchStoredRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     text: str | None
     status: list[str]
@@ -139,7 +139,7 @@ class SavedSearchStoredRequest(BaseModel):
 
 
 class SavedSearchStoredSnapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str = Field(min_length=1)
     description: str | None
@@ -149,24 +149,24 @@ class SavedSearchStoredSnapshot(BaseModel):
 
 
 class SavedSearchConditionalDeleteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     expected: SavedSearchStoredSnapshot
 
 
 class StrictApplicationRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str = Field(min_length=1)
     job_key: str
     status: ApplicationStatus
     notes: str
-    applied_at: datetime | None
-    updated_at: datetime | None
+    applied_at: str | None
+    updated_at: str | None
 
 
 class TrackerConditionalDeleteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     expected: StrictApplicationRecord
 

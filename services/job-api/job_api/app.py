@@ -276,11 +276,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     ) -> ConditionalDeleteResponse:
         try:
             request = TrackerConditionalDeleteRequest.model_validate(body)
+            expected_payload = request.expected.model_dump()
+            expected = ApplicationRecord.model_validate(expected_payload)
         except ValidationError:
             raise HTTPException(
                 status_code=422, detail="Conditional delete request is invalid."
             ) from None
-        expected = ApplicationRecord(**request.expected.model_dump())
+        if expected.model_dump(mode="json") != expected_payload:
+            raise HTTPException(
+                status_code=422, detail="Conditional delete request is invalid."
+            )
         if not record_id or record_id != expected.id:
             raise HTTPException(
                 status_code=400, detail="Conditional delete identity mismatch."
