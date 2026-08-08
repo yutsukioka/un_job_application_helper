@@ -1626,7 +1626,12 @@ final class AtlasVaultPlaintextMigrationCoordinator
             _remoteSavedSearchJson(expected, journal.profile),
             _remoteSavedSearchJson(
               journal.profile == AtlasVaultPlaintextMigrationProfile.windows
-                  ? _windowsRemoteSavedSearchFromJournal(value.toJson())
+                  ? _windowsRemoteSavedSearchFromJournal(
+                      _remoteSavedSearchJson(
+                        value,
+                        AtlasVaultPlaintextMigrationProfile.windows,
+                      ),
+                    )
                   : _savedSearchFromJournal(_savedSearchJson(value)),
               journal.profile,
             ),
@@ -2214,7 +2219,12 @@ final class AtlasVaultPlaintextMigrationCoordinator
       final remoteSavedSearches = <AtlasSavedSearch>[
         for (final value in compatibility.savedSearches)
           _profile == AtlasVaultPlaintextMigrationProfile.windows
-              ? _windowsRemoteSavedSearchFromJournal(value.toJson())
+              ? _windowsRemoteSavedSearchFromJournal(
+                  _remoteSavedSearchJson(
+                    value,
+                    AtlasVaultPlaintextMigrationProfile.windows,
+                  ),
+                )
               : _savedSearchFromJournal(_savedSearchJson(value)),
       ]..sort((left, right) => left.name.compareTo(right.name));
       final remoteSavedSearchNames = remoteSavedSearches
@@ -2645,19 +2655,33 @@ AtlasSavedSearch _windowsRemoteSavedSearchFromJournal(
     'name',
     'description',
     'request',
+    'compatibility_request_json',
     'created_at',
     'updated_at',
   });
-  final request = vault.AtlasSearchRequest.fromJson(
-    _stringMap(value['request']),
-  );
-  return AtlasSavedSearch(
-    name: _requiredText(value['name']),
-    description: _optionalText(value['description']),
-    request: AtlasSearchRequest.fromJson(request.toJson()),
-    createdAt: _preserveLegacyUtc(value['created_at'], required: true),
-    updatedAt: _preserveLegacyUtc(value['updated_at'], required: true),
-  );
+  try {
+    final reviewedRequest = _decodeCompatibilityRequestJson(
+      value['compatibility_request_json'],
+    );
+    final decoded = AtlasSavedSearch.fromPlaintextMigrationCompatibilityJson(
+      <String, Object?>{
+        'name': value['name'],
+        'description': value['description'],
+        'request': reviewedRequest,
+        'created_at': value['created_at'],
+        'updated_at': value['updated_at'],
+      },
+    );
+    final reduced = vault.AtlasSearchRequest.fromJson(
+      _stringMap(value['request']),
+    );
+    if (!_jsonEqual(reduced.toJson(), decoded.request.toJson())) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return decoded;
+  } catch (_) {
+    throw const AtlasVaultPlaintextMigrationException();
+  }
 }
 
 AtlasApplicationRecord _trackerFromJournal(Map<String, Object?> value) {
@@ -2719,15 +2743,70 @@ Map<String, Object?> _remoteSavedSearchJson(
   if (profile == AtlasVaultPlaintextMigrationProfile.android) {
     return _savedSearchJson(value);
   }
+  final stored = value.toCompatibilityStoredSnapshotJson();
   return <String, Object?>{
     'name': value.name,
     'description': value.description,
     'request': vault.AtlasSearchRequest.fromJson(
       value.request.toJson(),
     ).toJson(),
+    'compatibility_request_json': _encodeCompatibilityRequestJson(
+      _stringMap(stored['request']),
+    ),
     'created_at': _preserveLegacyUtc(value.createdAt, required: true),
     'updated_at': _preserveLegacyUtc(value.updatedAt, required: true),
   };
+}
+
+String _encodeCompatibilityRequestJson(Map<String, Object?> value) {
+  try {
+    return jsonEncode(_sortedCompatibilityJsonValue(value));
+  } catch (_) {
+    throw const AtlasVaultPlaintextMigrationException();
+  }
+}
+
+Map<String, Object?> _decodeCompatibilityRequestJson(Object? value) {
+  try {
+    final text = _requiredText(value);
+    final decoded = _stringMap(jsonDecode(text));
+    if (_encodeCompatibilityRequestJson(decoded) != text) {
+      throw const AtlasVaultPlaintextMigrationException();
+    }
+    return decoded;
+  } catch (_) {
+    throw const AtlasVaultPlaintextMigrationException();
+  }
+}
+
+Object? _sortedCompatibilityJsonValue(Object? value) {
+  if (value == null || value is String || value is bool || value is int) {
+    return value;
+  }
+  if (value is double && value.isFinite) {
+    return value;
+  }
+  if (value is List) {
+    return <Object?>[
+      for (final item in value) _sortedCompatibilityJsonValue(item),
+    ];
+  }
+  if (value is Map) {
+    final entries = value.entries.toList(growable: false);
+    for (final entry in entries) {
+      if (entry.key is! String) {
+        throw const AtlasVaultPlaintextMigrationException();
+      }
+    }
+    entries.sort(
+      (left, right) => (left.key as String).compareTo(right.key as String),
+    );
+    return <String, Object?>{
+      for (final entry in entries)
+        entry.key as String: _sortedCompatibilityJsonValue(entry.value),
+    };
+  }
+  throw const AtlasVaultPlaintextMigrationException();
 }
 
 Map<String, Object?> _trackerJson(AtlasApplicationRecord value) {

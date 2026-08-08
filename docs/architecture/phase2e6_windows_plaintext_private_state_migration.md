@@ -190,9 +190,17 @@ successful delete forces recovery before selection and preserves the changed
 content. The Windows protected journal preserves every validated compatibility
 timestamp string exactly, including fractional seconds and explicit UTC
 offsets, so the request precondition matches the stored server row rather than
-the normalized encrypted-payload timestamp. Android journal encoding retains
-its existing normalized whole-second behavior. API and Dart errors are fixed
-and private-free.
+the normalized encrypted-payload timestamp. It also preserves the complete
+strict saved-search request returned by the compatibility API, including the
+required stored-request fields that are intentionally absent from the reduced
+Flutter search model. The Windows-only journal carries that request as a
+deterministically sorted JSON string because stored confidence values are
+finite JSON numbers outside the integer-only AtlasVault canonical value set.
+Decode requires that string to be canonical and requires its reduced request
+to agree with the journal's canonical AtlasVault request before the exact map
+is replayed to conditional delete. Android journal encoding retains its
+existing normalized whole-second behavior and field set. API and Dart errors
+are fixed and private-free.
 
 ## 28. Compatibility Tracker Deletion
 

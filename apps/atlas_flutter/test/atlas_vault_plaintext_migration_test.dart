@@ -360,6 +360,7 @@ void main() {
         trackerRecords: fixture.compatibility.state.trackerRecords,
       );
 
+      await fixture.coordinator.inventory();
       await fixture.coordinator.prepare();
 
       final journal =
@@ -368,7 +369,10 @@ void main() {
       final remoteSavedSearch =
           (journal['remote_saved_searches'] as List<Object?>).single
               as Map<String, Object?>;
-      expect(remoteSavedSearch['request'], storedRequest);
+      expect(
+        jsonDecode(remoteSavedSearch['compatibility_request_json']! as String),
+        storedRequest,
+      );
       expect(remoteSavedSearch['created_at'], storedSnapshot['created_at']);
       expect(remoteSavedSearch['updated_at'], storedSnapshot['updated_at']);
     },
@@ -960,6 +964,39 @@ void main() {
       );
       expect(windowsJournal.durableCachePrivateSha256, isNotNull);
       expect(windowsJournal.legacyCachePrivateSha256, isNotNull);
+      final noncanonicalSnapshot =
+          jsonDecode(jsonEncode(windowsJournal.toJson()))
+              as Map<String, Object?>;
+      final noncanonicalRemote =
+          (noncanonicalSnapshot['remote_saved_searches']! as List<Object?>)
+                  .single
+              as Map<String, Object?>;
+      noncanonicalRemote['compatibility_request_json'] =
+          ' ${noncanonicalRemote['compatibility_request_json']}';
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.fromJson(
+          noncanonicalSnapshot,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
+      final inconsistentSnapshot =
+          jsonDecode(jsonEncode(windowsJournal.toJson()))
+              as Map<String, Object?>;
+      final inconsistentRemote =
+          (inconsistentSnapshot['remote_saved_searches']! as List<Object?>)
+                  .single
+              as Map<String, Object?>;
+      final reducedRequest =
+          inconsistentRemote['request']! as Map<String, Object?>;
+      reducedRequest['text'] = 'different-reviewed-query';
+      expect(
+        () => AtlasVaultPlaintextMigrationJournal.fromJson(
+          inconsistentSnapshot,
+          profile: AtlasVaultPlaintextMigrationProfile.windows,
+        ),
+        throwsA(isA<AtlasVaultPlaintextMigrationException>()),
+      );
       expect(
         () => AtlasVaultPlaintextMigrationJournal.decodeBytes(windowsBytes),
         throwsA(isA<AtlasVaultPlaintextMigrationException>()),

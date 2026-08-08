@@ -42,7 +42,7 @@ void main() {
         '/conditional-delete',
       );
       expect(request.jsonBody, <String, Object?>{
-        'expected': expected.toJson(),
+        'expected': expected.toCompatibilityStoredSnapshotJson(),
       });
       expect(request.path, isNot(contains(expected.name)));
     },
@@ -118,6 +118,38 @@ void main() {
     expect(request.jsonBody, <String, Object?>{'expected': expected.toJson()});
     expect(request.path, isNot(contains(expected.id)));
   });
+
+  test(
+    'conditional tracker deletion preserves exact reviewed timestamps',
+    () async {
+      final storedSnapshot = <String, Object?>{
+        'id': 'tracker/private/reviewed',
+        'job_key': 'unicef:reviewed-private-job',
+        'status': 'applied',
+        'notes': 'reviewed private notes',
+        'applied_at': '2026-08-01T00:00:00.123456+00:00',
+        'updated_at': '2026-08-02T12:34:56.654321Z',
+      };
+      final transport = _StoredTrackerConditionalDeleteTransport(
+        storedSnapshot,
+      );
+      final client = AtlasAPIClient(
+        baseURL: Uri.parse('http://atlas.test:8765'),
+        transport: transport,
+      );
+
+      final expected =
+          (await client.trackerRecordsForPlaintextMigration()).single;
+      final outcome = await client.conditionalDeleteTrackerRecord(expected);
+
+      expect(outcome, AtlasConditionalDeleteOutcome.deleted);
+      expect(expected.appliedAt, storedSnapshot['applied_at']);
+      expect(expected.updatedAt, storedSnapshot['updated_at']);
+      expect(transport.requests.last.jsonBody, <String, Object?>{
+        'expected': storedSnapshot,
+      });
+    },
+  );
 
   test(
     'conditional deletion maps HTTP 412 without exposing private content',
@@ -3485,6 +3517,26 @@ final class _StoredSavedSearchConditionalDeleteTransport
   Future<Object?> send(AtlasRequest request) async {
     requests.add(request);
     if (request.method == 'GET' && request.path == 'api/saved-searches') {
+      return <Object?>[storedSnapshot];
+    }
+    if (request.method == 'POST' &&
+        request.path.endsWith('/conditional-delete')) {
+      return const <String, Object?>{'outcome': 'deleted'};
+    }
+    fail('Unexpected request ${request.method} ${request.path}');
+  }
+}
+
+final class _StoredTrackerConditionalDeleteTransport implements AtlasTransport {
+  _StoredTrackerConditionalDeleteTransport(this.storedSnapshot);
+
+  final Map<String, Object?> storedSnapshot;
+  final List<AtlasRequest> requests = <AtlasRequest>[];
+
+  @override
+  Future<Object?> send(AtlasRequest request) async {
+    requests.add(request);
+    if (request.method == 'GET' && request.path == 'api/tracker') {
       return <Object?>[storedSnapshot];
     }
     if (request.method == 'POST' &&
