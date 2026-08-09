@@ -3091,6 +3091,27 @@ void main() {
     },
   );
 
+  test(
+    'pending recovery import admits resume drain without reopening legacy writes',
+    () async {
+      final transport = _RecordingTransport();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        recoveryImportPending: () async => true,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await controller.beginRecoveryImportAdmission();
+      controller.endRecoveryImportAdmission();
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+
+      expect(transport.savedJobKeys, isEmpty);
+    },
+  );
+
   test('migration context attaches once without starting authority work', () {
     final firstCoordinator = _ControllerMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.legacy,
