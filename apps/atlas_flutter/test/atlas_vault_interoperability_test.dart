@@ -40,6 +40,20 @@ void main() {
     expect(importPendingCalls, 0);
   });
 
+  test('recovery-import journals have strict Android and Windows profiles', () {
+    final source = File(
+      'lib/src/atlas_vault/interoperability.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('enum AtlasVaultRecoveryImportProfile'));
+    expect(source, contains("android('atlasvault-android-recovery-import')"));
+    expect(source, contains("windows('atlasvault-windows-recovery-import')"));
+    expect(
+      source,
+      contains('required AtlasVaultRecoveryImportProfile profile'),
+    );
+  });
+
   test('export requires active matching encrypted authority', () async {
     final fixture = await _Fixture.create(activate: false);
 
@@ -558,6 +572,14 @@ void main() {
       );
       expect(
         fixture.events.indexOf('import-journal.create'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+      expect(
+        fixture.events.indexOf('selection.create'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+      expect(
+        fixture.events.indexOf('import-journal.delete'),
         lessThan(fixture.events.indexOf('import-admission.end')),
       );
     },

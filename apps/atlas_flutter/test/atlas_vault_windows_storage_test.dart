@@ -85,6 +85,45 @@ void main() {
     expect(recorder.calls, isEmpty);
   });
 
+  test('encrypted-document picker uses one path-free copied call', () async {
+    final platformBytes = Uint8List.fromList(
+      utf8.encode('{"format":"atlasvault-export","version":1}'),
+    );
+    recorder.handler = (call) async {
+      expect(call.method, 'pickEncryptedExport');
+      expect(call.arguments, isNull);
+      return platformBytes;
+    };
+
+    final picked = await documentTransport.pickEncryptedExport();
+
+    expect(picked, orderedEquals(platformBytes));
+    expect(identical(picked, platformBytes), isFalse);
+    expect(recorder.calls, hasLength(1));
+  });
+
+  test('encrypted-document picker cancellation and errors are fixed', () async {
+    recorder.handler = (_) async => null;
+    expect(await documentTransport.pickEncryptedExport(), isNull);
+
+    recorder.handler = (_) async {
+      throw PlatformException(
+        code: 'win32_5',
+        message: r'C:\Users\private\Desktop\backup.atlasvault',
+      );
+    };
+    await expectLater(
+      documentTransport.pickEncryptedExport(),
+      throwsA(
+        isA<AtlasVaultWindowsStorageException>().having(
+          (failure) => failure.toString(),
+          'description',
+          'AtlasVault Windows storage operation failed.',
+        ),
+      ),
+    );
+  });
+
   test(
     'protected migration journal uses exact create read and CAS methods',
     () async {
@@ -221,6 +260,26 @@ void main() {
     expect(source, contains('class ScopedSensitiveArgumentWiper'));
     expect(source, contains('ScopedSensitiveArgumentWiper argument_wiper'));
     expect(source, isNot(contains('ScopedVaultKeyArgumentWiper')));
+  });
+
+  test('native bridge declares the protected recovery-import boundary', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final token in <String>[
+      'recovery-import',
+      'readRecoveryImportJournal',
+      'createRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+      'imports',
+      'recovery-import.lock',
+    ]) {
+      expect(source, contains(token), reason: token);
+    }
+    expect(source, contains('CRYPTPROTECT_UI_FORBIDDEN'));
+    expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
   });
 
   test('invalid vault IDs make no platform call', () async {

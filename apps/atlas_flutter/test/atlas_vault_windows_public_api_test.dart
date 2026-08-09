@@ -65,6 +65,16 @@ void main() {
     );
   });
 
+  test('Windows barrel exposes reviewed recovery-import boundaries', () {
+    final source = File('lib/atlas_vault_windows.dart').readAsStringSync();
+
+    expect(source, contains('AtlasWindowsProtectedRecoveryImportJournalStore'));
+    expect(source, contains('AtlasVaultRecoveryImportProfile'));
+    expect(source, contains('AtlasVaultRecoveryImportTransactionAdmission'));
+    expect(source, isNot(contains('recoveryImportPath')));
+    expect(source, isNot(contains('selectedFilePath')));
+  });
+
   test('pure-Dart AtlasVault barrel remains platform neutral', () {
     final source = File('lib/atlas_vault.dart').readAsStringSync();
 

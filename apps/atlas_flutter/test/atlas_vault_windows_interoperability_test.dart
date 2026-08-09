@@ -82,6 +82,58 @@ void main() {
     expect(helper, contains('attachInteroperabilityContext('));
   });
 
+  test('Windows production assembly owns explicit recovery import', () {
+    final appSource = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+    final cacheSource = File(
+      'lib/features/app_shell/atlas_cache_location.dart',
+    ).readAsStringSync();
+    final interopSource = File(
+      'lib/src/atlas_vault/interoperability.dart',
+    ).readAsStringSync();
+    final windowsStart = appSource.indexOf('if (Platform.isWindows) {');
+    final fallbackStart = appSource.indexOf(
+      'if (!Platform.isAndroid)',
+      windowsStart < 0 ? 0 : windowsStart,
+    );
+    final helperStart = appSource.indexOf(
+      'AtlasVaultInteroperabilityPresentationOwner '
+      '_attachWindowsEncryptedBackup',
+    );
+    final helperEnd = appSource.indexOf(
+      '_AtlasDefaultControllerAssembly _buildDefaultControllerAssembly()',
+      helperStart < 0 ? 0 : helperStart,
+    );
+
+    expect(windowsStart, isNonNegative);
+    expect(fallbackStart, greaterThan(windowsStart));
+    expect(helperStart, isNonNegative);
+    expect(helperEnd, greaterThan(helperStart));
+    final assembly = appSource.substring(windowsStart, fallbackStart);
+    final helper = appSource.substring(helperStart, helperEnd);
+    expect(
+      assembly,
+      contains('AtlasWindowsProtectedRecoveryImportJournalStore()'),
+    );
+    expect(assembly, contains('recoveryImportJournalStore:'));
+    expect(helper, contains('recoveryImportJournalStore:'));
+    expect(helper, contains('secureKeyStore:'));
+    expect(helper, contains('localStoreIO:'));
+    expect(helper, contains('inMemorySource:'));
+    expect(helper, contains('compatibilitySource:'));
+    expect(helper, contains('cacheSource:'));
+    expect(helper, contains('importTransactionAdmission:'));
+    expect(helper, contains('activateImportedVault:'));
+    expect(cacheSource, contains('_recoveryImportJournalStore.read()'));
+    expect(
+      interopSource,
+      contains('AtlasVaultRecoveryImportTransactionAdmission'),
+    );
+    expect(assembly, isNot(contains('.prepareRecoveryImport(')));
+    expect(assembly, isNot(contains('.confirmRecoveryImport(')));
+  });
+
   test(
     'Windows interoperability vector is strict and cryptographically exact',
     () async {

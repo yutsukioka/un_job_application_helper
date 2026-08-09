@@ -3151,6 +3151,10 @@ void main() {
       windowsAssembly,
       contains('AtlasWindowsProtectedMigrationJournalStore()'),
     );
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsProtectedRecoveryImportJournalStore()'),
+    );
     expect(windowsAssembly, contains('AtlasWindowsSelectedVaultStore()'));
     expect(
       windowsAssembly,
@@ -3200,6 +3204,9 @@ void main() {
       migrationAssembly,
       contains('AtlasVaultInteroperabilityPresentationOwner('),
     );
+    expect(migrationAssembly, contains('recoveryImportJournalStore:'));
+    expect(migrationAssembly, contains('importTransactionAdmission:'));
+    expect(migrationAssembly, contains('activateImportedVault:'));
     expect(migrationAssembly, contains('attachInteroperabilityContext('));
     expect(sideEffectFreeAssembly, isNot(contains('.beginRecoverySetup(')));
     expect(sideEffectFreeAssembly, isNot(contains('.savePreparedExport(')));
