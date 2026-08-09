@@ -445,7 +445,9 @@ class AtlasAppController extends ChangeNotifier
         return AtlasVaultActivationResult.activated;
       }
 
-      if (plaintextMigrationResume || _plaintextAuthorityAdmission == null) {
+      if (plaintextMigrationResume ||
+          recoveryImportResume ||
+          _plaintextAuthorityAdmission == null) {
         return await activateUnderAuthority();
       }
       return await _runLegacyPrivateOperation(activateUnderAuthority);

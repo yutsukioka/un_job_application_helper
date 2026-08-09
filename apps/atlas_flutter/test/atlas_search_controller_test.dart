@@ -2490,6 +2490,14 @@ void main() {
         isNot(contains('_recoveryImportBlocksLegacyPrivateAuthority = false')),
       );
       expect(
+        activationSource,
+        contains(
+          'if (plaintextMigrationResume ||\n'
+          '          recoveryImportResume ||\n'
+          '          _plaintextAuthorityAdmission == null)',
+        ),
+      );
+      expect(
         source,
         contains(
           'void _recoveryImportPendingDidChange(bool pending) {\n'
