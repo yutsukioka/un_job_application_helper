@@ -161,3 +161,35 @@ vector JSON was modified.
 Direct cross-language tests additionally exchange encrypted `.atlasvault`
 artifacts outside the repository. Recovery keys remain separate test inputs,
 and no plaintext sidecar or production user data is written.
+
+## Windows Encrypted Interoperability Vector
+
+`atlasvault_windows_interop_vectors_v1.json` contains three fake, test-only
+encrypted interoperability cases:
+
+- `apple_to_windows` is produced through the Apple production recovery-export
+  coordinator and installed through the Windows production import coordinator.
+- `android_to_windows` is produced through the Android/Flutter production
+  recovery-export coordinator and installed through the Windows production
+  import coordinator.
+- `windows_to_apple_android` is produced through the Windows production
+  recovery-export coordinator and installed through the Apple and Android
+  production import coordinators.
+
+Each case fixes fake recovery-key text, a fake raw vault key used only by the
+deterministic tests, canonical `atlasvault-export` version 1 bytes, SHA-256,
+ordered encrypted records, supported-record counts, unsupported private-record
+counts, and tombstone counts. The cases prove that every producer and consumer
+agrees on canonical bytes while preserving encrypted record order, unsupported
+records, and tombstones. Recovery-wrap v2 remains the portable recovery
+boundary, and valid passphrase-wrap v1 entries may coexist where specified.
+
+All values are fake. Recovery keys are supplied separately by the test vector;
+they are not embedded in `.atlasvault` documents and are never written as
+sidecars. Direct encrypted artifacts and their SHA-256 files are generated in
+the external persistent checkpoint, not in the repository. No production user
+data or plaintext intermediary is present.
+
+The pre-existing payload, crypto, key-wrap, recovery-export, and iOS-Flutter
+vector JSON files remain unchanged. The Windows vector adds another consumer
+of the established wire format; it does not change any wire field or version.

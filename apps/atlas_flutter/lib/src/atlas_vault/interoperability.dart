@@ -124,6 +124,15 @@ enum AtlasVaultRecoveryImportStage {
   }
 }
 
+enum AtlasVaultRecoveryImportProfile {
+  android('atlasvault-android-recovery-import'),
+  windows('atlasvault-windows-recovery-import');
+
+  const AtlasVaultRecoveryImportProfile(this.format);
+
+  final String format;
+}
+
 abstract interface class AtlasVaultProtectedRecoveryImportJournalStore {
   Future<Uint8List?> read();
 
@@ -142,6 +151,7 @@ abstract interface class AtlasVaultProtectedRecoveryImportJournalStore {
 
 final class AtlasVaultRecoveryImportJournal {
   AtlasVaultRecoveryImportJournal._({
+    required this.profile,
     required this.importId,
     required this.stage,
     required this.exportId,
@@ -156,6 +166,7 @@ final class AtlasVaultRecoveryImportJournal {
   static const format = 'atlasvault-android-recovery-import';
   static const version = 1;
 
+  final AtlasVaultRecoveryImportProfile profile;
   final String importId;
   final AtlasVaultRecoveryImportStage stage;
   final String exportId;
@@ -167,6 +178,8 @@ final class AtlasVaultRecoveryImportJournal {
   final String vaultKeySha256;
 
   factory AtlasVaultRecoveryImportJournal.prepared({
+    AtlasVaultRecoveryImportProfile profile =
+        AtlasVaultRecoveryImportProfile.android,
     required String importId,
     required String exportId,
     required String vaultId,
@@ -177,7 +190,7 @@ final class AtlasVaultRecoveryImportJournal {
     required String vaultKeySha256,
   }) {
     return AtlasVaultRecoveryImportJournal.fromJson(<String, Object?>{
-      'format': format,
+      'format': profile.format,
       'version': version,
       'import_id': importId,
       'stage': AtlasVaultRecoveryImportStage.prepared.wireName,
@@ -188,16 +201,21 @@ final class AtlasVaultRecoveryImportJournal {
       'export_sha256': exportSha256,
       'local_store_sha256': localStoreSha256,
       'vault_key_sha256': vaultKeySha256,
-    });
+    }, profile: profile);
   }
 
-  factory AtlasVaultRecoveryImportJournal.decodeBytes(Uint8List source) {
+  factory AtlasVaultRecoveryImportJournal.decodeBytes(
+    Uint8List source, {
+    AtlasVaultRecoveryImportProfile profile =
+        AtlasVaultRecoveryImportProfile.android,
+  }) {
     try {
       return AtlasVaultRecoveryImportJournal.fromJson(
         decodeAtlasVaultJsonObject(
           utf8.decode(source, allowMalformed: false),
           context: 'Recovery import journal',
         ),
+        profile: profile,
       );
     } catch (_) {
       throw const AtlasVaultInteroperabilityException();
@@ -205,8 +223,10 @@ final class AtlasVaultRecoveryImportJournal {
   }
 
   factory AtlasVaultRecoveryImportJournal.fromJson(
-    Map<String, Object?> source,
-  ) {
+    Map<String, Object?> source, {
+    AtlasVaultRecoveryImportProfile profile =
+        AtlasVaultRecoveryImportProfile.android,
+  }) {
     try {
       final value = Map<String, Object?>.from(source);
       requireAtlasVaultExactKeys(
@@ -226,7 +246,7 @@ final class AtlasVaultRecoveryImportJournal {
         },
         context: 'Recovery import journal',
       );
-      if (value['format'] != format ||
+      if (value['format'] != profile.format ||
           requireAtlasVaultInt(
                 value['version'],
                 field: 'recovery_import.version',
@@ -235,6 +255,7 @@ final class AtlasVaultRecoveryImportJournal {
         throw const AtlasVaultInteroperabilityException();
       }
       return AtlasVaultRecoveryImportJournal._(
+        profile: profile,
         importId: requireAtlasVaultCanonicalUuid(
           value['import_id'],
           field: 'recovery_import.import_id',
@@ -271,11 +292,11 @@ final class AtlasVaultRecoveryImportJournal {
     return AtlasVaultRecoveryImportJournal.fromJson(<String, Object?>{
       ...toJson(),
       'stage': next.wireName,
-    });
+    }, profile: profile);
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
-    'format': format,
+    'format': profile.format,
     'version': version,
     'import_id': importId,
     'stage': stage.wireName,
@@ -342,6 +363,19 @@ abstract interface class AtlasVaultRecoveryImportOperationAdmission {
   void endRecoveryImportAdmission();
 }
 
+abstract interface class AtlasVaultRecoveryImportTransactionAdmission {
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation);
+}
+
+final class _NoopRecoveryImportTransactionAdmission
+    implements AtlasVaultRecoveryImportTransactionAdmission {
+  const _NoopRecoveryImportTransactionAdmission();
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
+      operation();
+}
+
 final class _NoopRecoveryImportOperationAdmission
     implements AtlasVaultRecoveryImportOperationAdmission {
   const _NoopRecoveryImportOperationAdmission();
@@ -370,6 +404,9 @@ final class AtlasVaultInteroperabilityCoordinator
     AtlasVaultCompatibilityPrivateSource? compatibilitySource,
     AtlasLocalCacheMigrationSource? cacheSource,
     AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
+    AtlasVaultRecoveryImportTransactionAdmission? importTransactionAdmission,
+    AtlasVaultRecoveryImportProfile recoveryImportProfile =
+        AtlasVaultRecoveryImportProfile.android,
     Future<bool> Function(String vaultId)? activateImportedVault,
     void Function(bool pending)? recoveryImportPendingDidChange,
     DateTime Function()? now,
@@ -406,6 +443,11 @@ final class AtlasVaultInteroperabilityCoordinator
        _importOperationAdmission =
            importOperationAdmission ??
            const _NoopRecoveryImportOperationAdmission(),
+       _importTransactionAdmission =
+           importTransactionAdmission ??
+           const _NoopRecoveryImportTransactionAdmission(),
+       // ignore: prefer_initializing_formals
+       _recoveryImportProfile = recoveryImportProfile,
        _activateImportedVault =
            activateImportedVault ??
            ((vaultId) async =>
@@ -440,6 +482,9 @@ final class AtlasVaultInteroperabilityCoordinator
   final AtlasVaultCompatibilityPrivateSource? _compatibilitySource;
   final AtlasLocalCacheMigrationSource? _cacheSource;
   final AtlasVaultRecoveryImportOperationAdmission _importOperationAdmission;
+  final AtlasVaultRecoveryImportTransactionAdmission
+  _importTransactionAdmission;
+  final AtlasVaultRecoveryImportProfile _recoveryImportProfile;
   final Future<bool> Function(String vaultId) _activateImportedVault;
   final void Function(bool pending) _recoveryImportPendingDidChange;
   final DateTime Function() _now;
@@ -825,93 +870,105 @@ final class AtlasVaultInteroperabilityCoordinator
         recoveryKey.destroy();
         recoveryKey = null;
         journal = await _loadImportJournal(dependencies.journalStore);
-        if (journal == null) {
-          await _importOperationAdmission.beginRecoveryImportAdmission();
-          importAdmissionHeld = true;
-        }
-        final gate = await _cleanInstallGate(dependencies, journal: journal);
-        if (gate != _ImportGate.ready) {
-          return _fixedImportResult(
-            _gateDisposition(gate),
-            count: export.records.length,
-            pendingImport: journal != null,
-          );
-        }
+        final journalExistedBeforeTransaction = journal != null;
+        await _importOperationAdmission.beginRecoveryImportAdmission();
+        importAdmissionHeld = true;
+        return await _importTransactionAdmission.runRecoveryImportTransaction(
+          () async {
+            journal = await _loadImportJournal(dependencies.journalStore);
+            if (journalExistedBeforeTransaction && journal == null) {
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                count: export.records.length,
+              );
+            }
+            final gate = await _cleanInstallGate(
+              dependencies,
+              journal: journal,
+            );
+            if (gate != _ImportGate.ready) {
+              return _fixedImportResult(
+                _gateDisposition(gate),
+                count: export.records.length,
+                pendingImport: journal != null,
+              );
+            }
 
-        final timestamp = journal?.createdAt ?? _utcSeconds(_now());
-        final storeId = journal?.storeId ?? _importStoreIdProvider();
-        final localStore = _localStoreForImport(
-          export,
-          storeId: storeId,
-          timestamp: timestamp,
-        );
-        if (journal == null) {
-          await _requireImportTargetAvailable(
-            dependencies,
-            export.vaultMetadata.vaultId,
-          );
-        }
-        await _runtime.validateImportProjection(
-          vaultId: export.vaultMetadata.vaultId,
-          vaultKey: vaultKey,
-          store: localStore,
-        );
-        final localBytes = localStore.canonicalBytes();
-        try {
-          final localStoreSha256 = await atlasVaultSha256Hex(localBytes);
-          final vaultKeySha256 = await atlasVaultSha256Hex(vaultKey);
-          if (journal == null) {
-            journal = AtlasVaultRecoveryImportJournal.prepared(
-              importId: _importIdProvider(),
-              exportId: export.exportId,
-              vaultId: export.vaultMetadata.vaultId,
+            final timestamp = journal?.createdAt ?? _utcSeconds(_now());
+            final storeId = journal?.storeId ?? _importStoreIdProvider();
+            final localStore = _localStoreForImport(
+              export,
               storeId: storeId,
-              createdAt: timestamp,
-              exportSha256: exportSha256,
-              localStoreSha256: localStoreSha256,
-              vaultKeySha256: vaultKeySha256,
+              timestamp: timestamp,
             );
-            await _createAndVerifyImportJournal(
-              dependencies.journalStore,
-              journal,
+            if (journal == null) {
+              await _requireImportTargetAvailable(
+                dependencies,
+                export.vaultMetadata.vaultId,
+              );
+            }
+            await _runtime.validateImportProjection(
+              vaultId: export.vaultMetadata.vaultId,
+              vaultKey: vaultKey!,
+              store: localStore,
             );
-            _importOperationAdmission.endRecoveryImportAdmission();
-            importAdmissionHeld = false;
-          } else if (journal.exportId != export.exportId ||
-              journal.vaultId != export.vaultMetadata.vaultId ||
-              journal.storeId != storeId ||
-              journal.exportSha256 != exportSha256 ||
-              journal.localStoreSha256 != localStoreSha256 ||
-              journal.vaultKeySha256 != vaultKeySha256) {
-            return _fixedImportResult(
-              AtlasVaultRecoveryImportDisposition.recoveryRequired,
-              count: export.records.length,
-              pendingImport: true,
-            );
-          }
+            final localBytes = localStore.canonicalBytes();
+            try {
+              final localStoreSha256 = await atlasVaultSha256Hex(localBytes);
+              final vaultKeySha256 = await atlasVaultSha256Hex(vaultKey);
+              if (journal == null) {
+                journal = AtlasVaultRecoveryImportJournal.prepared(
+                  profile: _recoveryImportProfile,
+                  importId: _importIdProvider(),
+                  exportId: export.exportId,
+                  vaultId: export.vaultMetadata.vaultId,
+                  storeId: storeId,
+                  createdAt: timestamp,
+                  exportSha256: exportSha256,
+                  localStoreSha256: localStoreSha256,
+                  vaultKeySha256: vaultKeySha256,
+                );
+                await _createAndVerifyImportJournal(
+                  dependencies.journalStore,
+                  journal!,
+                );
+              } else if (journal!.exportId != export.exportId ||
+                  journal!.vaultId != export.vaultMetadata.vaultId ||
+                  journal!.storeId != storeId ||
+                  journal!.exportSha256 != exportSha256 ||
+                  journal!.localStoreSha256 != localStoreSha256 ||
+                  journal!.vaultKeySha256 != vaultKeySha256) {
+                return _fixedImportResult(
+                  AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                  count: export.records.length,
+                  pendingImport: true,
+                );
+              }
 
-          final pendingJournal = await _installImport(
-            dependencies: dependencies,
-            journal: journal,
-            localStore: localStore,
-            vaultKey: vaultKey,
-            verification: verification,
-          );
-          if (pendingJournal != null) {
-            return _fixedImportResult(
-              AtlasVaultRecoveryImportDisposition.completionPending,
-              count: export.records.length,
-              pendingImport: true,
-            );
-          }
-          _clearPreparedImport();
-          return _fixedImportResult(
-            AtlasVaultRecoveryImportDisposition.importedAndActive,
-            count: export.records.length,
-          );
-        } finally {
-          _wipe(localBytes);
-        }
+              final pendingJournal = await _installImport(
+                dependencies: dependencies,
+                journal: journal!,
+                localStore: localStore,
+                vaultKey: vaultKey,
+                verification: verification,
+              );
+              if (pendingJournal != null) {
+                return _fixedImportResult(
+                  AtlasVaultRecoveryImportDisposition.completionPending,
+                  count: export.records.length,
+                  pendingImport: true,
+                );
+              }
+              _clearPreparedImport();
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.importedAndActive,
+                count: export.records.length,
+              );
+            } finally {
+              _wipe(localBytes);
+            }
+          },
+        );
       } catch (_) {
         AtlasVaultRecoveryImportJournal? recoveredJournal;
         var journalReadWasConclusive = false;
@@ -963,65 +1020,72 @@ final class AtlasVaultInteroperabilityCoordinator
       }
       Uint8List? key;
       try {
-        final journal = await _loadImportJournal(dependencies.journalStore);
-        if (journal == null) {
-          _recoveryImportPendingDidChange(false);
-          return _fixedImportResult(
-            AtlasVaultRecoveryImportDisposition.cancelled,
-          );
-        }
-        if (journal.stage.index >=
-            AtlasVaultRecoveryImportStage.selectionCommitted.index) {
-          return _fixedImportResult(
-            AtlasVaultRecoveryImportDisposition.recoveryRequired,
-            pendingImport: true,
-          );
-        }
-        if (await _selectedVaultStore.read() != null) {
-          return _fixedImportResult(
-            AtlasVaultRecoveryImportDisposition.recoveryRequired,
-            pendingImport: true,
-          );
-        }
-
-        final store = await dependencies.localStoreIO.read(journal.vaultId);
-        if (store != null) {
-          final bytes = store.canonicalBytes();
-          try {
-            if (await atlasVaultSha256Hex(bytes) != journal.localStoreSha256) {
+        return await _importTransactionAdmission.runRecoveryImportTransaction(
+          () async {
+            final journal = await _loadImportJournal(dependencies.journalStore);
+            if (journal == null) {
+              _recoveryImportPendingDidChange(false);
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.cancelled,
+              );
+            }
+            if (journal.stage.index >=
+                AtlasVaultRecoveryImportStage.selectionCommitted.index) {
               return _fixedImportResult(
                 AtlasVaultRecoveryImportDisposition.recoveryRequired,
                 pendingImport: true,
               );
             }
-          } finally {
-            _wipe(bytes);
-          }
-        }
-        key = await dependencies.secureKeyStore.loadVaultKey(journal.vaultId);
-        if (key != null &&
-            await atlasVaultSha256Hex(key) != journal.vaultKeySha256) {
-          return _fixedImportResult(
-            AtlasVaultRecoveryImportDisposition.recoveryRequired,
-            pendingImport: true,
-          );
-        }
+            if (await _selectedVaultStore.read() != null) {
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                pendingImport: true,
+              );
+            }
 
-        if (store != null) {
-          await dependencies.localStoreIO.delete(journal.vaultId);
-        }
-        if (key != null) {
-          await dependencies.secureKeyStore.deleteVaultKey(journal.vaultId);
-        }
-        if (await dependencies.localStoreIO.read(journal.vaultId) != null ||
-            await dependencies.secureKeyStore.containsVaultKey(
+            final store = await dependencies.localStoreIO.read(journal.vaultId);
+            if (store != null) {
+              final bytes = store.canonicalBytes();
+              try {
+                if (await atlasVaultSha256Hex(bytes) !=
+                    journal.localStoreSha256) {
+                  return _fixedImportResult(
+                    AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                    pendingImport: true,
+                  );
+                }
+              } finally {
+                _wipe(bytes);
+              }
+            }
+            key = await dependencies.secureKeyStore.loadVaultKey(
               journal.vaultId,
-            )) {
-          throw const AtlasVaultInteroperabilityException();
-        }
-        await _deleteImportJournal(dependencies.journalStore, journal);
-        return _fixedImportResult(
-          AtlasVaultRecoveryImportDisposition.cancelled,
+            );
+            if (key != null &&
+                await atlasVaultSha256Hex(key!) != journal.vaultKeySha256) {
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                pendingImport: true,
+              );
+            }
+
+            if (store != null) {
+              await dependencies.localStoreIO.delete(journal.vaultId);
+            }
+            if (key != null) {
+              await dependencies.secureKeyStore.deleteVaultKey(journal.vaultId);
+            }
+            if (await dependencies.localStoreIO.read(journal.vaultId) != null ||
+                await dependencies.secureKeyStore.containsVaultKey(
+                  journal.vaultId,
+                )) {
+              throw const AtlasVaultInteroperabilityException();
+            }
+            await _deleteImportJournal(dependencies.journalStore, journal);
+            return _fixedImportResult(
+              AtlasVaultRecoveryImportDisposition.cancelled,
+            );
+          },
         );
       } catch (_) {
         return _fixedImportResult(
@@ -1594,7 +1658,10 @@ final class AtlasVaultInteroperabilityCoordinator
       return null;
     }
     try {
-      return AtlasVaultRecoveryImportJournal.decodeBytes(bytes);
+      return AtlasVaultRecoveryImportJournal.decodeBytes(
+        bytes,
+        profile: _recoveryImportProfile,
+      );
     } finally {
       _wipe(bytes);
     }

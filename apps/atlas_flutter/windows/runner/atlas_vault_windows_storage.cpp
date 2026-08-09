@@ -7,6 +7,7 @@
 #include <flutter/standard_method_codec.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,7 @@ constexpr size_t kVaultKeyLength = 32;
 constexpr size_t kVaultIdMaximumLength = 96;
 constexpr size_t kProtectedBlobMaximumLength = 1024 * 1024;
 constexpr size_t kStoreMaximumLength = 128 * 1024 * 1024;
+constexpr size_t kEncryptedDocumentMaximumLength = 128 * 1024 * 1024;
 constexpr size_t kKeyEnvelopeFixedLength = 8 + 4 + 2 + 4 + 32;
 constexpr char kKeyEnvelopeMagic[] = "AVWKEY01";
 constexpr uint32_t kKeyEnvelopeVersion = 1;
@@ -41,6 +43,7 @@ constexpr char kProtectedBlobEnvelopeMagic[] = "AVWBLB01";
 constexpr uint32_t kProtectedBlobEnvelopeVersion = 1;
 constexpr char kMigrationJournalPurpose[] =
     "plaintext-private-state-migration";
+constexpr char kRecoveryImportPurpose[] = "recovery-import";
 constexpr char kSelectedVaultPurpose[] = "selected-vault";
 constexpr char kCapabilityProbeVaultId[] = "capability_probe_v1";
 
@@ -49,6 +52,12 @@ enum class OperationResult {
   kNotFound,
   kAlreadyExists,
   kStale,
+  kFailed,
+};
+
+enum class DocumentDialogResult {
+  kSelected,
+  kCancelled,
   kFailed,
 };
 
@@ -131,10 +140,13 @@ struct ProtectedBlobEnvelope {
 
 struct ProtectedMetadataPaths {
   std::wstring migrations_directory;
+  std::wstring imports_directory;
   std::wstring selection_directory;
   std::wstring lock_directory;
   std::wstring migration_journal_path;
   std::wstring migration_lock_path;
+  std::wstring recovery_import_path;
+  std::wstring recovery_import_lock_path;
   std::wstring selection_path;
   std::wstring selection_lock_path;
 };
@@ -395,11 +407,13 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
   const std::wstring atlas_vault = JoinPath(organization, L"AtlasVault");
   const std::wstring version = JoinPath(atlas_vault, L"v1");
   output->migrations_directory = JoinPath(version, L"migrations");
+  output->imports_directory = JoinPath(version, L"imports");
   output->selection_directory = JoinPath(version, L"selection");
   output->lock_directory = JoinPath(version, L"locks");
   if (!EnsureSafeDirectory(organization) ||
       !EnsureSafeDirectory(atlas_vault) || !EnsureSafeDirectory(version) ||
       !EnsureSafeDirectory(output->migrations_directory) ||
+      !EnsureSafeDirectory(output->imports_directory) ||
       !EnsureSafeDirectory(output->selection_directory) ||
       !EnsureSafeDirectory(output->lock_directory)) {
     return false;
@@ -411,6 +425,10 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
   output->migration_lock_path =
       JoinPath(output->lock_directory,
                L"plaintext-private-state-migration.lock");
+  output->recovery_import_path =
+      JoinPath(output->imports_directory, L"recovery-import.bin");
+  output->recovery_import_lock_path =
+      JoinPath(output->lock_directory, L"recovery-import.lock");
   output->selection_path =
       JoinPath(output->selection_directory, L"selected-vault.bin");
   output->selection_lock_path =
@@ -657,6 +675,201 @@ OperationResult DeleteRegularFile(const std::wstring& path) {
   }
   return DeleteFileW(path.c_str()) != FALSE ? OperationResult::kSuccess
                                             : OperationResult::kFailed;
+}
+
+DocumentDialogResult SelectEncryptedExportSource(
+    HWND owner_window,
+    std::wstring* selected_path_output) {
+  if (owner_window == nullptr || selected_path_output == nullptr) {
+    return DocumentDialogResult::kFailed;
+  }
+  selected_path_output->clear();
+
+  IFileOpenDialog* dialog = nullptr;
+  HRESULT status = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                    CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&dialog));
+  if (FAILED(status) || dialog == nullptr) {
+    return DocumentDialogResult::kFailed;
+  }
+
+  DWORD options = 0;
+  status = dialog->GetOptions(&options);
+  if (SUCCEEDED(status)) {
+    status = dialog->SetOptions(
+        options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST |
+        FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT | FOS_NOCHANGEDIR);
+  }
+  const COMDLG_FILTERSPEC filters[] = {
+      {L"AtlasVault encrypted backup (*.atlasvault)", L"*.atlasvault"},
+  };
+  if (SUCCEEDED(status)) {
+    status = dialog->SetFileTypes(1, filters);
+  }
+  if (SUCCEEDED(status)) {
+    status = dialog->SetFileTypeIndex(1);
+  }
+  if (SUCCEEDED(status)) {
+    status = dialog->SetDefaultExtension(L"atlasvault");
+  }
+  if (FAILED(status)) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+
+  status = dialog->Show(owner_window);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    dialog->Release();
+    return DocumentDialogResult::kCancelled;
+  }
+  if (FAILED(status)) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+
+  IShellItem* item = nullptr;
+  status = dialog->GetResult(&item);
+  if (FAILED(status) || item == nullptr) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+  PWSTR selected_path = nullptr;
+  status = item->GetDisplayName(SIGDN_FILESYSPATH, &selected_path);
+  if (SUCCEEDED(status) && selected_path != nullptr &&
+      selected_path[0] != L'\0') {
+    selected_path_output->assign(selected_path);
+  }
+  if (selected_path != nullptr) {
+    CoTaskMemFree(selected_path);
+  }
+  item->Release();
+  dialog->Release();
+  return SUCCEEDED(status) && !selected_path_output->empty()
+             ? DocumentDialogResult::kSelected
+             : DocumentDialogResult::kFailed;
+}
+
+DocumentDialogResult SelectEncryptedExportDestination(
+    HWND owner_window,
+    std::wstring* destination_path) {
+  if (owner_window == nullptr || destination_path == nullptr) {
+    return DocumentDialogResult::kFailed;
+  }
+  destination_path->clear();
+
+  IFileSaveDialog* dialog = nullptr;
+  HRESULT status = CoCreateInstance(CLSID_FileSaveDialog, nullptr,
+                                    CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&dialog));
+  if (FAILED(status) || dialog == nullptr) {
+    return DocumentDialogResult::kFailed;
+  }
+
+  DWORD options = 0;
+  status = dialog->GetOptions(&options);
+  if (SUCCEEDED(status)) {
+    status = dialog->SetOptions(
+        options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+        FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_OVERWRITEPROMPT);
+  }
+  const COMDLG_FILTERSPEC filters[] = {
+      {L"AtlasVault encrypted backup (*.atlasvault)", L"*.atlasvault"},
+  };
+  if (SUCCEEDED(status)) {
+    status = dialog->SetFileTypes(1, filters);
+  }
+  if (SUCCEEDED(status)) {
+    status = dialog->SetFileTypeIndex(1);
+  }
+  if (SUCCEEDED(status)) {
+    status = dialog->SetDefaultExtension(L"atlasvault");
+  }
+  if (SUCCEEDED(status)) {
+    status = dialog->SetFileName(
+        L"AtlasVault-Encrypted-Backup.atlasvault");
+  }
+  if (FAILED(status)) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+
+  status = dialog->Show(owner_window);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    dialog->Release();
+    return DocumentDialogResult::kCancelled;
+  }
+  if (FAILED(status)) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+
+  IShellItem* item = nullptr;
+  status = dialog->GetResult(&item);
+  if (FAILED(status) || item == nullptr) {
+    dialog->Release();
+    return DocumentDialogResult::kFailed;
+  }
+  PWSTR selected_path = nullptr;
+  status = item->GetDisplayName(SIGDN_FILESYSPATH, &selected_path);
+  if (SUCCEEDED(status) && selected_path != nullptr &&
+      selected_path[0] != L'\0') {
+    destination_path->assign(selected_path);
+  }
+  if (selected_path != nullptr) {
+    CoTaskMemFree(selected_path);
+  }
+  item->Release();
+  dialog->Release();
+  return SUCCEEDED(status) && !destination_path->empty()
+             ? DocumentDialogResult::kSelected
+             : DocumentDialogResult::kFailed;
+}
+
+OperationResult SaveEncryptedExportAtomically(
+    const std::wstring& destination,
+    const std::vector<uint8_t>& encrypted_bytes) {
+  if (destination.empty() || encrypted_bytes.empty() ||
+      encrypted_bytes.size() > kEncryptedDocumentMaximumLength) {
+    return OperationResult::kFailed;
+  }
+  const size_t separator = destination.find_last_of(L"\\/");
+  if (separator == std::wstring::npos || separator == 0) {
+    return OperationResult::kFailed;
+  }
+  const size_t directory_length =
+      separator == 2 && destination.size() > 2 && destination[1] == L':'
+          ? 3
+          : separator;
+  const std::wstring directory = destination.substr(0, directory_length);
+  if (!IsSafeDirectory(directory)) {
+    return OperationResult::kFailed;
+  }
+  const OperationResult existing = InspectRegularFile(destination);
+  if (existing != OperationResult::kSuccess &&
+      existing != OperationResult::kNotFound) {
+    return OperationResult::kFailed;
+  }
+
+  std::wstring temporary;
+  if (!WriteFlushedTemporary(directory, encrypted_bytes, &temporary)) {
+    return OperationResult::kFailed;
+  }
+  if (MoveFileExW(temporary.c_str(), destination.c_str(),
+                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
+      FALSE) {
+    DeleteFileW(temporary.c_str());
+    return OperationResult::kFailed;
+  }
+
+  std::vector<uint8_t> restored;
+  const OperationResult read_result = ReadRegularFile(
+      destination, kEncryptedDocumentMaximumLength, &restored);
+  const bool equal =
+      read_result == OperationResult::kSuccess &&
+      ConstantTimeEquals(encrypted_bytes.data(), encrypted_bytes.size(),
+                         restored.data(), restored.size());
+  Wipe(&restored);
+  return equal ? OperationResult::kSuccess : OperationResult::kFailed;
 }
 
 std::vector<uint8_t> DpapiEntropy(const std::string& vault_id,
@@ -1517,8 +1730,12 @@ void WipeSensitiveArgument(const std::string& method,
   const char* key = nullptr;
   if (method == "createVaultKey") {
     key = "vault_key";
+  } else if (method == "saveEncryptedExport") {
+    key = "export_bytes";
   } else if (method == "createPlaintextMigrationJournal" ||
-             method == "replacePlaintextMigrationJournal") {
+             method == "replacePlaintextMigrationJournal" ||
+             method == "createRecoveryImportJournal" ||
+             method == "replaceRecoveryImportJournal") {
     key = "journal_bytes";
   }
   if (key == nullptr) {
@@ -1559,9 +1776,20 @@ class AtlasVaultWindowsStorageWorker {
       std::string,
       std::unique_ptr<flutter::EncodableValue>,
       std::unique_ptr<Result>)>;
+  using PickCallback = std::function<void(
+      std::wstring,
+      std::unique_ptr<Result>)>;
+  using SaveCallback = std::function<void(
+      std::wstring,
+      std::vector<uint8_t>,
+      std::unique_ptr<Result>)>;
 
-  explicit AtlasVaultWindowsStorageWorker(ExecuteCallback execute)
+  AtlasVaultWindowsStorageWorker(ExecuteCallback execute,
+                                 PickCallback pick,
+                                 SaveCallback save)
       : execute_(std::move(execute)),
+        pick_(std::move(pick)),
+        save_(std::move(save)),
         worker_(&AtlasVaultWindowsStorageWorker::Run, this) {}
 
   ~AtlasVaultWindowsStorageWorker() { StopAndDrain(); }
@@ -1575,8 +1803,11 @@ class AtlasVaultWindowsStorageWorker {
       std::string method,
       std::unique_ptr<flutter::EncodableValue> arguments,
       std::unique_ptr<Result> result) {
-    PendingOperation operation{std::move(method), std::move(arguments),
-                               std::move(result)};
+    PendingOperation operation;
+    operation.kind = PendingOperation::Kind::kMethod;
+    operation.method = std::move(method);
+    operation.arguments = std::move(arguments);
+    operation.result = std::move(result);
     bool rejected = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -1587,10 +1818,66 @@ class AtlasVaultWindowsStorageWorker {
       }
     }
     if (rejected) {
+      WipeSensitiveArgument(operation.method, operation.arguments.get());
       ReturnFailure(std::move(operation.result));
       return;
     }
     condition_.notify_one();
+  }
+
+  bool EnqueueSave(std::wstring destination_path,
+                   std::vector<uint8_t> encrypted_bytes,
+                   std::unique_ptr<Result> result) {
+    PendingOperation operation;
+    operation.kind = PendingOperation::Kind::kSaveEncryptedExport;
+    operation.destination_path = std::move(destination_path);
+    operation.encrypted_bytes = std::move(encrypted_bytes);
+    operation.result = std::move(result);
+    bool rejected = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopping_) {
+        rejected = true;
+      } else {
+        pending_.push_back(std::move(operation));
+      }
+    }
+    if (rejected) {
+      Wipe(&operation.encrypted_bytes);
+      ReturnFailure(std::move(operation.result));
+      return false;
+    }
+    condition_.notify_one();
+    return true;
+  }
+
+  bool EnqueuePick(std::wstring selected_path,
+                   std::unique_ptr<Result> result) {
+    PendingOperation operation;
+    operation.kind = PendingOperation::Kind::kPickEncryptedExport;
+    operation.destination_path = std::move(selected_path);
+    operation.result = std::move(result);
+    bool rejected = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopping_) {
+        rejected = true;
+      } else {
+        pending_.push_back(std::move(operation));
+      }
+    }
+    if (rejected) {
+      if (!operation.destination_path.empty()) {
+        SecureZeroMemory(operation.destination_path.data(),
+                         operation.destination_path.size() *
+                             sizeof(wchar_t));
+        operation.destination_path.clear();
+      }
+      ReturnFailure(std::move(operation.result));
+      return false;
+    }
+    condition_.notify_one();
+    return true;
   }
 
   void StopAndDrain() {
@@ -1606,8 +1893,17 @@ class AtlasVaultWindowsStorageWorker {
 
  private:
   struct PendingOperation {
+    enum class Kind {
+      kMethod,
+      kPickEncryptedExport,
+      kSaveEncryptedExport,
+    };
+
+    Kind kind = Kind::kMethod;
     std::string method;
     std::unique_ptr<flutter::EncodableValue> arguments;
+    std::wstring destination_path;
+    std::vector<uint8_t> encrypted_bytes;
     std::unique_ptr<Result> result;
   };
 
@@ -1627,12 +1923,25 @@ class AtlasVaultWindowsStorageWorker {
         operation = std::move(pending_.front());
         pending_.pop_front();
       }
-      execute_(std::move(operation.method), std::move(operation.arguments),
-               std::move(operation.result));
+      if (operation.kind == PendingOperation::Kind::kPickEncryptedExport) {
+        pick_(std::move(operation.destination_path),
+              std::move(operation.result));
+      } else if (operation.kind ==
+                 PendingOperation::Kind::kSaveEncryptedExport) {
+        save_(std::move(operation.destination_path),
+              std::move(operation.encrypted_bytes),
+              std::move(operation.result));
+      } else {
+        execute_(std::move(operation.method),
+                 std::move(operation.arguments),
+                 std::move(operation.result));
+      }
     }
   }
 
   ExecuteCallback execute_;
+  PickCallback pick_;
+  SaveCallback save_;
   std::mutex mutex_;
   std::condition_variable condition_;
   std::deque<PendingOperation> pending_;
@@ -1642,8 +1951,10 @@ class AtlasVaultWindowsStorageWorker {
 
 AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
     flutter::BinaryMessenger* messenger,
-    const std::string& channel_name)
-    : channel_(std::make_unique<
+    const std::string& channel_name,
+    HWND owner_window)
+    : owner_window_(owner_window),
+      channel_(std::make_unique<
                flutter::MethodChannel<flutter::EncodableValue>>(
           messenger, channel_name,
           &flutter::StandardMethodCodec::GetInstance())),
@@ -1655,6 +1966,22 @@ AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
                   flutter::MethodResult<flutter::EncodableValue>> result) {
             ExecuteMethodCall(std::move(method), std::move(arguments),
                               std::move(result));
+          },
+          [this](
+              std::wstring selected_path,
+              std::unique_ptr<
+                  flutter::MethodResult<flutter::EncodableValue>> result) {
+            ExecutePickEncryptedExport(std::move(selected_path),
+                                       std::move(result));
+          },
+          [this](
+              std::wstring destination_path,
+              std::vector<uint8_t> encrypted_bytes,
+              std::unique_ptr<
+                  flutter::MethodResult<flutter::EncodableValue>> result) {
+            ExecuteSaveEncryptedExport(std::move(destination_path),
+                                       std::move(encrypted_bytes),
+                                       std::move(result));
           })) {
   channel_->SetMethodCallHandler(
       [this](
@@ -1668,11 +1995,21 @@ AtlasVaultWindowsStorage::AtlasVaultWindowsStorage(
 AtlasVaultWindowsStorage::~AtlasVaultWindowsStorage() {
   channel_->SetMethodCallHandler(nullptr);
   worker_->StopAndDrain();
+  document_operation_pending_.store(false);
+  owner_window_ = nullptr;
 }
 
 void AtlasVaultWindowsStorage::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (call.method_name() == "pickEncryptedExport") {
+    HandlePickEncryptedExport(call, std::move(result));
+    return;
+  }
+  if (call.method_name() == "saveEncryptedExport") {
+    HandleSaveEncryptedExport(call, std::move(result));
+    return;
+  }
   std::unique_ptr<flutter::EncodableValue> arguments;
   if (call.arguments() != nullptr) {
     arguments =
@@ -1680,6 +2017,112 @@ void AtlasVaultWindowsStorage::HandleMethodCall(
   }
   worker_->Enqueue(call.method_name(), std::move(arguments),
                    std::move(result));
+}
+
+void AtlasVaultWindowsStorage::HandlePickEncryptedExport(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (!HasNoArguments(call) || document_operation_pending_.exchange(true)) {
+    ReturnFailure(std::move(result));
+    return;
+  }
+
+  std::wstring selected_path;
+  const DocumentDialogResult dialog_result =
+      SelectEncryptedExportSource(owner_window_, &selected_path);
+  if (dialog_result == DocumentDialogResult::kCancelled) {
+    document_operation_pending_.store(false);
+    result->Success(flutter::EncodableValue());
+    return;
+  }
+  if (dialog_result != DocumentDialogResult::kSelected) {
+    document_operation_pending_.store(false);
+    ReturnFailure(std::move(result));
+    return;
+  }
+
+  if (!worker_->EnqueuePick(std::move(selected_path), std::move(result))) {
+    document_operation_pending_.store(false);
+  }
+}
+
+void AtlasVaultWindowsStorage::ExecutePickEncryptedExport(
+    std::wstring selected_path,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  std::vector<uint8_t> encrypted_bytes;
+  const OperationResult read_result = ReadRegularFile(
+      selected_path, kEncryptedDocumentMaximumLength, &encrypted_bytes);
+  if (!selected_path.empty()) {
+    SecureZeroMemory(selected_path.data(),
+                     selected_path.size() * sizeof(wchar_t));
+    selected_path.clear();
+  }
+  document_operation_pending_.store(false);
+  if (read_result != OperationResult::kSuccess || encrypted_bytes.empty()) {
+    Wipe(&encrypted_bytes);
+    ReturnFailure(std::move(result), read_result);
+    return;
+  }
+  ReturnBytes(std::move(result), &encrypted_bytes, true);
+}
+
+void AtlasVaultWindowsStorage::HandleSaveEncryptedExport(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const flutter::EncodableMap* arguments =
+      ExactArguments(call, {"export_bytes"});
+  const std::vector<uint8_t>* supplied =
+      arguments == nullptr ? nullptr
+                           : BytesArgument(*arguments, "export_bytes");
+  if (supplied == nullptr || supplied->empty() ||
+      supplied->size() > kEncryptedDocumentMaximumLength ||
+      document_operation_pending_.exchange(true)) {
+    ReturnFailure(std::move(result));
+    return;
+  }
+
+  std::vector<uint8_t> encrypted_bytes(*supplied);
+  std::wstring destination_path;
+  const DocumentDialogResult dialog_result =
+      SelectEncryptedExportDestination(owner_window_, &destination_path);
+  if (dialog_result == DocumentDialogResult::kCancelled) {
+    Wipe(&encrypted_bytes);
+    document_operation_pending_.store(false);
+    result->Success(flutter::EncodableValue(false));
+    return;
+  }
+  if (dialog_result != DocumentDialogResult::kSelected) {
+    Wipe(&encrypted_bytes);
+    document_operation_pending_.store(false);
+    ReturnFailure(std::move(result));
+    return;
+  }
+
+  if (!worker_->EnqueueSave(std::move(destination_path),
+                            std::move(encrypted_bytes),
+                            std::move(result))) {
+    document_operation_pending_.store(false);
+  }
+}
+
+void AtlasVaultWindowsStorage::ExecuteSaveEncryptedExport(
+    std::wstring destination_path,
+    std::vector<uint8_t> encrypted_bytes,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const OperationResult save_result =
+      SaveEncryptedExportAtomically(destination_path, encrypted_bytes);
+  Wipe(&encrypted_bytes);
+  if (!destination_path.empty()) {
+    SecureZeroMemory(destination_path.data(),
+                     destination_path.size() * sizeof(wchar_t));
+    destination_path.clear();
+  }
+  document_operation_pending_.store(false);
+  if (save_result != OperationResult::kSuccess) {
+    ReturnFailure(std::move(result), save_result);
+    return;
+  }
+  result->Success(flutter::EncodableValue(true));
 }
 
 void AtlasVaultWindowsStorage::ExecuteMethodCall(
@@ -1720,19 +2163,28 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       method == "createPlaintextMigrationJournal" ||
       method == "replacePlaintextMigrationJournal" ||
       method == "deletePlaintextMigrationJournal";
+  const bool recovery_import_metadata_method =
+      method == "readRecoveryImportJournal" ||
+      method == "createRecoveryImportJournal" ||
+      method == "replaceRecoveryImportJournal" ||
+      method == "deleteRecoveryImportJournal";
   const bool selected_vault_method =
       method == "readSelectedVault" || method == "createSelectedVault" ||
       method == "clearSelectedVault";
-  if (migration_metadata_method || selected_vault_method) {
+  if (migration_metadata_method || recovery_import_metadata_method ||
+      selected_vault_method) {
     ProtectedMetadataPaths paths;
     if (!PrepareProtectedMetadataPaths(&paths)) {
       ReturnFailure(std::move(result));
       return;
     }
     ScopedVaultLock lock;
-    const std::wstring& lock_path = migration_metadata_method
-                                        ? paths.migration_lock_path
-                                        : paths.selection_lock_path;
+    const std::wstring& lock_path =
+        migration_metadata_method
+            ? paths.migration_lock_path
+        : recovery_import_metadata_method
+            ? paths.recovery_import_lock_path
+            : paths.selection_lock_path;
     if (!lock.Acquire(lock_path)) {
       ReturnFailure(std::move(result));
       return;
@@ -1836,6 +2288,114 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       }
       const OperationResult delete_result = DeleteProtectedMetadata(
           paths.migration_journal_path, kMigrationJournalPurpose,
+          *expected_sha256, *allow_absent,
+          kProtectedMetadataPlaintextMaximumLength);
+      if (delete_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), delete_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "readRecoveryImportJournal") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.recovery_import_path, kRecoveryImportPurpose,
+          kProtectedMetadataPlaintextMaximumLength, &journal);
+      if (read_result == OperationResult::kNotFound) {
+        result->Success(flutter::EncodableValue());
+        return;
+      }
+      if (read_result != OperationResult::kSuccess) {
+        Wipe(&journal);
+        ReturnFailure(std::move(result));
+        return;
+      }
+      ReturnBytes(std::move(result), &journal, true);
+      return;
+    }
+
+    if (method == "createRecoveryImportJournal") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"journal_bytes"});
+      const std::vector<uint8_t>* supplied =
+          arguments == nullptr
+              ? nullptr
+              : BytesArgument(*arguments, "journal_bytes");
+      if (supplied == nullptr || supplied->empty() ||
+          supplied->size() > kProtectedMetadataPlaintextMaximumLength) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal(*supplied);
+      const OperationResult create_result = CreateProtectedMetadata(
+          paths.imports_directory, paths.recovery_import_path,
+          kRecoveryImportPurpose, journal,
+          kProtectedMetadataPlaintextMaximumLength);
+      Wipe(&journal);
+      if (create_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), create_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "replaceRecoveryImportJournal") {
+      const flutter::EncodableMap* arguments = ExactArguments(
+          call, {"journal_bytes", "expected_sha256"});
+      const std::vector<uint8_t>* supplied =
+          arguments == nullptr
+              ? nullptr
+              : BytesArgument(*arguments, "journal_bytes");
+      const std::string* expected_sha256 =
+          arguments == nullptr
+              ? nullptr
+              : StringArgument(*arguments, "expected_sha256");
+      if (supplied == nullptr || expected_sha256 == nullptr ||
+          supplied->empty() ||
+          supplied->size() > kProtectedMetadataPlaintextMaximumLength ||
+          !IsLowerSha256(*expected_sha256)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> journal(*supplied);
+      const OperationResult replace_result = ReplaceProtectedMetadata(
+          paths.imports_directory, paths.recovery_import_path,
+          kRecoveryImportPurpose, journal, *expected_sha256,
+          kProtectedMetadataPlaintextMaximumLength);
+      Wipe(&journal);
+      if (replace_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), replace_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "deleteRecoveryImportJournal") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"expected_sha256", "allow_absent"});
+      const std::string* expected_sha256 =
+          arguments == nullptr
+              ? nullptr
+              : StringArgument(*arguments, "expected_sha256");
+      const bool* allow_absent =
+          arguments == nullptr
+              ? nullptr
+              : BooleanArgument(*arguments, "allow_absent");
+      if (expected_sha256 == nullptr || allow_absent == nullptr ||
+          !IsLowerSha256(*expected_sha256)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      const OperationResult delete_result = DeleteProtectedMetadata(
+          paths.recovery_import_path, kRecoveryImportPurpose,
           *expected_sha256, *allow_absent,
           kProtectedMetadataPlaintextMaximumLength);
       if (delete_result != OperationResult::kSuccess) {

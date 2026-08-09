@@ -1,11 +1,10 @@
 # AtlasVault v1 Encrypted Vault Contract
 
-Status: Phase 2D-61 contract. The Python reference package in
-`packages/vaultsync` implements the cross-platform cryptographic format.
-The Apple implementation generates and verifies recovery material and
-encrypted exports, but production recovery unlock and import remain deferred.
-This contract does not define cloud sync behavior, authentication, or data
-migration.
+Status: AtlasVault v1 cross-platform encrypted export contract. The Python
+reference package in `packages/vaultsync` implements the cryptographic format,
+and the Apple, Android, and Windows clients consume the same canonical
+`atlasvault-export` version 1 envelope. This contract does not define cloud
+sync behavior, authentication, device linking, or data migration.
 
 ## Purpose
 
@@ -78,9 +77,9 @@ Rules:
 - Raw vault keys are never serialized into vault metadata or record files.
 - Future devices may store a local copy of the unwrapped vault key in platform
   secure storage.
-- Future Apple clients should use Apple Keychain.
-- Future Android clients should use Android Keystore.
-- Future Windows clients should use DPAPI or Credential Manager.
+- Apple clients use Apple Keychain for device-local key custody.
+- Android clients use Android Keystore for device-local key custody.
+- Windows clients use current-user DPAPI for device-local key custody.
 - Cloud providers and custom backends store only encrypted metadata and
   encrypted record blobs.
 - Authentication and account identity are separate from encryption keys.
@@ -426,6 +425,56 @@ Existing-vault replacement and cross-vault merging are not part of this
 contract. The recovery key travels separately, no plaintext intermediary or
 cloud service is required, and this profile does not alter the export wire
 fields or versions.
+
+### Windows Encrypted Interoperability
+
+Windows is another consumer of the same canonical `atlasvault-export` version
+1 envelope. Windows does not add fields, reinterpret metadata, change record
+ordering, or define a platform-specific transport envelope. Recovery transport
+requires exactly one recovery-wrap v2 and may retain valid coexisting
+passphrase-wrap v1 entries. The recovery key travels separately and is absent
+from the encrypted document.
+
+Windows export excludes the local-store ID, local timestamps, current-user
+DPAPI blob, selected-vault marker, migration and import journals, public cache,
+local path, raw keys, and decrypted payloads. Export preserves vault metadata,
+ordered encrypted-record envelopes, tombstones, and supported-but-unrendered
+private records without re-encryption.
+
+Windows import is clean-install only. It rejects an existing selected vault,
+pending plaintext migration, pending unrelated import, or any plaintext private
+authority. After strict canonical decode and recovery-key authentication, it
+creates a new Windows local-store ID and local timestamps while retaining the
+imported vault metadata and encrypted records byte-for-byte and in order.
+
+The device-local Windows recovery-import journal uses the strict
+`atlasvault-windows-recovery-import` profile and current-user DPAPI protection.
+It stores transaction identifiers, stages, and SHA-256 resource fingerprints,
+but no export bytes, encrypted records, file path, recovery key, raw vault key,
+or plaintext. Existing Android journals retain the exact
+`atlasvault-android-recovery-import` format and canonical encoding; either
+platform rejects the other platform's local journal profile.
+
+Windows installation ordering is fixed:
+
+1. create the DPAPI-protected recovery-import journal;
+2. create and read back the canonical encrypted local store;
+3. create and verify the current-user DPAPI-protected vault key;
+4. create and read back the selected-vault marker;
+5. activate and verify the imported encrypted runtime;
+6. clear the import journal last.
+
+The store is first, the key is second, and selection is last. Selection is the
+commit point. Resume requires the same canonical export and recovery key.
+Before selection, explicit reset is hash-bound to the journaled store and key;
+after selection, reset is unavailable and only resume may complete the
+transaction. The Windows recovery-import transaction holds the existing
+cross-process plaintext-authority admission boundary from the final clean-state
+check through selection and journal completion.
+
+Windows file dialogs transfer encrypted bytes only and expose no path to Dart.
+There is no plaintext intermediary, recovery-key sidecar, existing-vault
+replacement, cloud dependency, or device-linking behavior in this contract.
 
 ## Future Device Onboarding And Removal
 

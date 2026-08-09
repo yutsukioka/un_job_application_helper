@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas.dart';
@@ -15,132 +16,169 @@ void main() {
   testWidgets(
     'Android installs and re-exports an Apple-origin encrypted vault',
     (tester) async {
-      final vector = _AndroidInteropVector.load();
-      final keyStore = AtlasAndroidVaultSecureKeyStore();
-      final localStore = AtlasAndroidVaultLocalStoreIO();
-      final selected = AtlasAndroidSelectedVaultStore();
-      final migrationJournal = AtlasAndroidProtectedMigrationJournalStore();
-      final importJournal = AtlasAndroidProtectedRecoveryImportJournalStore();
-      final runtime = AtlasVaultPrivateStateRuntime(
-        secureKeyStore: keyStore,
-        localStoreIO: localStore,
-      );
-      await _cleanup(
-        vector.vaultId,
-        runtime: runtime,
-        keyStore: keyStore,
-        localStore: localStore,
-        selected: selected,
-        importJournal: importJournal,
-      );
-      addTearDown(() async {
-        await _cleanup(
-          vector.vaultId,
-          runtime: runtime,
-          keyStore: keyStore,
-          localStore: localStore,
-          selected: selected,
-          importJournal: importJournal,
-        );
-      });
-      expect(await migrationJournal.read(), isNull);
-      final compatibility = _EmptyCompatibilitySource();
-      final transport = _MemoryDocumentTransport(vector.exportBytes);
-      final coordinator = AtlasVaultInteroperabilityCoordinator(
-        runtime: runtime,
-        selectedVaultStore: selected,
-        migrationJournalStore: migrationJournal,
-        recoveryImportPending: () => _hasPendingRecoveryImport(importJournal),
-        documentTransport: transport,
-        recoveryImportJournalStore: importJournal,
-        secureKeyStore: keyStore,
-        localStoreIO: localStore,
-        inMemorySource: const _EmptyPlaintextSource(),
-        compatibilitySource: compatibility,
-        cacheSource: const _EmptyCacheSource(),
-        now: () => DateTime.parse('2026-07-29T03:04:05Z'),
-        uuidProvider: () => '40000000-0000-4000-8000-000000000401',
-        importIdProvider: () => '40000000-0000-4000-8000-000000000402',
-        importStoreIdProvider: () => '40000000-0000-4000-8000-000000000403',
-      );
+      await _runImportAndReexport(tester, _AndroidInteropVector.loadApple());
+    },
+  );
 
-      expect(await selected.read(), isNull);
-      expect(await importJournal.read(), isNull);
-      final prepared = await coordinator.prepareRecoveryImport();
-      expect(
-        prepared.disposition,
-        AtlasVaultRecoveryImportDisposition.importPrepared,
-      );
-      final imported = await coordinator.confirmRecoveryImport(
-        vector.recoveryText,
-      );
+  testWidgets(
+    'Android installs and re-exports a Windows-origin encrypted vault',
+    (tester) async {
+      await _runImportAndReexport(tester, _AndroidInteropVector.loadWindows());
+    },
+  );
 
-      expect(
-        imported.disposition,
-        AtlasVaultRecoveryImportDisposition.importedAndActive,
-      );
-      expect(await selected.read(), vector.vaultId);
-      expect(await importJournal.read(), isNull);
-      expect(await keyStore.containsVaultKey(vector.vaultId), isTrue);
-      final installed = (await localStore.read(vector.vaultId))!;
-      expect(installed.records, hasLength(vector.expectedRecordCount));
-      expect(
-        installed.records.map((record) => jsonEncode(record.toJson())),
-        orderedEquals(
-          vector.export.records.map((record) => jsonEncode(record.toJson())),
-        ),
-      );
-      expect(
-        installed.records.where((record) => record.deleted),
-        hasLength(vector.expectedTombstoneCount),
-      );
-      final snapshot = await runtime.read();
-      expect(
-        snapshot.savedSearches,
-        hasLength(vector.expectedSavedSearchCount),
-      );
-      expect(snapshot.trackerRecords, hasLength(vector.expectedTrackerCount));
-      expect(
-        vector.expectedRecordCount -
-            vector.expectedTombstoneCount -
-            snapshot.savedSearches.length -
-            snapshot.trackerRecords.length,
-        vector.expectedHiddenRecordCount,
-      );
-      final storeText = utf8.decode(installed.canonicalBytes());
-      for (final sentinel in vector.privateSentinels) {
-        expect(storeText, isNot(contains(sentinel)), reason: sentinel);
-      }
-      expect(compatibility.deleteCalls, 0);
-
-      final exportPrepared = await coordinator.prepareExistingRecoveryExport(
-        vector.recoveryText,
-      );
-      expect(
-        exportPrepared.disposition,
-        AtlasVaultRecoveryExportDisposition.exportReady,
-      );
-      expect(
-        (await coordinator.savePreparedExport()).disposition,
-        AtlasVaultRecoveryExportDisposition.saved,
-      );
-      final reexported = vault.AtlasVaultEncryptedExport.decodeJson(
-        utf8.decode(transport.savedBytes!),
-      );
-      expect(reexported.vaultMetadata.vaultId, vector.vaultId);
-      expect(reexported.records, installed.records);
-      expect(reexported.canonicalBytes(), orderedEquals(transport.savedBytes!));
-      expect(compatibility.deleteCalls, 0);
-      tester.printToConsole(
-        'AtlasVault Android Apple-origin import and re-export passed.',
+  testWidgets(
+    'Android reproduces its exact Windows interoperability artifact',
+    (tester) async {
+      await _runImportAndReexport(
+        tester,
+        _AndroidInteropVector.loadAndroid(),
+        artifactBaseName: 'android-to-windows',
       );
     },
   );
 }
 
+Future<void> _runImportAndReexport(
+  WidgetTester tester,
+  _AndroidInteropVector vector, {
+  String? artifactBaseName,
+}) async {
+  final keyStore = AtlasAndroidVaultSecureKeyStore();
+  final localStore = AtlasAndroidVaultLocalStoreIO();
+  final selected = AtlasAndroidSelectedVaultStore();
+  final migrationJournal = AtlasAndroidProtectedMigrationJournalStore();
+  final importJournal = AtlasAndroidProtectedRecoveryImportJournalStore();
+  final runtime = AtlasVaultPrivateStateRuntime(
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+  );
+  await _cleanup(
+    vector.vaultId,
+    runtime: runtime,
+    keyStore: keyStore,
+    localStore: localStore,
+    selected: selected,
+    importJournal: importJournal,
+  );
+  addTearDown(() async {
+    await _cleanup(
+      vector.vaultId,
+      runtime: runtime,
+      keyStore: keyStore,
+      localStore: localStore,
+      selected: selected,
+      importJournal: importJournal,
+    );
+  });
+  expect(await migrationJournal.read(), isNull);
+  final compatibility = _EmptyCompatibilitySource();
+  final transport = _MemoryDocumentTransport(vector.exportBytes);
+  final coordinator = AtlasVaultInteroperabilityCoordinator(
+    runtime: runtime,
+    selectedVaultStore: selected,
+    migrationJournalStore: migrationJournal,
+    recoveryImportPending: () => _hasPendingRecoveryImport(importJournal),
+    documentTransport: transport,
+    recoveryImportJournalStore: importJournal,
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    inMemorySource: const _EmptyPlaintextSource(),
+    compatibilitySource: compatibility,
+    cacheSource: const _EmptyCacheSource(),
+    now: () => DateTime.parse(vector.exportTimestamp),
+    uuidProvider: () => vector.exportId,
+    importIdProvider: () => '40000000-0000-4000-8000-000000000402',
+    importStoreIdProvider: () => '40000000-0000-4000-8000-000000000403',
+  );
+
+  expect(await selected.read(), isNull);
+  expect(await importJournal.read(), isNull);
+  final prepared = await coordinator.prepareRecoveryImport();
+  expect(
+    prepared.disposition,
+    AtlasVaultRecoveryImportDisposition.importPrepared,
+  );
+  final imported = await coordinator.confirmRecoveryImport(vector.recoveryText);
+
+  expect(
+    imported.disposition,
+    AtlasVaultRecoveryImportDisposition.importedAndActive,
+  );
+  expect(await selected.read(), vector.vaultId);
+  expect(await importJournal.read(), isNull);
+  expect(await keyStore.containsVaultKey(vector.vaultId), isTrue);
+  final installed = (await localStore.read(vector.vaultId))!;
+  expect(installed.records, hasLength(vector.expectedRecordCount));
+  expect(
+    installed.records.map((record) => jsonEncode(record.toJson())),
+    orderedEquals(
+      vector.export.records.map((record) => jsonEncode(record.toJson())),
+    ),
+  );
+  expect(
+    installed.records.where((record) => record.deleted),
+    hasLength(vector.expectedTombstoneCount),
+  );
+  final snapshot = await runtime.read();
+  expect(snapshot.savedSearches, hasLength(vector.expectedSavedSearchCount));
+  expect(snapshot.trackerRecords, hasLength(vector.expectedTrackerCount));
+  expect(
+    vector.expectedRecordCount -
+        vector.expectedTombstoneCount -
+        snapshot.savedSearches.length -
+        snapshot.trackerRecords.length,
+    vector.expectedHiddenRecordCount,
+  );
+  final storeText = utf8.decode(installed.canonicalBytes());
+  for (final sentinel in vector.privateSentinels) {
+    expect(storeText, isNot(contains(sentinel)), reason: sentinel);
+  }
+  expect(compatibility.deleteCalls, 0);
+
+  final exportPrepared = await coordinator.prepareExistingRecoveryExport(
+    vector.recoveryText,
+  );
+  expect(
+    exportPrepared.disposition,
+    AtlasVaultRecoveryExportDisposition.exportReady,
+  );
+  expect(
+    (await coordinator.savePreparedExport()).disposition,
+    AtlasVaultRecoveryExportDisposition.saved,
+  );
+  final reexported = vault.AtlasVaultEncryptedExport.decodeJson(
+    utf8.decode(transport.savedBytes!),
+  );
+  expect(transport.savedBytes, orderedEquals(vector.exportBytes));
+  expect(reexported.vaultMetadata.vaultId, vector.vaultId);
+  expect(reexported.records, installed.records);
+  expect(reexported.canonicalBytes(), orderedEquals(transport.savedBytes!));
+  expect(compatibility.deleteCalls, 0);
+  const artifactDirectory = String.fromEnvironment(
+    'ATLAS_INTEROP_ARTIFACT_DIR',
+  );
+  if (artifactBaseName != null && artifactDirectory.isNotEmpty) {
+    final directory = Directory(artifactDirectory);
+    await directory.create(recursive: true);
+    final bytes = transport.savedBytes!;
+    final digest = await vault.atlasVaultSha256Hex(bytes);
+    await File(
+      '${directory.path}/$artifactBaseName.atlasvault',
+    ).writeAsBytes(bytes, flush: true);
+    await File(
+      '${directory.path}/$artifactBaseName.sha256',
+    ).writeAsString('$digest\n', flush: true);
+  }
+  tester.printToConsole('AtlasVault Android ${vector.caseId} passed.');
+}
+
 final class _AndroidInteropVector {
   _AndroidInteropVector({
+    required this.caseId,
     required this.vaultId,
+    required this.exportId,
+    required this.exportTimestamp,
     required this.recoveryText,
     required this.exportBytes,
     required this.export,
@@ -152,7 +190,10 @@ final class _AndroidInteropVector {
     required this.privateSentinels,
   });
 
+  final String caseId;
   final String vaultId;
+  final String exportId;
+  final String exportTimestamp;
   final String recoveryText;
   final Uint8List exportBytes;
   final vault.AtlasVaultEncryptedExport export;
@@ -163,16 +204,66 @@ final class _AndroidInteropVector {
   final int expectedHiddenRecordCount;
   final List<String> privateSentinels;
 
-  factory _AndroidInteropVector.load() {
-    final root = loadAtlasVaultVector(
-      'atlasvault_ios_flutter_interop_vectors_v1.json',
-    );
-    final value = atlasVaultObject(root['ios_to_flutter']);
-    final bytes = Uint8List.fromList(
+  factory _AndroidInteropVector.loadApple() => _AndroidInteropVector._load(
+    fileName: 'atlasvault_ios_flutter_interop_vectors_v1.json',
+    caseName: 'ios_to_flutter',
+    privateSentinels: const <String>[
+      'FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK',
+      'FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK',
+      'FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK',
+      'saved_search',
+      'saved_job',
+    ],
+  );
+
+  factory _AndroidInteropVector.loadWindows() => _AndroidInteropVector._load(
+    fileName: 'atlasvault_windows_interop_vectors_v1.json',
+    caseName: 'windows_to_apple_android',
+    directArtifactBaseName: 'windows-to-apple-android',
+  );
+
+  factory _AndroidInteropVector.loadAndroid() => _AndroidInteropVector._load(
+    fileName: 'atlasvault_windows_interop_vectors_v1.json',
+    caseName: 'android_to_windows',
+  );
+
+  factory _AndroidInteropVector._load({
+    required String fileName,
+    required String caseName,
+    List<String>? privateSentinels,
+    String? directArtifactBaseName,
+  }) {
+    final root = loadAtlasVaultVector(fileName);
+    final value = atlasVaultObject(root[caseName]);
+    final vectorBytes = Uint8List.fromList(
       base64Decode(value['canonical_encrypted_export_b64']! as String),
     );
+    const artifactDirectory = String.fromEnvironment(
+      'ATLAS_INTEROP_ARTIFACT_DIR',
+    );
+    var bytes = vectorBytes;
+    if (directArtifactBaseName != null && artifactDirectory.isNotEmpty) {
+      final artifact = File(
+        '$artifactDirectory/$directArtifactBaseName.atlasvault',
+      );
+      if (!artifact.existsSync()) {
+        throw StateError('The direct encrypted test artifact is absent.');
+      }
+      final directBytes = Uint8List.fromList(artifact.readAsBytesSync());
+      if (base64Encode(directBytes) != base64Encode(vectorBytes)) {
+        directBytes.fillRange(0, directBytes.length, 0);
+        throw StateError('The direct encrypted test artifact is invalid.');
+      }
+      bytes = directBytes;
+    }
+    final expectedPayloadValues = atlasVaultObject(
+      value['expected_payload_values'],
+    );
     return _AndroidInteropVector(
+      caseId: value['case_id'] as String? ?? caseName,
       vaultId: value['vault_id']! as String,
+      exportId: value['export_id']! as String,
+      exportTimestamp: value['export_timestamp']! as String,
       recoveryText: value['test_only_recovery_key_text']! as String,
       exportBytes: bytes,
       export: vault.AtlasVaultEncryptedExport.decodeJson(utf8.decode(bytes)),
@@ -184,13 +275,13 @@ final class _AndroidInteropVector {
       expectedTombstoneCount: value['expected_tombstone_count']! as int,
       expectedHiddenRecordCount:
           value['expected_preserved_other_private_record_count']! as int,
-      privateSentinels: const <String>[
-        'FAKE_SAVED_SEARCH_NAME_DO_NOT_LEAK',
-        'FAKE_PRIVATE_SEARCH_TEXT_DO_NOT_LEAK',
-        'FAKE_SAVED_ONLY_JOB_KEY_DO_NOT_LEAK',
-        'saved_search',
-        'saved_job',
-      ],
+      privateSentinels:
+          privateSentinels ??
+          <String>[
+            for (final entry in expectedPayloadValues.entries)
+              if (!entry.key.endsWith('_record_id') && entry.value is String)
+                entry.value! as String,
+          ],
     );
   }
 }

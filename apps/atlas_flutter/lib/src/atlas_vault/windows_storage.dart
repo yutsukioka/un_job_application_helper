@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../atlas_vault.dart';
 import 'android_storage.dart' show AtlasVaultSecureKeyStore;
 import 'canonical_json.dart';
+import 'interoperability.dart';
 import 'local_store_io.dart';
 import 'plaintext_migration.dart';
 
@@ -276,6 +277,58 @@ final class AtlasWindowsVaultLocalStoreIO implements AtlasVaultLocalStoreIO {
   String toString() => 'AtlasWindowsVaultLocalStoreIO(<redacted>)';
 }
 
+final class AtlasWindowsEncryptedDocumentTransport
+    implements AtlasVaultEncryptedDocumentTransport {
+  AtlasWindowsEncryptedDocumentTransport({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumDocumentByteCount = 128 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> pickEncryptedExport() async {
+    final value = await _invoke<Object?>(_channel, 'pickEncryptedExport', null);
+    if (value == null) {
+      return null;
+    }
+    final bytes = _copyBytes(value);
+    try {
+      if (bytes.isEmpty || bytes.length > maximumDocumentByteCount) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      return Uint8List.fromList(bytes);
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<bool> saveEncryptedExport(Uint8List canonicalExportBytes) async {
+    if (canonicalExportBytes.isEmpty ||
+        canonicalExportBytes.length > maximumDocumentByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    final bytes = Uint8List.fromList(canonicalExportBytes);
+    try {
+      final value = await _invoke<Object?>(
+        _channel,
+        'saveEncryptedExport',
+        <String, Object?>{'export_bytes': bytes},
+      );
+      if (value is! bool) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      return value;
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsEncryptedDocumentTransport(<redacted>)';
+}
+
 final class AtlasWindowsProtectedMigrationJournalStore
     implements AtlasVaultProtectedMigrationJournalStore {
   AtlasWindowsProtectedMigrationJournalStore({MethodChannel? channel})
@@ -392,6 +445,118 @@ final class AtlasWindowsProtectedMigrationJournalStore
 
   @override
   String toString() => 'AtlasWindowsProtectedMigrationJournalStore(<redacted>)';
+}
+
+final class AtlasWindowsProtectedRecoveryImportJournalStore
+    implements AtlasVaultProtectedRecoveryImportJournalStore {
+  AtlasWindowsProtectedRecoveryImportJournalStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumJournalByteCount = 16 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> read() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'readRecoveryImportJournal',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = _copyBytes(value);
+    try {
+      _validateJournalBytes(bytes);
+      return Uint8List.fromList(bytes);
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) async {
+    final bytes = _validatedJournalCopy(canonicalBytes);
+    try {
+      await _invoke<void>(
+        _channel,
+        'createRecoveryImportJournal',
+        <String, Object?>{'journal_bytes': bytes},
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) async {
+    _validateSha256(expectedSha256);
+    final bytes = _validatedJournalCopy(canonicalBytes);
+    try {
+      await _invoke<void>(
+        _channel,
+        'replaceRecoveryImportJournal',
+        <String, Object?>{
+          'journal_bytes': bytes,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) async {
+    _validateSha256(expectedSha256);
+    await _invoke<void>(
+      _channel,
+      'deleteRecoveryImportJournal',
+      <String, Object?>{
+        'expected_sha256': expectedSha256,
+        'allow_absent': allowAbsent,
+      },
+    );
+  }
+
+  Uint8List _validatedJournalCopy(Uint8List source) {
+    _validateJournalBytes(source);
+    return Uint8List.fromList(source);
+  }
+
+  void _validateJournalBytes(Uint8List source) {
+    if (source.isEmpty || source.length > maximumJournalByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    Uint8List? canonical;
+    try {
+      final journal = AtlasVaultRecoveryImportJournal.decodeBytes(
+        source,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      );
+      canonical = journal.canonicalBytes();
+      if (!_constantTimeEquals(source, canonical)) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+    } catch (_) {
+      throw const AtlasVaultWindowsStorageException();
+    } finally {
+      if (canonical != null) {
+        _wipe(canonical);
+      }
+    }
+  }
+
+  @override
+  String toString() =>
+      'AtlasWindowsProtectedRecoveryImportJournalStore(<redacted>)';
 }
 
 final class AtlasWindowsSelectedVaultStore

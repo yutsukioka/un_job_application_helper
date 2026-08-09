@@ -13,7 +13,9 @@ void main() {
   late AtlasVaultWindowsMethodCallRecorder recorder;
   late AtlasWindowsVaultSecureKeyStore storage;
   late AtlasWindowsProtectedMigrationJournalStore journal;
+  late AtlasWindowsProtectedRecoveryImportJournalStore recoveryJournal;
   late AtlasWindowsSelectedVaultStore selection;
+  late AtlasWindowsEncryptedDocumentTransport documentTransport;
 
   setUp(() {
     recorder = AtlasVaultWindowsMethodCallRecorder(
@@ -23,7 +25,13 @@ void main() {
     journal = AtlasWindowsProtectedMigrationJournalStore(
       channel: recorder.channel,
     );
+    recoveryJournal = AtlasWindowsProtectedRecoveryImportJournalStore(
+      channel: recorder.channel,
+    );
     selection = AtlasWindowsSelectedVaultStore(channel: recorder.channel);
+    documentTransport = AtlasWindowsEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
   });
 
   tearDown(() {
@@ -32,6 +40,92 @@ void main() {
 
   test('construction performs no platform call', () {
     expect(recorder.calls, isEmpty);
+  });
+
+  test('encrypted-document save uses exact bounded path-free call', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+    recorder.handler = (call) async {
+      expect(call.method, 'saveEncryptedExport');
+      expect(call.arguments, isA<Map<Object?, Object?>>());
+      final arguments = call.arguments! as Map<Object?, Object?>;
+      expect(arguments.keys, <Object?>['export_bytes']);
+      expect(arguments['export_bytes'], orderedEquals(bytes));
+      expect(identical(arguments['export_bytes'], bytes), isFalse);
+      return true;
+    };
+
+    expect(await documentTransport.saveEncryptedExport(bytes), isTrue);
+    expect(recorder.calls, hasLength(1));
+  });
+
+  test('encrypted-document save cancellation and errors are fixed', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+    recorder.handler = (_) async => false;
+    expect(await documentTransport.saveEncryptedExport(bytes), isFalse);
+
+    recorder.handler = (_) async {
+      throw PlatformException(
+        code: 'win32_5',
+        message: r'C:\Users\private\Desktop\backup.atlasvault',
+      );
+    };
+    await expectLater(
+      documentTransport.saveEncryptedExport(bytes),
+      throwsA(
+        isA<AtlasVaultWindowsStorageException>().having(
+          (failure) => failure.toString(),
+          'description',
+          'AtlasVault Windows storage operation failed.',
+        ),
+      ),
+    );
+  });
+
+  test('invalid encrypted-document save size makes no platform call', () async {
+    await expectLater(
+      documentTransport.saveEncryptedExport(Uint8List(0)),
+      throwsA(isA<AtlasVaultWindowsStorageException>()),
+    );
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('encrypted-document picker uses one path-free copied call', () async {
+    final platformBytes = Uint8List.fromList(
+      utf8.encode('{"format":"atlasvault-export","version":1}'),
+    );
+    recorder.handler = (call) async {
+      expect(call.method, 'pickEncryptedExport');
+      expect(call.arguments, isNull);
+      return platformBytes;
+    };
+
+    final picked = await documentTransport.pickEncryptedExport();
+
+    expect(picked, orderedEquals(platformBytes));
+    expect(identical(picked, platformBytes), isFalse);
+    expect(recorder.calls, hasLength(1));
+  });
+
+  test('encrypted-document picker cancellation and errors are fixed', () async {
+    recorder.handler = (_) async => null;
+    expect(await documentTransport.pickEncryptedExport(), isNull);
+
+    recorder.handler = (_) async {
+      throw PlatformException(
+        code: 'win32_5',
+        message: r'C:\Users\private\Desktop\backup.atlasvault',
+      );
+    };
+    await expectLater(
+      documentTransport.pickEncryptedExport(),
+      throwsA(
+        isA<AtlasVaultWindowsStorageException>().having(
+          (failure) => failure.toString(),
+          'description',
+          'AtlasVault Windows storage operation failed.',
+        ),
+      ),
+    );
   });
 
   test(
@@ -110,6 +204,74 @@ void main() {
     },
   );
 
+  test('protected recovery-import journal uses strict Windows CAS', () async {
+    final bytes = AtlasVaultRecoveryImportJournal.prepared(
+      profile: AtlasVaultRecoveryImportProfile.windows,
+      importId: '30000000-0000-4000-8000-000000000331',
+      exportId: '30000000-0000-4000-8000-000000000332',
+      vaultId: 'vault-alpha',
+      storeId: '30000000-0000-4000-8000-000000000333',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    ).canonicalBytes();
+    recorder.handler = (call) async {
+      switch (call.method) {
+        case 'readRecoveryImportJournal':
+          expect(call.arguments, isNull);
+          return Uint8List.fromList(bytes);
+        case 'createRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{'journal_bytes': bytes});
+          return null;
+        case 'replaceRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'journal_bytes': bytes,
+            'expected_sha256': 'a' * 64,
+          });
+          return null;
+        case 'deleteRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'expected_sha256': 'b' * 64,
+            'allow_absent': true,
+          });
+          return null;
+        default:
+          fail('Unexpected Windows recovery-import journal method.');
+      }
+    };
+
+    await recoveryJournal.create(bytes);
+    expect(await recoveryJournal.read(), orderedEquals(bytes));
+    await recoveryJournal.replace(bytes, expectedSha256: 'a' * 64);
+    await recoveryJournal.delete(expectedSha256: 'b' * 64, allowAbsent: true);
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'createRecoveryImportJournal',
+      'readRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+    ]);
+  });
+
+  test('protected recovery-import journal rejects Android profile', () async {
+    final androidBytes = AtlasVaultRecoveryImportJournal.prepared(
+      importId: '30000000-0000-4000-8000-000000000341',
+      exportId: '30000000-0000-4000-8000-000000000342',
+      vaultId: 'vault-alpha',
+      storeId: '30000000-0000-4000-8000-000000000343',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    ).canonicalBytes();
+
+    await expectLater(
+      recoveryJournal.create(androidBytes),
+      throwsA(isA<AtlasVaultWindowsStorageException>()),
+    );
+    expect(recorder.calls, isEmpty);
+  });
+
   test(
     'selected vault uses strict create-only read and clear methods',
     () async {
@@ -170,6 +332,26 @@ void main() {
     expect(source, contains('class ScopedSensitiveArgumentWiper'));
     expect(source, contains('ScopedSensitiveArgumentWiper argument_wiper'));
     expect(source, isNot(contains('ScopedVaultKeyArgumentWiper')));
+  });
+
+  test('native bridge declares the protected recovery-import boundary', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final token in <String>[
+      'recovery-import',
+      'readRecoveryImportJournal',
+      'createRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+      'imports',
+      'recovery-import.lock',
+    ]) {
+      expect(source, contains(token), reason: token);
+    }
+    expect(source, contains('CRYPTPROTECT_UI_FORBIDDEN'));
+    expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
   });
 
   test('invalid vault IDs make no platform call', () async {

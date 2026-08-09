@@ -152,6 +152,83 @@ void main() {
     );
   });
 
+  test('native encrypted save dialog is owned, atomic, and path-free', () {
+    final runner = File('windows/runner/flutter_window.cpp').readAsStringSync();
+    final header = File(
+      'windows/runner/atlas_vault_windows_storage.h',
+    ).readAsStringSync();
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+    final combined = '$header\n$source';
+
+    expect(runner, contains('GetHandle()'));
+    expect(combined, contains('HWND'));
+    for (final token in <String>[
+      'saveEncryptedExport',
+      'IFileSaveDialog',
+      'FOS_FORCEFILESYSTEM',
+      'FOS_PATHMUSTEXIST',
+      'FOS_DONTADDTORECENT',
+      'FOS_NOCHANGEDIR',
+      'FOS_OVERWRITEPROMPT',
+      'AtlasVault-Encrypted-Backup.atlasvault',
+      'FlushFileBuffers',
+      'MoveFileExW',
+      'MOVEFILE_REPLACE_EXISTING',
+      'MOVEFILE_WRITE_THROUGH',
+    ]) {
+      expect(combined, contains(token), reason: token);
+    }
+    expect(combined, isNot(contains('SHAddToRecentDocs')));
+    expect(combined, isNot(contains('SIGDN_FILESYSPATH.*result')));
+  });
+
+  test('native encrypted picker is owned, bounded, and path-free', () {
+    final header = File(
+      'windows/runner/atlas_vault_windows_storage.h',
+    ).readAsStringSync();
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+    final combined = '$header\n$source';
+
+    for (final token in <String>[
+      'pickEncryptedExport',
+      'IFileOpenDialog',
+      'FOS_FORCEFILESYSTEM',
+      'FOS_FILEMUSTEXIST',
+      'FOS_PATHMUSTEXIST',
+      'FOS_DONTADDTORECENT',
+      'FOS_NOCHANGEDIR',
+      'FILE_FLAG_OPEN_REPARSE_POINT',
+    ]) {
+      expect(combined, contains(token), reason: token);
+    }
+    expect(combined, isNot(contains('SHAddToRecentDocs')));
+  });
+
+  test('native recovery-import journal is current-user protected', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+
+    for (final token in <String>[
+      'recovery-import',
+      'AVWBLB01',
+      'readRecoveryImportJournal',
+      'createRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+      'CryptProtectData',
+      'CryptUnprotectData',
+      'CRYPTPROTECT_UI_FORBIDDEN',
+    ]) {
+      expect(source, contains(token), reason: token);
+    }
+    expect(source, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
+  });
+
   test('runner build links only the required Windows libraries', () {
     final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
 

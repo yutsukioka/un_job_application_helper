@@ -19,6 +19,10 @@ void main() {
     AtlasVaultPlaintextMigrationCoordinating? migrationCoordinator;
     AtlasVaultPlaintextMigrationPresentationPlatform? presentationPlatform;
     AtlasVaultPlaintextMigrationPresentationOwner? presentationOwner;
+    AtlasVaultEncryptedDocumentTransport? documentTransport;
+    AtlasWindowsEncryptedDocumentTransport? windowsDocumentTransport;
+    AtlasVaultInteroperabilityCoordinating? interoperabilityCoordinator;
+    AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
     Future<Uint8List?> Function(String)? load;
 
     expect(keyStore, isNull);
@@ -34,6 +38,10 @@ void main() {
     expect(migrationCoordinator, isNull);
     expect(presentationPlatform, isNull);
     expect(presentationOwner, isNull);
+    expect(documentTransport, isNull);
+    expect(windowsDocumentTransport, isNull);
+    expect(interoperabilityCoordinator, isNull);
+    expect(interoperabilityOwner, isNull);
     expect(load, isNull);
     expect(atlasVaultWindowsMethodChannelName, 'atlas/vault_windows');
   });
@@ -55,6 +63,16 @@ void main() {
       capabilities.toString(),
       'AtlasVaultWindowsCapabilities(<redacted>)',
     );
+  });
+
+  test('Windows barrel exposes reviewed recovery-import boundaries', () {
+    final source = File('lib/atlas_vault_windows.dart').readAsStringSync();
+
+    expect(source, contains('AtlasWindowsProtectedRecoveryImportJournalStore'));
+    expect(source, contains('AtlasVaultRecoveryImportProfile'));
+    expect(source, contains('AtlasVaultRecoveryImportTransactionAdmission'));
+    expect(source, isNot(contains('recoveryImportPath')));
+    expect(source, isNot(contains('selectedFilePath')));
   });
 
   test('pure-Dart AtlasVault barrel remains platform neutral', () {

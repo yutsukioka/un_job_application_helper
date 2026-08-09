@@ -2473,7 +2473,7 @@ void main() {
     () async {
       final source = await File(
         'lib/features/app_shell/atlas_app.dart',
-      ).readAsString();
+      ).readAsString().then((value) => value.replaceAll('\r\n', '\n'));
       final activationStart = source.indexOf(
         'Future<AtlasVaultActivationResult> _activateExistingAtlasVault',
       );
@@ -2488,6 +2488,14 @@ void main() {
       expect(
         activationSource,
         isNot(contains('_recoveryImportBlocksLegacyPrivateAuthority = false')),
+      );
+      expect(
+        activationSource,
+        contains(
+          'if (plaintextMigrationResume ||\n'
+          '          recoveryImportResume ||\n'
+          '          _plaintextAuthorityAdmission == null)',
+        ),
       );
       expect(
         source,
@@ -3083,6 +3091,27 @@ void main() {
     },
   );
 
+  test(
+    'pending recovery import admits resume drain without reopening legacy writes',
+    () async {
+      final transport = _RecordingTransport();
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        recoveryImportPending: () async => true,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.bootstrapPrivateAuthorityAndLoadPersistedCache();
+      await controller.beginRecoveryImportAdmission();
+      controller.endRecoveryImportAdmission();
+      await controller.saveJob(JobSearchResult.fromJson(_jobJson));
+
+      expect(transport.savedJobKeys, isEmpty);
+    },
+  );
+
   test('migration context attaches once without starting authority work', () {
     final firstCoordinator = _ControllerMigrationCoordinator(
       authorityState: AtlasVaultPlaintextAuthorityState.legacy,
@@ -3151,6 +3180,10 @@ void main() {
       windowsAssembly,
       contains('AtlasWindowsProtectedMigrationJournalStore()'),
     );
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsProtectedRecoveryImportJournalStore()'),
+    );
     expect(windowsAssembly, contains('AtlasWindowsSelectedVaultStore()'));
     expect(
       windowsAssembly,
@@ -3187,7 +3220,25 @@ void main() {
     expect(sideEffectFreeAssembly, isNot(contains('.inventory(')));
     expect(sideEffectFreeAssembly, isNot(contains('.prepare(')));
     expect(sideEffectFreeAssembly, isNot(contains('.resume(')));
-    expect(sideEffectFreeAssembly, isNot(contains('Interoperability')));
+    expect(windowsAssembly, contains('_attachWindowsEncryptedBackup('));
+    expect(
+      migrationAssembly,
+      contains('AtlasWindowsEncryptedDocumentTransport()'),
+    );
+    expect(
+      migrationAssembly,
+      contains('AtlasVaultInteroperabilityCoordinator('),
+    );
+    expect(
+      migrationAssembly,
+      contains('AtlasVaultInteroperabilityPresentationOwner('),
+    );
+    expect(migrationAssembly, contains('recoveryImportJournalStore:'));
+    expect(migrationAssembly, contains('importTransactionAdmission:'));
+    expect(migrationAssembly, contains('activateImportedVault:'));
+    expect(migrationAssembly, contains('attachInteroperabilityContext('));
+    expect(sideEffectFreeAssembly, isNot(contains('.beginRecoverySetup(')));
+    expect(sideEffectFreeAssembly, isNot(contains('.savePreparedExport(')));
   });
 }
 

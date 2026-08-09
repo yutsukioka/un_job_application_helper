@@ -9,6 +9,7 @@ import '../../src/cache_file_replacement.dart';
 import '../../atlas.dart';
 import '../../atlas_vault.dart' show atlasVaultSha256Hex;
 import '../../src/atlas_vault/canonical_json.dart';
+import '../../src/atlas_vault/interoperability.dart';
 import '../../src/atlas_vault/plaintext_migration.dart';
 
 const atlasLocalCacheFileName = 'atlas-local-cache-v1.json';
@@ -78,22 +79,60 @@ final class AtlasPersistentCacheLocation {
   }
 }
 
+final class _AbsentRecoveryImportJournalStore
+    implements AtlasVaultProtectedRecoveryImportJournalStore {
+  const _AbsentRecoveryImportJournalStore();
+
+  @override
+  Future<Uint8List?> read() async => null;
+
+  @override
+  Future<void> create(Uint8List canonicalBytes) => Future<void>.error(
+    const AtlasVaultPlaintextAuthorityAdmissionException(),
+  );
+
+  @override
+  Future<void> replace(
+    Uint8List canonicalBytes, {
+    required String expectedSha256,
+  }) => Future<void>.error(
+    const AtlasVaultPlaintextAuthorityAdmissionException(),
+  );
+
+  @override
+  Future<void> delete({
+    required String expectedSha256,
+    bool allowAbsent = false,
+  }) => Future<void>.error(
+    const AtlasVaultPlaintextAuthorityAdmissionException(),
+  );
+}
+
 final class AtlasWindowsPlaintextAuthorityAdmission
-    implements AtlasVaultPlaintextAuthorityAdmission {
+    implements
+        AtlasVaultPlaintextAuthorityAdmission,
+        AtlasVaultRecoveryImportTransactionAdmission {
   AtlasWindowsPlaintextAuthorityAdmission({
     required AtlasPersistentCacheLocationProvider locationProvider,
     required AtlasVaultProtectedMigrationJournalStore journalStore,
     required AtlasVaultSelectedVaultStore selectedVaultStore,
+    AtlasVaultProtectedRecoveryImportJournalStore? recoveryImportJournalStore,
   }) : // Keep public constructor parameter names stable.
        // ignore: prefer_initializing_formals
        _locationProvider = locationProvider,
        // ignore: prefer_initializing_formals
        _journalStore = journalStore,
        // ignore: prefer_initializing_formals
+       _recoveryImportJournalStore =
+           recoveryImportJournalStore ??
+           const _AbsentRecoveryImportJournalStore(),
+       // ignore: prefer_initializing_formals
        _selectedVaultStore = selectedVaultStore;
 
   final AtlasPersistentCacheLocationProvider _locationProvider;
   final AtlasVaultProtectedMigrationJournalStore _journalStore;
+  final AtlasVaultProtectedRecoveryImportJournalStore
+  _recoveryImportJournalStore;
   final AtlasVaultSelectedVaultStore _selectedVaultStore;
   Future<AtlasPersistentCacheLocation>? _location;
 
@@ -112,16 +151,21 @@ final class AtlasWindowsPlaintextAuthorityAdmission
     try {
       return await location.coordinateMutation(() async {
         Uint8List? journalBytes;
+        Uint8List? recoveryImportBytes;
         String? selectedVault;
         try {
           journalBytes = await _journalStore.read();
+          recoveryImportBytes = await _recoveryImportJournalStore.read();
           selectedVault = await _selectedVaultStore.read();
         } catch (_) {
           throw const AtlasVaultPlaintextAuthorityAdmissionException();
         } finally {
           journalBytes?.fillRange(0, journalBytes.length, 0);
+          recoveryImportBytes?.fillRange(0, recoveryImportBytes.length, 0);
         }
-        if (journalBytes != null || selectedVault != null) {
+        if (journalBytes != null ||
+            recoveryImportBytes != null ||
+            selectedVault != null) {
           throw const AtlasVaultPlaintextAuthorityAdmissionException();
         }
         return operation();
@@ -149,6 +193,10 @@ final class AtlasWindowsPlaintextAuthorityAdmission
       throw const AtlasVaultPlaintextAuthorityAdmissionException();
     }
   }
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
+      runMigrationTransaction(operation);
 
   @override
   String toString() => 'AtlasWindowsPlaintextAuthorityAdmission(<redacted>)';

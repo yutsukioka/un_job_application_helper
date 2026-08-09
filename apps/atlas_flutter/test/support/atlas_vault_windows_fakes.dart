@@ -34,7 +34,9 @@ final class FakeAtlasVaultWindowsPlatform {
   Uint8List? _vaultKey;
   Uint8List? _localStoreBytes;
   Uint8List? _migrationJournalBytes;
+  Uint8List? _recoveryImportJournalBytes;
   String? _selectedVaultId;
+  Uint8List? pickedEncryptedExportBytes;
 
   List<MethodCall> get calls => List<MethodCall>.unmodifiable(recorder.calls);
 
@@ -44,6 +46,11 @@ final class FakeAtlasVaultWindowsPlatform {
   Uint8List? get migrationJournalBytes => _migrationJournalBytes == null
       ? null
       : Uint8List.fromList(_migrationJournalBytes!);
+
+  Uint8List? get recoveryImportJournalBytes =>
+      _recoveryImportJournalBytes == null
+      ? null
+      : Uint8List.fromList(_recoveryImportJournalBytes!);
 
   String? get selectedVaultId => _selectedVaultId;
 
@@ -69,6 +76,18 @@ final class FakeAtlasVaultWindowsPlatform {
     _localStoreBytes = null;
     _migrationJournalBytes?.fillRange(0, _migrationJournalBytes!.length, 0);
     _migrationJournalBytes = null;
+    _recoveryImportJournalBytes?.fillRange(
+      0,
+      _recoveryImportJournalBytes!.length,
+      0,
+    );
+    _recoveryImportJournalBytes = null;
+    pickedEncryptedExportBytes?.fillRange(
+      0,
+      pickedEncryptedExportBytes!.length,
+      0,
+    );
+    pickedEncryptedExportBytes = null;
     _selectedVaultId = null;
   }
 
@@ -166,6 +185,48 @@ final class FakeAtlasVaultWindowsPlatform {
         current.fillRange(0, current.length, 0);
         _migrationJournalBytes = null;
         return null;
+      case 'readRecoveryImportJournal':
+        return _recoveryImportJournalBytes == null
+            ? null
+            : Uint8List.fromList(_recoveryImportJournalBytes!);
+      case 'createRecoveryImportJournal':
+        if (_recoveryImportJournalBytes != null) {
+          throw PlatformException(code: 'already_exists');
+        }
+        _recoveryImportJournalBytes = Uint8List.fromList(
+          arguments['journal_bytes']! as Uint8List,
+        );
+        return null;
+      case 'replaceRecoveryImportJournal':
+        final current = _recoveryImportJournalBytes;
+        if (current == null ||
+            arguments['expected_sha256'] !=
+                await atlasVaultSha256Hex(current)) {
+          throw PlatformException(code: 'stale_digest');
+        }
+        _recoveryImportJournalBytes = Uint8List.fromList(
+          arguments['journal_bytes']! as Uint8List,
+        );
+        return null;
+      case 'deleteRecoveryImportJournal':
+        final current = _recoveryImportJournalBytes;
+        if (current == null) {
+          if (arguments['allow_absent'] == true) {
+            return null;
+          }
+          throw PlatformException(code: 'storage_failed');
+        }
+        if (arguments['expected_sha256'] !=
+            await atlasVaultSha256Hex(current)) {
+          throw PlatformException(code: 'stale_digest');
+        }
+        current.fillRange(0, current.length, 0);
+        _recoveryImportJournalBytes = null;
+        return null;
+      case 'pickEncryptedExport':
+        return pickedEncryptedExportBytes == null
+            ? null
+            : Uint8List.fromList(pickedEncryptedExportBytes!);
       case 'readSelectedVault':
         return _selectedVaultId;
       case 'createSelectedVault':

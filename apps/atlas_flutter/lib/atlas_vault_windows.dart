@@ -2,6 +2,30 @@ library;
 
 export 'src/atlas_vault/android_storage.dart' show AtlasVaultSecureKeyStore;
 export 'src/atlas_vault/local_store_io.dart' show AtlasVaultLocalStoreIO;
+export 'src/atlas_vault/interoperability.dart'
+    show
+        AtlasVaultEncryptedDocumentTransport,
+        AtlasVaultInteroperabilityCoordinator,
+        AtlasVaultInteroperabilityCoordinating,
+        AtlasVaultInteroperabilityException,
+        AtlasVaultProtectedRecoveryImportJournalStore,
+        AtlasVaultRecoveryDisplayHandle,
+        AtlasVaultRecoveryExportAvailability,
+        AtlasVaultRecoveryExportDisposition,
+        AtlasVaultRecoveryExportResult,
+        AtlasVaultRecoveryImportDisposition,
+        AtlasVaultRecoveryImportJournal,
+        AtlasVaultRecoveryImportProfile,
+        AtlasVaultRecoveryImportResult,
+        AtlasVaultRecoveryImportStage,
+        AtlasVaultRecoveryImportTransactionAdmission;
+export 'src/atlas_vault/interoperability_view.dart'
+    show
+        AtlasVaultInteroperabilityContext,
+        AtlasVaultInteroperabilityPanel,
+        AtlasVaultInteroperabilityPlatformProfile,
+        AtlasVaultInteroperabilityPresentationOwner,
+        AtlasVaultInteroperabilityPresentationStatus;
 export 'src/atlas_vault/models.dart'
     show AtlasVaultEncryptedRecord, AtlasVaultLocalStore;
 export 'src/atlas_vault/plaintext_migration.dart'
@@ -42,7 +66,9 @@ export 'src/atlas_vault/windows_storage.dart'
         atlasVaultWindowsMethodChannelName,
         AtlasVaultWindowsCapabilities,
         AtlasVaultWindowsStorageException,
+        AtlasWindowsEncryptedDocumentTransport,
         AtlasWindowsProtectedMigrationJournalStore,
+        AtlasWindowsProtectedRecoveryImportJournalStore,
         AtlasWindowsSelectedVaultStore,
         AtlasWindowsVaultLocalStoreIO,
         AtlasWindowsVaultSecureKeyStore;

@@ -5,6 +5,9 @@ import 'dart:typed_data';
 const _deviceInteropVectorBase64 = String.fromEnvironment(
   'ATLAS_INTEROP_VECTOR_B64',
 );
+const _deviceWindowsInteropVectorBase64 = String.fromEnvironment(
+  'ATLAS_WINDOWS_INTEROP_VECTOR_B64',
+);
 
 Directory atlasVaultRepositoryRoot() {
   var current = Directory.current.absolute;
@@ -27,6 +30,13 @@ Uint8List loadAtlasVaultVectorBytes(String fileName) {
       _deviceInteropVectorBase64.isNotEmpty) {
     try {
       bytes = base64Decode(_deviceInteropVectorBase64);
+    } on FormatException {
+      throw StateError('AtlasVault device vector input is invalid.');
+    }
+  } else if (fileName == 'atlasvault_windows_interop_vectors_v1.json' &&
+      _deviceWindowsInteropVectorBase64.isNotEmpty) {
+    try {
+      bytes = base64Decode(_deviceWindowsInteropVectorBase64);
     } on FormatException {
       throw StateError('AtlasVault device vector input is invalid.');
     }

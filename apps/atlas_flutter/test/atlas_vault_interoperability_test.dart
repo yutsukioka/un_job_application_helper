@@ -40,6 +40,76 @@ void main() {
     expect(importPendingCalls, 0);
   });
 
+  test('recovery-import journals have strict Android and Windows profiles', () {
+    final source = File(
+      'lib/src/atlas_vault/interoperability.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('enum AtlasVaultRecoveryImportProfile'));
+    expect(source, contains("android('atlasvault-android-recovery-import')"));
+    expect(source, contains("windows('atlasvault-windows-recovery-import')"));
+    expect(source, contains('required this.profile'));
+  });
+
+  test('recovery-import journal profiles reject cross-platform bytes', () {
+    final android = AtlasVaultRecoveryImportJournal.prepared(
+      importId: '30000000-0000-4000-8000-000000000311',
+      exportId: '30000000-0000-4000-8000-000000000312',
+      vaultId: 'vault-profile-test',
+      storeId: '30000000-0000-4000-8000-000000000313',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    );
+    final windows = AtlasVaultRecoveryImportJournal.prepared(
+      profile: AtlasVaultRecoveryImportProfile.windows,
+      importId: '30000000-0000-4000-8000-000000000321',
+      exportId: '30000000-0000-4000-8000-000000000322',
+      vaultId: 'vault-profile-test',
+      storeId: '30000000-0000-4000-8000-000000000323',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '4' * 64,
+      localStoreSha256: '5' * 64,
+      vaultKeySha256: '6' * 64,
+    );
+    final androidBytes = android.canonicalBytes();
+    final windowsBytes = windows.canonicalBytes();
+
+    expect(
+      utf8.decode(androidBytes),
+      contains('"format":"atlasvault-android-recovery-import"'),
+    );
+    expect(
+      utf8.decode(windowsBytes),
+      contains('"format":"atlasvault-windows-recovery-import"'),
+    );
+    expect(
+      AtlasVaultRecoveryImportJournal.decodeBytes(
+        androidBytes,
+      ).canonicalBytes(),
+      androidBytes,
+    );
+    expect(
+      AtlasVaultRecoveryImportJournal.decodeBytes(
+        windowsBytes,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      ).canonicalBytes(),
+      windowsBytes,
+    );
+    expect(
+      () => AtlasVaultRecoveryImportJournal.decodeBytes(windowsBytes),
+      throwsA(isA<AtlasVaultInteroperabilityException>()),
+    );
+    expect(
+      () => AtlasVaultRecoveryImportJournal.decodeBytes(
+        androidBytes,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      ),
+      throwsA(isA<AtlasVaultInteroperabilityException>()),
+    );
+  });
+
   test('export requires active matching encrypted authority', () async {
     final fixture = await _Fixture.create(activate: false);
 
@@ -560,6 +630,89 @@ void main() {
         fixture.events.indexOf('import-journal.create'),
         lessThan(fixture.events.indexOf('import-admission.end')),
       );
+      expect(
+        fixture.events.indexOf('selection.create'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+      expect(
+        fixture.events.indexOf('import-journal.delete'),
+        lessThan(fixture.events.indexOf('import-admission.end')),
+      );
+    },
+  );
+
+  test(
+    'initial import drains controller admission before cross-process lock',
+    () async {
+      final operationAdmission = _ImportOperationAdmission();
+      final transactionAdmission = _ImportTransactionAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: operationAdmission,
+        importTransactionAdmission: transactionAdmission,
+      );
+      operationAdmission.attachEvents(fixture.events);
+      transactionAdmission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+
+      final confirmation = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await operationAdmission.entered;
+      final transactionStartedBeforeDrain = transactionAdmission.entered;
+      operationAdmission.releaseAdmittedMutation();
+      final result = await confirmation;
+
+      expect(transactionStartedBeforeDrain, isFalse);
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(
+        fixture.events.indexOf('import-admission.drained'),
+        lessThan(fixture.events.indexOf('import-transaction.begin')),
+      );
+    },
+  );
+
+  test(
+    'journaled resume drains controller admission before cross-process lock',
+    () async {
+      final operationAdmission = _ImportOperationAdmission();
+      final transactionAdmission = _ImportTransactionAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: operationAdmission,
+        importTransactionAdmission: transactionAdmission,
+        failAfterEvent: 'store.create',
+      );
+      operationAdmission.attachEvents(fixture.events);
+      transactionAdmission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+
+      final interrupted = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await operationAdmission.entered;
+      operationAdmission.releaseAdmittedMutation();
+      final interruptedResult = await interrupted;
+      expect(interruptedResult.pendingImport, isTrue);
+
+      fixture.faults.clear();
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+      final resumed = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        resumed.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(fixture.events, contains('import-admission.begin'));
+      expect(
+        fixture.events.indexOf('import-admission.drained'),
+        lessThan(fixture.events.indexOf('import-transaction.begin')),
+      );
     },
   );
 
@@ -613,7 +766,8 @@ void main() {
       fixture.faults
         ..failAfterEvent = 'import-journal.create'
         ..failBeforeEvent = 'import-journal.read'
-        ..remainingBeforeMatches = 2;
+        // Pre-admission read, locked recheck, then post-failure recovery read.
+        ..remainingBeforeMatches = 3;
 
       final confirmation = fixture.coordinator.confirmRecoveryImport(
         fixture.caseData.recoveryText,
@@ -1403,6 +1557,7 @@ final class _ImportFixture {
     app.AtlasLocalCacheMigrationPrivateState? cacheState,
     bool compatibilityFails = false,
     AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
+    AtlasVaultRecoveryImportTransactionAdmission? importTransactionAdmission,
     List<bool>? recoveryImportPendingChanges,
     String? failAfterEvent,
     int failAfterOccurrence = 1,
@@ -1457,6 +1612,7 @@ final class _ImportFixture {
       compatibilitySource: compatibilitySource,
       cacheSource: _ImportCacheSource(cacheState ?? _emptyCacheState()),
       importOperationAdmission: importOperationAdmission,
+      importTransactionAdmission: importTransactionAdmission,
       recoveryImportPendingDidChange: recoveryImportPendingChanges == null
           ? null
           : (pending) {
@@ -1522,6 +1678,29 @@ final class _ImportOperationAdmission
   void endRecoveryImportAdmission() {
     _events?.add('import-admission.end');
     blocksNewLegacyMutation = false;
+  }
+}
+
+final class _ImportTransactionAdmission
+    implements AtlasVaultRecoveryImportTransactionAdmission {
+  List<String>? _events;
+  bool entered = false;
+
+  void attachEvents(List<String> events) {
+    _events = events;
+  }
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(
+    Future<T> Function() operation,
+  ) async {
+    entered = true;
+    _events?.add('import-transaction.begin');
+    try {
+      return await operation();
+    } finally {
+      _events?.add('import-transaction.end');
+    }
   }
 }
 
