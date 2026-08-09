@@ -348,6 +348,9 @@ void main() {
     );
     expect(coordinator.calls, isNot(contains('discard-pending')));
 
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
     gate.complete(
       const AtlasVaultRecoveryImportResult(
         disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
@@ -397,6 +400,9 @@ void main() {
     expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.saving);
     expect(coordinator.calls, isNot(contains('discard-pending')));
 
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
     gate.complete(
       const AtlasVaultRecoveryExportResult(
         disposition: AtlasVaultRecoveryExportDisposition.saved,
@@ -409,6 +415,66 @@ void main() {
     expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.saved);
     expect(find.text('Encrypted backup saved.'), findsOneWidget);
   });
+
+  testWidgets(
+    'Windows picker completion while inactive discards prepared import',
+    (tester) async {
+      final gate = _Gate<AtlasVaultRecoveryImportResult>();
+      final coordinator = _FakeCoordinator(
+        importResult: const AtlasVaultRecoveryImportResult(
+          disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+          encryptedRecordCount: 4,
+          pendingImport: false,
+        ),
+        importPrepareGate: gate,
+      );
+      final owner = AtlasVaultInteroperabilityPresentationOwner(
+        coordinator: coordinator,
+        platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+      );
+      addTearDown(() {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        owner.dispose();
+      });
+      await owner.present();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+        ),
+      );
+
+      await tester.tap(find.text('Import Encrypted Backup'));
+      await tester.pump();
+      expect(
+        owner.status,
+        AtlasVaultInteroperabilityPresentationStatus.pickingImport,
+      );
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+
+      gate.complete(
+        const AtlasVaultRecoveryImportResult(
+          disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+          encryptedRecordCount: 4,
+          pendingImport: false,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+      expect(find.text('Recovery Key'), findsNothing);
+      expect(coordinator.calls, contains('discard-pending'));
+    },
+  );
 
   testWidgets('Windows lifecycle loss outside a dialog clears and hides', (
     tester,
