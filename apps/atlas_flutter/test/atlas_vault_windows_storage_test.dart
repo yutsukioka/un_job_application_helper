@@ -14,6 +14,7 @@ void main() {
   late AtlasWindowsVaultSecureKeyStore storage;
   late AtlasWindowsProtectedMigrationJournalStore journal;
   late AtlasWindowsSelectedVaultStore selection;
+  late AtlasWindowsEncryptedDocumentTransport documentTransport;
 
   setUp(() {
     recorder = AtlasVaultWindowsMethodCallRecorder(
@@ -24,6 +25,9 @@ void main() {
       channel: recorder.channel,
     );
     selection = AtlasWindowsSelectedVaultStore(channel: recorder.channel);
+    documentTransport = AtlasWindowsEncryptedDocumentTransport(
+      channel: recorder.channel,
+    );
   });
 
   tearDown(() {
@@ -31,6 +35,53 @@ void main() {
   });
 
   test('construction performs no platform call', () {
+    expect(recorder.calls, isEmpty);
+  });
+
+  test('encrypted-document save uses exact bounded path-free call', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+    recorder.handler = (call) async {
+      expect(call.method, 'saveEncryptedExport');
+      expect(call.arguments, isA<Map<Object?, Object?>>());
+      final arguments = call.arguments! as Map<Object?, Object?>;
+      expect(arguments.keys, <Object?>['export_bytes']);
+      expect(arguments['export_bytes'], orderedEquals(bytes));
+      expect(identical(arguments['export_bytes'], bytes), isFalse);
+      return true;
+    };
+
+    expect(await documentTransport.saveEncryptedExport(bytes), isTrue);
+    expect(recorder.calls, hasLength(1));
+  });
+
+  test('encrypted-document save cancellation and errors are fixed', () async {
+    final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
+    recorder.handler = (_) async => false;
+    expect(await documentTransport.saveEncryptedExport(bytes), isFalse);
+
+    recorder.handler = (_) async {
+      throw PlatformException(
+        code: 'win32_5',
+        message: r'C:\Users\private\Desktop\backup.atlasvault',
+      );
+    };
+    await expectLater(
+      documentTransport.saveEncryptedExport(bytes),
+      throwsA(
+        isA<AtlasVaultWindowsStorageException>().having(
+          (failure) => failure.toString(),
+          'description',
+          'AtlasVault Windows storage operation failed.',
+        ),
+      ),
+    );
+  });
+
+  test('invalid encrypted-document save size makes no platform call', () async {
+    await expectLater(
+      documentTransport.saveEncryptedExport(Uint8List(0)),
+      throwsA(isA<AtlasVaultWindowsStorageException>()),
+    );
     expect(recorder.calls, isEmpty);
   });
 

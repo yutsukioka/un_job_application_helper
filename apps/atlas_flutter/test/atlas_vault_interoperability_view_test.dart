@@ -5,6 +5,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'Windows profile presents fixed device-local recovery wording',
+    () async {
+      final coordinator = _FakeCoordinator(
+        availability: const AtlasVaultRecoveryExportAvailability(
+          available: true,
+          encryptedRecordCount: 3,
+          recoveryWrapPresent: true,
+        ),
+      );
+      final owner = AtlasVaultInteroperabilityPresentationOwner(
+        coordinator: coordinator,
+        platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+      );
+
+      await owner.present();
+
+      expect(owner.message, contains('Windows current-user'));
+      expect(owner.message, isNot(contains('vault-')));
+      expect(coordinator.calls, <String>['inspect-import', 'inspect']);
+      owner.dispose();
+    },
+  );
+
   test('owner construction creates no operation', () {
     final coordinator = _FakeCoordinator();
 

@@ -152,6 +152,38 @@ void main() {
     );
   });
 
+  test('native encrypted save dialog is owned, atomic, and path-free', () {
+    final runner = File('windows/runner/flutter_window.cpp').readAsStringSync();
+    final header = File(
+      'windows/runner/atlas_vault_windows_storage.h',
+    ).readAsStringSync();
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+    final combined = '$header\n$source';
+
+    expect(runner, contains('GetHandle()'));
+    expect(combined, contains('HWND'));
+    for (final token in <String>[
+      'saveEncryptedExport',
+      'IFileSaveDialog',
+      'FOS_FORCEFILESYSTEM',
+      'FOS_PATHMUSTEXIST',
+      'FOS_DONTADDTORECENT',
+      'FOS_NOCHANGEDIR',
+      'FOS_OVERWRITEPROMPT',
+      'AtlasVault-Encrypted-Backup.atlasvault',
+      'FlushFileBuffers',
+      'MoveFileExW',
+      'MOVEFILE_REPLACE_EXISTING',
+      'MOVEFILE_WRITE_THROUGH',
+    ]) {
+      expect(combined, contains(token), reason: token);
+    }
+    expect(combined, isNot(contains('SHAddToRecentDocs')));
+    expect(combined, isNot(contains('SIGDN_FILESYSPATH.*result')));
+  });
+
   test('runner build links only the required Windows libraries', () {
     final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
 

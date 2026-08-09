@@ -3187,7 +3187,18 @@ void main() {
     expect(sideEffectFreeAssembly, isNot(contains('.inventory(')));
     expect(sideEffectFreeAssembly, isNot(contains('.prepare(')));
     expect(sideEffectFreeAssembly, isNot(contains('.resume(')));
-    expect(sideEffectFreeAssembly, isNot(contains('Interoperability')));
+    expect(
+      windowsAssembly,
+      contains('AtlasWindowsEncryptedDocumentTransport()'),
+    );
+    expect(windowsAssembly, contains('AtlasVaultInteroperabilityCoordinator('));
+    expect(
+      windowsAssembly,
+      contains('AtlasVaultInteroperabilityPresentationOwner('),
+    );
+    expect(windowsAssembly, contains('attachInteroperabilityContext('));
+    expect(sideEffectFreeAssembly, isNot(contains('.beginRecoverySetup(')));
+    expect(sideEffectFreeAssembly, isNot(contains('.savePreparedExport(')));
   });
 }
 
