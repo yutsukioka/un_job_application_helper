@@ -572,10 +572,16 @@ class _AtlasVaultInteroperabilityPanelState
   final TextEditingController _recoveryInput = TextEditingController();
   final TextEditingController _importRecoveryInput = TextEditingController();
   String? _displayRecoveryText;
+  AppLifecycleState? _lifecycleState;
+  AtlasVaultInteroperabilityPresentationStatus? _lastOwnerStatus;
+  bool _windowsDocumentFocusLossAvailable = false;
+  bool _windowsDocumentFocusLossActive = false;
 
   @override
   void initState() {
     super.initState();
+    _lifecycleState = WidgetsBinding.instance.lifecycleState;
+    _lastOwnerStatus = widget.owner.status;
     WidgetsBinding.instance.addObserver(this);
     widget.owner.addListener(_handleOwnerChanged);
   }
@@ -588,25 +594,32 @@ class _AtlasVaultInteroperabilityPanelState
     }
     oldWidget.owner.removeListener(_handleOwnerChanged);
     widget.owner.addListener(_handleOwnerChanged);
+    _lastOwnerStatus = widget.owner.status;
+    _windowsDocumentFocusLossAvailable = false;
+    _windowsDocumentFocusLossActive = false;
     _clearLocalRecoveryState();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
-      final nativeDocumentDialogOwnsFocus =
-          state == AppLifecycleState.inactive &&
-          widget.owner.platformProfile ==
-              AtlasVaultInteroperabilityPlatformProfile.windows &&
-          (widget.owner.status ==
-                  AtlasVaultInteroperabilityPresentationStatus.pickingImport ||
-              widget.owner.status ==
-                  AtlasVaultInteroperabilityPresentationStatus.saving);
-      _clearLocalRecoveryState();
-      if (!nativeDocumentDialogOwnsFocus) {
-        widget.owner.hide();
-      }
+    _lifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      _windowsDocumentFocusLossActive = false;
+      return;
     }
+    final preserveNativeDialog =
+        state == AppLifecycleState.inactive &&
+        _isWindowsDocumentOperation(widget.owner.status) &&
+        (_windowsDocumentFocusLossAvailable || _windowsDocumentFocusLossActive);
+    _clearLocalRecoveryState();
+    if (preserveNativeDialog) {
+      _windowsDocumentFocusLossAvailable = false;
+      _windowsDocumentFocusLossActive = true;
+      return;
+    }
+    _windowsDocumentFocusLossAvailable = false;
+    _windowsDocumentFocusLossActive = false;
+    widget.owner.hide();
   }
 
   @override
@@ -623,12 +636,39 @@ class _AtlasVaultInteroperabilityPanelState
     if (!mounted) {
       return;
     }
-    if (widget.owner.status ==
-        AtlasVaultInteroperabilityPresentationStatus.hidden) {
+    final previousStatus = _lastOwnerStatus;
+    final currentStatus = widget.owner.status;
+    _lastOwnerStatus = currentStatus;
+    final wasDocumentOperation = _isWindowsDocumentOperation(previousStatus);
+    final isDocumentOperation = _isWindowsDocumentOperation(currentStatus);
+    if (!wasDocumentOperation && isDocumentOperation) {
+      _windowsDocumentFocusLossAvailable = true;
+      _windowsDocumentFocusLossActive = false;
+    } else if (wasDocumentOperation && !isDocumentOperation) {
+      _windowsDocumentFocusLossAvailable = false;
+      _windowsDocumentFocusLossActive = false;
+      if (_lifecycleState != null &&
+          _lifecycleState != AppLifecycleState.resumed &&
+          currentStatus !=
+              AtlasVaultInteroperabilityPresentationStatus.hidden) {
+        _clearLocalRecoveryState(notify: false);
+        widget.owner.hide();
+        return;
+      }
+    }
+    if (currentStatus == AtlasVaultInteroperabilityPresentationStatus.hidden) {
       _clearLocalRecoveryState(notify: false);
     }
     setState(() {});
   }
+
+  bool _isWindowsDocumentOperation(
+    AtlasVaultInteroperabilityPresentationStatus? status,
+  ) =>
+      widget.owner.platformProfile ==
+          AtlasVaultInteroperabilityPlatformProfile.windows &&
+      (status == AtlasVaultInteroperabilityPresentationStatus.pickingImport ||
+          status == AtlasVaultInteroperabilityPresentationStatus.saving);
 
   @override
   Widget build(BuildContext context) {
