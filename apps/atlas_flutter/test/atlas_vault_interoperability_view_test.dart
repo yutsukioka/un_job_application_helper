@@ -305,6 +305,111 @@ void main() {
     owner.dispose();
   });
 
+  testWidgets('Windows modal picker focus loss preserves pending import', (
+    tester,
+  ) async {
+    final gate = _Gate<AtlasVaultRecoveryImportResult>();
+    final coordinator = _FakeCoordinator(
+      importResult: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+      importPrepareGate: gate,
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+      platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+    );
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      owner.dispose();
+    });
+    await owner.present();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    await tester.tap(find.text('Import Encrypted Backup'));
+    await tester.pump();
+    expect(
+      owner.status,
+      AtlasVaultInteroperabilityPresentationStatus.pickingImport,
+    );
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+
+    expect(
+      owner.status,
+      AtlasVaultInteroperabilityPresentationStatus.pickingImport,
+    );
+    expect(coordinator.calls, isNot(contains('discard-pending')));
+
+    gate.complete(
+      const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      owner.status,
+      AtlasVaultInteroperabilityPresentationStatus.awaitingImportRecoveryKey,
+    );
+    expect(find.text('Recovery Key'), findsOneWidget);
+  });
+
+  testWidgets('Windows modal save focus loss preserves prepared export', (
+    tester,
+  ) async {
+    final gate = _Gate<AtlasVaultRecoveryExportResult>();
+    final coordinator = _FakeCoordinator(saveGate: gate);
+    final owner =
+        AtlasVaultInteroperabilityPresentationOwner(
+            coordinator: coordinator,
+            platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+          )
+          ..status = AtlasVaultInteroperabilityPresentationStatus.exportReady
+          ..encryptedRecordCount = 4
+          ..recoveryWrapPresent = true;
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      owner.dispose();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    await tester.tap(find.text('Save Encrypted Backup'));
+    await tester.pump();
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.saving);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.saving);
+    expect(coordinator.calls, isNot(contains('discard-pending')));
+
+    gate.complete(
+      const AtlasVaultRecoveryExportResult(
+        disposition: AtlasVaultRecoveryExportDisposition.saved,
+        encryptedRecordCount: 4,
+        recoveryWrapPresent: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.saved);
+    expect(find.text('Encrypted backup saved.'), findsOneWidget);
+  });
+
   testWidgets('pending import resume advances to explicit recovery submit', (
     tester,
   ) async {
@@ -461,7 +566,9 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
     this.confirmGate,
     this.importResult,
     this.importInspection,
+    this.importPrepareGate,
     this.importConfirmGate,
+    this.saveGate,
   }) : handle = handle ?? _FakeDisplayHandle('AVRK1-TEST');
 
   final AtlasVaultRecoveryExportAvailability availability;
@@ -470,7 +577,9 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   final _Gate<AtlasVaultRecoveryExportResult>? confirmGate;
   final AtlasVaultRecoveryImportResult? importResult;
   final AtlasVaultRecoveryImportResult? importInspection;
+  final _Gate<AtlasVaultRecoveryImportResult>? importPrepareGate;
   final _Gate<AtlasVaultRecoveryImportResult>? importConfirmGate;
+  final _Gate<AtlasVaultRecoveryExportResult>? saveGate;
   final List<String> calls = <String>[];
 
   @override
@@ -516,6 +625,10 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   @override
   Future<AtlasVaultRecoveryExportResult> savePreparedExport() async {
     calls.add('save-export');
+    final gate = saveGate;
+    if (gate != null) {
+      return gate.future;
+    }
     return const AtlasVaultRecoveryExportResult(
       disposition: AtlasVaultRecoveryExportDisposition.saved,
       encryptedRecordCount: 3,
@@ -542,7 +655,7 @@ final class _FakeCoordinator implements AtlasVaultInteroperabilityCoordinating {
   @override
   Future<AtlasVaultRecoveryImportResult> prepareRecoveryImport() async {
     calls.add('prepare-import');
-    return importResult!;
+    return importPrepareGate?.future ?? importResult!;
   }
 
   @override
