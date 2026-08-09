@@ -871,10 +871,8 @@ final class AtlasVaultInteroperabilityCoordinator
         recoveryKey = null;
         journal = await _loadImportJournal(dependencies.journalStore);
         final journalExistedBeforeTransaction = journal != null;
-        if (!journalExistedBeforeTransaction) {
-          await _importOperationAdmission.beginRecoveryImportAdmission();
-          importAdmissionHeld = true;
-        }
+        await _importOperationAdmission.beginRecoveryImportAdmission();
+        importAdmissionHeld = true;
         return await _importTransactionAdmission.runRecoveryImportTransaction(
           () async {
             journal = await _loadImportJournal(dependencies.journalStore);

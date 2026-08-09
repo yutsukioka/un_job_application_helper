@@ -1771,8 +1771,7 @@ class AtlasAppController extends ChangeNotifier
 
   @override
   Future<void> beginRecoveryImportAdmission() async {
-    if (_recoveryImportAdmissionInProgress ||
-        _recoveryImportBlocksLegacyPrivateAuthority) {
+    if (_recoveryImportAdmissionInProgress) {
       throw const AtlasVaultInteroperabilityException();
     }
     _recoveryImportAdmissionInProgress = true;
