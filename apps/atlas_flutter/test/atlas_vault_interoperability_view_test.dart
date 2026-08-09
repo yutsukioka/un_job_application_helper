@@ -476,6 +476,52 @@ void main() {
     },
   );
 
+  testWidgets('Windows picker result cannot publish before focus resumes', (
+    tester,
+  ) async {
+    final gate = _Gate<AtlasVaultRecoveryImportResult>();
+    final coordinator = _FakeCoordinator(
+      importResult: const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+      importPrepareGate: gate,
+    );
+    final owner = AtlasVaultInteroperabilityPresentationOwner(
+      coordinator: coordinator,
+      platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+    );
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      owner.dispose();
+    });
+    await owner.present();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+
+    await tester.tap(find.text('Import Encrypted Backup'));
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+
+    gate.complete(
+      const AtlasVaultRecoveryImportResult(
+        disposition: AtlasVaultRecoveryImportDisposition.importPrepared,
+        encryptedRecordCount: 4,
+        pendingImport: false,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+    expect(find.text('Recovery Key'), findsNothing);
+    expect(coordinator.calls, contains('discard-pending'));
+  });
+
   testWidgets('Windows lifecycle loss outside a dialog clears and hides', (
     tester,
   ) async {
