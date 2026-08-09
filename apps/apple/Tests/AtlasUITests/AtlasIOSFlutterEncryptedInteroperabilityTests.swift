@@ -265,6 +265,29 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
         async throws
     {
         let vector = try InteropVector.load(direction: "ios_to_flutter")
+        try await assertProductionExport(
+            vector: vector,
+            artifactBaseName: "ios-to-flutter"
+        )
+    }
+
+    func testAppleProductionCoordinatorWritesExactWindowsArtifact()
+        async throws
+    {
+        let vector = try InteropVector.load(
+            direction: "apple_to_windows",
+            fileName: "atlasvault_windows_interop_vectors_v1.json"
+        )
+        try await assertProductionExport(
+            vector: vector,
+            artifactBaseName: "apple-to-windows"
+        )
+    }
+
+    private func assertProductionExport(
+        vector: InteropVector,
+        artifactBaseName: String
+    ) async throws {
         let envelope = try AtlasVaultEncryptedExportEnvelope.decodeStrict(
             vector.exportData
         )
@@ -341,7 +364,7 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
                 withIntermediateDirectories: true
             )
             let artifactURL = artifactDirectory.appendingPathComponent(
-                "ios-to-flutter.atlasvault"
+                artifactBaseName + ".atlasvault"
             )
             try document.encryptedData.write(
                 to: artifactURL,
@@ -349,7 +372,7 @@ final class AtlasIOSFlutterEncryptedInteroperabilityTests: XCTestCase {
             )
             try (vector.exportSHA256 + "\n").write(
                 to: artifactDirectory.appendingPathComponent(
-                    "ios-to-flutter.sha256"
+                    artifactBaseName + ".sha256"
                 ),
                 atomically: true,
                 encoding: .utf8

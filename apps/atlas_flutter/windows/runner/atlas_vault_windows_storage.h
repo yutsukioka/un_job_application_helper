@@ -34,6 +34,12 @@ class AtlasVaultWindowsStorage {
       std::string method,
       std::unique_ptr<flutter::EncodableValue> encoded_arguments,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void HandlePickEncryptedExport(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void ExecutePickEncryptedExport(
+      std::wstring selected_path,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
   void HandleSaveEncryptedExport(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);

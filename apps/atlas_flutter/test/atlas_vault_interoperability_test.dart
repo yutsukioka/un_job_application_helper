@@ -48,9 +48,65 @@ void main() {
     expect(source, contains('enum AtlasVaultRecoveryImportProfile'));
     expect(source, contains("android('atlasvault-android-recovery-import')"));
     expect(source, contains("windows('atlasvault-windows-recovery-import')"));
+    expect(source, contains('required this.profile'));
+  });
+
+  test('recovery-import journal profiles reject cross-platform bytes', () {
+    final android = AtlasVaultRecoveryImportJournal.prepared(
+      importId: '30000000-0000-4000-8000-000000000311',
+      exportId: '30000000-0000-4000-8000-000000000312',
+      vaultId: 'vault-profile-test',
+      storeId: '30000000-0000-4000-8000-000000000313',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    );
+    final windows = AtlasVaultRecoveryImportJournal.prepared(
+      profile: AtlasVaultRecoveryImportProfile.windows,
+      importId: '30000000-0000-4000-8000-000000000321',
+      exportId: '30000000-0000-4000-8000-000000000322',
+      vaultId: 'vault-profile-test',
+      storeId: '30000000-0000-4000-8000-000000000323',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '4' * 64,
+      localStoreSha256: '5' * 64,
+      vaultKeySha256: '6' * 64,
+    );
+    final androidBytes = android.canonicalBytes();
+    final windowsBytes = windows.canonicalBytes();
+
     expect(
-      source,
-      contains('required AtlasVaultRecoveryImportProfile profile'),
+      utf8.decode(androidBytes),
+      contains('"format":"atlasvault-android-recovery-import"'),
+    );
+    expect(
+      utf8.decode(windowsBytes),
+      contains('"format":"atlasvault-windows-recovery-import"'),
+    );
+    expect(
+      AtlasVaultRecoveryImportJournal.decodeBytes(
+        androidBytes,
+      ).canonicalBytes(),
+      androidBytes,
+    );
+    expect(
+      AtlasVaultRecoveryImportJournal.decodeBytes(
+        windowsBytes,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      ).canonicalBytes(),
+      windowsBytes,
+    );
+    expect(
+      () => AtlasVaultRecoveryImportJournal.decodeBytes(windowsBytes),
+      throwsA(isA<AtlasVaultInteroperabilityException>()),
+    );
+    expect(
+      () => AtlasVaultRecoveryImportJournal.decodeBytes(
+        androidBytes,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      ),
+      throwsA(isA<AtlasVaultInteroperabilityException>()),
     );
   });
 

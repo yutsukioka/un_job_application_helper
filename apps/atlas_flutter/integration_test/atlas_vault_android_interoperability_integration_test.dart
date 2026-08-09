@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas.dart';
@@ -25,12 +26,24 @@ void main() {
       await _runImportAndReexport(tester, _AndroidInteropVector.loadWindows());
     },
   );
+
+  testWidgets(
+    'Android reproduces its exact Windows interoperability artifact',
+    (tester) async {
+      await _runImportAndReexport(
+        tester,
+        _AndroidInteropVector.loadAndroid(),
+        artifactBaseName: 'android-to-windows',
+      );
+    },
+  );
 }
 
 Future<void> _runImportAndReexport(
   WidgetTester tester,
-  _AndroidInteropVector vector,
-) async {
+  _AndroidInteropVector vector, {
+  String? artifactBaseName,
+}) async {
   final keyStore = AtlasAndroidVaultSecureKeyStore();
   final localStore = AtlasAndroidVaultLocalStoreIO();
   final selected = AtlasAndroidSelectedVaultStore();
@@ -73,8 +86,8 @@ Future<void> _runImportAndReexport(
     inMemorySource: const _EmptyPlaintextSource(),
     compatibilitySource: compatibility,
     cacheSource: const _EmptyCacheSource(),
-    now: () => DateTime.parse('2026-07-29T03:04:05Z'),
-    uuidProvider: () => '40000000-0000-4000-8000-000000000401',
+    now: () => DateTime.parse(vector.exportTimestamp),
+    uuidProvider: () => vector.exportId,
     importIdProvider: () => '40000000-0000-4000-8000-000000000402',
     importStoreIdProvider: () => '40000000-0000-4000-8000-000000000403',
   );
@@ -137,10 +150,26 @@ Future<void> _runImportAndReexport(
   final reexported = vault.AtlasVaultEncryptedExport.decodeJson(
     utf8.decode(transport.savedBytes!),
   );
+  expect(transport.savedBytes, orderedEquals(vector.exportBytes));
   expect(reexported.vaultMetadata.vaultId, vector.vaultId);
   expect(reexported.records, installed.records);
   expect(reexported.canonicalBytes(), orderedEquals(transport.savedBytes!));
   expect(compatibility.deleteCalls, 0);
+  const artifactDirectory = String.fromEnvironment(
+    'ATLAS_INTEROP_ARTIFACT_DIR',
+  );
+  if (artifactBaseName != null && artifactDirectory.isNotEmpty) {
+    final directory = Directory(artifactDirectory);
+    await directory.create(recursive: true);
+    final bytes = transport.savedBytes!;
+    final digest = await vault.atlasVaultSha256Hex(bytes);
+    await File(
+      '${directory.path}/$artifactBaseName.atlasvault',
+    ).writeAsBytes(bytes, flush: true);
+    await File(
+      '${directory.path}/$artifactBaseName.sha256',
+    ).writeAsString('$digest\n', flush: true);
+  }
   tester.printToConsole('AtlasVault Android ${vector.caseId} passed.');
 }
 
@@ -148,6 +177,8 @@ final class _AndroidInteropVector {
   _AndroidInteropVector({
     required this.caseId,
     required this.vaultId,
+    required this.exportId,
+    required this.exportTimestamp,
     required this.recoveryText,
     required this.exportBytes,
     required this.export,
@@ -161,6 +192,8 @@ final class _AndroidInteropVector {
 
   final String caseId;
   final String vaultId;
+  final String exportId;
+  final String exportTimestamp;
   final String recoveryText;
   final Uint8List exportBytes;
   final vault.AtlasVaultEncryptedExport export;
@@ -188,6 +221,11 @@ final class _AndroidInteropVector {
     caseName: 'windows_to_apple_android',
   );
 
+  factory _AndroidInteropVector.loadAndroid() => _AndroidInteropVector._load(
+    fileName: 'atlasvault_windows_interop_vectors_v1.json',
+    caseName: 'android_to_windows',
+  );
+
   factory _AndroidInteropVector._load({
     required String fileName,
     required String caseName,
@@ -204,6 +242,8 @@ final class _AndroidInteropVector {
     return _AndroidInteropVector(
       caseId: value['case_id'] as String? ?? caseName,
       vaultId: value['vault_id']! as String,
+      exportId: value['export_id']! as String,
+      exportTimestamp: value['export_timestamp']! as String,
       recoveryText: value['test_only_recovery_key_text']! as String,
       exportBytes: bytes,
       export: vault.AtlasVaultEncryptedExport.decodeJson(utf8.decode(bytes)),

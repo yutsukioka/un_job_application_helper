@@ -2822,16 +2822,51 @@ AtlasVaultPlaintextMigrationPresentationOwner _attachWindowsMigration({
 AtlasVaultInteroperabilityPresentationOwner _attachWindowsEncryptedBackup({
   required AtlasAppController controller,
   required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasWindowsVaultSecureKeyStore secureKeyStore,
+  required AtlasWindowsVaultLocalStoreIO localStoreIO,
   required AtlasWindowsSelectedVaultStore selectedVaultStore,
   required AtlasWindowsProtectedMigrationJournalStore migrationJournalStore,
+  required AtlasWindowsProtectedRecoveryImportJournalStore
+  recoveryImportJournalStore,
+  required AtlasWindowsPlaintextAuthorityAdmission authorityAdmission,
 }) {
   final documentTransport = AtlasWindowsEncryptedDocumentTransport();
+  final inMemorySource = _AtlasControllerPlaintextMigrationSource(controller);
+  final compatibilitySource = _AtlasControllerCompatibilityMigrationSource(
+    controller,
+  );
+  final cacheSource = _AtlasResolvedLocalCacheMigrationSource(() async {
+    await controller._drainCacheWriteForMigration();
+    return AtlasWindowsDesktopCacheMigrationSource(
+      await resolveAtlasPersistentCacheLocation(importLegacyCache: false),
+    );
+  });
   final coordinator = AtlasVaultInteroperabilityCoordinator(
     runtime: runtime,
     selectedVaultStore: selectedVaultStore,
     migrationJournalStore: migrationJournalStore,
-    recoveryImportPending: () async => false,
+    recoveryImportPending: () async {
+      final bytes = await recoveryImportJournalStore.read();
+      try {
+        return bytes != null;
+      } finally {
+        bytes?.fillRange(0, bytes.length, 0);
+      }
+    },
     documentTransport: documentTransport,
+    recoveryImportJournalStore: recoveryImportJournalStore,
+    secureKeyStore: secureKeyStore,
+    localStoreIO: localStoreIO,
+    inMemorySource: inMemorySource,
+    compatibilitySource: compatibilitySource,
+    cacheSource: cacheSource,
+    importOperationAdmission: controller,
+    importTransactionAdmission: authorityAdmission,
+    recoveryImportProfile: AtlasVaultRecoveryImportProfile.windows,
+    activateImportedVault: (vaultId) async =>
+        await controller._activateImportedAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated,
+    recoveryImportPendingDidChange: controller._recoveryImportPendingDidChange,
   );
   final owner = AtlasVaultInteroperabilityPresentationOwner(
     coordinator: coordinator,
@@ -2849,10 +2884,13 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     final localStore = AtlasWindowsVaultLocalStoreIO();
     final selectedVaultStore = AtlasWindowsSelectedVaultStore();
     final migrationJournalStore = AtlasWindowsProtectedMigrationJournalStore();
+    final recoveryImportJournalStore =
+        AtlasWindowsProtectedRecoveryImportJournalStore();
     final authorityAdmission = AtlasWindowsPlaintextAuthorityAdmission(
       locationProvider: () =>
           resolveAtlasPersistentCacheLocation(importLegacyCache: false),
       journalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
       selectedVaultStore: selectedVaultStore,
     );
     final runtime = AtlasVaultPrivateStateRuntime(
@@ -2864,6 +2902,14 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       localCacheStoreFactory: _defaultCacheStore,
       privateStatePersistence: runtime,
       plaintextAuthorityAdmission: authorityAdmission,
+      recoveryImportPending: () async {
+        final bytes = await recoveryImportJournalStore.read();
+        try {
+          return bytes != null;
+        } finally {
+          bytes?.fillRange(0, bytes.length, 0);
+        }
+      },
       compatibilityPrivateStateAdmission: () async {
         final privateState = await _AtlasControllerCompatibilityMigrationSource(
           controller,
@@ -2884,8 +2930,12 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     final interoperabilityOwner = _attachWindowsEncryptedBackup(
       controller: controller,
       runtime: runtime,
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
       selectedVaultStore: selectedVaultStore,
       migrationJournalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
+      authorityAdmission: authorityAdmission,
     );
     return _AtlasDefaultControllerAssembly(
       controller: controller,

@@ -13,6 +13,7 @@ void main() {
   late AtlasVaultWindowsMethodCallRecorder recorder;
   late AtlasWindowsVaultSecureKeyStore storage;
   late AtlasWindowsProtectedMigrationJournalStore journal;
+  late AtlasWindowsProtectedRecoveryImportJournalStore recoveryJournal;
   late AtlasWindowsSelectedVaultStore selection;
   late AtlasWindowsEncryptedDocumentTransport documentTransport;
 
@@ -22,6 +23,9 @@ void main() {
     )..install();
     storage = AtlasWindowsVaultSecureKeyStore(channel: recorder.channel);
     journal = AtlasWindowsProtectedMigrationJournalStore(
+      channel: recorder.channel,
+    );
+    recoveryJournal = AtlasWindowsProtectedRecoveryImportJournalStore(
       channel: recorder.channel,
     );
     selection = AtlasWindowsSelectedVaultStore(channel: recorder.channel);
@@ -199,6 +203,74 @@ void main() {
       expect(recorder.calls, isEmpty);
     },
   );
+
+  test('protected recovery-import journal uses strict Windows CAS', () async {
+    final bytes = AtlasVaultRecoveryImportJournal.prepared(
+      profile: AtlasVaultRecoveryImportProfile.windows,
+      importId: '30000000-0000-4000-8000-000000000331',
+      exportId: '30000000-0000-4000-8000-000000000332',
+      vaultId: 'vault-alpha',
+      storeId: '30000000-0000-4000-8000-000000000333',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    ).canonicalBytes();
+    recorder.handler = (call) async {
+      switch (call.method) {
+        case 'readRecoveryImportJournal':
+          expect(call.arguments, isNull);
+          return Uint8List.fromList(bytes);
+        case 'createRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{'journal_bytes': bytes});
+          return null;
+        case 'replaceRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'journal_bytes': bytes,
+            'expected_sha256': 'a' * 64,
+          });
+          return null;
+        case 'deleteRecoveryImportJournal':
+          expect(call.arguments, <String, Object?>{
+            'expected_sha256': 'b' * 64,
+            'allow_absent': true,
+          });
+          return null;
+        default:
+          fail('Unexpected Windows recovery-import journal method.');
+      }
+    };
+
+    await recoveryJournal.create(bytes);
+    expect(await recoveryJournal.read(), orderedEquals(bytes));
+    await recoveryJournal.replace(bytes, expectedSha256: 'a' * 64);
+    await recoveryJournal.delete(expectedSha256: 'b' * 64, allowAbsent: true);
+    expect(recorder.calls.map((call) => call.method), <String>[
+      'createRecoveryImportJournal',
+      'readRecoveryImportJournal',
+      'replaceRecoveryImportJournal',
+      'deleteRecoveryImportJournal',
+    ]);
+  });
+
+  test('protected recovery-import journal rejects Android profile', () async {
+    final androidBytes = AtlasVaultRecoveryImportJournal.prepared(
+      importId: '30000000-0000-4000-8000-000000000341',
+      exportId: '30000000-0000-4000-8000-000000000342',
+      vaultId: 'vault-alpha',
+      storeId: '30000000-0000-4000-8000-000000000343',
+      createdAt: '2026-08-09T01:02:03Z',
+      exportSha256: '1' * 64,
+      localStoreSha256: '2' * 64,
+      vaultKeySha256: '3' * 64,
+    ).canonicalBytes();
+
+    await expectLater(
+      recoveryJournal.create(androidBytes),
+      throwsA(isA<AtlasVaultWindowsStorageException>()),
+    );
+    expect(recorder.calls, isEmpty);
+  });
 
   test(
     'selected vault uses strict create-only read and clear methods',

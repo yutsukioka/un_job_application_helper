@@ -8,12 +8,17 @@ export 'src/atlas_vault/interoperability.dart'
         AtlasVaultInteroperabilityCoordinator,
         AtlasVaultInteroperabilityCoordinating,
         AtlasVaultInteroperabilityException,
+        AtlasVaultProtectedRecoveryImportJournalStore,
         AtlasVaultRecoveryDisplayHandle,
         AtlasVaultRecoveryExportAvailability,
         AtlasVaultRecoveryExportDisposition,
         AtlasVaultRecoveryExportResult,
         AtlasVaultRecoveryImportDisposition,
-        AtlasVaultRecoveryImportResult;
+        AtlasVaultRecoveryImportJournal,
+        AtlasVaultRecoveryImportProfile,
+        AtlasVaultRecoveryImportResult,
+        AtlasVaultRecoveryImportStage,
+        AtlasVaultRecoveryImportTransactionAdmission;
 export 'src/atlas_vault/interoperability_view.dart'
     show
         AtlasVaultInteroperabilityContext,
@@ -63,6 +68,7 @@ export 'src/atlas_vault/windows_storage.dart'
         AtlasVaultWindowsStorageException,
         AtlasWindowsEncryptedDocumentTransport,
         AtlasWindowsProtectedMigrationJournalStore,
+        AtlasWindowsProtectedRecoveryImportJournalStore,
         AtlasWindowsSelectedVaultStore,
         AtlasWindowsVaultLocalStoreIO,
         AtlasWindowsVaultSecureKeyStore;
