@@ -462,7 +462,7 @@ final class _CrossProcessRecoveryScenario {
 
   Future<void> holdAdmissionUntilProcessTermination() async {
     await admission.runRecoveryImportTransaction(() async {
-      await _signal('crash-lock-held');
+      await _signal('crash-lock-held', value: '$pid');
       await Completer<void>().future;
     });
   }
@@ -526,9 +526,9 @@ final class _CrossProcessRecoveryScenario {
   File _signalFile(String name) =>
       File('${root.path}${Platform.pathSeparator}$name.ready');
 
-  Future<void> _signal(String name) async {
+  Future<void> _signal(String name, {String value = 'ready'}) async {
     await root.create(recursive: true);
-    await _signalFile(name).writeAsString('ready\n', flush: true);
+    await _signalFile(name).writeAsString('$value\n', flush: true);
   }
 
   Future<void> _waitForSignal(String name) async {
