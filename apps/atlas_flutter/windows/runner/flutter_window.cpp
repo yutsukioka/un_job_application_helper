@@ -27,7 +27,8 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   atlas_vault_storage_ = std::make_unique<AtlasVaultWindowsStorage>(
-      flutter_controller_->engine()->messenger(), "atlas/vault_windows");
+      flutter_controller_->engine()->messenger(), "atlas/vault_windows",
+      GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

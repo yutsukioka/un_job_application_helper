@@ -198,7 +198,9 @@ final class _AndroidInteropVector {
     final bytes = Uint8List.fromList(
       base64Decode(value['canonical_encrypted_export_b64']! as String),
     );
-    final expectedPayloadValues = value['fake_expected_payload_values'];
+    final expectedPayloadValues = atlasVaultObject(
+      value['expected_payload_values'],
+    );
     return _AndroidInteropVector(
       caseId: value['case_id'] as String? ?? caseName,
       vaultId: value['vault_id']! as String,
@@ -215,9 +217,11 @@ final class _AndroidInteropVector {
           value['expected_preserved_other_private_record_count']! as int,
       privateSentinels:
           privateSentinels ??
-          (expectedPayloadValues is List<dynamic>
-              ? expectedPayloadValues.cast<String>()
-              : const <String>[]),
+          <String>[
+            for (final entry in expectedPayloadValues.entries)
+              if (!entry.key.endsWith('_record_id') && entry.value is String)
+                entry.value! as String,
+          ],
     );
   }
 }

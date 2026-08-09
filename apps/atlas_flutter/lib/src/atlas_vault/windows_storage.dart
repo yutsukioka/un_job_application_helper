@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../atlas_vault.dart';
 import 'android_storage.dart' show AtlasVaultSecureKeyStore;
 import 'canonical_json.dart';
+import 'interoperability.dart';
 import 'local_store_io.dart';
 import 'plaintext_migration.dart';
 
@@ -274,6 +275,46 @@ final class AtlasWindowsVaultLocalStoreIO implements AtlasVaultLocalStoreIO {
 
   @override
   String toString() => 'AtlasWindowsVaultLocalStoreIO(<redacted>)';
+}
+
+final class AtlasWindowsEncryptedDocumentTransport
+    implements AtlasVaultEncryptedDocumentTransport {
+  AtlasWindowsEncryptedDocumentTransport({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumDocumentByteCount = 128 * 1024 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<Uint8List?> pickEncryptedExport() async {
+    throw const AtlasVaultWindowsStorageException();
+  }
+
+  @override
+  Future<bool> saveEncryptedExport(Uint8List canonicalExportBytes) async {
+    if (canonicalExportBytes.isEmpty ||
+        canonicalExportBytes.length > maximumDocumentByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    final bytes = Uint8List.fromList(canonicalExportBytes);
+    try {
+      final value = await _invoke<Object?>(
+        _channel,
+        'saveEncryptedExport',
+        <String, Object?>{'export_bytes': bytes},
+      );
+      if (value is! bool) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      return value;
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsEncryptedDocumentTransport(<redacted>)';
 }
 
 final class AtlasWindowsProtectedMigrationJournalStore

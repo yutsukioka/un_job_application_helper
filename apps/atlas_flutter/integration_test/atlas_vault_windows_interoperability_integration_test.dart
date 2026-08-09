@@ -120,14 +120,12 @@ final class _WindowsExportVector {
     final export = AtlasVaultEncryptedExport.decodeJson(
       utf8.decode(exportBytes),
     );
-    final payloadValues = atlasVaultList(
-      value['fake_expected_payload_values'],
-    ).cast<String>();
+    final payloadValues = atlasVaultObject(value['expected_payload_values']);
     return _WindowsExportVector(
       vaultId: value['vault_id']! as String,
       recoveryText: value['test_only_recovery_key_text']! as String,
       vaultKey: Uint8List.fromList(
-        base64Decode(value['test_only_raw_vault_key_b64']! as String),
+        base64Decode(value['test_only_vault_key_b64']! as String),
       ),
       exportBytes: exportBytes,
       exportSha256: value['canonical_encrypted_export_sha256']! as String,
@@ -135,7 +133,7 @@ final class _WindowsExportVector {
       localStore: AtlasVaultLocalStore.fromJson(<String, Object?>{
         'format': 'atlasvault-local-store',
         'version': 1,
-        'store_id': value['source_local_store_id']! as String,
+        'store_id': value['local_source_store_id']! as String,
         'created_at': export.createdAt,
         'updated_at': export.createdAt,
         'vault_metadata': export.vaultMetadata.toJson(),
@@ -143,7 +141,11 @@ final class _WindowsExportVector {
           for (final record in export.records) record.toJson(),
         ],
       }),
-      privateSentinels: payloadValues,
+      privateSentinels: <String>[
+        for (final entry in payloadValues.entries)
+          if (!entry.key.endsWith('_record_id') && entry.value is String)
+            entry.value! as String,
+      ],
     );
   }
 }

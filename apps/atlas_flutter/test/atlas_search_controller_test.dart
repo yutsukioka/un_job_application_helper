@@ -2473,7 +2473,7 @@ void main() {
     () async {
       final source = await File(
         'lib/features/app_shell/atlas_app.dart',
-      ).readAsString();
+      ).readAsString().then((value) => value.replaceAll('\r\n', '\n'));
       final activationStart = source.indexOf(
         'Future<AtlasVaultActivationResult> _activateExistingAtlasVault',
       );
@@ -3187,16 +3187,20 @@ void main() {
     expect(sideEffectFreeAssembly, isNot(contains('.inventory(')));
     expect(sideEffectFreeAssembly, isNot(contains('.prepare(')));
     expect(sideEffectFreeAssembly, isNot(contains('.resume(')));
+    expect(windowsAssembly, contains('_attachWindowsEncryptedBackup('));
     expect(
-      windowsAssembly,
+      migrationAssembly,
       contains('AtlasWindowsEncryptedDocumentTransport()'),
     );
-    expect(windowsAssembly, contains('AtlasVaultInteroperabilityCoordinator('));
     expect(
-      windowsAssembly,
+      migrationAssembly,
+      contains('AtlasVaultInteroperabilityCoordinator('),
+    );
+    expect(
+      migrationAssembly,
       contains('AtlasVaultInteroperabilityPresentationOwner('),
     );
-    expect(windowsAssembly, contains('attachInteroperabilityContext('));
+    expect(migrationAssembly, contains('attachInteroperabilityContext('));
     expect(sideEffectFreeAssembly, isNot(contains('.beginRecoverySetup(')));
     expect(sideEffectFreeAssembly, isNot(contains('.savePreparedExport(')));
   });

@@ -2819,6 +2819,30 @@ AtlasVaultPlaintextMigrationPresentationOwner _attachWindowsMigration({
   return owner;
 }
 
+AtlasVaultInteroperabilityPresentationOwner _attachWindowsEncryptedBackup({
+  required AtlasAppController controller,
+  required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasWindowsSelectedVaultStore selectedVaultStore,
+  required AtlasWindowsProtectedMigrationJournalStore migrationJournalStore,
+}) {
+  final documentTransport = AtlasWindowsEncryptedDocumentTransport();
+  final coordinator = AtlasVaultInteroperabilityCoordinator(
+    runtime: runtime,
+    selectedVaultStore: selectedVaultStore,
+    migrationJournalStore: migrationJournalStore,
+    recoveryImportPending: () async => false,
+    documentTransport: documentTransport,
+  );
+  final owner = AtlasVaultInteroperabilityPresentationOwner(
+    coordinator: coordinator,
+    platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+  );
+  controller.attachInteroperabilityContext(
+    AtlasVaultInteroperabilityContext(owner: owner),
+  );
+  return owner;
+}
+
 _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   if (Platform.isWindows) {
     final keyStore = AtlasWindowsVaultSecureKeyStore();
@@ -2857,9 +2881,16 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       migrationJournalStore: migrationJournalStore,
       authorityAdmission: authorityAdmission,
     );
+    final interoperabilityOwner = _attachWindowsEncryptedBackup(
+      controller: controller,
+      runtime: runtime,
+      selectedVaultStore: selectedVaultStore,
+      migrationJournalStore: migrationJournalStore,
+    );
     return _AtlasDefaultControllerAssembly(
       controller: controller,
       migrationOwner: owner,
+      interoperabilityOwner: interoperabilityOwner,
     );
   }
 

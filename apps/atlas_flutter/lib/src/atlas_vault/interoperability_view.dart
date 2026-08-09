@@ -27,6 +27,8 @@ enum AtlasVaultInteroperabilityPresentationStatus {
   unavailable,
 }
 
+enum AtlasVaultInteroperabilityPlatformProfile { android, windows }
+
 final class AtlasVaultInteroperabilityContext {
   const AtlasVaultInteroperabilityContext({required this.owner});
 
@@ -39,11 +41,13 @@ final class AtlasVaultInteroperabilityContext {
 final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
   AtlasVaultInteroperabilityPresentationOwner({
     required AtlasVaultInteroperabilityCoordinating coordinator,
+    this.platformProfile = AtlasVaultInteroperabilityPlatformProfile.android,
   }) : // Keep the public dependency label readable.
        // ignore: prefer_initializing_formals
        _coordinator = coordinator;
 
   final AtlasVaultInteroperabilityCoordinating _coordinator;
+  final AtlasVaultInteroperabilityPlatformProfile platformProfile;
 
   AtlasVaultInteroperabilityPresentationStatus status =
       AtlasVaultInteroperabilityPresentationStatus.hidden;
@@ -127,9 +131,7 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
       }
       _publish(
         AtlasVaultInteroperabilityPresentationStatus.ready,
-        availability.recoveryWrapPresent
-            ? 'Recovery export is available.'
-            : 'Recovery export setup is required.',
+        _recoveryExportMessage(availability.recoveryWrapPresent),
         count: availability.encryptedRecordCount,
         wrapPresent: availability.recoveryWrapPresent,
         importReady: importAvailable,
@@ -142,6 +144,17 @@ final class AtlasVaultInteroperabilityPresentationOwner extends ChangeNotifier {
         );
       }
     }
+  }
+
+  String _recoveryExportMessage(bool recoveryWrapPresent) {
+    if (platformProfile == AtlasVaultInteroperabilityPlatformProfile.windows) {
+      return recoveryWrapPresent
+          ? 'Encrypted backup is available with Windows current-user device-local protection.'
+          : 'Windows current-user device-local recovery export setup is required.';
+    }
+    return recoveryWrapPresent
+        ? 'Recovery export is available.'
+        : 'Recovery export setup is required.';
   }
 
   Future<void> prepareRecoveryImport() async {
