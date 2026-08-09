@@ -594,8 +594,18 @@ class _AtlasVaultInteroperabilityPanelState
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) {
+      final nativeDocumentDialogOwnsFocus =
+          state == AppLifecycleState.inactive &&
+          widget.owner.platformProfile ==
+              AtlasVaultInteroperabilityPlatformProfile.windows &&
+          (widget.owner.status ==
+                  AtlasVaultInteroperabilityPresentationStatus.pickingImport ||
+              widget.owner.status ==
+                  AtlasVaultInteroperabilityPresentationStatus.saving);
       _clearLocalRecoveryState();
-      widget.owner.hide();
+      if (!nativeDocumentDialogOwnsFocus) {
+        widget.owner.hide();
+      }
     }
   }
 

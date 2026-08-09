@@ -410,6 +410,38 @@ void main() {
     expect(find.text('Encrypted backup saved.'), findsOneWidget);
   });
 
+  testWidgets('Windows lifecycle loss outside a dialog clears and hides', (
+    tester,
+  ) async {
+    const recoveryText = 'AVRK1-LOCAL-TEST-ONLY-MUST-BE-CLEARED';
+    final coordinator = _FakeCoordinator();
+    final owner =
+        AtlasVaultInteroperabilityPresentationOwner(
+            coordinator: coordinator,
+            platformProfile: AtlasVaultInteroperabilityPlatformProfile.windows,
+          )
+          ..status = AtlasVaultInteroperabilityPresentationStatus
+              .awaitingImportRecoveryKey
+          ..importAvailable = true;
+    addTearDown(() {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      owner.dispose();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AtlasVaultInteroperabilityPanel(owner: owner)),
+      ),
+    );
+    await tester.enterText(find.byType(TextField), recoveryText);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+
+    expect(owner.status, AtlasVaultInteroperabilityPresentationStatus.hidden);
+    expect(find.text(recoveryText), findsNothing);
+    expect(coordinator.calls, contains('discard-pending'));
+  });
+
   testWidgets('pending import resume advances to explicit recovery submit', (
     tester,
   ) async {
