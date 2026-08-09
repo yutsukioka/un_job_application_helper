@@ -219,6 +219,7 @@ final class _AndroidInteropVector {
   factory _AndroidInteropVector.loadWindows() => _AndroidInteropVector._load(
     fileName: 'atlasvault_windows_interop_vectors_v1.json',
     caseName: 'windows_to_apple_android',
+    directArtifactBaseName: 'windows-to-apple-android',
   );
 
   factory _AndroidInteropVector.loadAndroid() => _AndroidInteropVector._load(
@@ -230,12 +231,31 @@ final class _AndroidInteropVector {
     required String fileName,
     required String caseName,
     List<String>? privateSentinels,
+    String? directArtifactBaseName,
   }) {
     final root = loadAtlasVaultVector(fileName);
     final value = atlasVaultObject(root[caseName]);
-    final bytes = Uint8List.fromList(
+    final vectorBytes = Uint8List.fromList(
       base64Decode(value['canonical_encrypted_export_b64']! as String),
     );
+    const artifactDirectory = String.fromEnvironment(
+      'ATLAS_INTEROP_ARTIFACT_DIR',
+    );
+    var bytes = vectorBytes;
+    if (directArtifactBaseName != null && artifactDirectory.isNotEmpty) {
+      final artifact = File(
+        '$artifactDirectory/$directArtifactBaseName.atlasvault',
+      );
+      if (!artifact.existsSync()) {
+        throw StateError('The direct encrypted test artifact is absent.');
+      }
+      final directBytes = Uint8List.fromList(artifact.readAsBytesSync());
+      if (base64Encode(directBytes) != base64Encode(vectorBytes)) {
+        directBytes.fillRange(0, directBytes.length, 0);
+        throw StateError('The direct encrypted test artifact is invalid.');
+      }
+      bytes = directBytes;
+    }
     final expectedPayloadValues = atlasVaultObject(
       value['expected_payload_values'],
     );
