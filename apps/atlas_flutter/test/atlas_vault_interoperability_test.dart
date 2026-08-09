@@ -642,6 +642,40 @@ void main() {
   );
 
   test(
+    'initial import drains controller admission before cross-process lock',
+    () async {
+      final operationAdmission = _ImportOperationAdmission();
+      final transactionAdmission = _ImportTransactionAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: operationAdmission,
+        importTransactionAdmission: transactionAdmission,
+      );
+      operationAdmission.attachEvents(fixture.events);
+      transactionAdmission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+
+      final confirmation = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await operationAdmission.entered;
+      final transactionStartedBeforeDrain = transactionAdmission.entered;
+      operationAdmission.releaseAdmittedMutation();
+      final result = await confirmation;
+
+      expect(transactionStartedBeforeDrain, isFalse);
+      expect(
+        result.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(
+        fixture.events.indexOf('import-admission.drained'),
+        lessThan(fixture.events.indexOf('import-transaction.begin')),
+      );
+    },
+  );
+
+  test(
     'recovered initial journal publishes pending before admission ends',
     () async {
       final pendingChanges = <bool>[];
@@ -691,7 +725,8 @@ void main() {
       fixture.faults
         ..failAfterEvent = 'import-journal.create'
         ..failBeforeEvent = 'import-journal.read'
-        ..remainingBeforeMatches = 2;
+        // Pre-admission read, locked recheck, then post-failure recovery read.
+        ..remainingBeforeMatches = 3;
 
       final confirmation = fixture.coordinator.confirmRecoveryImport(
         fixture.caseData.recoveryText,
@@ -1481,6 +1516,7 @@ final class _ImportFixture {
     app.AtlasLocalCacheMigrationPrivateState? cacheState,
     bool compatibilityFails = false,
     AtlasVaultRecoveryImportOperationAdmission? importOperationAdmission,
+    AtlasVaultRecoveryImportTransactionAdmission? importTransactionAdmission,
     List<bool>? recoveryImportPendingChanges,
     String? failAfterEvent,
     int failAfterOccurrence = 1,
@@ -1535,6 +1571,7 @@ final class _ImportFixture {
       compatibilitySource: compatibilitySource,
       cacheSource: _ImportCacheSource(cacheState ?? _emptyCacheState()),
       importOperationAdmission: importOperationAdmission,
+      importTransactionAdmission: importTransactionAdmission,
       recoveryImportPendingDidChange: recoveryImportPendingChanges == null
           ? null
           : (pending) {
@@ -1600,6 +1637,29 @@ final class _ImportOperationAdmission
   void endRecoveryImportAdmission() {
     _events?.add('import-admission.end');
     blocksNewLegacyMutation = false;
+  }
+}
+
+final class _ImportTransactionAdmission
+    implements AtlasVaultRecoveryImportTransactionAdmission {
+  List<String>? _events;
+  bool entered = false;
+
+  void attachEvents(List<String> events) {
+    _events = events;
+  }
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(
+    Future<T> Function() operation,
+  ) async {
+    entered = true;
+    _events?.add('import-transaction.begin');
+    try {
+      return await operation();
+    } finally {
+      _events?.add('import-transaction.end');
+    }
   }
 }
 

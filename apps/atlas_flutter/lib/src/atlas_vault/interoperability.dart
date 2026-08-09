@@ -869,12 +869,20 @@ final class AtlasVaultInteroperabilityCoordinator
         );
         recoveryKey.destroy();
         recoveryKey = null;
+        journal = await _loadImportJournal(dependencies.journalStore);
+        final journalExistedBeforeTransaction = journal != null;
+        if (!journalExistedBeforeTransaction) {
+          await _importOperationAdmission.beginRecoveryImportAdmission();
+          importAdmissionHeld = true;
+        }
         return await _importTransactionAdmission.runRecoveryImportTransaction(
           () async {
             journal = await _loadImportJournal(dependencies.journalStore);
-            if (journal == null) {
-              await _importOperationAdmission.beginRecoveryImportAdmission();
-              importAdmissionHeld = true;
+            if (journalExistedBeforeTransaction && journal == null) {
+              return _fixedImportResult(
+                AtlasVaultRecoveryImportDisposition.recoveryRequired,
+                count: export.records.length,
+              );
             }
             final gate = await _cleanInstallGate(
               dependencies,
