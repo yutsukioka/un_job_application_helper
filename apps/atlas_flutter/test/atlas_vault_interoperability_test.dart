@@ -676,6 +676,47 @@ void main() {
   );
 
   test(
+    'journaled resume drains controller admission before cross-process lock',
+    () async {
+      final operationAdmission = _ImportOperationAdmission();
+      final transactionAdmission = _ImportTransactionAdmission();
+      final fixture = await _ImportFixture.create(
+        importOperationAdmission: operationAdmission,
+        importTransactionAdmission: transactionAdmission,
+        failAfterEvent: 'store.create',
+      );
+      operationAdmission.attachEvents(fixture.events);
+      transactionAdmission.attachEvents(fixture.events);
+      await fixture.coordinator.prepareRecoveryImport();
+
+      final interrupted = fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+      await operationAdmission.entered;
+      operationAdmission.releaseAdmittedMutation();
+      final interruptedResult = await interrupted;
+      expect(interruptedResult.pendingImport, isTrue);
+
+      fixture.faults.clear();
+      await fixture.coordinator.prepareRecoveryImport();
+      fixture.events.clear();
+      final resumed = await fixture.coordinator.confirmRecoveryImport(
+        fixture.caseData.recoveryText,
+      );
+
+      expect(
+        resumed.disposition,
+        AtlasVaultRecoveryImportDisposition.importedAndActive,
+      );
+      expect(fixture.events, contains('import-admission.begin'));
+      expect(
+        fixture.events.indexOf('import-admission.drained'),
+        lessThan(fixture.events.indexOf('import-transaction.begin')),
+      );
+    },
+  );
+
+  test(
     'recovered initial journal publishes pending before admission ends',
     () async {
       final pendingChanges = <bool>[];
