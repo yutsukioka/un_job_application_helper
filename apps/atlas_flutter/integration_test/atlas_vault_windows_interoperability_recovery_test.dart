@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -12,6 +13,13 @@ import 'package:integration_test/integration_test.dart';
 
 import '../test/support/atlas_vault_vector_loader.dart';
 
+const _processStageEnvironment = 'ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_STAGE';
+const _processVaultEnvironment =
+    'ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_VAULT_ID';
+const _defaultProcessVaultId = 'windows_recovery_import_cross_process_test';
+
+String? get _processStage => Platform.environment[_processStageEnvironment];
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -19,6 +27,9 @@ void main() {
     tester,
   ) async {
     if (!Platform.isWindows) {
+      return;
+    }
+    if (_processStage != null) {
       return;
     }
     final store = AtlasWindowsProtectedRecoveryImportJournalStore();
@@ -96,6 +107,9 @@ void main() {
     if (!Platform.isWindows) {
       return;
     }
+    if (_processStage != null) {
+      return;
+    }
     final vector = _RecoveryVector.load();
     var scenario = 10;
     try {
@@ -156,6 +170,9 @@ void main() {
 
   testWidgets('Windows reset is pre-selection and hash bound', (tester) async {
     if (!Platform.isWindows) {
+      return;
+    }
+    if (_processStage != null) {
       return;
     }
     final vector = _RecoveryVector.load();
@@ -241,6 +258,301 @@ void main() {
       'Windows import reset stayed hash-bound and pre-selection only.',
     );
   });
+
+  testWidgets('Windows import admission is authoritative across processes', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) {
+      return;
+    }
+    final stage = _processStage;
+    if (stage == null) {
+      return;
+    }
+    final vaultId =
+        Platform.environment[_processVaultEnvironment] ??
+        _defaultProcessVaultId;
+    final scenario = _CrossProcessRecoveryScenario(vaultId);
+    switch (stage) {
+      case 'admission-waiter':
+        await scenario.runLegacyAdmissionWaiter();
+        tester.printToConsole(
+          'An already-running Windows legacy process was blocked by the '
+          'recovery-import journal and reopened only after reset completed.',
+        );
+        return;
+      case 'admission-prepare':
+        await scenario.prepareAdmissionFence();
+        tester.printToConsole(
+          'The Windows recovery-import journal was created under the shared '
+          'cross-process admission lock.',
+        );
+        return;
+      case 'admission-reset':
+        await scenario.resetAdmissionFence();
+        tester.printToConsole(
+          'Windows import reset removed the protected journal before '
+          'reopening legacy admission.',
+        );
+        return;
+      case 'selection-waiter':
+        await scenario.runSelectionWaiter();
+        tester.printToConsole(
+          'A concurrent Windows legacy process remained excluded through '
+          'selected-vault commitment.',
+        );
+        return;
+      case 'selection-run':
+        await scenario.runSelectionFence();
+        tester.printToConsole(
+          'Windows import held cross-process admission continuously through '
+          'selection read-back and journal deletion.',
+        );
+        return;
+      case 'crash-holder':
+        await scenario.holdAdmissionUntilProcessTermination();
+        return;
+      case 'crash-verify':
+        await scenario.verifyAdmissionAfterProcessCrash();
+        tester.printToConsole(
+          'Windows released recovery-import admission after holder process '
+          'termination.',
+        );
+        return;
+      case 'cleanup':
+        await scenario.cleanTestResources();
+        tester.printToConsole(
+          'Windows recovery-import cross-process resources were cleaned.',
+        );
+        return;
+      default:
+        fail('Unsupported fixed Windows recovery-import process stage.');
+    }
+  });
+}
+
+final class _CrossProcessRecoveryScenario {
+  _CrossProcessRecoveryScenario(this.vaultId)
+    : root = Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}'
+        'atlas_windows_import_cross_process_'
+        '${vaultId.replaceAll('-', '')}',
+      ) {
+    location = _cacheLocation(root);
+    admission = AtlasWindowsPlaintextAuthorityAdmission(
+      locationProvider: () async => location,
+      journalStore: migrationJournal,
+      recoveryImportJournalStore: importJournal,
+      selectedVaultStore: selected,
+    );
+  }
+
+  final String vaultId;
+  final Directory root;
+  late final AtlasPersistentCacheLocation location;
+  final AtlasWindowsProtectedMigrationJournalStore migrationJournal =
+      AtlasWindowsProtectedMigrationJournalStore();
+  final AtlasWindowsProtectedRecoveryImportJournalStore importJournal =
+      AtlasWindowsProtectedRecoveryImportJournalStore();
+  final AtlasWindowsSelectedVaultStore selected =
+      AtlasWindowsSelectedVaultStore();
+  late final AtlasWindowsPlaintextAuthorityAdmission admission;
+
+  AtlasVaultRecoveryImportJournal get journal =>
+      AtlasVaultRecoveryImportJournal.prepared(
+        profile: AtlasVaultRecoveryImportProfile.windows,
+        importId: '79000000-0000-4000-8000-000000000079',
+        exportId: '80000000-0000-4000-8000-000000000080',
+        vaultId: vaultId,
+        storeId: '81000000-0000-4000-8000-000000000081',
+        createdAt: '2026-08-09T04:05:06Z',
+        exportSha256: '1' * 64,
+        localStoreSha256: '2' * 64,
+        vaultKeySha256: '3' * 64,
+      );
+
+  Future<void> runLegacyAdmissionWaiter() async {
+    await _signal('legacy-ready');
+    await _waitForSignal('journal-ready');
+    var privateWrites = 0;
+    await expectLater(
+      admission.runLegacyPrivateOperation(() async {
+        privateWrites += 1;
+      }),
+      throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+    );
+    expect(privateWrites, 0);
+    await _signal('legacy-blocked');
+
+    await _waitForSignal('reset-complete');
+    await admission.runLegacyPrivateOperation(() async {
+      privateWrites += 1;
+    });
+    expect(privateWrites, 1);
+    await _signal('legacy-reopened');
+  }
+
+  Future<void> prepareAdmissionFence() async {
+    await _waitForSignal('legacy-ready');
+    await _requireNoSelection();
+    final bytes = journal.canonicalBytes();
+    try {
+      await admission.runRecoveryImportTransaction(() async {
+        expect(await importJournal.read(), isNull);
+        await importJournal.create(bytes);
+        final restored = await importJournal.read();
+        expect(restored, orderedEquals(bytes));
+        restored?.fillRange(0, restored.length, 0);
+      });
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+    await _signal('journal-ready');
+    await _waitForSignal('legacy-blocked');
+  }
+
+  Future<void> resetAdmissionFence() async {
+    await _waitForSignal('legacy-blocked');
+    await admission.runRecoveryImportTransaction(() async {
+      await _deleteExpectedJournal();
+      expect(await importJournal.read(), isNull);
+      await _requireNoSelection();
+    });
+    await _signal('reset-complete');
+    await _waitForSignal('legacy-reopened');
+  }
+
+  Future<void> runSelectionWaiter() async {
+    await _signal('selection-waiter-ready');
+    await _waitForSignal('selection-transaction-held');
+    var privateWrites = 0;
+    await _signal('selection-write-attempted');
+    await expectLater(
+      admission.runLegacyPrivateOperation(() async {
+        privateWrites += 1;
+      }),
+      throwsA(isA<AtlasVaultPlaintextAuthorityAdmissionException>()),
+    );
+    expect(privateWrites, 0);
+    expect(await selected.read(), vaultId);
+    expect(await importJournal.read(), isNull);
+    await _signal('selection-write-blocked');
+  }
+
+  Future<void> runSelectionFence() async {
+    await _waitForSignal('selection-waiter-ready');
+    await _requireNoSelection();
+    final bytes = journal.canonicalBytes();
+    try {
+      await admission.runRecoveryImportTransaction(() async {
+        expect(await importJournal.read(), isNull);
+        await importJournal.create(bytes);
+        await _signal('selection-transaction-held');
+        await _waitForSignal('selection-write-attempted');
+        await selected.create(vaultId);
+        expect(await selected.read(), vaultId);
+        await _deleteExpectedJournal();
+        expect(await importJournal.read(), isNull);
+      });
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+    await _waitForSignal('selection-write-blocked');
+  }
+
+  Future<void> holdAdmissionUntilProcessTermination() async {
+    await admission.runRecoveryImportTransaction(() async {
+      await _signal('crash-lock-held');
+      await Completer<void>().future;
+    });
+  }
+
+  Future<void> verifyAdmissionAfterProcessCrash() async {
+    await _waitForSignal('crash-lock-held');
+    await _signal('crash-waiter-ready');
+    var acquired = false;
+    await admission.runRecoveryImportTransaction(() async {
+      acquired = true;
+      await _signal('crash-lock-reacquired');
+    });
+    expect(acquired, isTrue);
+  }
+
+  Future<void> cleanTestResources() async {
+    await root.create(recursive: true);
+    final selectedVault = await selected.read();
+    if (selectedVault == vaultId) {
+      await selected.clear(vaultId);
+    } else if (selectedVault != null) {
+      throw StateError('Unrelated selected vault is present.');
+    }
+    await _deleteExpectedJournal(allowAbsent: true);
+    if (await root.exists()) {
+      await root.delete(recursive: true);
+    }
+  }
+
+  Future<void> _deleteExpectedJournal({bool allowAbsent = false}) async {
+    final bytes = await importJournal.read();
+    if (bytes == null) {
+      if (allowAbsent) {
+        return;
+      }
+      fail('Expected Windows recovery-import journal is absent.');
+    }
+    try {
+      final restored = AtlasVaultRecoveryImportJournal.decodeBytes(
+        bytes,
+        profile: AtlasVaultRecoveryImportProfile.windows,
+      );
+      if (restored.vaultId != vaultId) {
+        throw StateError('Unrelated Windows recovery import is pending.');
+      }
+      await importJournal.delete(
+        expectedSha256: await atlasVaultSha256Hex(bytes),
+      );
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+  }
+
+  Future<void> _requireNoSelection() async {
+    final value = await selected.read();
+    if (value != null) {
+      throw StateError('Unexpected selected vault in test storage.');
+    }
+  }
+
+  File _signalFile(String name) =>
+      File('${root.path}${Platform.pathSeparator}$name.ready');
+
+  Future<void> _signal(String name) async {
+    await root.create(recursive: true);
+    await _signalFile(name).writeAsString('ready\n', flush: true);
+  }
+
+  Future<void> _waitForSignal(String name) async {
+    await root.create(recursive: true);
+    final file = _signalFile(name);
+    if (await file.exists()) {
+      return;
+    }
+    final ready = Completer<void>();
+    late final StreamSubscription<FileSystemEvent> subscription;
+    subscription = root.watch().listen((_) {
+      if (!ready.isCompleted && file.existsSync()) {
+        ready.complete();
+      }
+    });
+    if (await file.exists() && !ready.isCompleted) {
+      ready.complete();
+    }
+    try {
+      await ready.future;
+    } finally {
+      await subscription.cancel();
+    }
+  }
 }
 
 final class _RecoveryHarness {
