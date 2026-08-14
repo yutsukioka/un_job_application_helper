@@ -118,8 +118,18 @@ final class AtlasVaultPairingFoundationTests: XCTestCase {
         let pairing = try dictionary(root["pairing"], context: "pairing")
         let inviter = try identity(root, name: "device_a")
         let invitee = try identity(root, name: "device_b")
+
+        XCTAssertThrowsError(
+            try AtlasVaultPairingFoundation.createOffer(
+                inviter: inviter,
+                offerID: try string(pairing["offer_id"], context: "offer_id"),
+                nonce: try data(pairing["offer_nonce"], context: "offer_nonce"),
+                issuedAt: "2026-01-15T12:05:00Z",
+                expiresAt: "2026-01-15T12:15:01Z"
+            )
+        )
+
         let cases = [
-            ("2026-01-15T12:05:00Z", "2026-01-15T12:15:01Z", "2026-01-15T12:07:00Z"),
             ("2026-01-15T12:05:00Z", "2026-01-15T12:15:00Z", "2026-01-15T12:15:00Z"),
             ("2026-01-15T12:09:01Z", "2026-01-15T12:15:00Z", "2026-01-15T12:07:00Z"),
         ]

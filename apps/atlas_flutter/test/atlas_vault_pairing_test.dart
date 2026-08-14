@@ -148,9 +148,21 @@ void main() {
     expect(freshGuard.consumedCount, 0);
   });
 
-  test('lifetime, expiry, and future issue are rejected', () async {
+  test('offer lifetime over 600 seconds is rejected at creation', () async {
+    await expectLater(
+      createAtlasVaultPairingOffer(
+        inviter: inviter,
+        offerId: pairing['offer_id']! as String,
+        nonce: _bytes(pairing['offer_nonce']),
+        issuedAt: '2026-01-15T12:05:00Z',
+        expiresAt: '2026-01-15T12:15:01Z',
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
+
+  test('expiry and future issue are rejected during verification', () async {
     final cases = <(String, String, String)>[
-      ('2026-01-15T12:05:00Z', '2026-01-15T12:15:01Z', '2026-01-15T12:07:00Z'),
       ('2026-01-15T12:05:00Z', '2026-01-15T12:15:00Z', '2026-01-15T12:15:00Z'),
       ('2026-01-15T12:09:01Z', '2026-01-15T12:15:00Z', '2026-01-15T12:07:00Z'),
     ];

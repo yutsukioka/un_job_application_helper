@@ -161,15 +161,29 @@ def test_complete_verification_consumes_replay_guard_only_after_proofs() -> None
     assert fresh_guard.consumed_count == 0
 
 
+def test_offer_lifetime_over_600_seconds_fails_at_creation() -> None:
+    root = load_vector()
+    pairing = root["pairing"]
+    inviter = identity(root, "device_a")
+
+    with pytest.raises(PairingError, match="pairing verification failed"):
+        create_pairing_offer(
+            inviter,
+            offer_id=pairing["offer_id"],
+            nonce=decode64(pairing["offer_nonce"]),
+            issued_at="2026-01-15T12:05:00Z",
+            expires_at="2026-01-15T12:15:01Z",
+        )
+
+
 @pytest.mark.parametrize(
     ("issued_at", "expires_at", "current_time"),
     [
-        ("2026-01-15T12:05:00Z", "2026-01-15T12:15:01Z", "2026-01-15T12:07:00Z"),
         ("2026-01-15T12:05:00Z", "2026-01-15T12:15:00Z", "2026-01-15T12:15:00Z"),
         ("2026-01-15T12:09:01Z", "2026-01-15T12:15:00Z", "2026-01-15T12:07:00Z"),
     ],
 )
-def test_offer_lifetime_expiry_and_future_issue_fail(
+def test_expired_and_future_issued_offers_fail_verification(
     issued_at: str,
     expires_at: str,
     current_time: str,
