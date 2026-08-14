@@ -22,6 +22,77 @@ final class AtlasVaultWindowsStorageException implements Exception {
   String toString() => 'AtlasVault Windows storage operation failed.';
 }
 
+final class AtlasWindowsDeviceIdentitySecretStore
+    implements AtlasDeviceIdentitySecretStore {
+  AtlasWindowsDeviceIdentitySecretStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumSecretByteCount = 16 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle) async {
+    _validateSecretBytes(canonicalSecretBundle);
+    final bytes = Uint8List.fromList(canonicalSecretBundle);
+    try {
+      await _invoke<void>(
+        _channel,
+        'createDeviceIdentitySecret',
+        <String, Object?>{'secret_bytes': bytes},
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<Uint8List?> loadPrimaryIdentity() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'loadDeviceIdentitySecret',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = _copyBytes(value);
+    try {
+      _validateSecretBytes(bytes);
+      return Uint8List.fromList(bytes);
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<bool> containsPrimaryIdentity() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'containsDeviceIdentitySecret',
+      null,
+    );
+    if (value is! bool) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    return value;
+  }
+
+  @override
+  Future<void> deletePrimaryIdentity() async {
+    await _invoke<void>(_channel, 'deleteDeviceIdentitySecret', null);
+  }
+
+  void _validateSecretBytes(Uint8List value) {
+    if (value.isEmpty || value.length > maximumSecretByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsDeviceIdentitySecretStore(<redacted>)';
+}
+
 final class AtlasVaultWindowsCapabilities {
   const AtlasVaultWindowsCapabilities._({
     required this.secureBoundaryAvailable,

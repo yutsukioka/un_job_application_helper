@@ -3,6 +3,7 @@ library;
 export 'src/atlas_vault/android_storage.dart'
     show
         atlasVaultAndroidMethodChannelName,
+        AtlasAndroidDeviceIdentitySecretStore,
         AtlasAndroidEncryptedDocumentTransport,
         AtlasAndroidProtectedMigrationJournalStore,
         AtlasAndroidProtectedRecoveryImportJournalStore,

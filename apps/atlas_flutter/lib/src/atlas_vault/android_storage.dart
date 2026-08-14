@@ -22,6 +22,81 @@ final class AtlasVaultAndroidStorageException implements Exception {
   String toString() => 'AtlasVault Android storage operation failed.';
 }
 
+final class AtlasAndroidDeviceIdentitySecretStore
+    implements AtlasDeviceIdentitySecretStore {
+  AtlasAndroidDeviceIdentitySecretStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  static const int maximumSecretByteCount = 16 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle) async {
+    _validateSecretBytes(canonicalSecretBundle);
+    final bytes = Uint8List.fromList(canonicalSecretBundle);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'createDeviceIdentitySecret',
+        <String, Object?>{'secret_bytes': bytes},
+      );
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<Uint8List?> loadPrimaryIdentity() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'loadDeviceIdentitySecret',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = copyAtlasVaultAndroidBytesInternal(value);
+    try {
+      _validateSecretBytes(bytes);
+      return Uint8List.fromList(bytes);
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<bool> containsPrimaryIdentity() async {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      _channel,
+      'containsDeviceIdentitySecret',
+      null,
+    );
+    if (value is! bool) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+    return value;
+  }
+
+  @override
+  Future<void> deletePrimaryIdentity() async {
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      _channel,
+      'deleteDeviceIdentitySecret',
+      null,
+    );
+  }
+
+  void _validateSecretBytes(Uint8List value) {
+    if (value.isEmpty || value.length > maximumSecretByteCount) {
+      throw const AtlasVaultAndroidStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidDeviceIdentitySecretStore(<redacted>)';
+}
+
 final class AtlasAndroidEncryptedDocumentTransport
     implements AtlasVaultEncryptedDocumentTransport {
   AtlasAndroidEncryptedDocumentTransport({MethodChannel? channel})

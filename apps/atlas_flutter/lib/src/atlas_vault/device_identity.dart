@@ -23,6 +23,26 @@ final class AtlasVaultDeviceIdentityException implements Exception {
   String toString() => 'AtlasVault device identity is invalid.';
 }
 
+final class AtlasVaultDeviceIdentityCustodyException implements Exception {
+  const AtlasVaultDeviceIdentityCustodyException();
+
+  @override
+  String toString() => 'AtlasVault device identity custody failed.';
+}
+
+abstract interface class AtlasDeviceIdentitySecretStore {
+  Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle);
+
+  Future<Uint8List?> loadPrimaryIdentity();
+
+  Future<bool> containsPrimaryIdentity();
+
+  Future<void> deletePrimaryIdentity();
+}
+
+typedef AtlasVaultDeviceIdentityGenerator =
+    Future<AtlasVaultDeviceIdentity> Function();
+
 final class AtlasVaultDeviceDescriptor {
   AtlasVaultDeviceDescriptor._({
     required this.deviceId,
@@ -478,6 +498,130 @@ Future<AtlasVaultDeviceIdentity> generateAtlasVaultDeviceIdentity({
     signing?.fillRange(0, signing.length, 0);
     agreement?.fillRange(0, agreement.length, 0);
   }
+}
+
+final class AtlasDeviceIdentityCustody {
+  AtlasDeviceIdentityCustody(
+    this._store, {
+    AtlasVaultDeviceIdentityGenerator? identityGenerator,
+  }) : _identityGenerator =
+           identityGenerator ?? (() => generateAtlasVaultDeviceIdentity());
+
+  static const int maximumSecretByteCount = 16 * 1024;
+
+  final AtlasDeviceIdentitySecretStore _store;
+  final AtlasVaultDeviceIdentityGenerator _identityGenerator;
+
+  Future<AtlasVaultDeviceDescriptor> createPrimaryIdentity() async {
+    AtlasVaultDeviceIdentity? identity;
+    AtlasVaultDeviceIdentitySecret? secret;
+    Uint8List? canonical;
+    Uint8List? restored;
+    try {
+      identity = await _identityGenerator();
+      secret = identity.secretBundle();
+      canonical = secret.canonicalBytes();
+      _validateSecretSize(canonical);
+      await _store.createPrimaryIdentity(canonical);
+      restored = await _store.loadPrimaryIdentity();
+      if (restored == null || !_bytesEqual(canonical, restored)) {
+        throw const AtlasVaultDeviceIdentityCustodyException();
+      }
+      final descriptor = await _decodeDescriptor(restored);
+      if (descriptor != identity.descriptor) {
+        throw const AtlasVaultDeviceIdentityCustodyException();
+      }
+      return descriptor;
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    } finally {
+      identity?.destroy();
+      secret?.destroy();
+      if (canonical != null) {
+        canonical.fillRange(0, canonical.length, 0);
+      }
+      if (restored != null) {
+        restored.fillRange(0, restored.length, 0);
+      }
+    }
+  }
+
+  Future<AtlasVaultDeviceDescriptor?> loadPrimaryIdentity() async {
+    Uint8List? raw;
+    Uint8List? loaded;
+    try {
+      raw = await _store.loadPrimaryIdentity();
+      if (raw == null) {
+        return null;
+      }
+      loaded = Uint8List.fromList(raw);
+      return await _decodeDescriptor(loaded);
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    } finally {
+      if (raw != null) {
+        raw.fillRange(0, raw.length, 0);
+      }
+      if (loaded != null) {
+        loaded.fillRange(0, loaded.length, 0);
+      }
+    }
+  }
+
+  Future<bool> containsPrimaryIdentity() async {
+    try {
+      return await _store.containsPrimaryIdentity();
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    }
+  }
+
+  Future<void> deletePrimaryIdentity() async {
+    try {
+      await _store.deletePrimaryIdentity();
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    }
+  }
+
+  Future<AtlasVaultDeviceDescriptor> _decodeDescriptor(Uint8List bytes) async {
+    AtlasVaultDeviceIdentitySecret? secret;
+    AtlasVaultDeviceIdentity? identity;
+    Uint8List? canonical;
+    try {
+      _validateSecretSize(bytes);
+      final decoded = jsonDecode(utf8.decode(bytes, allowMalformed: false));
+      if (decoded is! Map<String, dynamic>) {
+        throw const AtlasVaultDeviceIdentityCustodyException();
+      }
+      secret = AtlasVaultDeviceIdentitySecret.fromJson(
+        decoded.cast<String, Object?>(),
+      );
+      canonical = secret.canonicalBytes();
+      if (!_bytesEqual(bytes, canonical)) {
+        throw const AtlasVaultDeviceIdentityCustodyException();
+      }
+      identity = await secret.loadIdentity();
+      return identity.descriptor;
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    } finally {
+      identity?.destroy();
+      secret?.destroy();
+      if (canonical != null) {
+        canonical.fillRange(0, canonical.length, 0);
+      }
+    }
+  }
+
+  void _validateSecretSize(Uint8List value) {
+    if (value.isEmpty || value.length > maximumSecretByteCount) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasDeviceIdentityCustody(<redacted>)';
 }
 
 Future<String> deriveAtlasVaultDeviceId(

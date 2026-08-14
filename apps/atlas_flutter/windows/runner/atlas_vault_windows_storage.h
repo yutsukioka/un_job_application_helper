@@ -14,8 +14,8 @@
 
 class AtlasVaultWindowsStorageWorker;
 
-// Owns serialized access to Windows DPAPI metadata, vault keys, and encrypted
-// local stores for the dedicated AtlasVault channel.
+// Owns serialized access to Windows DPAPI metadata, device identity, vault
+// keys, and encrypted local stores for the dedicated AtlasVault channel.
 class AtlasVaultWindowsStorage {
  public:
   AtlasVaultWindowsStorage(flutter::BinaryMessenger* messenger,

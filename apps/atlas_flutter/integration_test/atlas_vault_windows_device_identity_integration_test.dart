@@ -18,10 +18,19 @@ void main() {
     if (!Platform.isWindows) {
       return;
     }
-    final stage = Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_STAGE'];
+    const configuredStage = String.fromEnvironment(
+      'ATLAS_DEVICE_IDENTITY_TEST_STAGE',
+    );
+    final stage =
+        Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_STAGE'] ??
+        (configuredStage.isEmpty ? null : configuredStage);
+    const configuredTamper = bool.fromEnvironment(
+      'ATLAS_DEVICE_IDENTITY_TEST_EXPECT_TAMPER',
+    );
     final expectTamper =
         Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_EXPECT_TAMPER'] ==
-        'true';
+            'true' ||
+        configuredTamper;
     if (stage != 'prepare' && stage != 'verify') {
       fail('Windows device identity integration environment is invalid.');
     }

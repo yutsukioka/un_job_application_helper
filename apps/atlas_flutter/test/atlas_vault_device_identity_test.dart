@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart' as android;
@@ -183,7 +182,7 @@ void main() {
       final store = _FakeDeviceIdentitySecretStore();
       var generationCount = 0;
       final custody = AtlasDeviceIdentityCustody(
-        store: store,
+        store,
         identityGenerator: () async {
           generationCount += 1;
           return _identityFromVector(root, 'device_a');
@@ -216,7 +215,7 @@ void main() {
       );
       final store = _FakeDeviceIdentitySecretStore(initialValue: installed);
       final custody = AtlasDeviceIdentityCustody(
-        store: store,
+        store,
         identityGenerator: () => _identityFromVector(root, 'device_b'),
       );
 
@@ -233,7 +232,7 @@ void main() {
         'device_a',
       );
       final store = _FakeDeviceIdentitySecretStore(initialValue: installed);
-      final custody = AtlasDeviceIdentityCustody(store: store);
+      final custody = AtlasDeviceIdentityCustody(store);
 
       final descriptor = await custody.loadPrimaryIdentity();
       expect(
@@ -254,7 +253,7 @@ void main() {
       final store = _FakeDeviceIdentitySecretStore(
         initialValue: Uint8List.fromList(utf8.encode(jsonEncode(secret))),
       );
-      final custody = AtlasDeviceIdentityCustody(store: store);
+      final custody = AtlasDeviceIdentityCustody(store);
 
       await expectLater(
         custody.loadPrimaryIdentity(),
@@ -268,11 +267,30 @@ void main() {
       );
     });
 
+    test('invalid private-key lengths fail closed', () async {
+      final original = atlasVaultObject(
+        atlasVaultObject(root['device_a'])['secret_bundle'],
+      );
+      for (final field in <String>[
+        'signing_private_key',
+        'agreement_private_key',
+      ]) {
+        final secret = _clone(original)..[field] = base64Encode(Uint8List(31));
+        final store = _FakeDeviceIdentitySecretStore(
+          initialValue: Uint8List.fromList(utf8.encode(jsonEncode(secret))),
+        );
+        await expectLater(
+          AtlasDeviceIdentityCustody(store).loadPrimaryIdentity(),
+          throwsA(isA<AtlasVaultDeviceIdentityCustodyException>()),
+        );
+      }
+    });
+
     test('delete is idempotent and contains delegates explicitly', () async {
       final store = _FakeDeviceIdentitySecretStore(
         initialValue: loadAtlasVaultDeviceIdentitySecretBytes(root, 'device_a'),
       );
-      final custody = AtlasDeviceIdentityCustody(store: store);
+      final custody = AtlasDeviceIdentityCustody(store);
 
       expect(await custody.containsPrimaryIdentity(), isTrue);
       await custody.deletePrimaryIdentity();
@@ -360,6 +378,7 @@ Future<void> _expectPlatformAdapterContract({
   });
   addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
   final store = createStore(channel);
+  expect(calls, isEmpty);
 
   await store.createPrimaryIdentity(canonicalBytes);
   final loaded = await store.loadPrimaryIdentity();
@@ -388,6 +407,23 @@ Future<void> _expectPlatformAdapterContract({
     throwsA(expectedException),
   );
   expect(calls, hasLength(4));
+
+  const privateSentinel = 'FAKE_PRIVATE_DEVICE_IDENTITY_SENTINEL';
+  messenger.setMockMethodCallHandler(
+    channel,
+    (_) async => throw PlatformException(
+      code: privateSentinel,
+      message: privateSentinel,
+    ),
+  );
+  Object? platformError;
+  try {
+    await store.containsPrimaryIdentity();
+  } catch (error) {
+    platformError = error;
+  }
+  expect(platformError, expectedException);
+  expect(platformError.toString(), isNot(contains(privateSentinel)));
 }
 
 final class _FakeDeviceIdentitySecretStore

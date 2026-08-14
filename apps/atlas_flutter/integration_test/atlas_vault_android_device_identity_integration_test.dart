@@ -18,7 +18,19 @@ void main() {
     if (!Platform.isAndroid) {
       return;
     }
-    final stage = Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_STAGE'];
+    const configuredStage = String.fromEnvironment(
+      'ATLAS_DEVICE_IDENTITY_TEST_STAGE',
+    );
+    final stage =
+        Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_STAGE'] ??
+        (configuredStage.isEmpty ? null : configuredStage);
+    const configuredTamper = bool.fromEnvironment(
+      'ATLAS_DEVICE_IDENTITY_TEST_EXPECT_TAMPER',
+    );
+    final expectTamper =
+        Platform.environment['ATLAS_DEVICE_IDENTITY_TEST_EXPECT_TAMPER'] ==
+            'true' ||
+        configuredTamper;
     if (stage != 'prepare' && stage != 'verify') {
       fail('Android device identity integration environment is invalid.');
     }
@@ -50,6 +62,17 @@ void main() {
           'hardwareBacked=${capabilities.hardwareBacked}, '
           'strongBoxBacked=${capabilities.strongBoxBacked}',
         );
+        return;
+      }
+
+      if (expectTamper) {
+        await expectLater(
+          store.loadPrimaryIdentity(),
+          throwsA(isA<AtlasVaultAndroidStorageException>()),
+        );
+        await store.deletePrimaryIdentity();
+        expect(await store.containsPrimaryIdentity(), isFalse);
+        tester.printToConsole('Android identity tamper rejected and cleaned.');
         return;
       }
 

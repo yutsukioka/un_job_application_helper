@@ -104,6 +104,19 @@ internal class AtlasVaultAndroidStorage(
                         deleteVaultKey(requiredVaultId(call))
                         null
                     }
+                    "createDeviceIdentitySecret" -> {
+                        createDeviceIdentitySecret(
+                            requiredBytes(call, "secret_bytes"),
+                        )
+                        null
+                    }
+                    "loadDeviceIdentitySecret" -> loadDeviceIdentitySecret()
+                    "containsDeviceIdentitySecret" ->
+                        containsDeviceIdentitySecret()
+                    "deleteDeviceIdentitySecret" -> {
+                        deleteDeviceIdentitySecret()
+                        null
+                    }
                     "readLocalStore" -> readLocalStore(requiredVaultId(call))
                     "createLocalStore" -> {
                         createLocalStore(
@@ -690,6 +703,59 @@ internal class AtlasVaultAndroidStorage(
     private fun deleteLocalStore(vaultId: String) {
         val file = localStoreFile(vaultId, createParent = false)
         val root = vaultDirectory(vaultId, create = false)
+        if (!atomicFileExists(file, root)) {
+            return
+        }
+        ensureSafeAtomicState(file, root)
+        AtomicFile(file).delete()
+        if (atomicFileExists(file, root)) {
+            throw StorageFailure()
+        }
+    }
+
+    private fun createDeviceIdentitySecret(suppliedBytes: ByteArray) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(bytes, MAX_DEVICE_IDENTITY_BYTES)
+            createProtectedBlob(
+                deviceIdentityFile(createParent = true),
+                DEVICE_IDENTITY_PURPOSE,
+                bytes,
+                MAX_DEVICE_IDENTITY_BYTES,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun loadDeviceIdentitySecret(): ByteArray? {
+        val bytes = readProtectedBlob(
+            deviceIdentityFile(createParent = false),
+            DEVICE_IDENTITY_PURPOSE,
+            MAX_DEVICE_IDENTITY_BYTES,
+        ) ?: return null
+        try {
+            validateCanonicalJsonDocument(bytes, MAX_DEVICE_IDENTITY_BYTES)
+            return bytes.copyOf()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun containsDeviceIdentitySecret(): Boolean {
+        val bytes = readProtectedBlob(
+            deviceIdentityFile(createParent = false),
+            DEVICE_IDENTITY_PURPOSE,
+            MAX_DEVICE_IDENTITY_BYTES,
+        ) ?: return false
+        bytes.fill(0)
+        return true
+    }
+
+    private fun deleteDeviceIdentitySecret() {
+        val file = deviceIdentityFile(createParent = false)
+        val root = atlasVaultRoot(create = false)
         if (!atomicFileExists(file, root)) {
             return
         }
@@ -1360,6 +1426,15 @@ internal class AtlasVaultAndroidStorage(
         }
     }
 
+    private fun deviceIdentityFile(createParent: Boolean): File {
+        val root = File(atlasVaultRoot(createParent), "device").also {
+            ensureDirectory(it, createParent)
+        }
+        return File(root, DEVICE_IDENTITY_FILE).also {
+            ensureContained(it, root)
+        }
+    }
+
     private fun migrationJournalFile(createParent: Boolean): File {
         val root = File(atlasVaultRoot(createParent), "migrations").also {
             ensureDirectory(it, createParent)
@@ -1714,6 +1789,7 @@ internal class AtlasVaultAndroidStorage(
             "plaintext-private-state-migration"
         const val RECOVERY_IMPORT_JOURNAL_PURPOSE = "recovery-import"
         const val SELECTED_VAULT_PURPOSE = "selected-vault"
+        const val DEVICE_IDENTITY_PURPOSE = "device-identity"
         const val SELECTED_VAULT_FORMAT = "atlasvault-android-selected-vault"
         const val SELECTED_VAULT_VERSION = 1
         const val LOCAL_STORE_FORMAT = "atlasvault-local-store"
@@ -1733,10 +1809,12 @@ internal class AtlasVaultAndroidStorage(
         const val MAX_MIGRATION_JOURNAL_BYTES = 16 * 1024 * 1024
         const val MAX_RECOVERY_IMPORT_JOURNAL_BYTES = 64 * 1024
         const val MAX_SELECTED_VAULT_BYTES = 4 * 1024
+        const val MAX_DEVICE_IDENTITY_BYTES = 16 * 1024
         const val MAX_PROTECTED_ENVELOPE_OVERHEAD = 4 * 1024
         const val MIGRATION_JOURNAL_FILE = "plaintext-private-state.json.enc"
         const val RECOVERY_IMPORT_JOURNAL_FILE = "recovery-import.json.enc"
         const val SELECTED_VAULT_FILE = "selected-vault.json.enc"
+        const val DEVICE_IDENTITY_FILE = "device-identity.bin"
         const val SAVE_DOCUMENT_REQUEST_CODE = 0x4156
         const val PICK_DOCUMENT_REQUEST_CODE = 0x4157
         const val ENCRYPTED_EXPORT_MIME_TYPE =
@@ -1750,6 +1828,10 @@ internal class AtlasVaultAndroidStorage(
             "loadVaultKey",
             "containsVaultKey",
             "deleteVaultKey",
+            "createDeviceIdentitySecret",
+            "loadDeviceIdentitySecret",
+            "containsDeviceIdentitySecret",
+            "deleteDeviceIdentitySecret",
             "readLocalStore",
             "createLocalStore",
             "replaceLocalStore",
