@@ -424,6 +424,18 @@ class DeviceIdentitySecret:
         except Exception as exc:
             raise _invalid_identity() from exc
 
+    @classmethod
+    def from_canonical_bytes(cls, data: bytes) -> DeviceIdentitySecret:
+        try:
+            decoded = cls.from_dict(_canonical_json_object(data))
+            if not hmac.compare_digest(decoded.canonical_bytes(), data):
+                raise _invalid_identity()
+            return decoded
+        except DeviceIdentityError:
+            raise
+        except Exception as exc:
+            raise _invalid_identity() from exc
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,

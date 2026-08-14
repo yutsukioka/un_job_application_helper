@@ -92,10 +92,10 @@ seed, and X25519 private key. Every load re-derives public keys and device ID.
 
 Python-style sorted compact UTF-8 JSON, strict Base64, exact key sets, strict
 integers, lowercase UUID/hex, and UTC-second timestamps are normative. Python,
-Dart, and Swift strict signed-envelope decoders canonicalize and compare the
-complete input bytes, rejecting whitespace, key reordering, duplicate keys,
-malformed UTF-8, and every other noncanonical representation before transcript
-derivation.
+Dart, and Swift strict signed-envelope decoders, plus every persisted secret
+bundle decoder, canonicalize and compare the complete input bytes. They reject
+whitespace, key reordering, duplicate keys, malformed UTF-8, and every other
+noncanonical representation before identity loading or transcript derivation.
 
 ## 18. Pairing Offer
 
@@ -309,7 +309,7 @@ remains intact. A follow-up exact-head review cycle adds strict Python and Dart
 received offer and acceptance byte decoding plus explicit destruction of
 retained Dart session keys. A subsequent review cycle applies the same exact
 canonical-byte requirement to standalone signed device descriptors in Python
-and Dart.
+and Dart, then to Python identity secret bundles before identity re-derivation.
 
 ## 53. Apple Evidence
 
