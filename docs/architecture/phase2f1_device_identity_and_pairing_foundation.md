@@ -200,7 +200,10 @@ cases. Python is the reference generator.
 ## 36. Apple Keychain Custody
 
 Checkpoint B stores one canonical bundle as a create-only,
-non-synchronizable, device-only Keychain generic-password item.
+non-synchronizable Keychain generic-password item using
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, service
+`com.atlasvault.device-identity.v1`, and account `primary`. Loads are bounded,
+strictly decoded, and re-derived before the bundle is accepted.
 
 ## 37. Apple Limitations
 
@@ -210,7 +213,9 @@ against an unlocked malicious process or compromised OS.
 ## 38. Android Custody
 
 Checkpoint B reuses the existing Android Keystore-protected blob and no-backup
-file boundary with a fixed `device-identity` purpose.
+file boundary with a fixed `device-identity` purpose. The canonical bundle is
+create-only at `no_backup/atlasvault/v1/device/device-identity.bin`, and load,
+tamper rejection, and deletion use the existing protected-blob transaction.
 
 ## 39. Android Limitations
 
@@ -220,7 +225,9 @@ compromise remain outside this boundary.
 ## 40. Windows Custody
 
 Checkpoint B reuses the strict AVWBLB01 protected blob with current-user DPAPI,
-vault-independent entropy, Local AppData, and cross-process locking.
+purpose-bound entropy, Local AppData, create-only persistence, read-back
+verification, and cross-process locking. `CRYPTPROTECT_UI_FORBIDDEN` is used
+and `CRYPTPROTECT_LOCAL_MACHINE` is absent.
 
 ## 41. Windows Limitations
 
@@ -269,26 +276,49 @@ deferred.
 
 ## 51. Checkpoint A Evidence
 
-The preserved red commits establish missing three-language APIs and clock
-bounds. Focused Python and Dart vectors pass. Swift verifies fixed signatures,
-generates fresh valid signatures, and writes a public-only runtime artifact
-that Python and Dart verify with matching transcript and proofs.
+The preserved red commits `578f22d4` and `06d84ece` establish missing
+three-language APIs and clock bounds. Correction commit `0d366cfd` applies the
+authorized CryptoKit signature rule. Focused Python and Dart vectors pass.
+Swift verifies fixed signatures, generates fresh valid signatures, and writes
+a public-only runtime artifact that Python and Dart verify with matching
+transcript and proofs.
 
 ## 52. Checkpoint B Evidence
 
-Pending the secure-custody red and implementation commits.
+Red commit `df75f199` proves the platform custody methods were absent before
+implementation. Commit `9e93e645` adds strict create/load/contains/delete
+custody, defensive copies, bounded canonical decoding, read-back verification,
+fixed errors, and best-effort wiping on all three platforms. Dart custody and
+pairing tests pass at 24 of 24, the full Flutter suite passes, and the exact
+31-file scope remains intact.
 
 ## 53. Apple Evidence
 
-Pending fake-client and real fake-service Keychain verification.
+Nine focused Swift identity tests pass. They cover fake-client behavior and a
+real Security-framework round trip under a UUID-suffixed fake service: create,
+load, exact bundle comparison, identity re-derivation, duplicate rejection,
+delete, and absence. The production service and real identity material were
+not used.
 
 ## 54. Android Evidence
 
-Pending fresh-process Keystore-protected identity verification.
+An API 37 ARM64 emulator completed separate prepare and verify processes,
+including duplicate rejection, exact reload, Ed25519 sign/verify, X25519
+agreement, idempotent deletion, and absence. The 593-byte protected file
+contained neither raw nor Base64 private key material. A one-byte tamper was
+rejected in a fresh process and cleaned. Reported hardware-backed and StrongBox
+capabilities were both false; neither property is claimed.
 
 ## 55. Windows Evidence
 
-Pending fresh-process current-user DPAPI identity verification.
+Windows 11 Pro build 26200.9168 ran in a Parallels ARM virtual machine. Flutter
+3.44.4 built an x64 PE with MSVC 19.51.36248 and CMake 4.3.1-msvc1, so the x64
+runner executed under Windows emulation on the ARM64 OS. Debug and Release
+builds passed. Separate prepare and verify processes exercised current-user
+DPAPI, exact reload, Ed25519 sign/verify, X25519 agreement, delete, and absence.
+The 619-byte protected file contained neither raw nor Base64 private key
+material. A one-byte tamper was rejected and cleaned. DPAPI availability is
+not evidence of TPM backing, and no TPM guarantee is claimed.
 
 ## 56. Cross-Language Verification
 
@@ -322,9 +352,12 @@ best-effort basis. Immutable runtime/library copies cannot be guaranteed erased.
 - expiry validation: implemented;
 - replay-guard protocol: implemented;
 - durable replay store: not implemented;
-- Apple custody: pending Checkpoint B;
-- Android custody: pending Checkpoint B;
-- Windows custody: pending Checkpoint B;
+- Apple create-only Keychain custody: implemented and verified;
+- Android Keystore-protected no-backup custody: implemented and verified;
+- Windows current-user DPAPI custody: implemented and verified;
+- Apple Secure Enclave guarantee: not claimed;
+- Android hardware-backed or StrongBox guarantee: not claimed;
+- Windows TPM-backed guarantee: not claimed;
 - QR pairing: not implemented;
 - device linking: not implemented;
 - vault-key delivery: not implemented;
