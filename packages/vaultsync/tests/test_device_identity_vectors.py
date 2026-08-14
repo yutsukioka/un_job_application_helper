@@ -160,6 +160,30 @@ def test_descriptor_parser_rejects_tamper_unknown_fields_and_noncanonical_data()
             DeviceDescriptor.from_dict(invalid)
 
 
+def test_device_key_epoch_rejects_values_above_signed_64_bit() -> None:
+    root = load_vector()
+    vector = root["device_a"]
+    oversized = (1 << 63)
+
+    descriptor = deepcopy(vector["descriptor"])
+    descriptor["key_epoch"] = oversized
+    with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+        DeviceDescriptor.from_dict(descriptor)
+
+    secret = deepcopy(vector["secret_bundle"])
+    secret["key_epoch"] = oversized
+    with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+        DeviceIdentitySecret.from_dict(secret)
+
+    with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+        device_identity_from_private_keys(
+            signing_private_seed=decode64(vector["signing_private_seed"]),
+            agreement_private_key=decode64(vector["agreement_private_key"]),
+            created_at=vector["descriptor"]["created_at"],
+            key_epoch=oversized,
+        )
+
+
 def test_signed_descriptor_rejects_signature_and_key_substitution() -> None:
     root = load_vector()
     vector = root["device_a"]

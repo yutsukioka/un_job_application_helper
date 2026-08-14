@@ -74,6 +74,47 @@ final class AtlasVaultDeviceIdentityTests: XCTestCase {
         XCTAssertThrowsError(try AtlasVaultDeviceIdentitySecret.decodeStrict(mismatch))
     }
 
+    func testStrictIdentityDecodersRejectNoncanonicalJSONBytes() throws {
+        let vector = try dictionary(try loadRoot()["device_a"], context: "device_a")
+        let descriptor = try data(
+            vector["descriptor_canonical_json_b64"],
+            context: "descriptor"
+        )
+        let signed = try data(
+            vector["signed_descriptor_canonical_json_b64"],
+            context: "signed descriptor"
+        )
+        let secret = try data(
+            vector["secret_bundle_canonical_json_b64"],
+            context: "secret bundle"
+        )
+
+        XCTAssertThrowsError(
+            try AtlasVaultDeviceDescriptor.decodeStrict(Data(" \n".utf8) + descriptor)
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultSignedDeviceDescriptor.decodeStrict(signed + Data("\n".utf8))
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultDeviceIdentitySecret.decodeStrict(Data(" ".utf8) + secret)
+        )
+    }
+
+    func testMaximumDeviceKeyEpochIsTheSharedSigned64BitBound() throws {
+        let vector = try dictionary(try loadRoot()["device_a"], context: "device_a")
+        let maximumKeyEpoch = Int.max
+        let identity = try AtlasVaultDeviceIdentity(
+            signingPrivateSeed: try data(vector["signing_private_seed"], context: "signing seed"),
+            agreementPrivateKey: try data(vector["agreement_private_key"], context: "agreement key"),
+            createdAt: try string(
+                try dictionary(vector["descriptor"], context: "descriptor")["created_at"],
+                context: "created_at"
+            ),
+            keyEpoch: maximumKeyEpoch
+        )
+        XCTAssertEqual(identity.descriptor.keyEpoch, maximumKeyEpoch)
+    }
+
     func testDeviceIDDerivationIsDomainSeparatedAndOrdered() throws {
         let vector = try dictionary(try loadRoot()["device_a"], context: "device_a")
         let signing = try data(vector["signing_public_key"], context: "signing public")

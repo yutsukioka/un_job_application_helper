@@ -90,6 +90,25 @@ final class AtlasVaultPairingFoundationTests: XCTestCase {
         )
     }
 
+    func testStrictPairingDecodersRejectNoncanonicalJSONBytes() throws {
+        let pairing = try dictionary(try loadRoot()["pairing"], context: "pairing")
+        let offer = try data(
+            pairing["signed_offer_canonical_json_b64"],
+            context: "offer"
+        )
+        let acceptance = try data(
+            pairing["signed_acceptance_canonical_json_b64"],
+            context: "acceptance"
+        )
+
+        XCTAssertThrowsError(
+            try AtlasVaultSignedPairingOffer.decodeStrict(Data(" \n".utf8) + offer)
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultSignedPairingAcceptance.decodeStrict(acceptance + Data("\n".utf8))
+        )
+    }
+
     func testWritesPublicFreshSwiftSignatureArtifactWhenRequested() throws {
         guard let directory = ProcessInfo.processInfo.environment[
             "ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR"

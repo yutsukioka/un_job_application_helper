@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart' as android;
@@ -95,6 +96,21 @@ void main() {
       await deriveAtlasVaultDeviceId(agreement, signing),
       isNot(vector['device_id']),
     );
+  });
+
+  test('device key epochs use the shared signed 64-bit bound', () async {
+    const maximumKeyEpoch = 0x7fffffffffffffff;
+    final vector = atlasVaultObject(root['device_a']);
+    final descriptor = atlasVaultObject(vector['descriptor']);
+    final identity = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+      signingPrivateSeed: _bytes(vector['signing_private_seed']),
+      agreementPrivateKey: _bytes(vector['agreement_private_key']),
+      createdAt: descriptor['created_at']! as String,
+      keyEpoch: maximumKeyEpoch,
+    );
+
+    expect(identity.descriptor.keyEpoch, maximumKeyEpoch);
+    identity.destroy();
   });
 
   test(
@@ -335,6 +351,25 @@ void main() {
       },
     );
   });
+
+  test('Android worker wipes mutable MethodChannel result bytes', () {
+    final source = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      matches(
+        RegExp(
+          r'mainHandler\.post\s*\{\s*try\s*\{\s*result\.success\(value\)'
+          r'\s*\}\s*finally\s*\{\s*if \(value is ByteArray\)\s*\{'
+          r'\s*value\.fill\(0\)',
+          dotAll: true,
+        ),
+      ),
+    );
+  });
 }
 
 Future<AtlasVaultDeviceIdentity> _identityFromVector(
@@ -361,6 +396,7 @@ Future<void> _expectPlatformAdapterContract({
   final channel = MethodChannel(channelName);
   final calls = <MethodCall>[];
   final platformBytes = Uint8List.fromList(canonicalBytes);
+  Object? platformValue = platformBytes;
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   messenger.setMockMethodCallHandler(channel, (call) async {
@@ -370,7 +406,7 @@ Future<void> _expectPlatformAdapterContract({
       case 'deleteDeviceIdentitySecret':
         return null;
       case 'loadDeviceIdentitySecret':
-        return platformBytes;
+        return platformValue;
       case 'containsDeviceIdentitySecret':
         return true;
     }
@@ -380,7 +416,29 @@ Future<void> _expectPlatformAdapterContract({
   final store = createStore(channel);
   expect(calls, isEmpty);
 
+  final noncanonical = Uint8List.fromList(<int>[...canonicalBytes, 0x0a]);
+  await expectLater(
+    store.createPrimaryIdentity(noncanonical),
+    throwsA(expectedException),
+  );
+  final mismatchedObject = (jsonDecode(utf8.decode(canonicalBytes)) as Map)
+      .cast<String, Object?>();
+  mismatchedObject['device_id'] = 'avd1-${List.filled(64, '0').join()}';
+  final mismatched = Uint8List.fromList(
+    utf8.encode(jsonEncode(mismatchedObject)),
+  );
+  await expectLater(
+    store.createPrimaryIdentity(mismatched),
+    throwsA(expectedException),
+  );
+  expect(calls, isEmpty);
+
   await store.createPrimaryIdentity(canonicalBytes);
+  platformValue = noncanonical;
+  await expectLater(store.loadPrimaryIdentity(), throwsA(expectedException));
+  platformValue = mismatched;
+  await expectLater(store.loadPrimaryIdentity(), throwsA(expectedException));
+  platformValue = platformBytes;
   final loaded = await store.loadPrimaryIdentity();
   expect(loaded, canonicalBytes);
   platformBytes.fillRange(0, platformBytes.length, 0);
@@ -391,6 +449,8 @@ Future<void> _expectPlatformAdapterContract({
   expect(calls.map((call) => call.method), <String>[
     'createDeviceIdentitySecret',
     'loadDeviceIdentitySecret',
+    'loadDeviceIdentitySecret',
+    'loadDeviceIdentitySecret',
     'containsDeviceIdentitySecret',
     'deleteDeviceIdentitySecret',
   ]);
@@ -400,13 +460,15 @@ Future<void> _expectPlatformAdapterContract({
   expect(calls[1].arguments, isNull);
   expect(calls[2].arguments, isNull);
   expect(calls[3].arguments, isNull);
+  expect(calls[4].arguments, isNull);
+  expect(calls[5].arguments, isNull);
 
   final oversized = Uint8List(16 * 1024 + 1);
   await expectLater(
     store.createPrimaryIdentity(oversized),
     throwsA(expectedException),
   );
-  expect(calls, hasLength(4));
+  expect(calls, hasLength(6));
 
   const privateSentinel = 'FAKE_PRIVATE_DEVICE_IDENTITY_SENTINEL';
   messenger.setMockMethodCallHandler(

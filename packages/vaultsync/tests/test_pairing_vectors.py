@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -165,6 +167,38 @@ def test_complete_verification_consumes_replay_guard_only_after_proofs() -> None
             replay_guard=fresh_guard,
         )
     assert fresh_guard.consumed_count == 0
+
+
+def test_replay_guard_consumption_is_atomic_across_threads() -> None:
+    guard = InMemoryPairingReplayGuard()
+    callers_ready = Barrier(3)
+    unsynchronized_contains = Barrier(2)
+
+    class CoordinatedSet(set[tuple[str, bytes, str]]):
+        def __contains__(self, item: object) -> bool:
+            present = super().__contains__(item)
+            guard_lock = getattr(guard, "_lock", None)
+            if guard_lock is None or not guard_lock.locked():
+                unsynchronized_contains.wait()
+            return present
+
+    guard._consumed = CoordinatedSet()
+
+    def consume() -> str:
+        callers_ready.wait()
+        return guard.consume(
+            "00000000-0000-4000-8000-000000000001",
+            bytes.fromhex("11" * 32),
+            "2026-01-15T12:15:00Z",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = [executor.submit(consume), executor.submit(consume)]
+        callers_ready.wait()
+        results = [outcome.result() for outcome in outcomes]
+
+    assert sorted(results) == ["accepted", "already_consumed"]
+    assert guard.consumed_count == 1
 
 
 def test_offer_lifetime_over_600_seconds_fails_at_creation() -> None:
