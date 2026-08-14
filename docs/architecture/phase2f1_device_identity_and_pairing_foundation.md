@@ -75,6 +75,8 @@ and agreement public keys in that exact order.
 
 The seven-key descriptor contains only format, version, opaque ID, two public
 keys, creation time, and key epoch. Strict decoders reject all extra metadata.
+Key epochs are bounded to the shared signed 64-bit range
+`1...9223372036854775807`.
 
 ## 15. Signed Descriptor
 
@@ -89,7 +91,9 @@ seed, and X25519 private key. Every load re-derives public keys and device ID.
 ## 17. Canonical Serialization
 
 Python-style sorted compact UTF-8 JSON, strict Base64, exact key sets, strict
-integers, lowercase UUID/hex, and UTC-second timestamps are normative.
+integers, lowercase UUID/hex, and UTC-second timestamps are normative. Swift
+strict decoders canonicalize and compare the complete input bytes so accepted
+JSON cannot differ only by whitespace or key order.
 
 ## 18. Pairing Offer
 
@@ -139,7 +143,9 @@ Proof comparisons are constant time and swapped roles fail.
 ## 27. Replay-Guard Requirement
 
 Complete verification requires an injected consumer keyed by offer ID,
-transcript hash, and expiry. It runs only after all cryptographic checks.
+transcript hash, and expiry. It runs only after all cryptographic checks. The
+in-memory implementation serializes check-and-consume so concurrent verifier
+threads cannot both accept one transcript.
 
 ## 28. Durable Replay Deferred
 
@@ -216,6 +222,8 @@ Checkpoint B reuses the existing Android Keystore-protected blob and no-backup
 file boundary with a fixed `device-identity` purpose. The canonical bundle is
 create-only at `no_backup/atlasvault/v1/device/device-identity.bin`, and load,
 tamper rejection, and deletion use the existing protected-blob transaction.
+The Dart adapter reconstructs identities before create and after load, and the
+native MethodChannel result buffer is wiped after codec serialization.
 
 ## 39. Android Limitations
 
@@ -227,7 +235,9 @@ compromise remain outside this boundary.
 Checkpoint B reuses the strict AVWBLB01 protected blob with current-user DPAPI,
 purpose-bound entropy, Local AppData, create-only persistence, read-back
 verification, and cross-process locking. `CRYPTPROTECT_UI_FORBIDDEN` is used
-and `CRYPTPROTECT_LOCAL_MACHINE` is absent.
+and `CRYPTPROTECT_LOCAL_MACHINE` is absent. The exported Dart adapter requires
+an exact canonical bundle and re-derives the complete identity before native
+create and after native load.
 
 ## 41. Windows Limitations
 
@@ -288,13 +298,17 @@ transcript and proofs.
 Red commit `df75f199` proves the platform custody methods were absent before
 implementation. Commit `9e93e645` adds strict create/load/contains/delete
 custody, defensive copies, bounded canonical decoding, read-back verification,
-fixed errors, and best-effort wiping on all three platforms. Dart custody and
-pairing tests pass at 24 of 24, the full Flutter suite passes, and the exact
-31-file scope remains intact.
+fixed errors, and best-effort wiping on all three platforms. Exact-head review
+hardening adds adapter-level identity reconstruction, post-serialization
+Android result wiping, signed-64 epoch agreement, canonical-byte Swift
+decoding, and atomic in-process replay consumption. Focused Dart custody and
+pairing tests and the full Flutter suite pass, and the exact 31-file scope
+remains intact.
 
 ## 53. Apple Evidence
 
-Nine focused Swift identity tests pass. They cover fake-client behavior and a
+Eleven focused Swift identity tests pass. They cover canonical-byte rejection,
+the shared key-epoch bound, fake-client behavior, and a
 real Security-framework round trip under a UUID-suffixed fake service: create,
 load, exact bundle comparison, identity re-derivation, duplicate rejection,
 delete, and absence. The production service and real identity material were

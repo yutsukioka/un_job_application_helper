@@ -159,8 +159,10 @@ consume(offer_id, transcript_sha256, expires_at)
 
 There is no permissive default. Consumption occurs only after descriptor,
 offer, acceptance, offer-hash, transcript, X25519, and confirmation-proof
-verification. Duplicate consumption fails. Phase 2F-1 permits only in-memory
-deterministic test guards; durable replay persistence is deferred.
+verification. The check-and-consume operation is atomic for concurrent callers
+sharing one guard; exactly one caller can receive `accepted`. Duplicate
+consumption fails. Phase 2F-1 permits only in-memory deterministic test guards;
+durable replay persistence is deferred.
 
 ## Signature Generation Compatibility
 

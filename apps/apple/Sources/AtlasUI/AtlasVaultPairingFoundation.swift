@@ -247,7 +247,14 @@ public struct AtlasVaultSignedPairingOffer: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            return try JSONDecoder().decode(Self.self, from: data)
+            let decoded = try JSONDecoder().decode(Self.self, from: data)
+            guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try decoded.canonicalData(),
+                data
+            ) else {
+                throw AtlasVaultPairingError.verificationFailed
+            }
+            return decoded
         } catch {
             throw AtlasVaultPairingError.verificationFailed
         }
@@ -413,7 +420,14 @@ public struct AtlasVaultSignedPairingAcceptance: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            return try JSONDecoder().decode(Self.self, from: data)
+            let decoded = try JSONDecoder().decode(Self.self, from: data)
+            guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try decoded.canonicalData(),
+                data
+            ) else {
+                throw AtlasVaultPairingError.verificationFailed
+            }
+            return decoded
         } catch {
             throw AtlasVaultPairingError.verificationFailed
         }

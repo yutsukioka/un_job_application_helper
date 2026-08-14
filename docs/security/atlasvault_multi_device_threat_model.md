@@ -245,8 +245,9 @@ exists. Phase 2F-1 cannot identify a revoked but cryptographically valid key.
 
 ## 45. Key-Epoch Rollback
 
-**Classification: designed only.** Positive key epochs are authenticated in
-descriptors, but no trusted monotonic epoch authority exists.
+**Classification: designed only.** Key epochs in the shared signed 64-bit range
+`1...9223372036854775807` are authenticated in descriptors, but no trusted
+monotonic epoch authority exists.
 
 ## 46. Security Goals
 
@@ -291,7 +292,9 @@ Server time is never authoritative.
 
 Every complete verifier requires a replay guard and consumes only after
 signature, relation, transcript, agreement, and proof verification. No
-permissive default is allowed.
+permissive default is allowed. In-process check-and-consume is serialized so
+concurrent verifier threads cannot both admit the same transcript. Durable
+cross-process and cross-device replay state remains deferred.
 
 ## 54. Server Non-Authority
 

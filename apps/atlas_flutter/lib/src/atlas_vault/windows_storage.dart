@@ -33,8 +33,7 @@ final class AtlasWindowsDeviceIdentitySecretStore
 
   @override
   Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle) async {
-    _validateSecretBytes(canonicalSecretBundle);
-    final bytes = Uint8List.fromList(canonicalSecretBundle);
+    final bytes = await _validatedSecretCopy(canonicalSecretBundle);
     try {
       await _invoke<void>(
         _channel,
@@ -58,8 +57,7 @@ final class AtlasWindowsDeviceIdentitySecretStore
     }
     final bytes = _copyBytes(value);
     try {
-      _validateSecretBytes(bytes);
-      return Uint8List.fromList(bytes);
+      return await _validatedSecretCopy(bytes);
     } finally {
       _wipe(bytes);
     }
@@ -86,6 +84,47 @@ final class AtlasWindowsDeviceIdentitySecretStore
   void _validateSecretBytes(Uint8List value) {
     if (value.isEmpty || value.length > maximumSecretByteCount) {
       throw const AtlasVaultWindowsStorageException();
+    }
+  }
+
+  Future<Uint8List> _validatedSecretCopy(Uint8List source) async {
+    _validateSecretBytes(source);
+    final copy = Uint8List.fromList(source);
+    AtlasVaultDeviceIdentitySecret? secret;
+    AtlasVaultDeviceIdentity? identity;
+    Uint8List? canonical;
+    var accepted = false;
+    try {
+      final decoded = jsonDecode(utf8.decode(copy));
+      if (decoded is! Map) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      final object = <String, Object?>{};
+      for (final entry in decoded.entries) {
+        if (entry.key is! String) {
+          throw const AtlasVaultWindowsStorageException();
+        }
+        object[entry.key as String] = entry.value;
+      }
+      secret = AtlasVaultDeviceIdentitySecret.fromJson(object);
+      canonical = secret.canonicalBytes();
+      if (!_constantTimeEquals(copy, canonical)) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      identity = await secret.loadIdentity();
+      accepted = true;
+      return copy;
+    } catch (_) {
+      throw const AtlasVaultWindowsStorageException();
+    } finally {
+      identity?.destroy();
+      secret?.destroy();
+      if (canonical != null) {
+        _wipe(canonical);
+      }
+      if (!accepted) {
+        _wipe(copy);
+      }
     }
   }
 

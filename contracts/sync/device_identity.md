@@ -12,7 +12,9 @@ Boolean values where integers are required, and timestamps other than strict
 UTC seconds (`YYYY-MM-DDTHH:MM:SSZ`). Canonicalization determines the unsigned
 bytes being signed and the signed-envelope bytes once a signature is supplied.
 The protocol requires a valid Ed25519 signature, not deterministic signature
-generation by every platform API.
+generation by every platform API. A strict byte decoder must canonicalize the
+decoded value and require exact equality with the supplied bytes; accepting
+whitespace, alternate key order, or any other JSON normalization is forbidden.
 
 ## Public Descriptor
 
@@ -30,9 +32,12 @@ The descriptor has exactly seven keys:
 }
 ```
 
-`version` is the integer `1`; `key_epoch` is a positive integer. The signing
-key is an Ed25519 public key and the agreement key is an X25519 public key.
-They are distinct key-usage roles even if generated at the same time.
+`version` is the integer `1`; `key_epoch` is an integer in the inclusive range
+`1...9223372036854775807`. The signed 64-bit ceiling is shared by Python,
+Dart, and Swift so one runtime cannot issue a descriptor another runtime cannot
+decode. The signing key is an Ed25519 public key and the agreement key is an
+X25519 public key. They are distinct key-usage roles even if generated at the
+same time.
 
 The descriptor contains no private key, device or user label, platform, OS
 version, device model, account ID, email, vault ID, or unknown field.
@@ -115,7 +120,9 @@ ID, and requires an exact match before exposing the verified public identity.
 The bundle is installation-local secret state. It is never exported,
 synchronized, included in pairing messages, written to public cache, logged,
 or included in error descriptions. Only clearly marked fake vector material
-may appear in repository test data.
+may appear in repository test data. Exported platform-store adapters validate
+canonical bytes and reconstruct the complete identity before permitting native
+create or returning a native load result.
 
 ## Deferred Trust
 

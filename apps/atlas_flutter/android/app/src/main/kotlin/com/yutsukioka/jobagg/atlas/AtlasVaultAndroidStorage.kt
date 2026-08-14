@@ -194,7 +194,18 @@ internal class AtlasVaultAndroidStorage(
                     }
                     else -> throw StorageFailure()
                 }
-                mainHandler.post { result.success(value) }
+                val posted = mainHandler.post {
+                    try {
+                        result.success(value)
+                    } finally {
+                        if (value is ByteArray) {
+                            value.fill(0)
+                        }
+                    }
+                }
+                if (!posted && value is ByteArray) {
+                    value.fill(0)
+                }
             } catch (_: Throwable) {
                 mainHandler.post {
                     result.error(

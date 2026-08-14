@@ -26,6 +26,7 @@ DEVICE_IDENTITY_SECRET_FORMAT = "atlasvault-device-identity-secret"
 DEVICE_IDENTITY_VERSION = 1
 DEVICE_KEY_BYTES = 32
 DEVICE_SIGNATURE_BYTES = 64
+MAXIMUM_DEVICE_KEY_EPOCH = (1 << 63) - 1
 DEVICE_ID_DOMAIN = b"atlasvault-device-id-v1:"
 DEVICE_DESCRIPTOR_SIGNATURE_DOMAIN = b"atlasvault-device-descriptor-signature-v1:"
 
@@ -65,6 +66,13 @@ def _require_int(value: Any, *, positive: bool = False) -> int:
     if type(value) is not int or (positive and value <= 0):
         raise _invalid_identity()
     return value
+
+
+def _require_key_epoch(value: Any) -> int:
+    epoch = _require_int(value, positive=True)
+    if epoch > MAXIMUM_DEVICE_KEY_EPOCH:
+        raise _invalid_identity()
+    return epoch
 
 
 def _require_utc_seconds(value: Any) -> str:
@@ -163,7 +171,7 @@ class DeviceDescriptor:
                 raise _invalid_identity()
             if _require_int(self.version) != DEVICE_IDENTITY_VERSION:
                 raise _invalid_identity()
-            _require_int(self.key_epoch, positive=True)
+            _require_key_epoch(self.key_epoch)
             _require_utc_seconds(self.created_at)
             _require_device_id(self.device_id, signing, agreement)
             object.__setattr__(self, "signing_public_key", signing)
@@ -222,7 +230,7 @@ class DeviceDescriptor:
                     DEVICE_KEY_BYTES,
                 ),
                 created_at=_require_utc_seconds(obj.get("created_at")),
-                key_epoch=_require_int(obj.get("key_epoch"), positive=True),
+                key_epoch=_require_key_epoch(obj.get("key_epoch")),
             )
         except DeviceIdentityError:
             raise
@@ -336,7 +344,7 @@ class DeviceIdentitySecret:
                 raise _invalid_identity()
             if _require_int(self.version) != DEVICE_IDENTITY_VERSION:
                 raise _invalid_identity()
-            _require_int(self.key_epoch, positive=True)
+            _require_key_epoch(self.key_epoch)
             _require_utc_seconds(self.created_at)
             signing = _require_bytes(self.signing_private_key, DEVICE_KEY_BYTES)
             agreement = _require_bytes(
@@ -378,7 +386,7 @@ class DeviceIdentitySecret:
                 version=_require_int(obj.get("version")),
                 device_id=obj.get("device_id"),
                 created_at=_require_utc_seconds(obj.get("created_at")),
-                key_epoch=_require_int(obj.get("key_epoch"), positive=True),
+                key_epoch=_require_key_epoch(obj.get("key_epoch")),
                 signing_private_key=_decode_base64(
                     obj.get("signing_private_key"),
                     DEVICE_KEY_BYTES,

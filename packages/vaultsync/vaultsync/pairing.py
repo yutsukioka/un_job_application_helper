@@ -9,6 +9,7 @@ import struct
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import Any, Literal, Mapping, Protocol
 
 from cryptography.hazmat.primitives import hashes
@@ -444,10 +445,12 @@ class PairingReplayGuard(Protocol):
 class InMemoryPairingReplayGuard:
     def __init__(self) -> None:
         self._consumed: set[tuple[str, bytes, str]] = set()
+        self._lock = Lock()
 
     @property
     def consumed_count(self) -> int:
-        return len(self._consumed)
+        with self._lock:
+            return len(self._consumed)
 
     def consume(
         self,
@@ -456,10 +459,11 @@ class InMemoryPairingReplayGuard:
         expires_at: str,
     ) -> PairingReplayOutcome:
         item = (offer_id, bytes(transcript_sha256), expires_at)
-        if item in self._consumed:
-            return "already_consumed"
-        self._consumed.add(item)
-        return "accepted"
+        with self._lock:
+            if item in self._consumed:
+                return "already_consumed"
+            self._consumed.add(item)
+            return "accepted"
 
 
 def _verify_offer_signature(signed_offer: SignedPairingOffer) -> None:

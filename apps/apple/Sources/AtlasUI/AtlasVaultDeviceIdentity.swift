@@ -16,6 +16,7 @@ enum AtlasVaultDeviceIdentityValidation {
     static let version = 1
     static let keyLength = 32
     static let signatureLength = 64
+    static let maximumKeyEpoch = Int(Int64.max)
     static let deviceIDDomain = Data("atlasvault-device-id-v1:".utf8)
     static let descriptorSignatureDomain = Data(
         "atlasvault-device-descriptor-signature-v1:".utf8
@@ -150,6 +151,7 @@ public struct AtlasVaultDeviceDescriptor: Codable, Equatable, Sendable, CustomSt
             signingPublicKey.count == AtlasVaultDeviceIdentityValidation.keyLength,
             agreementPublicKey.count == AtlasVaultDeviceIdentityValidation.keyLength,
             keyEpoch > 0,
+            keyEpoch <= AtlasVaultDeviceIdentityValidation.maximumKeyEpoch,
             AtlasVaultDeviceIdentityValidation.constantTimeEqual(
                 deviceID,
                 try AtlasVaultDeviceIdentity.deriveDeviceID(
@@ -210,7 +212,14 @@ public struct AtlasVaultDeviceDescriptor: Codable, Equatable, Sendable, CustomSt
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            return try JSONDecoder().decode(Self.self, from: data)
+            let decoded = try JSONDecoder().decode(Self.self, from: data)
+            guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try decoded.canonicalData(),
+                data
+            ) else {
+                throw AtlasVaultDeviceIdentityError.invalidIdentity
+            }
+            return decoded
         } catch {
             throw AtlasVaultDeviceIdentityError.invalidIdentity
         }
@@ -289,7 +298,14 @@ public struct AtlasVaultSignedDeviceDescriptor: Codable, Equatable, Sendable, Cu
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            return try JSONDecoder().decode(Self.self, from: data)
+            let decoded = try JSONDecoder().decode(Self.self, from: data)
+            guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try decoded.canonicalData(),
+                data
+            ) else {
+                throw AtlasVaultDeviceIdentityError.invalidIdentity
+            }
+            return decoded
         } catch {
             throw AtlasVaultDeviceIdentityError.invalidIdentity
         }
@@ -353,7 +369,8 @@ public struct AtlasVaultDeviceIdentitySecret: Codable, Sendable, CustomStringCon
             version == AtlasVaultDeviceIdentityValidation.version,
             signingPrivateKey.count == AtlasVaultDeviceIdentityValidation.keyLength,
             agreementPrivateKey.count == AtlasVaultDeviceIdentityValidation.keyLength,
-            keyEpoch > 0
+            keyEpoch > 0,
+            keyEpoch <= AtlasVaultDeviceIdentityValidation.maximumKeyEpoch
         else {
             throw AtlasVaultDeviceIdentityError.invalidIdentity
         }
@@ -414,7 +431,14 @@ public struct AtlasVaultDeviceIdentitySecret: Codable, Sendable, CustomStringCon
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            return try JSONDecoder().decode(Self.self, from: data)
+            let decoded = try JSONDecoder().decode(Self.self, from: data)
+            guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try decoded.canonicalData(),
+                data
+            ) else {
+                throw AtlasVaultDeviceIdentityError.invalidIdentity
+            }
+            return decoded
         } catch {
             throw AtlasVaultDeviceIdentityError.invalidIdentity
         }
@@ -459,7 +483,8 @@ public struct AtlasVaultDeviceIdentity: Sendable, CustomStringConvertible {
             guard
                 signingPrivateSeed.count == AtlasVaultDeviceIdentityValidation.keyLength,
                 agreementPrivateKey.count == AtlasVaultDeviceIdentityValidation.keyLength,
-                keyEpoch > 0
+                keyEpoch > 0,
+                keyEpoch <= AtlasVaultDeviceIdentityValidation.maximumKeyEpoch
             else {
                 throw AtlasVaultDeviceIdentityError.invalidIdentity
             }

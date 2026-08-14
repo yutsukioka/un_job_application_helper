@@ -33,6 +33,7 @@ from vaultsync.export import (
     write_atlasvault_export,
 )
 from vaultsync.device_identity import (
+    MAXIMUM_DEVICE_KEY_EPOCH,
     DeviceDescriptor,
     DeviceIdentity,
     DeviceIdentityError,
@@ -124,6 +125,7 @@ __all__ = [
     "MigrationResult",
     "MigrationSafetyError",
     "MigrationSourceError",
+    "MAXIMUM_DEVICE_KEY_EPOCH",
     "PlaintextRecord",
     "InMemoryPairingReplayGuard",
     "PairingAcceptance",

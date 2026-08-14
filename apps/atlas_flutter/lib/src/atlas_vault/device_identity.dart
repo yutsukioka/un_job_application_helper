@@ -13,6 +13,7 @@ const _secretFormat = 'atlasvault-device-identity-secret';
 const _identityVersion = 1;
 const _keyLength = 32;
 const _signatureLength = 64;
+const int atlasVaultMaximumDeviceKeyEpoch = 0x7fffffffffffffff;
 const _deviceIdDomain = 'atlasvault-device-id-v1:';
 const _descriptorSignatureDomain = 'atlasvault-device-descriptor-signature-v1:';
 
@@ -107,7 +108,7 @@ final class AtlasVaultDeviceDescriptor {
         value['key_epoch'],
         field: 'key_epoch',
       );
-      if (keyEpoch <= 0) {
+      if (keyEpoch <= 0 || keyEpoch > atlasVaultMaximumDeviceKeyEpoch) {
         throw const AtlasVaultDeviceIdentityException();
       }
       return AtlasVaultDeviceDescriptor._(
@@ -281,7 +282,7 @@ final class AtlasVaultDeviceIdentitySecret {
         value['key_epoch'],
         field: 'key_epoch',
       );
-      if (epoch <= 0) {
+      if (epoch <= 0 || epoch > atlasVaultMaximumDeviceKeyEpoch) {
         throw const AtlasVaultDeviceIdentityException();
       }
       return AtlasVaultDeviceIdentitySecret._(
@@ -370,7 +371,8 @@ final class AtlasVaultDeviceIdentity {
     try {
       if (signingCopy.length != _keyLength ||
           agreementCopy.length != _keyLength ||
-          keyEpoch <= 0) {
+          keyEpoch <= 0 ||
+          keyEpoch > atlasVaultMaximumDeviceKeyEpoch) {
         throw const AtlasVaultDeviceIdentityException();
       }
       requireAtlasVaultUtcSeconds(createdAt, field: 'created_at');
