@@ -168,6 +168,21 @@ final class AtlasVaultSignedPairingOffer {
     }
   }
 
+  factory AtlasVaultSignedPairingOffer.fromCanonicalBytes(Uint8List value) {
+    try {
+      final input = Uint8List.fromList(value);
+      final decoded = AtlasVaultSignedPairingOffer.fromJson(
+        _decodeCanonicalPairingObject(input),
+      );
+      if (!_bytesEqual(input, decoded.canonicalBytes())) {
+        throw const AtlasVaultPairingException();
+      }
+      return decoded;
+    } catch (_) {
+      throw const AtlasVaultPairingException();
+    }
+  }
+
   Map<String, Object?> toJson() => <String, Object?>{
     'format': _signedOfferFormat,
     'version': _pairingVersion,
@@ -310,6 +325,23 @@ final class AtlasVaultSignedPairingAcceptance {
     }
   }
 
+  factory AtlasVaultSignedPairingAcceptance.fromCanonicalBytes(
+    Uint8List value,
+  ) {
+    try {
+      final input = Uint8List.fromList(value);
+      final decoded = AtlasVaultSignedPairingAcceptance.fromJson(
+        _decodeCanonicalPairingObject(input),
+      );
+      if (!_bytesEqual(input, decoded.canonicalBytes())) {
+        throw const AtlasVaultPairingException();
+      }
+      return decoded;
+    } catch (_) {
+      throw const AtlasVaultPairingException();
+    }
+  }
+
   Map<String, Object?> toJson() => <String, Object?>{
     'format': _signedAcceptanceFormat,
     'version': _pairingVersion,
@@ -349,6 +381,10 @@ final class AtlasVaultPairingSession {
 
   Uint8List get transcriptSha256 => Uint8List.fromList(_transcriptSha256);
   Uint8List get sessionKey => Uint8List.fromList(_sessionKey);
+
+  void destroy() {
+    _sessionKey.fillRange(0, _sessionKey.length, 0);
+  }
 
   @override
   String toString() => 'AtlasVaultPairingSession(<redacted>)';
@@ -735,6 +771,21 @@ Uint8List _concat(List<List<int>> parts) {
     offset += part.length;
   }
   return output;
+}
+
+Map<String, Object?> _decodeCanonicalPairingObject(Uint8List value) {
+  try {
+    if (value.isEmpty) {
+      throw const AtlasVaultPairingException();
+    }
+    final decoded = jsonDecode(utf8.decode(value, allowMalformed: false));
+    if (decoded is! Map<String, dynamic>) {
+      throw const AtlasVaultPairingException();
+    }
+    return decoded.cast<String, Object?>();
+  } catch (_) {
+    throw const AtlasVaultPairingException();
+  }
 }
 
 bool _bytesEqual(List<int> left, List<int> right) {

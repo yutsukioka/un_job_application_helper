@@ -9,7 +9,11 @@ Objects use the same strict sorted, compact UTF-8 JSON rules as the device
 identity contract. Canonical unsigned payload bytes are deterministic. A
 signed envelope is canonical relative to its supplied 64-byte signature.
 Received signature bytes are verified and retained exactly; they are never
-regenerated or normalized.
+regenerated or normalized. A received signed offer or acceptance must be
+decoded from its UTF-8 bytes, reconstructed under the strict model,
+canonically re-encoded, and compared with the complete input. Whitespace, key
+reordering, duplicate keys, malformed UTF-8, and any other noncanonical byte
+representation are rejected before transcript derivation.
 
 ## Pairing Offer
 
@@ -131,6 +135,8 @@ HKDF-SHA256(
 ```
 
 The shared secret and session key are process-local and never serialized.
+Mutable retained session-key copies expose explicit best-effort destruction;
+callers destroy them immediately after confirmation use.
 
 ## Directional Confirmation Proofs
 

@@ -67,6 +67,17 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value
 
 
+def _canonical_json_object(value: Any) -> Mapping[str, Any]:
+    try:
+        if not isinstance(value, bytes) or not value:
+            raise _invalid_pairing()
+        return _mapping(json.loads(value.decode("utf-8")))
+    except PairingError:
+        raise
+    except Exception as exc:
+        raise _invalid_pairing() from exc
+
+
 def _exact_keys(value: Mapping[str, Any], expected: set[str]) -> None:
     if set(value) != expected:
         raise _invalid_pairing()
@@ -264,6 +275,18 @@ class SignedPairingOffer:
         except Exception as exc:
             raise _invalid_pairing() from exc
 
+    @classmethod
+    def from_canonical_bytes(cls, data: bytes) -> SignedPairingOffer:
+        try:
+            decoded = cls.from_dict(_canonical_json_object(data))
+            if not hmac.compare_digest(decoded.canonical_bytes(), data):
+                raise _invalid_pairing()
+            return decoded
+        except PairingError:
+            raise
+        except Exception as exc:
+            raise _invalid_pairing() from exc
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,
@@ -387,6 +410,18 @@ class SignedPairingAcceptance:
                     DEVICE_SIGNATURE_BYTES,
                 ),
             )
+        except PairingError:
+            raise
+        except Exception as exc:
+            raise _invalid_pairing() from exc
+
+    @classmethod
+    def from_canonical_bytes(cls, data: bytes) -> SignedPairingAcceptance:
+        try:
+            decoded = cls.from_dict(_canonical_json_object(data))
+            if not hmac.compare_digest(decoded.canonical_bytes(), data):
+                raise _invalid_pairing()
+            return decoded
         except PairingError:
             raise
         except Exception as exc:

@@ -372,10 +372,15 @@ void main() {
       artifact['device_b_id'],
     );
 
-    final offer = AtlasVaultSignedPairingOffer.fromJson(
-      atlasVaultObject(artifact['signed_offer']),
+    final offer = AtlasVaultSignedPairingOffer.fromCanonicalBytes(
+      _bytes(artifact['signed_offer_canonical_json_b64']),
     );
-    final acceptance = AtlasVaultSignedPairingAcceptance.fromJson(
+    final acceptance = AtlasVaultSignedPairingAcceptance.fromCanonicalBytes(
+      _bytes(artifact['signed_acceptance_canonical_json_b64']),
+    );
+    expect(offer.toJson(), atlasVaultObject(artifact['signed_offer']));
+    expect(
+      acceptance.toJson(),
       atlasVaultObject(artifact['signed_acceptance']),
     );
     expect(

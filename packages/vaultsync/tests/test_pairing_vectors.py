@@ -449,10 +449,14 @@ def test_python_verifies_public_swift_runtime_signature_artifact() -> None:
         "device_b_id"
     ]
 
-    offer = SignedPairingOffer.from_dict(artifact["signed_offer"])
-    acceptance = SignedPairingAcceptance.from_dict(
-        artifact["signed_acceptance"]
+    offer = SignedPairingOffer.from_canonical_bytes(
+        decode64(artifact["signed_offer_canonical_json_b64"])
     )
+    acceptance = SignedPairingAcceptance.from_canonical_bytes(
+        decode64(artifact["signed_acceptance_canonical_json_b64"])
+    )
+    assert offer.to_dict() == artifact["signed_offer"]
+    assert acceptance.to_dict() == artifact["signed_acceptance"]
     assert offer.canonical_bytes() == decode64(
         artifact["signed_offer_canonical_json_b64"]
     )

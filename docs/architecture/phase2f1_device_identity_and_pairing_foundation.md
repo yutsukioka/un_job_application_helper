@@ -91,9 +91,11 @@ seed, and X25519 private key. Every load re-derives public keys and device ID.
 ## 17. Canonical Serialization
 
 Python-style sorted compact UTF-8 JSON, strict Base64, exact key sets, strict
-integers, lowercase UUID/hex, and UTC-second timestamps are normative. Swift
-strict decoders canonicalize and compare the complete input bytes so accepted
-JSON cannot differ only by whitespace or key order.
+integers, lowercase UUID/hex, and UTC-second timestamps are normative. Python,
+Dart, and Swift strict signed-envelope decoders canonicalize and compare the
+complete input bytes, rejecting whitespace, key reordering, duplicate keys,
+malformed UTF-8, and every other noncanonical representation before transcript
+derivation.
 
 ## 18. Pairing Offer
 
@@ -303,7 +305,9 @@ hardening adds adapter-level identity reconstruction, post-serialization
 Android result wiping, signed-64 epoch agreement, canonical-byte Swift
 decoding, and atomic in-process replay consumption. Focused Dart custody and
 pairing tests and the full Flutter suite pass, and the exact 31-file scope
-remains intact.
+remains intact. A follow-up exact-head review cycle adds strict Python and Dart
+received-envelope byte decoding plus explicit destruction of retained Dart
+session keys.
 
 ## 53. Apple Evidence
 
@@ -348,7 +352,9 @@ invalid input, platform paths, OS error codes, and cryptographic intermediates.
 ## 58. Secret Lifetime
 
 Mutable temporary key, secret, session, and bundle copies are wiped on a
-best-effort basis. Immutable runtime/library copies cannot be guaranteed erased.
+best-effort basis. Dart verified sessions expose explicit idempotent destruction
+of their retained session key while preserving the non-secret transcript hash.
+Immutable runtime/library copies cannot be guaranteed erased.
 
 ## 59. Go/No-Go
 
