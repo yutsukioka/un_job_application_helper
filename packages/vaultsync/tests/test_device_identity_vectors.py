@@ -12,6 +12,7 @@ import vaultsync
 import vaultsync.device_identity as device_identity
 from vaultsync.device_identity import (
     DeviceDescriptor,
+    DeviceIdentity,
     DeviceIdentityError,
     DeviceIdentitySecret,
     SignedDeviceDescriptor,
@@ -114,6 +115,19 @@ def test_device_id_derivation_is_domain_separated_and_ordered() -> None:
 
     assert derive_device_id(signing, agreement) == vector["device_id"]
     assert derive_device_id(agreement, signing) != vector["device_id"]
+
+
+def test_direct_identity_construction_rejects_mismatched_descriptor() -> None:
+    root = load_vector()
+    device_a = root["device_a"]
+    device_b = root["device_b"]
+
+    with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+        DeviceIdentity(
+            _signing_private_seed=decode64(device_a["signing_private_seed"]),
+            _agreement_private_key=decode64(device_a["agreement_private_key"]),
+            descriptor=DeviceDescriptor.from_dict(device_b["descriptor"]),
+        )
 
 
 def test_descriptor_parser_rejects_tamper_unknown_fields_and_noncanonical_data() -> None:

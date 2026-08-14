@@ -3,26 +3,13 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultPairingFoundationTests: XCTestCase {
-    func testOfferAndAcceptanceMatchExactVectorBytesAndSignatures() throws {
+    func testFixedOfferAndAcceptanceBytesAndSignaturesVerifyExactly() throws {
         let root = try loadRoot()
         let pairing = try dictionary(root["pairing"], context: "pairing")
         let inviter = try identity(root, name: "device_a")
         let invitee = try identity(root, name: "device_b")
-
-        let offer = try AtlasVaultPairingFoundation.createOffer(
-            inviter: inviter,
-            offerID: try string(pairing["offer_id"], context: "offer_id"),
-            nonce: try data(pairing["offer_nonce"], context: "offer_nonce"),
-            issuedAt: try string(pairing["issued_at"], context: "issued_at"),
-            expiresAt: try string(pairing["expires_at"], context: "expires_at")
-        )
-        let acceptance = try AtlasVaultPairingFoundation.createAcceptance(
-            invitee: invitee,
-            signedOffer: offer,
-            nonce: try data(pairing["acceptance_nonce"], context: "acceptance_nonce"),
-            acceptedAt: try string(pairing["accepted_at"], context: "accepted_at"),
-            currentTime: try string(pairing["verification_time"], context: "verification_time")
-        )
+        let offer = try signedOffer(pairing)
+        let acceptance = try signedAcceptance(pairing)
 
         XCTAssertEqual(offer.signature, try data(pairing["offer_signature"], context: "offer signature"))
         XCTAssertEqual(try offer.canonicalData(), try data(pairing["signed_offer_canonical_json_b64"], context: "offer canonical"))
@@ -31,6 +18,131 @@ final class AtlasVaultPairingFoundationTests: XCTestCase {
         XCTAssertEqual(
             try acceptance.canonicalData(),
             try data(pairing["signed_acceptance_canonical_json_b64"], context: "acceptance canonical")
+        )
+        _ = try AtlasVaultPairingFoundation.verifyOffer(
+            offer,
+            currentTime: try string(pairing["verification_time"], context: "verification_time")
+        )
+        XCTAssertEqual(
+            try AtlasVaultPairingFoundation.deriveSessionKey(
+                localIdentity: inviter,
+                offer: offer,
+                acceptance: acceptance
+            ),
+            try AtlasVaultPairingFoundation.deriveSessionKey(
+                localIdentity: invitee,
+                offer: offer,
+                acceptance: acceptance
+            )
+        )
+    }
+
+    func testFreshCryptoKitSignaturesVerifyAndTamperFails() throws {
+        let root = try loadRoot()
+        let pairing = try dictionary(root["pairing"], context: "pairing")
+        let fresh = try freshTranscript(root: root, pairing: pairing)
+
+        XCTAssertEqual(fresh.offer.signature.count, 64)
+        XCTAssertEqual(fresh.acceptance.signature.count, 64)
+        XCTAssertEqual(fresh.offer.offer.inviter.signature.count, 64)
+        XCTAssertEqual(fresh.acceptance.acceptance.invitee.signature.count, 64)
+        _ = try AtlasVaultPairingFoundation.verify(
+            localIdentity: fresh.inviter,
+            offer: fresh.offer,
+            acceptance: fresh.acceptance,
+            proofs: fresh.proofs,
+            currentTime: try string(pairing["verification_time"], context: "verification_time"),
+            replayGuard: TestReplayGuard()
+        )
+
+        var signatureObject = try dictionary(
+            JSONSerialization.jsonObject(with: fresh.offer.canonicalData()),
+            context: "fresh offer"
+        )
+        var signature = try data(signatureObject["signature"], context: "signature")
+        signature[0] ^= 1
+        signatureObject["signature"] = signature.base64EncodedString()
+        XCTAssertThrowsError(
+            try AtlasVaultPairingFoundation.verifyOffer(
+                AtlasVaultSignedPairingOffer.decodeStrict(
+                    JSONSerialization.data(withJSONObject: signatureObject, options: [.sortedKeys])
+                ),
+                currentTime: try string(pairing["verification_time"], context: "verification_time")
+            )
+        )
+
+        var payloadObject = try dictionary(
+            JSONSerialization.jsonObject(with: fresh.offer.canonicalData()),
+            context: "fresh offer"
+        )
+        var payload = try dictionary(payloadObject["offer"], context: "fresh offer payload")
+        var nonce = try data(payload["nonce"], context: "nonce")
+        nonce[0] ^= 1
+        payload["nonce"] = nonce.base64EncodedString()
+        payloadObject["offer"] = payload
+        XCTAssertThrowsError(
+            try AtlasVaultPairingFoundation.verifyOffer(
+                AtlasVaultSignedPairingOffer.decodeStrict(
+                    JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
+                ),
+                currentTime: try string(pairing["verification_time"], context: "verification_time")
+            )
+        )
+    }
+
+    func testWritesPublicFreshSwiftSignatureArtifactWhenRequested() throws {
+        guard let directory = ProcessInfo.processInfo.environment[
+            "ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR"
+        ] else {
+            return
+        }
+        let root = try loadRoot()
+        let pairing = try dictionary(root["pairing"], context: "pairing")
+        let fresh = try freshTranscript(root: root, pairing: pairing)
+        let offerData = try fresh.offer.canonicalData()
+        let acceptanceData = try fresh.acceptance.canonicalData()
+        let descriptorAData = try fresh.offer.offer.inviter.canonicalData()
+        let descriptorBData = try fresh.acceptance.acceptance.invitee.canonicalData()
+        let artifact: [String: Any] = [
+            "_warning": "FAKE TEST DATA ONLY - PUBLIC SIGNED ARTIFACT",
+            "format": "atlasvault-swift-runtime-signed-transcript-v1",
+            "version": 1,
+            "device_a_id": fresh.inviter.deviceID,
+            "device_b_id": fresh.invitee.deviceID,
+            "signed_descriptor_a": try JSONSerialization.jsonObject(with: descriptorAData),
+            "signed_descriptor_a_canonical_json_b64": descriptorAData.base64EncodedString(),
+            "signed_descriptor_b": try JSONSerialization.jsonObject(with: descriptorBData),
+            "signed_descriptor_b_canonical_json_b64": descriptorBData.base64EncodedString(),
+            "signed_offer": try JSONSerialization.jsonObject(with: offerData),
+            "signed_offer_canonical_json_b64": offerData.base64EncodedString(),
+            "signed_acceptance": try JSONSerialization.jsonObject(with: acceptanceData),
+            "signed_acceptance_canonical_json_b64": acceptanceData.base64EncodedString(),
+            "verification_time": try string(pairing["verification_time"], context: "verification_time"),
+            "transcript_sha256": fresh.transcript.hexString,
+            "inviter_proof": fresh.proofs.inviter.base64EncodedString(),
+            "invitee_proof": fresh.proofs.invitee.base64EncodedString(),
+        ]
+        let encoded = try JSONSerialization.data(
+            withJSONObject: artifact,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        let rendered = String(decoding: encoded, as: UTF8.self)
+        for forbidden in [
+            "signing_private", "agreement_private", "shared_secret",
+            "session_key", "vault_key", "recovery_key",
+        ] {
+            XCTAssertFalse(rendered.contains(forbidden))
+        }
+        let outputDirectory = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+        try encoded.write(
+            to: outputDirectory.appendingPathComponent(
+                "swift-generated-signed-transcript.json"
+            ),
+            options: .atomic
         )
     }
 
@@ -235,6 +347,61 @@ final class AtlasVaultPairingFoundationTests: XCTestCase {
             agreementPrivateKey: try data(vector["agreement_private_key"], context: "agreement key"),
             createdAt: try string(descriptor["created_at"], context: "created_at"),
             keyEpoch: try int(descriptor["key_epoch"], context: "key_epoch")
+        )
+    }
+
+    private func freshTranscript(
+        root: [String: Any],
+        pairing: [String: Any]
+    ) throws -> (
+        inviter: AtlasVaultDeviceIdentity,
+        invitee: AtlasVaultDeviceIdentity,
+        offer: AtlasVaultSignedPairingOffer,
+        acceptance: AtlasVaultSignedPairingAcceptance,
+        transcript: Data,
+        proofs: AtlasVaultPairingProofs
+    ) {
+        let inviter = try identity(root, name: "device_a")
+        let invitee = try identity(root, name: "device_b")
+        let offer = try AtlasVaultPairingFoundation.createOffer(
+            inviter: inviter,
+            offerID: try string(pairing["offer_id"], context: "offer_id"),
+            nonce: try data(pairing["offer_nonce"], context: "offer_nonce"),
+            issuedAt: try string(pairing["issued_at"], context: "issued_at"),
+            expiresAt: try string(pairing["expires_at"], context: "expires_at")
+        )
+        let acceptance = try AtlasVaultPairingFoundation.createAcceptance(
+            invitee: invitee,
+            signedOffer: offer,
+            nonce: try data(pairing["acceptance_nonce"], context: "acceptance_nonce"),
+            acceptedAt: try string(pairing["accepted_at"], context: "accepted_at"),
+            currentTime: try string(pairing["verification_time"], context: "verification_time")
+        )
+        let transcript = try AtlasVaultPairingFoundation.transcriptSHA256(
+            offer: offer,
+            acceptance: acceptance
+        )
+        let inviterSession = try AtlasVaultPairingFoundation.deriveSessionKey(
+            localIdentity: inviter,
+            offer: offer,
+            acceptance: acceptance
+        )
+        let inviteeSession = try AtlasVaultPairingFoundation.deriveSessionKey(
+            localIdentity: invitee,
+            offer: offer,
+            acceptance: acceptance
+        )
+        XCTAssertEqual(inviterSession, inviteeSession)
+        return (
+            inviter,
+            invitee,
+            offer,
+            acceptance,
+            transcript,
+            try AtlasVaultPairingFoundation.deriveProofs(
+                sessionKey: inviterSession,
+                transcriptSHA256: transcript
+            )
         )
     }
 

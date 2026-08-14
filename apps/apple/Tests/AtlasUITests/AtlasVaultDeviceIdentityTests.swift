@@ -24,8 +24,20 @@ final class AtlasVaultDeviceIdentityTests: XCTestCase {
                 try data(vector["descriptor_canonical_json_b64"], context: "descriptor canonical")
             )
 
-            let signed = try identity.signDescriptor()
-            XCTAssertEqual(signed.signature, try data(vector["descriptor_signature"], context: "descriptor signature"))
+            let fresh = try identity.signDescriptor()
+            XCTAssertEqual(fresh.signature.count, 64)
+            XCTAssertEqual(try fresh.verifiedDescriptor(), identity.descriptor)
+
+            let signed = try AtlasVaultSignedDeviceDescriptor.decodeStrict(
+                try data(
+                    vector["signed_descriptor_canonical_json_b64"],
+                    context: "signed descriptor canonical"
+                )
+            )
+            XCTAssertEqual(
+                signed.signature,
+                try data(vector["descriptor_signature"], context: "descriptor signature")
+            )
             XCTAssertEqual(
                 try signed.canonicalData(),
                 try data(vector["signed_descriptor_canonical_json_b64"], context: "signed descriptor canonical")

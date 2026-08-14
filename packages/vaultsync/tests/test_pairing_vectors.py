@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from vaultsync.device_identity import device_identity_from_private_keys
+from vaultsync.device_identity import (
+    SignedDeviceDescriptor,
+    device_identity_from_private_keys,
+    verify_signed_device_descriptor,
+)
 from vaultsync.pairing import (
     InMemoryPairingReplayGuard,
     PairingError,
@@ -21,6 +26,7 @@ from vaultsync.pairing import (
     derive_pairing_session_key,
     derive_pairing_session_key_from_shared_secret,
     pairing_transcript_sha256,
+    verify_pairing_offer,
     verify_pairing_transcript,
 )
 
@@ -313,3 +319,93 @@ def test_invalid_case_manifest_is_complete_and_errors_are_redacted() -> None:
     failure = PairingError("pairing verification failed")
     for secret in secret_values:
         assert secret not in str(failure)
+
+
+def test_python_verifies_public_swift_runtime_signature_artifact() -> None:
+    directory = os.environ.get("ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR")
+    if directory is None:
+        pytest.skip("Swift runtime signature artifact was not requested")
+    artifact_path = Path(directory) / "swift-generated-signed-transcript.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert set(artifact) == {
+        "_warning",
+        "format",
+        "version",
+        "device_a_id",
+        "device_b_id",
+        "signed_descriptor_a",
+        "signed_descriptor_a_canonical_json_b64",
+        "signed_descriptor_b",
+        "signed_descriptor_b_canonical_json_b64",
+        "signed_offer",
+        "signed_offer_canonical_json_b64",
+        "signed_acceptance",
+        "signed_acceptance_canonical_json_b64",
+        "verification_time",
+        "transcript_sha256",
+        "inviter_proof",
+        "invitee_proof",
+    }
+    assert artifact["_warning"] == (
+        "FAKE TEST DATA ONLY - PUBLIC SIGNED ARTIFACT"
+    )
+    assert artifact["format"] == (
+        "atlasvault-swift-runtime-signed-transcript-v1"
+    )
+    assert artifact["version"] == 1
+
+    descriptor_a = SignedDeviceDescriptor.from_dict(
+        artifact["signed_descriptor_a"]
+    )
+    descriptor_b = SignedDeviceDescriptor.from_dict(
+        artifact["signed_descriptor_b"]
+    )
+    assert descriptor_a.canonical_bytes() == decode64(
+        artifact["signed_descriptor_a_canonical_json_b64"]
+    )
+    assert descriptor_b.canonical_bytes() == decode64(
+        artifact["signed_descriptor_b_canonical_json_b64"]
+    )
+    assert verify_signed_device_descriptor(descriptor_a).device_id == artifact[
+        "device_a_id"
+    ]
+    assert verify_signed_device_descriptor(descriptor_b).device_id == artifact[
+        "device_b_id"
+    ]
+
+    offer = SignedPairingOffer.from_dict(artifact["signed_offer"])
+    acceptance = SignedPairingAcceptance.from_dict(
+        artifact["signed_acceptance"]
+    )
+    assert offer.canonical_bytes() == decode64(
+        artifact["signed_offer_canonical_json_b64"]
+    )
+    assert acceptance.canonical_bytes() == decode64(
+        artifact["signed_acceptance_canonical_json_b64"]
+    )
+    assert offer.offer.inviter == descriptor_a
+    assert acceptance.acceptance.invitee == descriptor_b
+    assert acceptance.acceptance.offer_sha256 == offer.sha256_hex()
+    verify_pairing_offer(offer, current_time=artifact["verification_time"])
+
+    vector = load_vector()
+    inviter = identity(vector, "device_a")
+    transcript = pairing_transcript_sha256(offer, acceptance)
+    session_key = derive_pairing_session_key(inviter, offer, acceptance)
+    proofs = derive_pairing_proofs(session_key, transcript)
+    assert transcript.hex() == artifact["transcript_sha256"]
+    assert proofs.inviter == decode64(artifact["inviter_proof"])
+    assert proofs.invitee == decode64(artifact["invitee_proof"])
+
+    verified = verify_pairing_transcript(
+        local_identity=inviter,
+        signed_offer=offer,
+        signed_acceptance=acceptance,
+        proofs=PairingProofs(
+            inviter=decode64(artifact["inviter_proof"]),
+            invitee=decode64(artifact["invitee_proof"]),
+        ),
+        current_time=artifact["verification_time"],
+        replay_guard=InMemoryPairingReplayGuard(),
+    )
+    assert verified.transcript_sha256 == transcript

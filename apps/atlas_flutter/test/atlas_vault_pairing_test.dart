@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
@@ -265,6 +266,163 @@ void main() {
       );
     },
   );
+
+  test('Dart verifies the public Swift runtime signature artifact', () async {
+    final directory =
+        Platform.environment['ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR'];
+    if (directory == null) {
+      return;
+    }
+    final artifact = atlasVaultObject(
+      jsonDecode(
+        await File(
+          '$directory/swift-generated-signed-transcript.json',
+        ).readAsString(),
+      ),
+    );
+    expect(artifact.keys.toSet(), <String>{
+      '_warning',
+      'format',
+      'version',
+      'device_a_id',
+      'device_b_id',
+      'signed_descriptor_a',
+      'signed_descriptor_a_canonical_json_b64',
+      'signed_descriptor_b',
+      'signed_descriptor_b_canonical_json_b64',
+      'signed_offer',
+      'signed_offer_canonical_json_b64',
+      'signed_acceptance',
+      'signed_acceptance_canonical_json_b64',
+      'verification_time',
+      'transcript_sha256',
+      'inviter_proof',
+      'invitee_proof',
+    });
+    expect(
+      artifact['_warning'],
+      'FAKE TEST DATA ONLY - PUBLIC SIGNED ARTIFACT',
+    );
+    expect(artifact['format'], 'atlasvault-swift-runtime-signed-transcript-v1');
+    expect(artifact['version'], 1);
+
+    final descriptorA = AtlasVaultSignedDeviceDescriptor.fromJson(
+      atlasVaultObject(artifact['signed_descriptor_a']),
+    );
+    final descriptorB = AtlasVaultSignedDeviceDescriptor.fromJson(
+      atlasVaultObject(artifact['signed_descriptor_b']),
+    );
+    expect(
+      descriptorA.canonicalBytes(),
+      _bytes(artifact['signed_descriptor_a_canonical_json_b64']),
+    );
+    expect(
+      descriptorB.canonicalBytes(),
+      _bytes(artifact['signed_descriptor_b_canonical_json_b64']),
+    );
+    expect(
+      (await verifyAtlasVaultSignedDeviceDescriptor(descriptorA)).deviceId,
+      artifact['device_a_id'],
+    );
+    expect(
+      (await verifyAtlasVaultSignedDeviceDescriptor(descriptorB)).deviceId,
+      artifact['device_b_id'],
+    );
+
+    final offer = AtlasVaultSignedPairingOffer.fromJson(
+      atlasVaultObject(artifact['signed_offer']),
+    );
+    final acceptance = AtlasVaultSignedPairingAcceptance.fromJson(
+      atlasVaultObject(artifact['signed_acceptance']),
+    );
+    expect(
+      offer.canonicalBytes(),
+      _bytes(artifact['signed_offer_canonical_json_b64']),
+    );
+    expect(
+      acceptance.canonicalBytes(),
+      _bytes(artifact['signed_acceptance_canonical_json_b64']),
+    );
+    expect(offer.offer.inviter.toJson(), descriptorA.toJson());
+    expect(acceptance.acceptance.invitee.toJson(), descriptorB.toJson());
+    expect(await offer.sha256Hex(), acceptance.acceptance.offerSha256);
+    await verifyAtlasVaultPairingOffer(
+      offer,
+      currentTime: artifact['verification_time']! as String,
+    );
+
+    final transcript = await atlasVaultPairingTranscriptSha256(
+      offer,
+      acceptance,
+    );
+    final sessionKey = await deriveAtlasVaultPairingSessionKey(
+      localIdentity: inviter,
+      signedOffer: offer,
+      signedAcceptance: acceptance,
+    );
+    final runtimeProofs = await deriveAtlasVaultPairingProofs(
+      sessionKey: sessionKey,
+      transcriptSha256: transcript,
+    );
+    expect(transcript, _hexBytes(artifact['transcript_sha256']! as String));
+    expect(runtimeProofs.inviter, _bytes(artifact['inviter_proof']));
+    expect(runtimeProofs.invitee, _bytes(artifact['invitee_proof']));
+    await verifyAtlasVaultPairingTranscript(
+      localIdentity: inviter,
+      signedOffer: offer,
+      signedAcceptance: acceptance,
+      proofs: AtlasVaultPairingProofs(
+        inviter: _bytes(artifact['inviter_proof']),
+        invitee: _bytes(artifact['invitee_proof']),
+      ),
+      currentTime: artifact['verification_time']! as String,
+      replayGuard: _ReplayGuard(),
+    );
+
+    final badSignature = _clone(atlasVaultObject(artifact['signed_offer']));
+    final changedSignature = _bytes(badSignature['signature'])..[0] ^= 1;
+    badSignature['signature'] = base64Encode(changedSignature);
+    await expectLater(
+      verifyAtlasVaultPairingOffer(
+        AtlasVaultSignedPairingOffer.fromJson(badSignature),
+        currentTime: artifact['verification_time']! as String,
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+
+    final badOffer = _clone(atlasVaultObject(artifact['signed_offer']));
+    final offerPayload = atlasVaultObject(badOffer['offer']);
+    final changedNonce = _bytes(offerPayload['nonce'])..[0] ^= 1;
+    offerPayload['nonce'] = base64Encode(changedNonce);
+    await expectLater(
+      verifyAtlasVaultPairingOffer(
+        AtlasVaultSignedPairingOffer.fromJson(badOffer),
+        currentTime: artifact['verification_time']! as String,
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+
+    final badAcceptance = _clone(
+      atlasVaultObject(artifact['signed_acceptance']),
+    );
+    atlasVaultObject(badAcceptance['acceptance'])['offer_sha256'] = ''.padLeft(
+      64,
+      '0',
+    );
+    await expectLater(
+      verifyAtlasVaultPairingTranscript(
+        localIdentity: inviter,
+        signedOffer: offer,
+        signedAcceptance: AtlasVaultSignedPairingAcceptance.fromJson(
+          badAcceptance,
+        ),
+        proofs: runtimeProofs,
+        currentTime: artifact['verification_time']! as String,
+        replayGuard: _ReplayGuard(),
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
 }
 
 final class _ReplayGuard implements AtlasVaultPairingReplayGuard {

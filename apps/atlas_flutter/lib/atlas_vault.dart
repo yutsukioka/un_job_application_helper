@@ -1,5 +1,6 @@
 library;
 
+export 'src/atlas_vault/device_identity.dart';
 export 'src/atlas_vault/crypto.dart'
     show
         AtlasVaultCryptoException,
@@ -15,6 +16,7 @@ export 'src/atlas_vault/crypto.dart'
 export 'src/atlas_vault/export.dart';
 export 'src/atlas_vault/models.dart';
 export 'src/atlas_vault/payloads.dart';
+export 'src/atlas_vault/pairing.dart';
 export 'src/atlas_vault/recovery.dart'
     show
         AtlasVaultRecoveryKey,
