@@ -203,6 +203,21 @@ final class AtlasVaultSignedDeviceDescriptor {
     }
   }
 
+  factory AtlasVaultSignedDeviceDescriptor.fromCanonicalBytes(Uint8List value) {
+    try {
+      final input = Uint8List.fromList(value);
+      final decoded = AtlasVaultSignedDeviceDescriptor.fromJson(
+        _decodeCanonicalIdentityObject(input),
+      );
+      if (!_bytesEqual(input, decoded.canonicalBytes())) {
+        throw const AtlasVaultDeviceIdentityException();
+      }
+      return decoded;
+    } catch (_) {
+      throw const AtlasVaultDeviceIdentityException();
+    }
+  }
+
   Map<String, Object?> toJson() => <String, Object?>{
     'format': _signedDescriptorFormat,
     'version': _identityVersion,
@@ -672,6 +687,21 @@ Uint8List _concat(List<List<int>> parts) {
     offset += part.length;
   }
   return output;
+}
+
+Map<String, Object?> _decodeCanonicalIdentityObject(Uint8List value) {
+  try {
+    if (value.isEmpty) {
+      throw const AtlasVaultDeviceIdentityException();
+    }
+    final decoded = jsonDecode(utf8.decode(value, allowMalformed: false));
+    if (decoded is! Map<String, dynamic>) {
+      throw const AtlasVaultDeviceIdentityException();
+    }
+    return decoded.cast<String, Object?>();
+  } catch (_) {
+    throw const AtlasVaultDeviceIdentityException();
+  }
 }
 
 bool _bytesEqual(List<int> left, List<int> right) {

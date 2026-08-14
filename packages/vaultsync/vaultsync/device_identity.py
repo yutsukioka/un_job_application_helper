@@ -48,6 +48,17 @@ def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_json_object(value: Any) -> Mapping[str, Any]:
+    try:
+        if not isinstance(value, bytes) or not value:
+            raise _invalid_identity()
+        return _require_mapping(json.loads(value.decode("utf-8")))
+    except DeviceIdentityError:
+        raise
+    except Exception as exc:
+        raise _invalid_identity() from exc
+
+
 def _require_exact_keys(
     value: Mapping[str, Any],
     expected: set[str],
@@ -291,6 +302,18 @@ class SignedDeviceDescriptor:
                     DEVICE_SIGNATURE_BYTES,
                 ),
             )
+        except DeviceIdentityError:
+            raise
+        except Exception as exc:
+            raise _invalid_identity() from exc
+
+    @classmethod
+    def from_canonical_bytes(cls, data: bytes) -> SignedDeviceDescriptor:
+        try:
+            decoded = cls.from_dict(_canonical_json_object(data))
+            if not hmac.compare_digest(decoded.canonical_bytes(), data):
+                raise _invalid_identity()
+            return decoded
         except DeviceIdentityError:
             raise
         except Exception as exc:

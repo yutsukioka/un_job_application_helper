@@ -306,8 +306,10 @@ Android result wiping, signed-64 epoch agreement, canonical-byte Swift
 decoding, and atomic in-process replay consumption. Focused Dart custody and
 pairing tests and the full Flutter suite pass, and the exact 31-file scope
 remains intact. A follow-up exact-head review cycle adds strict Python and Dart
-received-envelope byte decoding plus explicit destruction of retained Dart
-session keys.
+received offer and acceptance byte decoding plus explicit destruction of
+retained Dart session keys. A subsequent review cycle applies the same exact
+canonical-byte requirement to standalone signed device descriptors in Python
+and Dart.
 
 ## 53. Apple Evidence
 
