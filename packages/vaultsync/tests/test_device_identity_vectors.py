@@ -134,6 +134,35 @@ def test_secret_bundle_is_strict_and_rederives_identity(device_name: str) -> Non
         DeviceIdentitySecret.from_dict(mismatched)
 
 
+@pytest.mark.parametrize("device_name", ["device_a", "device_b"])
+def test_received_secret_bundle_requires_exact_canonical_bytes(
+    device_name: str,
+) -> None:
+    vector = load_vector()[device_name]
+    canonical = decode64(vector["secret_bundle_canonical_json_b64"])
+    decoded = DeviceIdentitySecret.from_canonical_bytes(canonical)
+    assert decoded.canonical_bytes() == canonical
+
+    parsed = json.loads(canonical.decode("utf-8"))
+    reordered = json.dumps(
+        dict(reversed(list(parsed.items()))),
+        separators=(",", ":"),
+    ).encode("utf-8")
+    first_key, first_value = next(iter(parsed.items()))
+    duplicate = (
+        b"{"
+        + json.dumps(first_key).encode("utf-8")
+        + b":"
+        + json.dumps(first_value, separators=(",", ":")).encode("utf-8")
+        + b","
+        + canonical[1:]
+    )
+
+    for noncanonical in (canonical + b"\n", reordered, duplicate):
+        with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+            DeviceIdentitySecret.from_canonical_bytes(noncanonical)
+
+
 def test_device_id_derivation_is_domain_separated_and_ordered() -> None:
     vector = load_vector()["device_a"]
     signing = decode64(vector["signing_public_key"])
