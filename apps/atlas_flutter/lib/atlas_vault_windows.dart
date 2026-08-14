@@ -66,6 +66,7 @@ export 'src/atlas_vault/windows_storage.dart'
         atlasVaultWindowsMethodChannelName,
         AtlasVaultWindowsCapabilities,
         AtlasVaultWindowsStorageException,
+        AtlasWindowsDeviceIdentitySecretStore,
         AtlasWindowsEncryptedDocumentTransport,
         AtlasWindowsProtectedMigrationJournalStore,
         AtlasWindowsProtectedRecoveryImportJournalStore,

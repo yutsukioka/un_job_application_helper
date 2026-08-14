@@ -22,6 +22,116 @@ final class AtlasVaultWindowsStorageException implements Exception {
   String toString() => 'AtlasVault Windows storage operation failed.';
 }
 
+final class AtlasWindowsDeviceIdentitySecretStore
+    implements AtlasDeviceIdentitySecretStore {
+  AtlasWindowsDeviceIdentitySecretStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  static const int maximumSecretByteCount = 16 * 1024;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle) async {
+    final bytes = await _validatedSecretCopy(canonicalSecretBundle);
+    try {
+      await _invoke<void>(
+        _channel,
+        'createDeviceIdentitySecret',
+        <String, Object?>{'secret_bytes': bytes},
+      );
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<Uint8List?> loadPrimaryIdentity() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'loadDeviceIdentitySecret',
+      null,
+    );
+    if (value == null) {
+      return null;
+    }
+    final bytes = _copyBytes(value);
+    try {
+      return await _validatedSecretCopy(bytes);
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<bool> containsPrimaryIdentity() async {
+    final value = await _invoke<Object?>(
+      _channel,
+      'containsDeviceIdentitySecret',
+      null,
+    );
+    if (value is! bool) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+    return value;
+  }
+
+  @override
+  Future<void> deletePrimaryIdentity() async {
+    await _invoke<void>(_channel, 'deleteDeviceIdentitySecret', null);
+  }
+
+  void _validateSecretBytes(Uint8List value) {
+    if (value.isEmpty || value.length > maximumSecretByteCount) {
+      throw const AtlasVaultWindowsStorageException();
+    }
+  }
+
+  Future<Uint8List> _validatedSecretCopy(Uint8List source) async {
+    _validateSecretBytes(source);
+    final copy = Uint8List.fromList(source);
+    AtlasVaultDeviceIdentitySecret? secret;
+    AtlasVaultDeviceIdentity? identity;
+    Uint8List? canonical;
+    var accepted = false;
+    try {
+      final decoded = jsonDecode(utf8.decode(copy));
+      if (decoded is! Map) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      final object = <String, Object?>{};
+      for (final entry in decoded.entries) {
+        if (entry.key is! String) {
+          throw const AtlasVaultWindowsStorageException();
+        }
+        object[entry.key as String] = entry.value;
+      }
+      secret = AtlasVaultDeviceIdentitySecret.fromJson(object);
+      canonical = secret.canonicalBytes();
+      if (!_constantTimeEquals(copy, canonical)) {
+        throw const AtlasVaultWindowsStorageException();
+      }
+      identity = await secret.loadIdentity();
+      accepted = true;
+      return copy;
+    } catch (_) {
+      throw const AtlasVaultWindowsStorageException();
+    } finally {
+      identity?.destroy();
+      secret?.destroy();
+      if (canonical != null) {
+        _wipe(canonical);
+      }
+      if (!accepted) {
+        _wipe(copy);
+      }
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsDeviceIdentitySecretStore(<redacted>)';
+}
+
 final class AtlasVaultWindowsCapabilities {
   const AtlasVaultWindowsCapabilities._({
     required this.secureBoundaryAvailable,

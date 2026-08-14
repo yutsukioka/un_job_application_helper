@@ -193,3 +193,37 @@ data or plaintext intermediary is present.
 The pre-existing payload, crypto, key-wrap, recovery-export, and iOS-Flutter
 vector JSON files remain unchanged. The Windows vector adds another consumer
 of the established wire format; it does not change any wire field or version.
+
+## Device Identity And Pairing Vector
+
+`atlasvault_device_identity_pairing_vectors_v1.json` is a fake,
+deterministic, test-only identity and pairing fixture. Python is the reference
+generator. It fixes two fake Ed25519 seeds, two fake X25519 private keys,
+derived public keys and opaque device IDs, strict descriptors, signed pairing
+objects, a length-delimited transcript hash, the X25519 shared secret,
+HKDF-SHA256 session key, directional HMAC-SHA256 proofs, and invalid cases.
+None of these values belong to a production user or installation.
+
+The vector contains one fixed valid Python-generated Ed25519 signature for
+each signed object. Python and deterministic Dart signing reproduce those
+bytes. Swift strictly decodes and canonicalizes each fixed signed envelope and
+verifies its signature with CryptoKit. Fresh CryptoKit signatures are required
+to be valid but are not compared for equality or inequality with the fixed
+signature because CryptoKit intentionally randomizes signature generation.
+Canonical unsigned payloads remain byte-identical across all runtimes.
+
+The fixed transcript is derived from the fixed signed envelopes. A runtime
+transcript is derived from the exact runtime envelopes actually exchanged, so
+another valid signature can yield another valid transcript hash. Phase 2F-1
+tests write a public-only fresh Swift signed transcript to the external
+checkpoint directory identified by
+`ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR`; Python and Dart verify those fresh
+signatures and reproduce the transcript and confirmation proofs. That external
+artifact contains no private key, shared secret, session key, recovery key, or
+vault key and is never committed.
+
+The vector defines only cryptographic possession and transcript behavior. It
+does not establish device trust, transport a vault key, persist replay state,
+implement QR pairing, register devices with a backend, synchronize records,
+revoke devices, or rotate keys. All pre-existing vector JSON files remain
+unchanged.

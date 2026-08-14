@@ -38,6 +38,7 @@ constexpr size_t kProtectedMetadataPlaintextMaximumLength = 16 * 1024 * 1024;
 constexpr size_t kProtectedMetadataBlobMaximumLength =
     kProtectedMetadataPlaintextMaximumLength + 1024 * 1024;
 constexpr size_t kSelectedVaultPlaintextMaximumLength = 256;
+constexpr size_t kDeviceIdentityPlaintextMaximumLength = 16 * 1024;
 constexpr size_t kProtectedBlobEnvelopeFixedLength = 8 + 4 + 2 + 4 + 4 + 32;
 constexpr char kProtectedBlobEnvelopeMagic[] = "AVWBLB01";
 constexpr uint32_t kProtectedBlobEnvelopeVersion = 1;
@@ -45,6 +46,7 @@ constexpr char kMigrationJournalPurpose[] =
     "plaintext-private-state-migration";
 constexpr char kRecoveryImportPurpose[] = "recovery-import";
 constexpr char kSelectedVaultPurpose[] = "selected-vault";
+constexpr char kDeviceIdentityPurpose[] = "device-identity";
 constexpr char kCapabilityProbeVaultId[] = "capability_probe_v1";
 
 enum class OperationResult {
@@ -139,6 +141,7 @@ struct ProtectedBlobEnvelope {
 };
 
 struct ProtectedMetadataPaths {
+  std::wstring device_directory;
   std::wstring migrations_directory;
   std::wstring imports_directory;
   std::wstring selection_directory;
@@ -149,6 +152,8 @@ struct ProtectedMetadataPaths {
   std::wstring recovery_import_lock_path;
   std::wstring selection_path;
   std::wstring selection_lock_path;
+  std::wstring device_identity_path;
+  std::wstring device_identity_lock_path;
 };
 
 struct StorageCapabilities {
@@ -406,12 +411,14 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
       JoinPath(local_root, L"UNApplications");
   const std::wstring atlas_vault = JoinPath(organization, L"AtlasVault");
   const std::wstring version = JoinPath(atlas_vault, L"v1");
+  output->device_directory = JoinPath(version, L"device");
   output->migrations_directory = JoinPath(version, L"migrations");
   output->imports_directory = JoinPath(version, L"imports");
   output->selection_directory = JoinPath(version, L"selection");
   output->lock_directory = JoinPath(version, L"locks");
   if (!EnsureSafeDirectory(organization) ||
       !EnsureSafeDirectory(atlas_vault) || !EnsureSafeDirectory(version) ||
+      !EnsureSafeDirectory(output->device_directory) ||
       !EnsureSafeDirectory(output->migrations_directory) ||
       !EnsureSafeDirectory(output->imports_directory) ||
       !EnsureSafeDirectory(output->selection_directory) ||
@@ -433,6 +440,10 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
       JoinPath(output->selection_directory, L"selected-vault.bin");
   output->selection_lock_path =
       JoinPath(output->lock_directory, L"selected-vault.lock");
+  output->device_identity_path =
+      JoinPath(output->device_directory, L"device-identity.bin");
+  output->device_identity_lock_path =
+      JoinPath(output->lock_directory, L"device-identity.lock");
   return true;
 }
 
@@ -1730,6 +1741,8 @@ void WipeSensitiveArgument(const std::string& method,
   const char* key = nullptr;
   if (method == "createVaultKey") {
     key = "vault_key";
+  } else if (method == "createDeviceIdentitySecret") {
+    key = "secret_bytes";
   } else if (method == "saveEncryptedExport") {
     key = "export_bytes";
   } else if (method == "createPlaintextMigrationJournal" ||
@@ -2171,8 +2184,13 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
   const bool selected_vault_method =
       method == "readSelectedVault" || method == "createSelectedVault" ||
       method == "clearSelectedVault";
+  const bool device_identity_method =
+      method == "createDeviceIdentitySecret" ||
+      method == "loadDeviceIdentitySecret" ||
+      method == "containsDeviceIdentitySecret" ||
+      method == "deleteDeviceIdentitySecret";
   if (migration_metadata_method || recovery_import_metadata_method ||
-      selected_vault_method) {
+      selected_vault_method || device_identity_method) {
     ProtectedMetadataPaths paths;
     if (!PrepareProtectedMetadataPaths(&paths)) {
       ReturnFailure(std::move(result));
@@ -2184,9 +2202,96 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
             ? paths.migration_lock_path
         : recovery_import_metadata_method
             ? paths.recovery_import_lock_path
-            : paths.selection_lock_path;
+        : selected_vault_method
+            ? paths.selection_lock_path
+            : paths.device_identity_lock_path;
     if (!lock.Acquire(lock_path)) {
       ReturnFailure(std::move(result));
+      return;
+    }
+
+    if (method == "createDeviceIdentitySecret") {
+      const flutter::EncodableMap* arguments =
+          ExactArguments(call, {"secret_bytes"});
+      const std::vector<uint8_t>* supplied =
+          arguments == nullptr
+              ? nullptr
+              : BytesArgument(*arguments, "secret_bytes");
+      if (supplied == nullptr || supplied->empty() ||
+          supplied->size() > kDeviceIdentityPlaintextMaximumLength) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> secret(*supplied);
+      const OperationResult create_result = CreateProtectedMetadata(
+          paths.device_directory, paths.device_identity_path,
+          kDeviceIdentityPurpose, secret,
+          kDeviceIdentityPlaintextMaximumLength);
+      Wipe(&secret);
+      if (create_result != OperationResult::kSuccess) {
+        ReturnFailure(std::move(result), create_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (method == "loadDeviceIdentitySecret") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> secret;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.device_identity_path, kDeviceIdentityPurpose,
+          kDeviceIdentityPlaintextMaximumLength, &secret);
+      if (read_result == OperationResult::kNotFound) {
+        result->Success(flutter::EncodableValue());
+        return;
+      }
+      if (read_result != OperationResult::kSuccess) {
+        Wipe(&secret);
+        ReturnFailure(std::move(result));
+        return;
+      }
+      ReturnBytes(std::move(result), &secret, true);
+      return;
+    }
+
+    if (method == "containsDeviceIdentitySecret") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> secret;
+      const OperationResult read_result = ReadProtectedMetadata(
+          paths.device_identity_path, kDeviceIdentityPurpose,
+          kDeviceIdentityPlaintextMaximumLength, &secret);
+      Wipe(&secret);
+      if (read_result != OperationResult::kSuccess &&
+          read_result != OperationResult::kNotFound) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      result->Success(flutter::EncodableValue(
+          read_result == OperationResult::kSuccess));
+      return;
+    }
+
+    if (method == "deleteDeviceIdentitySecret") {
+      if (!HasNoArguments(call)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      const OperationResult delete_result =
+          DeleteRegularFile(paths.device_identity_path);
+      if (delete_result != OperationResult::kSuccess ||
+          InspectRegularFile(paths.device_identity_path) !=
+              OperationResult::kNotFound) {
+        ReturnFailure(std::move(result), delete_result);
+        return;
+      }
+      result->Success();
       return;
     }
 
