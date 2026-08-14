@@ -83,6 +83,24 @@ void main() {
     );
   }
 
+  test('received signed descriptor requires exact canonical bytes', () {
+    final vector = atlasVaultObject(root['device_a']);
+    final canonical = _bytes(vector['signed_descriptor_canonical_json_b64']);
+
+    expect(
+      AtlasVaultSignedDeviceDescriptor.fromCanonicalBytes(
+        canonical,
+      ).canonicalBytes(),
+      canonical,
+    );
+    for (final variant in _noncanonicalJsonVariants(canonical)) {
+      expect(
+        () => AtlasVaultSignedDeviceDescriptor.fromCanonicalBytes(variant),
+        throwsA(isA<AtlasVaultDeviceIdentityException>()),
+      );
+    }
+  });
+
   test('device ID derivation is domain separated and ordered', () async {
     final vector = atlasVaultObject(root['device_a']);
     final signing = _bytes(vector['signing_public_key']);
@@ -534,6 +552,23 @@ final class _FakeDeviceIdentitySecretStore
 
 Uint8List _bytes(Object? value) {
   return Uint8List.fromList(base64Decode(value! as String));
+}
+
+List<Uint8List> _noncanonicalJsonVariants(Uint8List canonical) {
+  final text = utf8.decode(canonical, allowMalformed: false);
+  final parsed = atlasVaultObject(jsonDecode(text));
+  final reversed = <String, Object?>{
+    for (final entry in parsed.entries.toList().reversed)
+      entry.key: entry.value,
+  };
+  final first = parsed.entries.first;
+  final duplicate =
+      '{${jsonEncode(first.key)}:${jsonEncode(first.value)},${text.substring(1)}';
+  return <Uint8List>[
+    Uint8List.fromList(utf8.encode('$text\n')),
+    Uint8List.fromList(utf8.encode(jsonEncode(reversed))),
+    Uint8List.fromList(utf8.encode(duplicate)),
+  ];
 }
 
 Map<String, Object?> _clone(Map<String, Object?> value) {

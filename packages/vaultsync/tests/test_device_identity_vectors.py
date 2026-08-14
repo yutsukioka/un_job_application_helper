@@ -84,6 +84,32 @@ def test_private_vectors_rederive_public_identity_and_signatures(
     assert verify_signed_device_descriptor(signed) == identity.descriptor
 
 
+def test_received_signed_descriptor_requires_exact_canonical_bytes() -> None:
+    vector = load_vector()["device_a"]
+    canonical = decode64(vector["signed_descriptor_canonical_json_b64"])
+    decoded = SignedDeviceDescriptor.from_canonical_bytes(canonical)
+    assert decoded.canonical_bytes() == canonical
+
+    parsed = json.loads(canonical.decode("utf-8"))
+    reordered = json.dumps(
+        dict(reversed(list(parsed.items()))),
+        separators=(",", ":"),
+    ).encode("utf-8")
+    first_key, first_value = next(iter(parsed.items()))
+    duplicate = (
+        b"{"
+        + json.dumps(first_key).encode("utf-8")
+        + b":"
+        + json.dumps(first_value, separators=(",", ":")).encode("utf-8")
+        + b","
+        + canonical[1:]
+    )
+
+    for noncanonical in (canonical + b"\n", reordered, duplicate):
+        with pytest.raises(DeviceIdentityError, match="invalid device identity"):
+            SignedDeviceDescriptor.from_canonical_bytes(noncanonical)
+
+
 @pytest.mark.parametrize("device_name", ["device_a", "device_b"])
 def test_secret_bundle_is_strict_and_rederives_identity(device_name: str) -> None:
     vector = load_vector()[device_name]
