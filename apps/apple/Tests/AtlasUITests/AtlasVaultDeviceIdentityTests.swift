@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import XCTest
 @testable import AtlasUI
 
@@ -172,6 +173,105 @@ final class AtlasVaultDeviceIdentityTests: XCTestCase {
         }
     }
 
+    func testKeychainCustodyIsCreateOnlyStrictAndDeviceOnly() throws {
+        let vector = try dictionary(try loadRoot()["device_a"], context: "device_a")
+        let bundle = try data(
+            vector["secret_bundle_canonical_json_b64"],
+            context: "secret bundle"
+        )
+        let client = DeviceIdentityFakeKeychainClient()
+        let store = AtlasKeychainDeviceIdentityStore(
+            client: client,
+            service: "com.atlasvault.tests.device-identity",
+            account: "primary"
+        )
+
+        XCTAssertNil(try store.loadPrimaryIdentity())
+        XCTAssertFalse(try store.containsPrimaryIdentity())
+        try store.createPrimaryIdentity(bundle)
+        XCTAssertEqual(try store.loadPrimaryIdentity(), bundle)
+        XCTAssertTrue(try store.containsPrimaryIdentity())
+        XCTAssertEqual(client.addedItems, [
+            AtlasKeychainItem(
+                service: "com.atlasvault.tests.device-identity",
+                account: "primary",
+                valueData: bundle,
+                accessibility: .afterFirstUnlockThisDeviceOnly
+            ),
+        ])
+        XCTAssertTrue(client.updatedItems.isEmpty)
+
+        XCTAssertThrowsError(try store.createPrimaryIdentity(bundle)) { error in
+            XCTAssertEqual(
+                error as? AtlasKeychainDeviceIdentityStoreError,
+                .collision
+            )
+        }
+        XCTAssertTrue(client.updatedItems.isEmpty)
+
+        try store.deletePrimaryIdentity()
+        try store.deletePrimaryIdentity()
+        XCTAssertNil(try store.loadPrimaryIdentity())
+    }
+
+    func testKeychainCustodyRejectsOversizeAndInvalidLoadedBundle() throws {
+        let client = DeviceIdentityFakeKeychainClient()
+        let store = AtlasKeychainDeviceIdentityStore(
+            client: client,
+            service: "com.atlasvault.tests.device-identity",
+            account: "primary"
+        )
+
+        XCTAssertThrowsError(
+            try store.createPrimaryIdentity(Data(repeating: 1, count: 16 * 1024 + 1))
+        ) { error in
+            XCTAssertEqual(
+                error as? AtlasKeychainDeviceIdentityStoreError,
+                .invalidSecret
+            )
+        }
+        XCTAssertTrue(client.addedItems.isEmpty)
+
+        client.setRawValue(
+            Data(#"{"format":"private-sentinel"}"#.utf8),
+            service: "com.atlasvault.tests.device-identity",
+            account: "primary"
+        )
+        XCTAssertThrowsError(try store.loadPrimaryIdentity()) { error in
+            XCTAssertFalse(String(describing: error).contains("private-sentinel"))
+        }
+    }
+
+    func testRealKeychainCustodyRoundTripWhenAvailable() throws {
+        let vector = try dictionary(try loadRoot()["device_a"], context: "device_a")
+        let bundle = try data(
+            vector["secret_bundle_canonical_json_b64"],
+            context: "secret bundle"
+        )
+        let service = "com.atlasvault.tests.device-identity.\(UUID().uuidString)"
+        let store = AtlasKeychainDeviceIdentityStore(service: service)
+
+        do {
+            try store.deletePrimaryIdentity()
+            try store.createPrimaryIdentity(bundle)
+            XCTAssertEqual(try store.loadPrimaryIdentity(), bundle)
+            let loaded = try XCTUnwrap(try store.loadPrimaryIdentity())
+            XCTAssertEqual(
+                try AtlasVaultDeviceIdentitySecret.decodeStrict(loaded)
+                    .loadIdentity().deviceID,
+                try string(vector["device_id"], context: "device_id")
+            )
+            XCTAssertThrowsError(try store.createPrimaryIdentity(bundle))
+            try store.deletePrimaryIdentity()
+            XCTAssertNil(try store.loadPrimaryIdentity())
+        } catch AtlasKeychainDeviceIdentityStoreError.unavailable {
+            throw XCTSkip("The test Keychain is unavailable in this environment.")
+        } catch {
+            try? store.deletePrimaryIdentity()
+            throw error
+        }
+    }
+
     private func loadRoot() throws -> [String: Any] {
         let data = try Data(contentsOf: try vectorURL())
         let root = try dictionary(JSONSerialization.jsonObject(with: data), context: "vector root")
@@ -225,5 +325,62 @@ final class AtlasVaultDeviceIdentityTests: XCTestCase {
             throw NSError(domain: context, code: 1)
         }
         return data
+    }
+}
+
+private final class DeviceIdentityFakeKeychainClient:
+    AtlasKeychainClient,
+    @unchecked Sendable
+{
+    struct UpdateCall: Equatable {
+        let query: AtlasKeychainQuery
+        let attributes: AtlasKeychainUpdate
+    }
+
+    private struct StorageKey: Hashable {
+        let service: String
+        let account: String
+    }
+
+    private var values: [StorageKey: Data] = [:]
+    private(set) var addedItems: [AtlasKeychainItem] = []
+    private(set) var updatedItems: [UpdateCall] = []
+
+    func add(_ item: AtlasKeychainItem) -> OSStatus {
+        addedItems.append(item)
+        let key = StorageKey(service: item.service, account: item.account)
+        guard values[key] == nil else { return errSecDuplicateItem }
+        values[key] = item.valueData
+        return errSecSuccess
+    }
+
+    func copyMatching(_ query: AtlasKeychainQuery) -> AtlasKeychainCopyResult {
+        let key = StorageKey(service: query.service, account: query.account)
+        guard let value = values[key] else {
+            return AtlasKeychainCopyResult(
+                status: errSecItemNotFound,
+                valueData: nil
+            )
+        }
+        return AtlasKeychainCopyResult(status: errSecSuccess, valueData: value)
+    }
+
+    func update(
+        _ query: AtlasKeychainQuery,
+        with attributes: AtlasKeychainUpdate
+    ) -> OSStatus {
+        updatedItems.append(UpdateCall(query: query, attributes: attributes))
+        return errSecSuccess
+    }
+
+    func delete(_ query: AtlasKeychainQuery) -> OSStatus {
+        let key = StorageKey(service: query.service, account: query.account)
+        return values.removeValue(forKey: key) == nil
+            ? errSecItemNotFound
+            : errSecSuccess
+    }
+
+    func setRawValue(_ value: Data, service: String, account: String) {
+        values[StorageKey(service: service, account: account)] = value
     }
 }

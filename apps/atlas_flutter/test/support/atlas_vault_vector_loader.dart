@@ -85,3 +85,19 @@ List<Object?> atlasVaultList(Object? value) {
   }
   return value.cast<Object?>();
 }
+
+Uint8List loadAtlasVaultDeviceIdentitySecretBytes(
+  Map<String, Object?> vector,
+  String deviceName,
+) {
+  final device = atlasVaultObject(vector[deviceName]);
+  final encoded = device['secret_bundle_canonical_json_b64'];
+  if (encoded is! String) {
+    throw StateError('AtlasVault device identity vector is invalid.');
+  }
+  try {
+    return Uint8List.fromList(base64Decode(encoded));
+  } on FormatException {
+    throw StateError('AtlasVault device identity vector is invalid.');
+  }
+}

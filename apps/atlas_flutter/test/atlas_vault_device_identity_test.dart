@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
+import 'package:atlas/atlas_vault_android.dart' as android;
+import 'package:atlas/atlas_vault_windows.dart' as windows;
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_vector_loader.dart';
@@ -174,6 +177,261 @@ void main() {
       }
     }
   });
+
+  group('explicit device identity custody', () {
+    test('construction performs no call and generation is explicit', () async {
+      final store = _FakeDeviceIdentitySecretStore();
+      var generationCount = 0;
+      final custody = AtlasDeviceIdentityCustody(
+        store: store,
+        identityGenerator: () async {
+          generationCount += 1;
+          return _identityFromVector(root, 'device_a');
+        },
+      );
+
+      expect(store.callCount, 0);
+      expect(generationCount, 0);
+      expect(custody.toString(), isNot(contains('signing_private')));
+
+      final descriptor = await custody.createPrimaryIdentity();
+
+      expect(generationCount, 1);
+      expect(store.createCount, 1);
+      expect(store.loadCount, 1);
+      expect(
+        store.createdBytes,
+        loadAtlasVaultDeviceIdentitySecretBytes(root, 'device_a'),
+      );
+      expect(
+        descriptor.toJson(),
+        atlasVaultObject(atlasVaultObject(root['device_a'])['descriptor']),
+      );
+    });
+
+    test('create-only collision preserves the installed identity', () async {
+      final installed = loadAtlasVaultDeviceIdentitySecretBytes(
+        root,
+        'device_a',
+      );
+      final store = _FakeDeviceIdentitySecretStore(initialValue: installed);
+      final custody = AtlasDeviceIdentityCustody(
+        store: store,
+        identityGenerator: () => _identityFromVector(root, 'device_b'),
+      );
+
+      await expectLater(
+        custody.createPrimaryIdentity(),
+        throwsA(isA<AtlasVaultDeviceIdentityCustodyException>()),
+      );
+      expect(await store.loadPrimaryIdentity(), installed);
+    });
+
+    test('load strictly rederives both keys and the device ID', () async {
+      final installed = loadAtlasVaultDeviceIdentitySecretBytes(
+        root,
+        'device_a',
+      );
+      final store = _FakeDeviceIdentitySecretStore(initialValue: installed);
+      final custody = AtlasDeviceIdentityCustody(store: store);
+
+      final descriptor = await custody.loadPrimaryIdentity();
+      expect(
+        descriptor?.toJson(),
+        atlasVaultObject(atlasVaultObject(root['device_a'])['descriptor']),
+      );
+
+      installed.fillRange(0, installed.length, 0);
+      final second = await custody.loadPrimaryIdentity();
+      expect(second?.deviceId, descriptor?.deviceId);
+    });
+
+    test('mismatched loaded device ID fails with a redacted error', () async {
+      final secret = _clone(
+        atlasVaultObject(atlasVaultObject(root['device_a'])['secret_bundle']),
+      )..['device_id'] = atlasVaultObject(root['device_b'])['device_id'];
+      final privateSentinel = secret['signing_private_key']! as String;
+      final store = _FakeDeviceIdentitySecretStore(
+        initialValue: Uint8List.fromList(utf8.encode(jsonEncode(secret))),
+      );
+      final custody = AtlasDeviceIdentityCustody(store: store);
+
+      await expectLater(
+        custody.loadPrimaryIdentity(),
+        throwsA(
+          isA<AtlasVaultDeviceIdentityCustodyException>().having(
+            (error) => error.toString(),
+            'description',
+            isNot(contains(privateSentinel)),
+          ),
+        ),
+      );
+    });
+
+    test('delete is idempotent and contains delegates explicitly', () async {
+      final store = _FakeDeviceIdentitySecretStore(
+        initialValue: loadAtlasVaultDeviceIdentitySecretBytes(root, 'device_a'),
+      );
+      final custody = AtlasDeviceIdentityCustody(store: store);
+
+      expect(await custody.containsPrimaryIdentity(), isTrue);
+      await custody.deletePrimaryIdentity();
+      await custody.deletePrimaryIdentity();
+      expect(await custody.containsPrimaryIdentity(), isFalse);
+      expect(store.deleteCount, 2);
+    });
+  });
+
+  group('platform device identity adapters', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    test(
+      'Android adapter uses the exact create/load/contains/delete methods',
+      () async {
+        await _expectPlatformAdapterContract(
+          channelName: android.atlasVaultAndroidMethodChannelName,
+          createStore: (channel) =>
+              android.AtlasAndroidDeviceIdentitySecretStore(channel: channel),
+          expectedException: isA<android.AtlasVaultAndroidStorageException>(),
+          canonicalBytes: loadAtlasVaultDeviceIdentitySecretBytes(
+            root,
+            'device_a',
+          ),
+        );
+      },
+    );
+
+    test(
+      'Windows adapter uses the exact create/load/contains/delete methods',
+      () async {
+        await _expectPlatformAdapterContract(
+          channelName: windows.atlasVaultWindowsMethodChannelName,
+          createStore: (channel) =>
+              windows.AtlasWindowsDeviceIdentitySecretStore(channel: channel),
+          expectedException: isA<windows.AtlasVaultWindowsStorageException>(),
+          canonicalBytes: loadAtlasVaultDeviceIdentitySecretBytes(
+            root,
+            'device_a',
+          ),
+        );
+      },
+    );
+  });
+}
+
+Future<AtlasVaultDeviceIdentity> _identityFromVector(
+  Map<String, Object?> root,
+  String deviceName,
+) {
+  final vector = atlasVaultObject(root[deviceName]);
+  final descriptor = atlasVaultObject(vector['descriptor']);
+  return AtlasVaultDeviceIdentity.fromPrivateKeys(
+    signingPrivateSeed: _bytes(vector['signing_private_seed']),
+    agreementPrivateKey: _bytes(vector['agreement_private_key']),
+    createdAt: descriptor['created_at']! as String,
+    keyEpoch: descriptor['key_epoch']! as int,
+  );
+}
+
+Future<void> _expectPlatformAdapterContract({
+  required String channelName,
+  required AtlasDeviceIdentitySecretStore Function(MethodChannel channel)
+  createStore,
+  required Matcher expectedException,
+  required Uint8List canonicalBytes,
+}) async {
+  final channel = MethodChannel(channelName);
+  final calls = <MethodCall>[];
+  final platformBytes = Uint8List.fromList(canonicalBytes);
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(channel, (call) async {
+    calls.add(call);
+    switch (call.method) {
+      case 'createDeviceIdentitySecret':
+      case 'deleteDeviceIdentitySecret':
+        return null;
+      case 'loadDeviceIdentitySecret':
+        return platformBytes;
+      case 'containsDeviceIdentitySecret':
+        return true;
+    }
+    throw PlatformException(code: 'unexpected');
+  });
+  addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  final store = createStore(channel);
+
+  await store.createPrimaryIdentity(canonicalBytes);
+  final loaded = await store.loadPrimaryIdentity();
+  expect(loaded, canonicalBytes);
+  platformBytes.fillRange(0, platformBytes.length, 0);
+  expect(loaded, canonicalBytes);
+  expect(await store.containsPrimaryIdentity(), isTrue);
+  await store.deletePrimaryIdentity();
+
+  expect(calls.map((call) => call.method), <String>[
+    'createDeviceIdentitySecret',
+    'loadDeviceIdentitySecret',
+    'containsDeviceIdentitySecret',
+    'deleteDeviceIdentitySecret',
+  ]);
+  expect((calls.first.arguments! as Map<Object?, Object?>).keys, <Object?>[
+    'secret_bytes',
+  ]);
+  expect(calls[1].arguments, isNull);
+  expect(calls[2].arguments, isNull);
+  expect(calls[3].arguments, isNull);
+
+  final oversized = Uint8List(16 * 1024 + 1);
+  await expectLater(
+    store.createPrimaryIdentity(oversized),
+    throwsA(expectedException),
+  );
+  expect(calls, hasLength(4));
+}
+
+final class _FakeDeviceIdentitySecretStore
+    implements AtlasDeviceIdentitySecretStore {
+  _FakeDeviceIdentitySecretStore({Uint8List? initialValue})
+    : _value = initialValue == null ? null : Uint8List.fromList(initialValue);
+
+  Uint8List? _value;
+  Uint8List? createdBytes;
+  int createCount = 0;
+  int loadCount = 0;
+  int containsCount = 0;
+  int deleteCount = 0;
+
+  int get callCount => createCount + loadCount + containsCount + deleteCount;
+
+  @override
+  Future<void> createPrimaryIdentity(Uint8List canonicalSecretBundle) async {
+    createCount += 1;
+    if (_value != null) {
+      throw const AtlasVaultDeviceIdentityCustodyException();
+    }
+    createdBytes = Uint8List.fromList(canonicalSecretBundle);
+    _value = Uint8List.fromList(canonicalSecretBundle);
+  }
+
+  @override
+  Future<Uint8List?> loadPrimaryIdentity() async {
+    loadCount += 1;
+    return _value == null ? null : Uint8List.fromList(_value!);
+  }
+
+  @override
+  Future<bool> containsPrimaryIdentity() async {
+    containsCount += 1;
+    return _value != null;
+  }
+
+  @override
+  Future<void> deletePrimaryIdentity() async {
+    deleteCount += 1;
+    _value?.fillRange(0, _value!.length, 0);
+    _value = null;
+  }
 }
 
 Uint8List _bytes(Object? value) {
