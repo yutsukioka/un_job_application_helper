@@ -95,6 +95,48 @@ def test_offer_and_acceptance_match_exact_vector_bytes_and_signatures() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("vector_key", "decoder"),
+    [
+        (
+            "signed_offer_canonical_json_b64",
+            SignedPairingOffer.from_canonical_bytes,
+        ),
+        (
+            "signed_acceptance_canonical_json_b64",
+            SignedPairingAcceptance.from_canonical_bytes,
+        ),
+    ],
+)
+def test_received_signed_envelopes_require_exact_canonical_bytes(
+    vector_key: str,
+    decoder,
+) -> None:
+    pairing = load_vector()["pairing"]
+    canonical = decode64(pairing[vector_key])
+    decoded = decoder(canonical)
+    assert decoded.canonical_bytes() == canonical
+
+    parsed = json.loads(canonical.decode("utf-8"))
+    reordered = json.dumps(
+        dict(reversed(list(parsed.items()))),
+        separators=(",", ":"),
+    ).encode("utf-8")
+    first_key, first_value = next(iter(parsed.items()))
+    duplicate = (
+        b"{"
+        + json.dumps(first_key).encode("utf-8")
+        + b":"
+        + json.dumps(first_value, separators=(",", ":")).encode("utf-8")
+        + b","
+        + canonical[1:]
+    )
+
+    for noncanonical in (canonical + b"\n", reordered, duplicate):
+        with pytest.raises(PairingError, match="pairing verification failed"):
+            decoder(noncanonical)
+
+
 def test_shared_secret_transcript_session_and_proofs_match_vector() -> None:
     root = load_vector()
     pairing = root["pairing"]

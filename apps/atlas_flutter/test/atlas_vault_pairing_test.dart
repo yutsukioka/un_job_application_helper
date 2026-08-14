@@ -59,6 +59,39 @@ void main() {
     },
   );
 
+  test('received signed envelopes require exact canonical bytes', () {
+    final offerBytes = _bytes(pairing['signed_offer_canonical_json_b64']);
+    final acceptanceBytes = _bytes(
+      pairing['signed_acceptance_canonical_json_b64'],
+    );
+
+    expect(
+      AtlasVaultSignedPairingOffer.fromCanonicalBytes(
+        offerBytes,
+      ).canonicalBytes(),
+      offerBytes,
+    );
+    expect(
+      AtlasVaultSignedPairingAcceptance.fromCanonicalBytes(
+        acceptanceBytes,
+      ).canonicalBytes(),
+      acceptanceBytes,
+    );
+
+    for (final variant in _noncanonicalJsonVariants(offerBytes)) {
+      expect(
+        () => AtlasVaultSignedPairingOffer.fromCanonicalBytes(variant),
+        throwsA(isA<AtlasVaultPairingException>()),
+      );
+    }
+    for (final variant in _noncanonicalJsonVariants(acceptanceBytes)) {
+      expect(
+        () => AtlasVaultSignedPairingAcceptance.fromCanonicalBytes(variant),
+        throwsA(isA<AtlasVaultPairingException>()),
+      );
+    }
+  });
+
   test('shared secret, transcript, session, and proofs match vector', () async {
     final offer = AtlasVaultSignedPairingOffer.fromJson(
       atlasVaultObject(pairing['signed_offer']),
@@ -118,6 +151,16 @@ void main() {
       _hexBytes(pairing['transcript_sha256']! as String),
     );
     expect(guard.consumedCount, 1);
+
+    final returnedSessionKey = verified.sessionKey;
+    verified.destroy();
+    expect(verified.sessionKey, Uint8List(32));
+    expect(
+      verified.transcriptSha256,
+      _hexBytes(pairing['transcript_sha256']! as String),
+    );
+    expect(returnedSessionKey, _bytes(pairing['hkdf_session_key']));
+    returnedSessionKey.fillRange(0, returnedSessionKey.length, 0);
 
     await expectLater(
       verifyAtlasVaultPairingTranscript(
@@ -467,6 +510,23 @@ Uint8List _hexBytes(String value) {
     for (var index = 0; index < value.length; index += 2)
       int.parse(value.substring(index, index + 2), radix: 16),
   ]);
+}
+
+List<Uint8List> _noncanonicalJsonVariants(Uint8List canonical) {
+  final text = utf8.decode(canonical, allowMalformed: false);
+  final parsed = atlasVaultObject(jsonDecode(text));
+  final reversed = <String, Object?>{
+    for (final entry in parsed.entries.toList().reversed)
+      entry.key: entry.value,
+  };
+  final first = parsed.entries.first;
+  final duplicate =
+      '{${jsonEncode(first.key)}:${jsonEncode(first.value)},${text.substring(1)}';
+  return <Uint8List>[
+    Uint8List.fromList(utf8.encode('$text\n')),
+    Uint8List.fromList(utf8.encode(jsonEncode(reversed))),
+    Uint8List.fromList(utf8.encode(duplicate)),
+  ];
 }
 
 Map<String, Object?> _clone(Map<String, Object?> value) {
