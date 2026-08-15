@@ -68,8 +68,13 @@ export 'src/atlas_vault/windows_storage.dart'
         AtlasVaultWindowsStorageException,
         AtlasWindowsDeviceIdentitySecretStore,
         AtlasWindowsEncryptedDocumentTransport,
+        AtlasWindowsPairingArtifactStageStore,
+        AtlasWindowsPairingArtifactTransport,
+        AtlasWindowsPairingReplayStore,
+        AtlasWindowsPairingTransactionStore,
         AtlasWindowsProtectedMigrationJournalStore,
         AtlasWindowsProtectedRecoveryImportJournalStore,
         AtlasWindowsSelectedVaultStore,
+        AtlasWindowsTrustedDeviceRegistryStore,
         AtlasWindowsVaultLocalStoreIO,
         AtlasWindowsVaultSecureKeyStore;

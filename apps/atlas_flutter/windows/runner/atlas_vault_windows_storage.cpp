@@ -39,6 +39,8 @@ constexpr size_t kProtectedMetadataBlobMaximumLength =
     kProtectedMetadataPlaintextMaximumLength + 1024 * 1024;
 constexpr size_t kSelectedVaultPlaintextMaximumLength = 256;
 constexpr size_t kDeviceIdentityPlaintextMaximumLength = 16 * 1024;
+constexpr size_t kPairingStatePlaintextMaximumLength = 2 * 1024 * 1024;
+constexpr size_t kPairingTransactionPlaintextMaximumLength = 64 * 1024;
 constexpr size_t kProtectedBlobEnvelopeFixedLength = 8 + 4 + 2 + 4 + 4 + 32;
 constexpr char kProtectedBlobEnvelopeMagic[] = "AVWBLB01";
 constexpr uint32_t kProtectedBlobEnvelopeVersion = 1;
@@ -47,6 +49,9 @@ constexpr char kMigrationJournalPurpose[] =
 constexpr char kRecoveryImportPurpose[] = "recovery-import";
 constexpr char kSelectedVaultPurpose[] = "selected-vault";
 constexpr char kDeviceIdentityPurpose[] = "device-identity";
+constexpr char kTrustedDevicesPurpose[] = "trusted-devices";
+constexpr char kPairingReplayPurpose[] = "pairing-replay";
+constexpr char kPairingTransactionPurpose[] = "pairing-transaction";
 constexpr char kCapabilityProbeVaultId[] = "capability_probe_v1";
 
 enum class OperationResult {
@@ -145,6 +150,8 @@ struct ProtectedMetadataPaths {
   std::wstring migrations_directory;
   std::wstring imports_directory;
   std::wstring selection_directory;
+  std::wstring pairing_directory;
+  std::wstring pairing_staging_directory;
   std::wstring lock_directory;
   std::wstring migration_journal_path;
   std::wstring migration_lock_path;
@@ -154,6 +161,13 @@ struct ProtectedMetadataPaths {
   std::wstring selection_lock_path;
   std::wstring device_identity_path;
   std::wstring device_identity_lock_path;
+  std::wstring trusted_devices_path;
+  std::wstring trusted_devices_lock_path;
+  std::wstring pairing_replay_path;
+  std::wstring pairing_replay_lock_path;
+  std::wstring pairing_transaction_path;
+  std::wstring pairing_transaction_lock_path;
+  std::wstring pairing_staging_lock_path;
 };
 
 struct StorageCapabilities {
@@ -415,6 +429,9 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
   output->migrations_directory = JoinPath(version, L"migrations");
   output->imports_directory = JoinPath(version, L"imports");
   output->selection_directory = JoinPath(version, L"selection");
+  output->pairing_directory = JoinPath(version, L"pairing");
+  output->pairing_staging_directory =
+      JoinPath(output->pairing_directory, L"staged");
   output->lock_directory = JoinPath(version, L"locks");
   if (!EnsureSafeDirectory(organization) ||
       !EnsureSafeDirectory(atlas_vault) || !EnsureSafeDirectory(version) ||
@@ -422,6 +439,8 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
       !EnsureSafeDirectory(output->migrations_directory) ||
       !EnsureSafeDirectory(output->imports_directory) ||
       !EnsureSafeDirectory(output->selection_directory) ||
+      !EnsureSafeDirectory(output->pairing_directory) ||
+      !EnsureSafeDirectory(output->pairing_staging_directory) ||
       !EnsureSafeDirectory(output->lock_directory)) {
     return false;
   }
@@ -444,6 +463,20 @@ bool PrepareProtectedMetadataPaths(ProtectedMetadataPaths* output) {
       JoinPath(output->device_directory, L"device-identity.bin");
   output->device_identity_lock_path =
       JoinPath(output->lock_directory, L"device-identity.lock");
+  output->trusted_devices_path =
+      JoinPath(output->pairing_directory, L"trusted-devices.bin");
+  output->trusted_devices_lock_path =
+      JoinPath(output->lock_directory, L"trusted-devices.lock");
+  output->pairing_replay_path =
+      JoinPath(output->pairing_directory, L"pairing-replay.bin");
+  output->pairing_replay_lock_path =
+      JoinPath(output->lock_directory, L"pairing-replay.lock");
+  output->pairing_transaction_path =
+      JoinPath(output->pairing_directory, L"pairing-transaction.bin");
+  output->pairing_transaction_lock_path =
+      JoinPath(output->lock_directory, L"pairing-transaction.lock");
+  output->pairing_staging_lock_path =
+      JoinPath(output->lock_directory, L"pairing-staging.lock");
   return true;
 }
 
@@ -622,6 +655,20 @@ bool IsLowerSha256(const std::string& value) {
   return true;
 }
 
+bool IsPairingArtifactKind(const std::string& value) {
+  return value == "offer" || value == "acceptance" ||
+         value == "delivery" || value == "acknowledgement";
+}
+
+std::wstring PairingArtifactPath(const ProtectedMetadataPaths& paths,
+                                 const std::string& kind) {
+  if (!IsPairingArtifactKind(kind)) {
+    return std::wstring();
+  }
+  return JoinPath(paths.pairing_staging_directory,
+                  WidenAscii(kind) + L".atlaspair");
+}
+
 OperationResult AtomicReplace(const std::wstring& directory,
                               const std::wstring& destination,
                               const std::vector<uint8_t>& bytes,
@@ -688,10 +735,15 @@ OperationResult DeleteRegularFile(const std::wstring& path) {
                                             : OperationResult::kFailed;
 }
 
-DocumentDialogResult SelectEncryptedExportSource(
+DocumentDialogResult SelectDocumentSource(
     HWND owner_window,
+    const wchar_t* filter_name,
+    const wchar_t* filter_pattern,
+    const wchar_t* default_extension,
     std::wstring* selected_path_output) {
-  if (owner_window == nullptr || selected_path_output == nullptr) {
+  if (owner_window == nullptr || filter_name == nullptr ||
+      filter_pattern == nullptr || default_extension == nullptr ||
+      selected_path_output == nullptr) {
     return DocumentDialogResult::kFailed;
   }
   selected_path_output->clear();
@@ -712,7 +764,7 @@ DocumentDialogResult SelectEncryptedExportSource(
         FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT | FOS_NOCHANGEDIR);
   }
   const COMDLG_FILTERSPEC filters[] = {
-      {L"AtlasVault encrypted backup (*.atlasvault)", L"*.atlasvault"},
+      {filter_name, filter_pattern},
   };
   if (SUCCEEDED(status)) {
     status = dialog->SetFileTypes(1, filters);
@@ -721,7 +773,7 @@ DocumentDialogResult SelectEncryptedExportSource(
     status = dialog->SetFileTypeIndex(1);
   }
   if (SUCCEEDED(status)) {
-    status = dialog->SetDefaultExtension(L"atlasvault");
+    status = dialog->SetDefaultExtension(default_extension);
   }
   if (FAILED(status)) {
     dialog->Release();
@@ -760,10 +812,16 @@ DocumentDialogResult SelectEncryptedExportSource(
              : DocumentDialogResult::kFailed;
 }
 
-DocumentDialogResult SelectEncryptedExportDestination(
+DocumentDialogResult SelectDocumentDestination(
     HWND owner_window,
+    const wchar_t* filter_name,
+    const wchar_t* filter_pattern,
+    const wchar_t* default_extension,
+    const wchar_t* suggested_filename,
     std::wstring* destination_path) {
-  if (owner_window == nullptr || destination_path == nullptr) {
+  if (owner_window == nullptr || filter_name == nullptr ||
+      filter_pattern == nullptr || default_extension == nullptr ||
+      suggested_filename == nullptr || destination_path == nullptr) {
     return DocumentDialogResult::kFailed;
   }
   destination_path->clear();
@@ -784,7 +842,7 @@ DocumentDialogResult SelectEncryptedExportDestination(
         FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_OVERWRITEPROMPT);
   }
   const COMDLG_FILTERSPEC filters[] = {
-      {L"AtlasVault encrypted backup (*.atlasvault)", L"*.atlasvault"},
+      {filter_name, filter_pattern},
   };
   if (SUCCEEDED(status)) {
     status = dialog->SetFileTypes(1, filters);
@@ -793,11 +851,10 @@ DocumentDialogResult SelectEncryptedExportDestination(
     status = dialog->SetFileTypeIndex(1);
   }
   if (SUCCEEDED(status)) {
-    status = dialog->SetDefaultExtension(L"atlasvault");
+    status = dialog->SetDefaultExtension(default_extension);
   }
   if (SUCCEEDED(status)) {
-    status = dialog->SetFileName(
-        L"AtlasVault-Encrypted-Backup.atlasvault");
+    status = dialog->SetFileName(suggested_filename);
   }
   if (FAILED(status)) {
     dialog->Release();
@@ -1745,6 +1802,17 @@ void WipeSensitiveArgument(const std::string& method,
     key = "secret_bytes";
   } else if (method == "saveEncryptedExport") {
     key = "export_bytes";
+  } else if (method == "savePairingArtifact" ||
+             method == "createStagedPairingArtifact") {
+    key = "artifact_bytes";
+  } else if (method == "createTrustedDeviceRegistry" ||
+             method == "replaceTrustedDeviceRegistry" ||
+             method == "createPairingReplayStore" ||
+             method == "replacePairingReplayStore") {
+    key = "state_bytes";
+  } else if (method == "createPairingTransaction" ||
+             method == "replacePairingTransaction") {
+    key = "transaction_bytes";
   } else if (method == "createPlaintextMigrationJournal" ||
              method == "replacePlaintextMigrationJournal" ||
              method == "createRecoveryImportJournal" ||
@@ -2023,6 +2091,14 @@ void AtlasVaultWindowsStorage::HandleMethodCall(
     HandleSaveEncryptedExport(call, std::move(result));
     return;
   }
+  if (call.method_name() == "pickPairingArtifact") {
+    HandlePickPairingArtifact(call, std::move(result));
+    return;
+  }
+  if (call.method_name() == "savePairingArtifact") {
+    HandleSavePairingArtifact(call, std::move(result));
+    return;
+  }
   std::unique_ptr<flutter::EncodableValue> arguments;
   if (call.arguments() != nullptr) {
     arguments =
@@ -2042,7 +2118,9 @@ void AtlasVaultWindowsStorage::HandlePickEncryptedExport(
 
   std::wstring selected_path;
   const DocumentDialogResult dialog_result =
-      SelectEncryptedExportSource(owner_window_, &selected_path);
+      SelectDocumentSource(
+          owner_window_, L"AtlasVault encrypted backup (*.atlasvault)",
+          L"*.atlasvault", L"atlasvault", &selected_path);
   if (dialog_result == DocumentDialogResult::kCancelled) {
     document_operation_pending_.store(false);
     result->Success(flutter::EncodableValue());
@@ -2097,7 +2175,10 @@ void AtlasVaultWindowsStorage::HandleSaveEncryptedExport(
   std::vector<uint8_t> encrypted_bytes(*supplied);
   std::wstring destination_path;
   const DocumentDialogResult dialog_result =
-      SelectEncryptedExportDestination(owner_window_, &destination_path);
+      SelectDocumentDestination(
+          owner_window_, L"AtlasVault encrypted backup (*.atlasvault)",
+          L"*.atlasvault", L"atlasvault",
+          L"AtlasVault-Encrypted-Backup.atlasvault", &destination_path);
   if (dialog_result == DocumentDialogResult::kCancelled) {
     Wipe(&encrypted_bytes);
     document_operation_pending_.store(false);
@@ -2136,6 +2217,71 @@ void AtlasVaultWindowsStorage::ExecuteSaveEncryptedExport(
     return;
   }
   result->Success(flutter::EncodableValue(true));
+}
+
+void AtlasVaultWindowsStorage::HandlePickPairingArtifact(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (!HasNoArguments(call) || document_operation_pending_.exchange(true)) {
+    ReturnFailure(std::move(result));
+    return;
+  }
+  std::wstring selected_path;
+  const DocumentDialogResult dialog_result = SelectDocumentSource(
+      owner_window_, L"AtlasVault pairing artifact (*.atlaspair)",
+      L"*.atlaspair", L"atlaspair", &selected_path);
+  if (dialog_result == DocumentDialogResult::kCancelled) {
+    document_operation_pending_.store(false);
+    result->Success(flutter::EncodableValue());
+    return;
+  }
+  if (dialog_result != DocumentDialogResult::kSelected) {
+    document_operation_pending_.store(false);
+    ReturnFailure(std::move(result));
+    return;
+  }
+  if (!worker_->EnqueuePick(std::move(selected_path), std::move(result))) {
+    document_operation_pending_.store(false);
+  }
+}
+
+void AtlasVaultWindowsStorage::HandleSavePairingArtifact(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const flutter::EncodableMap* arguments =
+      ExactArguments(call, {"artifact_bytes"});
+  const std::vector<uint8_t>* supplied =
+      arguments == nullptr ? nullptr
+                           : BytesArgument(*arguments, "artifact_bytes");
+  if (supplied == nullptr || supplied->empty() ||
+      supplied->size() > kEncryptedDocumentMaximumLength ||
+      document_operation_pending_.exchange(true)) {
+    ReturnFailure(std::move(result));
+    return;
+  }
+  std::vector<uint8_t> artifact_bytes(*supplied);
+  std::wstring destination_path;
+  const DocumentDialogResult dialog_result = SelectDocumentDestination(
+      owner_window_, L"AtlasVault pairing artifact (*.atlaspair)",
+      L"*.atlaspair", L"atlaspair", L"AtlasVault-Pairing.atlaspair",
+      &destination_path);
+  if (dialog_result == DocumentDialogResult::kCancelled) {
+    Wipe(&artifact_bytes);
+    document_operation_pending_.store(false);
+    result->Success(flutter::EncodableValue(false));
+    return;
+  }
+  if (dialog_result != DocumentDialogResult::kSelected) {
+    Wipe(&artifact_bytes);
+    document_operation_pending_.store(false);
+    ReturnFailure(std::move(result));
+    return;
+  }
+  if (!worker_->EnqueueSave(std::move(destination_path),
+                            std::move(artifact_bytes),
+                            std::move(result))) {
+    document_operation_pending_.store(false);
+  }
 }
 
 void AtlasVaultWindowsStorage::ExecuteMethodCall(
@@ -2189,8 +2335,27 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       method == "loadDeviceIdentitySecret" ||
       method == "containsDeviceIdentitySecret" ||
       method == "deleteDeviceIdentitySecret";
+  const bool trusted_devices_method =
+      method == "readTrustedDeviceRegistry" ||
+      method == "createTrustedDeviceRegistry" ||
+      method == "replaceTrustedDeviceRegistry";
+  const bool pairing_replay_method =
+      method == "readPairingReplayStore" ||
+      method == "createPairingReplayStore" ||
+      method == "replacePairingReplayStore";
+  const bool pairing_transaction_method =
+      method == "readPairingTransaction" ||
+      method == "createPairingTransaction" ||
+      method == "replacePairingTransaction" ||
+      method == "deletePairingTransaction";
+  const bool pairing_staging_method =
+      method == "readStagedPairingArtifact" ||
+      method == "createStagedPairingArtifact" ||
+      method == "deleteStagedPairingArtifact";
   if (migration_metadata_method || recovery_import_metadata_method ||
-      selected_vault_method || device_identity_method) {
+      selected_vault_method || device_identity_method ||
+      trusted_devices_method || pairing_replay_method ||
+      pairing_transaction_method || pairing_staging_method) {
     ProtectedMetadataPaths paths;
     if (!PrepareProtectedMetadataPaths(&paths)) {
       ReturnFailure(std::move(result));
@@ -2204,7 +2369,15 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
             ? paths.recovery_import_lock_path
         : selected_vault_method
             ? paths.selection_lock_path
-            : paths.device_identity_lock_path;
+        : device_identity_method
+            ? paths.device_identity_lock_path
+        : trusted_devices_method
+            ? paths.trusted_devices_lock_path
+        : pairing_replay_method
+            ? paths.pairing_replay_lock_path
+        : pairing_transaction_method
+            ? paths.pairing_transaction_lock_path
+            : paths.pairing_staging_lock_path;
     if (!lock.Acquire(lock_path)) {
       ReturnFailure(std::move(result));
       return;
@@ -2288,6 +2461,216 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       if (delete_result != OperationResult::kSuccess ||
           InspectRegularFile(paths.device_identity_path) !=
               OperationResult::kNotFound) {
+        ReturnFailure(std::move(result), delete_result);
+        return;
+      }
+      result->Success();
+      return;
+    }
+
+    if (trusted_devices_method || pairing_replay_method ||
+        pairing_transaction_method) {
+      const std::wstring& path =
+          trusted_devices_method
+              ? paths.trusted_devices_path
+          : pairing_replay_method
+              ? paths.pairing_replay_path
+              : paths.pairing_transaction_path;
+      const char* purpose =
+          trusted_devices_method
+              ? kTrustedDevicesPurpose
+          : pairing_replay_method
+              ? kPairingReplayPurpose
+              : kPairingTransactionPurpose;
+      const size_t maximum_length = pairing_transaction_method
+                                        ? kPairingTransactionPlaintextMaximumLength
+                                        : kPairingStatePlaintextMaximumLength;
+      const bool read_method =
+          method == "readTrustedDeviceRegistry" ||
+          method == "readPairingReplayStore" ||
+          method == "readPairingTransaction";
+      const bool create_method =
+          method == "createTrustedDeviceRegistry" ||
+          method == "createPairingReplayStore" ||
+          method == "createPairingTransaction";
+      const bool replace_method =
+          method == "replaceTrustedDeviceRegistry" ||
+          method == "replacePairingReplayStore" ||
+          method == "replacePairingTransaction";
+      if (read_method) {
+        if (!HasNoArguments(call)) {
+          ReturnFailure(std::move(result));
+          return;
+        }
+        std::vector<uint8_t> plaintext;
+        const OperationResult read_result = ReadProtectedMetadata(
+            path, purpose, maximum_length, &plaintext);
+        if (read_result == OperationResult::kNotFound) {
+          result->Success(flutter::EncodableValue());
+          return;
+        }
+        if (read_result != OperationResult::kSuccess) {
+          Wipe(&plaintext);
+          ReturnFailure(std::move(result), read_result);
+          return;
+        }
+        ReturnBytes(std::move(result), &plaintext, true);
+        return;
+      }
+      if (create_method || replace_method) {
+        const std::string bytes_key = pairing_transaction_method
+                                          ? "transaction_bytes"
+                                          : "state_bytes";
+        const flutter::EncodableMap* arguments = ExactArguments(
+            call, replace_method
+                      ? std::vector<std::string>{bytes_key,
+                                                 "expected_sha256"}
+                      : std::vector<std::string>{bytes_key});
+        const std::vector<uint8_t>* supplied =
+            arguments == nullptr
+                ? nullptr
+                : BytesArgument(*arguments, bytes_key);
+        const std::string* expected_sha256 =
+            !replace_method || arguments == nullptr
+                ? nullptr
+                : StringArgument(*arguments, "expected_sha256");
+        if (supplied == nullptr || supplied->empty() ||
+            supplied->size() > maximum_length ||
+            (replace_method &&
+             (expected_sha256 == nullptr ||
+              !IsLowerSha256(*expected_sha256)))) {
+          ReturnFailure(std::move(result));
+          return;
+        }
+        std::vector<uint8_t> plaintext(*supplied);
+        const OperationResult mutation_result =
+            create_method
+                ? CreateProtectedMetadata(paths.pairing_directory, path,
+                                          purpose, plaintext, maximum_length)
+                : ReplaceProtectedMetadata(
+                      paths.pairing_directory, path, purpose, plaintext,
+                      *expected_sha256, maximum_length);
+        Wipe(&plaintext);
+        if (mutation_result != OperationResult::kSuccess) {
+          ReturnFailure(std::move(result), mutation_result);
+          return;
+        }
+        result->Success();
+        return;
+      }
+      if (method == "deletePairingTransaction") {
+        const flutter::EncodableMap* arguments =
+            ExactArguments(call, {"expected_sha256"});
+        const std::string* expected_sha256 =
+            arguments == nullptr
+                ? nullptr
+                : StringArgument(*arguments, "expected_sha256");
+        if (expected_sha256 == nullptr ||
+            !IsLowerSha256(*expected_sha256)) {
+          ReturnFailure(std::move(result));
+          return;
+        }
+        const OperationResult delete_result = DeleteProtectedMetadata(
+            path, purpose, *expected_sha256, false, maximum_length);
+        if (delete_result != OperationResult::kSuccess) {
+          ReturnFailure(std::move(result), delete_result);
+          return;
+        }
+        result->Success();
+        return;
+      }
+    }
+
+    if (pairing_staging_method) {
+      const bool read_method = method == "readStagedPairingArtifact";
+      const bool create_method = method == "createStagedPairingArtifact";
+      const flutter::EncodableMap* arguments = ExactArguments(
+          call, read_method
+                    ? std::vector<std::string>{"kind"}
+                : create_method
+                    ? std::vector<std::string>{"kind", "artifact_bytes"}
+                    : std::vector<std::string>{"kind", "expected_sha256"});
+      const std::string* kind =
+          arguments == nullptr ? nullptr : StringArgument(*arguments, "kind");
+      if (kind == nullptr || !IsPairingArtifactKind(*kind)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      const std::wstring artifact_path = PairingArtifactPath(paths, *kind);
+      if (artifact_path.empty()) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      if (read_method) {
+        std::vector<uint8_t> artifact;
+        const OperationResult read_result = ReadRegularFile(
+            artifact_path, kEncryptedDocumentMaximumLength, &artifact);
+        if (read_result == OperationResult::kNotFound) {
+          result->Success(flutter::EncodableValue());
+          return;
+        }
+        if (read_result != OperationResult::kSuccess || artifact.empty()) {
+          Wipe(&artifact);
+          ReturnFailure(std::move(result), read_result);
+          return;
+        }
+        ReturnBytes(std::move(result), &artifact, true);
+        return;
+      }
+      if (create_method) {
+        const std::vector<uint8_t>* supplied =
+            BytesArgument(*arguments, "artifact_bytes");
+        if (supplied == nullptr || supplied->empty() ||
+            supplied->size() > kEncryptedDocumentMaximumLength) {
+          ReturnFailure(std::move(result));
+          return;
+        }
+        std::vector<uint8_t> artifact(*supplied);
+        const OperationResult create_result = AtomicCreate(
+            paths.pairing_staging_directory, artifact_path, artifact,
+            kEncryptedDocumentMaximumLength);
+        Wipe(&artifact);
+        if (create_result != OperationResult::kSuccess) {
+          ReturnFailure(std::move(result), create_result);
+          return;
+        }
+        result->Success();
+        return;
+      }
+      const std::string* expected_sha256 =
+          StringArgument(*arguments, "expected_sha256");
+      if (expected_sha256 == nullptr ||
+          !IsLowerSha256(*expected_sha256)) {
+        ReturnFailure(std::move(result));
+        return;
+      }
+      std::vector<uint8_t> current;
+      const OperationResult read_result = ReadRegularFile(
+          artifact_path, kEncryptedDocumentMaximumLength, &current);
+      std::array<uint8_t, 32> digest{};
+      const bool digest_ok =
+          read_result == OperationResult::kSuccess && Sha256(current, &digest);
+      const std::string actual_sha256 =
+          digest_ok ? HexLower(digest.data(), digest.size()) : std::string();
+      const bool matches =
+          digest_ok &&
+          ConstantTimeEquals(
+              reinterpret_cast<const uint8_t*>(actual_sha256.data()),
+              actual_sha256.size(),
+              reinterpret_cast<const uint8_t*>(expected_sha256->data()),
+              expected_sha256->size());
+      Wipe(&current);
+      SecureZeroMemory(digest.data(), digest.size());
+      if (!matches) {
+        ReturnFailure(std::move(result),
+                      read_result == OperationResult::kSuccess
+                          ? OperationResult::kStale
+                          : read_result);
+        return;
+      }
+      const OperationResult delete_result = DeleteRegularFile(artifact_path);
+      if (delete_result != OperationResult::kSuccess ||
+          InspectRegularFile(artifact_path) != OperationResult::kNotFound) {
         ReturnFailure(std::move(result), delete_result);
         return;
       }

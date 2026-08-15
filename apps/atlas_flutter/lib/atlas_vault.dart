@@ -18,6 +18,7 @@ export 'src/atlas_vault/key_delivery.dart';
 export 'src/atlas_vault/models.dart';
 export 'src/atlas_vault/payloads.dart';
 export 'src/atlas_vault/pairing.dart';
+export 'src/atlas_vault/pairing_transaction.dart';
 export 'src/atlas_vault/trusted_devices.dart';
 export 'src/atlas_vault/recovery.dart'
     show

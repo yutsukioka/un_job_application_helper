@@ -1,7 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/atlas_vault_windows.dart';
@@ -44,7 +42,59 @@ void main() {
       () => validateAtlasVaultPairingTransition(transaction, backwards),
       throwsA(isA<AtlasVaultPairingTransactionException>()),
     );
+
+    expect(
+      () => AtlasVaultPairingTransaction.fromJson(<String, Object?>{
+        ...transaction.toJson(),
+        'vault_id': '../not-a-vault',
+      }),
+      throwsA(isA<AtlasVaultPairingTransactionException>()),
+    );
+    expect(
+      () => AtlasVaultPairingTransaction.fromCanonicalBytes(
+        Uint8List(atlasVaultMaximumPairingTransactionByteCount + 1),
+      ),
+      throwsA(isA<AtlasVaultPairingTransactionException>()),
+    );
+
+    final copiedSecret = transaction.ephemeralPrivateKey!;
+    expect(copiedSecret, isNot(everyElement(0)));
+    transaction.destroy();
+    expect(transaction.ephemeralPrivateKey, everyElement(0));
+    expect(copiedSecret, isNot(everyElement(0)));
+    copiedSecret.fillRange(0, copiedSecret.length, 0);
   });
+
+  test(
+    'pairing replay adapter accepts the full protected-state bound',
+    () async {
+      final replay = _largeReplayStore();
+      final bytes = replay.canonicalBytes();
+      expect(
+        bytes.length,
+        greaterThan(atlasVaultMaximumPairingTransactionByteCount),
+      );
+      expect(bytes.length, lessThan(atlasVaultMaximumPairingStateByteCount));
+      final recorder = AtlasVaultPairingMethodCallRecorder(
+        channelName: atlasVaultWindowsMethodChannelName,
+      )..install();
+      addTearDown(recorder.uninstall);
+      recorder.handler = (_) async => bytes;
+
+      final restored = await AtlasWindowsPairingReplayStore(
+        channel: recorder.channel,
+      ).read();
+      expect(restored?.entries.length, replay.entries.length);
+      expect(bytes, replay.canonicalBytes());
+
+      recorder.handler = (_) async =>
+          Uint8List(atlasVaultMaximumPairingStateByteCount + 1);
+      await expectLater(
+        AtlasWindowsPairingReplayStore(channel: recorder.channel).read(),
+        throwsA(isA<AtlasVaultPairingStorageException>()),
+      );
+    },
+  );
 
   for (final platform in <String>['android', 'windows']) {
     test(
@@ -134,6 +184,40 @@ void main() {
     );
   }
 
+  test(
+    'tampered protected transaction and wrong staged kind fail closed',
+    () async {
+      final recorder = AtlasVaultPairingMethodCallRecorder(
+        channelName: atlasVaultWindowsMethodChannelName,
+      )..install();
+      addTearDown(recorder.uninstall);
+      final transaction = AtlasVaultPairingTransaction.fromJson(
+        _transactionJson(vector),
+      );
+      final tampered = transaction.canonicalBytes()..last ^= 1;
+      recorder.handler = (call) async {
+        if (call.method == 'readPairingTransaction') return tampered;
+        if (call.method == 'readStagedPairingArtifact') {
+          return _artifactBytes(vector, 'offer');
+        }
+        return null;
+      };
+
+      await expectLater(
+        AtlasWindowsPairingTransactionStore(channel: recorder.channel).read(),
+        throwsA(isA<AtlasVaultPairingStorageException>()),
+      );
+      await expectLater(
+        AtlasWindowsPairingArtifactStageStore(
+          channel: recorder.channel,
+        ).read(AtlasVaultPairingArtifactKind.acceptance),
+        throwsA(isA<AtlasVaultPairingStorageException>()),
+      );
+      tampered.fillRange(0, tampered.length, 0);
+      transaction.destroy();
+    },
+  );
+
   test('platform errors and descriptions expose no path or secret', () async {
     final recorder = AtlasVaultPairingMethodCallRecorder(
       channelName: atlasVaultWindowsMethodChannelName,
@@ -185,11 +269,18 @@ void main() {
     expect(android, contains('noBackupFilesDir'));
     expect(android, contains('ACTION_OPEN_DOCUMENT'));
     expect(android, contains('ACTION_CREATE_DOCUMENT'));
+    expect(android, isNot(contains('takePersistableUriPermission')));
+    expect(android, isNot(contains('FLAG_GRANT_PERSISTABLE_URI_PERMISSION')));
+    expect(android, contains('MAX_PAIRING_STATE_BYTES = 2 * 1024 * 1024'));
     expect(windows, contains('CryptProtectData'));
     expect(windows, contains('CRYPTPROTECT_UI_FORBIDDEN'));
     expect(windows, isNot(contains('CRYPTPROTECT_LOCAL_MACHINE')));
     expect(windows, contains('FOS_DONTADDTORECENT'));
     expect(windows, contains('*.atlaspair'));
+    expect(
+      windows,
+      contains('kPairingStatePlaintextMaximumLength = 2 * 1024 * 1024'),
+    );
   });
 }
 
@@ -273,4 +364,27 @@ Uint8List _artifactBytes(Map<String, Object?> vector, String kind) {
     atlasVaultObject(vector['artifacts'])[kind],
   );
   return Uint8List.fromList(base64Decode(artifact['canonical_b64']! as String));
+}
+
+AtlasVaultPairingReplayStore _largeReplayStore() {
+  return AtlasVaultPairingReplayStore.fromJson(<String, Object?>{
+    'format': 'atlasvault-pairing-replay',
+    'version': 1,
+    'local_device_id': 'avd1-${'a' * 64}',
+    'revision': '43000000-0000-4000-8000-000000000001',
+    'parent_revision': null,
+    'created_at': '2026-08-15T10:00:00Z',
+    'updated_at': '2026-08-15T10:01:00Z',
+    'entries': <Object?>[
+      for (var index = 1; index <= 400; index += 1)
+        <String, Object?>{
+          'kind': 'offer',
+          'object_id':
+              '43000000-0000-4000-8000-${index.toString().padLeft(12, '0')}',
+          'transcript_sha256': 'b' * 64,
+          'consumed_at': '2026-08-15T10:00:00Z',
+          'expires_at': '2026-08-15T10:10:00Z',
+        },
+    ],
+  });
 }

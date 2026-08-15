@@ -47,6 +47,12 @@ class AtlasVaultWindowsStorage {
       std::wstring destination_path,
       std::vector<uint8_t> encrypted_bytes,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void HandlePickPairingArtifact(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void HandleSavePairingArtifact(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
 
   HWND owner_window_;
   std::atomic_bool document_operation_pending_{false};

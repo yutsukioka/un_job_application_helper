@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 @testable import AtlasUI
@@ -27,8 +28,78 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         try journal.create(transaction)
         XCTAssertEqual(try journal.load(), transaction)
         XCTAssertEqual(client.lastAdded?.accessibility, .afterFirstUnlockThisDeviceOnly)
+        XCTAssertEqual(client.lastAdded?.account, "pending-v1")
+        XCTAssertThrowsError(try journal.create(transaction)) { error in
+            XCTAssertEqual(error as? AtlasVaultPairingStateStoreError, .collision)
+        }
+        try journal.replace(
+            transaction,
+            expectedSHA256: transaction.sha256Hex()
+        )
+        XCTAssertThrowsError(
+            try journal.replace(
+                transaction,
+                expectedSHA256: String(repeating: "0", count: 64)
+            )
+        ) { error in
+            XCTAssertEqual(error as? AtlasVaultPairingStateStoreError, .stale)
+        }
         try journal.delete(expectedSHA256: try transaction.sha256Hex())
         XCTAssertNil(try journal.load())
+        client.overwrite(
+            service: type(of: journal).service,
+            account: "pending-v1",
+            data: Data("{}".utf8)
+        )
+        XCTAssertThrowsError(try journal.load())
+
+        XCTAssertThrowsError(
+            try AtlasVaultPairingTransaction.decodeStrict(
+                Data(repeating: 0, count: AtlasVaultPairingTransaction.maximumByteCount + 1)
+            )
+        )
+    }
+
+    func testRegistryAndReplayUseCreateOnlyCASAndVerifyDescriptors() throws {
+        let registry = try AtlasVaultTrustedDeviceRegistry.decodeStrict(
+            try vectorData(key: "trusted_registry_canonical_b64")
+        )
+        let replay = try AtlasVaultPairingReplayStore.decodeStrict(
+            try vectorData(key: "replay_store_canonical_b64")
+        )
+        let client = PairingStateFakeKeychainClient()
+        let registryStore = AtlasKeychainTrustedDeviceRegistryStore(client: client)
+        let replayStore = AtlasKeychainPairingReplayStore(client: client)
+
+        try registryStore.create(registry)
+        XCTAssertEqual(try registryStore.load(), registry)
+        XCTAssertEqual(client.lastAdded?.service, "com.atlasvault.trusted-devices.v1")
+        XCTAssertEqual(client.lastAdded?.account, "state-v1")
+        XCTAssertEqual(client.lastAdded?.accessibility, .afterFirstUnlockThisDeviceOnly)
+        XCTAssertThrowsError(try registryStore.create(registry))
+        try registryStore.replace(
+            registry,
+            expectedSHA256: sha256Hex(try registry.canonicalData())
+        )
+        XCTAssertThrowsError(
+            try registryStore.replace(
+                registry,
+                expectedSHA256: String(repeating: "0", count: 64)
+            )
+        )
+
+        try replayStore.create(replay)
+        XCTAssertEqual(try replayStore.load(), replay)
+        try replayStore.replace(
+            replay,
+            expectedSHA256: sha256Hex(try replay.canonicalData())
+        )
+        XCTAssertThrowsError(
+            try replayStore.replace(
+                replay,
+                expectedSHA256: String(repeating: "0", count: 64)
+            )
+        )
     }
 
     func testSandboxStageIsHashBoundAndCleansUp() throws {
@@ -42,10 +113,25 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             try vectorArtifact(kind: "offer")
         )
         try store.create(artifact)
+        XCTAssertThrowsError(try store.create(artifact))
         XCTAssertEqual(
             try store.read(kind: .offer)?.canonicalData(),
             try artifact.canonicalData()
         )
+        XCTAssertThrowsError(
+            try store.delete(
+                kind: .offer,
+                expectedSHA256: String(repeating: "0", count: 64)
+            )
+        )
+        XCTAssertNotNil(try store.read(kind: .offer))
+
+        let staged = root.appendingPathComponent("offer.atlaspair")
+        var tampered = try Data(contentsOf: staged)
+        tampered[tampered.startIndex] ^= 1
+        try tampered.write(to: staged, options: .atomic)
+        XCTAssertThrowsError(try store.read(kind: .offer))
+        try artifact.canonicalData().write(to: staged, options: .atomic)
         try store.delete(
             kind: .offer,
             expectedSHA256: try artifact.sha256Hex()
@@ -66,8 +152,26 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         return data
     }
 
+    private func vectorData(key: String) throws -> Data {
+        let root = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: vectorURL)
+        ) as? [String: Any]
+        guard
+            let encoded = root?[key] as? String,
+            let data = Data(base64Encoded: encoded)
+        else { throw PairingTransactionTestError.invalidVector }
+        return data
+    }
+
+    private func sha256Hex(_ data: Data) -> String {
+        Data(SHA256.hash(data: data))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     private var vectorURL: URL {
         URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -92,6 +196,10 @@ private final class PairingStateFakeKeychainClient:
 {
     private var values: [String: Data] = [:]
     private(set) var lastAdded: AtlasKeychainItem?
+
+    func overwrite(service: String, account: String, data: Data) {
+        values[Self.key(service: service, account: account)] = data
+    }
 
     func add(_ item: AtlasKeychainItem) -> OSStatus {
         let key = Self.key(service: item.service, account: item.account)

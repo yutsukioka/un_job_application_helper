@@ -86,6 +86,14 @@ internal class AtlasVaultAndroidStorage(
                 beginSaveEncryptedExport(call, result)
                 return
             }
+            "pickPairingArtifact" -> {
+                beginPickPairingArtifact(result)
+                return
+            }
+            "savePairingArtifact" -> {
+                beginSavePairingArtifact(call, result)
+                return
+            }
         }
         executor.execute {
             try {
@@ -115,6 +123,105 @@ internal class AtlasVaultAndroidStorage(
                         containsDeviceIdentitySecret()
                     "deleteDeviceIdentitySecret" -> {
                         deleteDeviceIdentitySecret()
+                        null
+                    }
+                    "readTrustedDeviceRegistry" -> readPairingState(
+                        trustedDeviceRegistryFile(createParent = false),
+                        TRUSTED_DEVICES_PURPOSE,
+                        MAX_PAIRING_STATE_BYTES,
+                    )
+                    "createTrustedDeviceRegistry" -> {
+                        createPairingState(
+                            trustedDeviceRegistryFile(createParent = true),
+                            TRUSTED_DEVICES_PURPOSE,
+                            requiredBytes(call, "state_bytes"),
+                            MAX_PAIRING_STATE_BYTES,
+                        )
+                        null
+                    }
+                    "replaceTrustedDeviceRegistry" -> {
+                        replacePairingState(
+                            trustedDeviceRegistryFile(createParent = false),
+                            TRUSTED_DEVICES_PURPOSE,
+                            requiredBytes(call, "state_bytes"),
+                            requiredString(call, "expected_sha256"),
+                            MAX_PAIRING_STATE_BYTES,
+                        )
+                        null
+                    }
+                    "readPairingReplayStore" -> readPairingState(
+                        pairingReplayFile(createParent = false),
+                        PAIRING_REPLAY_PURPOSE,
+                        MAX_PAIRING_STATE_BYTES,
+                    )
+                    "createPairingReplayStore" -> {
+                        createPairingState(
+                            pairingReplayFile(createParent = true),
+                            PAIRING_REPLAY_PURPOSE,
+                            requiredBytes(call, "state_bytes"),
+                            MAX_PAIRING_STATE_BYTES,
+                        )
+                        null
+                    }
+                    "replacePairingReplayStore" -> {
+                        replacePairingState(
+                            pairingReplayFile(createParent = false),
+                            PAIRING_REPLAY_PURPOSE,
+                            requiredBytes(call, "state_bytes"),
+                            requiredString(call, "expected_sha256"),
+                            MAX_PAIRING_STATE_BYTES,
+                        )
+                        null
+                    }
+                    "readPairingTransaction" -> readPairingState(
+                        pairingTransactionFile(createParent = false),
+                        PAIRING_TRANSACTION_PURPOSE,
+                        MAX_PAIRING_TRANSACTION_BYTES,
+                    )
+                    "createPairingTransaction" -> {
+                        createPairingState(
+                            pairingTransactionFile(createParent = true),
+                            PAIRING_TRANSACTION_PURPOSE,
+                            requiredBytes(call, "transaction_bytes"),
+                            MAX_PAIRING_TRANSACTION_BYTES,
+                        )
+                        null
+                    }
+                    "replacePairingTransaction" -> {
+                        replacePairingState(
+                            pairingTransactionFile(createParent = false),
+                            PAIRING_TRANSACTION_PURPOSE,
+                            requiredBytes(call, "transaction_bytes"),
+                            requiredString(call, "expected_sha256"),
+                            MAX_PAIRING_TRANSACTION_BYTES,
+                        )
+                        null
+                    }
+                    "deletePairingTransaction" -> {
+                        deleteProtectedBlob(
+                            pairingTransactionFile(createParent = false),
+                            PAIRING_TRANSACTION_PURPOSE,
+                            requiredString(call, "expected_sha256"),
+                            allowAbsent = false,
+                            maximumPlaintextBytes = MAX_PAIRING_TRANSACTION_BYTES,
+                        )
+                        null
+                    }
+                    "readStagedPairingArtifact" -> readStagedPairingArtifact(
+                        requiredPairingArtifactKind(call),
+                    )
+                    "createStagedPairingArtifact" -> {
+                        createStagedPairingArtifact(
+                            requiredPairingArtifactKind(call),
+                            requiredBytes(call, "artifact_bytes"),
+                        )
+                        null
+                    }
+                    "deleteStagedPairingArtifact" -> {
+                        deleteStagedPairingArtifact(
+                            requiredPairingArtifactKind(call),
+                            requiredString(call, "expected_sha256"),
+                        )
                         null
                     }
                     "readLocalStore" -> readLocalStore(requiredVaultId(call))
@@ -223,19 +330,32 @@ internal class AtlasVaultAndroidStorage(
         resultCode: Int,
         data: Intent?,
     ): Boolean {
-        if (requestCode != SAVE_DOCUMENT_REQUEST_CODE &&
-            requestCode != PICK_DOCUMENT_REQUEST_CODE
+        if (requestCode !in setOf(
+                SAVE_DOCUMENT_REQUEST_CODE,
+                PICK_DOCUMENT_REQUEST_CODE,
+                SAVE_PAIRING_DOCUMENT_REQUEST_CODE,
+                PICK_PAIRING_DOCUMENT_REQUEST_CODE,
+            )
         ) {
             return false
         }
         val pending = pendingDocumentOperation ?: return true
-        val expectedKind =
-            if (requestCode == PICK_DOCUMENT_REQUEST_CODE) {
+        val expectedKind = if (requestCode == PICK_DOCUMENT_REQUEST_CODE ||
+            requestCode == PICK_PAIRING_DOCUMENT_REQUEST_CODE
+        ) {
                 DocumentOperationKind.PICK
             } else {
                 DocumentOperationKind.SAVE
             }
-        if (pending.kind != expectedKind) {
+        val expectedProfile = if (
+            requestCode == PICK_PAIRING_DOCUMENT_REQUEST_CODE ||
+            requestCode == SAVE_PAIRING_DOCUMENT_REQUEST_CODE
+        ) {
+            DocumentProfile.PAIRING_ARTIFACT
+        } else {
+            DocumentProfile.ENCRYPTED_EXPORT
+        }
+        if (pending.kind != expectedKind || pending.profile != expectedProfile) {
             pendingDocumentOperation = null
             pending.wipeUnclaimedBytes()
             pending.result.error(
@@ -353,6 +473,7 @@ internal class AtlasVaultAndroidStorage(
         pendingDocumentOperation = PendingDocumentOperation(
             result = result,
             kind = DocumentOperationKind.PICK,
+            profile = DocumentProfile.ENCRYPTED_EXPORT,
             bytes = null,
         )
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -415,6 +536,7 @@ internal class AtlasVaultAndroidStorage(
         pendingDocumentOperation = PendingDocumentOperation(
             result = result,
             kind = DocumentOperationKind.SAVE,
+            profile = DocumentProfile.ENCRYPTED_EXPORT,
             bytes = bytes,
         )
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -444,6 +566,108 @@ internal class AtlasVaultAndroidStorage(
         output.use {
             it.write(bytes)
             it.flush()
+        }
+    }
+
+    private fun beginPickPairingArtifact(result: MethodChannel.Result) {
+        beginPickDocument(
+            result = result,
+            profile = DocumentProfile.PAIRING_ARTIFACT,
+            requestCode = PICK_PAIRING_DOCUMENT_REQUEST_CODE,
+            mimeType = PAIRING_ARTIFACT_MIME_TYPE,
+        )
+    }
+
+    private fun beginSavePairingArtifact(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        beginSaveDocument(
+            call = call,
+            result = result,
+            bytesKey = "artifact_bytes",
+            profile = DocumentProfile.PAIRING_ARTIFACT,
+            requestCode = SAVE_PAIRING_DOCUMENT_REQUEST_CODE,
+            mimeType = PAIRING_ARTIFACT_MIME_TYPE,
+            filename = PAIRING_ARTIFACT_FILENAME,
+        )
+    }
+
+    private fun beginPickDocument(
+        result: MethodChannel.Result,
+        profile: DocumentProfile,
+        requestCode: Int,
+        mimeType: String,
+    ) {
+        if (closed || pendingDocumentOperation != null) {
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
+            return
+        }
+        pendingDocumentOperation = PendingDocumentOperation(
+            result = result,
+            kind = DocumentOperationKind.PICK,
+            profile = profile,
+            bytes = null,
+        )
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(mimeType, "application/json", "application/octet-stream"),
+            )
+        }
+        try {
+            activity.startActivityForResult(intent, requestCode)
+        } catch (_: Throwable) {
+            pendingDocumentOperation = null
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
+        }
+    }
+
+    private fun beginSaveDocument(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        bytesKey: String,
+        profile: DocumentProfile,
+        requestCode: Int,
+        mimeType: String,
+        filename: String,
+    ) {
+        if (closed || pendingDocumentOperation != null) {
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
+            return
+        }
+        val supplied = try {
+            requiredBytes(call, bytesKey)
+        } catch (_: Throwable) {
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
+            return
+        }
+        if (supplied.isEmpty() || supplied.size > MAX_DOCUMENT_BYTES) {
+            supplied.fill(0)
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
+            return
+        }
+        val bytes = supplied.copyOf()
+        supplied.fill(0)
+        pendingDocumentOperation = PendingDocumentOperation(
+            result = result,
+            kind = DocumentOperationKind.SAVE,
+            profile = profile,
+            bytes = bytes,
+        )
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mimeType
+            putExtra(Intent.EXTRA_TITLE, filename)
+        }
+        try {
+            activity.startActivityForResult(intent, requestCode)
+        } catch (_: Throwable) {
+            pendingDocumentOperation = null
+            bytes.fill(0)
+            result.error(ERROR_CODE, "AtlasVault Android storage operation failed.", null)
         }
     }
 
@@ -773,6 +997,131 @@ internal class AtlasVaultAndroidStorage(
         ensureSafeAtomicState(file, root)
         AtomicFile(file).delete()
         if (atomicFileExists(file, root)) {
+            throw StorageFailure()
+        }
+    }
+
+    private fun readPairingState(
+        file: File,
+        purpose: String,
+        maximumBytes: Int,
+    ): ByteArray? {
+        val bytes = readProtectedBlob(file, purpose, maximumBytes) ?: return null
+        try {
+            validateCanonicalJsonDocument(bytes, maximumBytes)
+            return bytes.copyOf()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun createPairingState(
+        file: File,
+        purpose: String,
+        suppliedBytes: ByteArray,
+        maximumBytes: Int,
+    ) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(bytes, maximumBytes)
+            createProtectedBlob(file, purpose, bytes, maximumBytes)
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun replacePairingState(
+        file: File,
+        purpose: String,
+        suppliedBytes: ByteArray,
+        expectedSha256: String,
+        maximumBytes: Int,
+    ) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalJsonDocument(bytes, maximumBytes)
+            replaceProtectedBlob(
+                file,
+                purpose,
+                bytes,
+                expectedSha256,
+                maximumBytes,
+            )
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun readStagedPairingArtifact(kind: String): ByteArray? {
+        val file = stagedPairingArtifactFile(kind, createParent = false)
+        val root = atlasVaultRoot(create = false)
+        if (!atomicFileExists(file, root)) {
+            return null
+        }
+        val bytes = readBoundedFile(file, MAX_DOCUMENT_BYTES)
+        try {
+            validateCanonicalPairingArtifact(bytes, kind)
+            return bytes.copyOf()
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    private fun createStagedPairingArtifact(
+        kind: String,
+        suppliedBytes: ByteArray,
+    ) {
+        val bytes = suppliedBytes.copyOf()
+        try {
+            validateCanonicalPairingArtifact(bytes, kind)
+            val file = stagedPairingArtifactFile(kind, createParent = true)
+            atomicWrite(file, bytes, createOnly = true)
+            verifyReadBack(file, bytes, MAX_DOCUMENT_BYTES)
+        } finally {
+            bytes.fill(0)
+            suppliedBytes.fill(0)
+        }
+    }
+
+    private fun deleteStagedPairingArtifact(
+        kind: String,
+        expectedSha256: String,
+    ) {
+        val file = stagedPairingArtifactFile(kind, createParent = false)
+        val root = atlasVaultRoot(create = false)
+        val current = readStagedPairingArtifact(kind) ?: throw StorageFailure()
+        val expectedDigest = decodeSha256(expectedSha256)
+        try {
+            val actualDigest = MessageDigest.getInstance("SHA-256").digest(current)
+            try {
+                if (!MessageDigest.isEqual(actualDigest, expectedDigest)) {
+                    throw StorageFailure()
+                }
+            } finally {
+                actualDigest.fill(0)
+            }
+        } finally {
+            current.fill(0)
+            expectedDigest.fill(0)
+        }
+        ensureSafeAtomicState(file, root)
+        AtomicFile(file).delete()
+        if (atomicFileExists(file, root)) {
+            throw StorageFailure()
+        }
+    }
+
+    private fun validateCanonicalPairingArtifact(bytes: ByteArray, kind: String) {
+        validateCanonicalJsonDocument(bytes, MAX_DOCUMENT_BYTES)
+        val value = parseStrictObject(bytes)
+        requireExactKeys(value, setOf("format", "version", "kind", "payload"))
+        if (value.opt("format") != PAIRING_ARTIFACT_FORMAT ||
+            strictInt(value.opt("version")) != PAIRING_ARTIFACT_VERSION ||
+            value.opt("kind") != kind ||
+            value.opt("payload") !is JSONObject
+        ) {
             throw StorageFailure()
         }
     }
@@ -1446,6 +1795,43 @@ internal class AtlasVaultAndroidStorage(
         }
     }
 
+    private fun trustedDeviceRegistryFile(createParent: Boolean): File {
+        return File(pairingStateRoot(createParent), TRUSTED_DEVICES_FILE).also {
+            ensureContained(it, pairingStateRoot(createParent))
+        }
+    }
+
+    private fun pairingReplayFile(createParent: Boolean): File {
+        return File(pairingStateRoot(createParent), PAIRING_REPLAY_FILE).also {
+            ensureContained(it, pairingStateRoot(createParent))
+        }
+    }
+
+    private fun pairingTransactionFile(createParent: Boolean): File {
+        return File(pairingStateRoot(createParent), PAIRING_TRANSACTION_FILE).also {
+            ensureContained(it, pairingStateRoot(createParent))
+        }
+    }
+
+    private fun stagedPairingArtifactFile(
+        kind: String,
+        createParent: Boolean,
+    ): File {
+        validatePairingArtifactKind(kind)
+        val root = File(pairingStateRoot(createParent), "staged").also {
+            ensureDirectory(it, createParent)
+        }
+        return File(root, "$kind.atlaspair").also {
+            ensureContained(it, root)
+        }
+    }
+
+    private fun pairingStateRoot(create: Boolean): File {
+        return File(atlasVaultRoot(create), "pairing").also {
+            ensureDirectory(it, create)
+        }
+    }
+
     private fun migrationJournalFile(createParent: Boolean): File {
         val root = File(atlasVaultRoot(createParent), "migrations").also {
             ensureDirectory(it, createParent)
@@ -1550,6 +1936,18 @@ internal class AtlasVaultAndroidStorage(
         val value = requiredString(call, "vault_id")
         validateVaultId(value)
         return value
+    }
+
+    private fun requiredPairingArtifactKind(call: MethodCall): String {
+        val value = requiredString(call, "kind")
+        validatePairingArtifactKind(value)
+        return value
+    }
+
+    private fun validatePairingArtifactKind(value: String) {
+        if (value !in PAIRING_ARTIFACT_KINDS) {
+            throw StorageFailure()
+        }
     }
 
     private fun requiredString(call: MethodCall, key: String): String {
@@ -1760,9 +2158,15 @@ internal class AtlasVaultAndroidStorage(
         SAVE,
     }
 
+    private enum class DocumentProfile {
+        ENCRYPTED_EXPORT,
+        PAIRING_ARTIFACT,
+    }
+
     private class PendingDocumentOperation(
         val result: MethodChannel.Result,
         val kind: DocumentOperationKind,
+        val profile: DocumentProfile,
         bytes: ByteArray?,
     ) {
         private var unclaimedBytes: ByteArray? = bytes
@@ -1801,6 +2205,9 @@ internal class AtlasVaultAndroidStorage(
         const val RECOVERY_IMPORT_JOURNAL_PURPOSE = "recovery-import"
         const val SELECTED_VAULT_PURPOSE = "selected-vault"
         const val DEVICE_IDENTITY_PURPOSE = "device-identity"
+        const val TRUSTED_DEVICES_PURPOSE = "trusted-devices"
+        const val PAIRING_REPLAY_PURPOSE = "pairing-replay"
+        const val PAIRING_TRANSACTION_PURPOSE = "pairing-transaction"
         const val SELECTED_VAULT_FORMAT = "atlasvault-android-selected-vault"
         const val SELECTED_VAULT_VERSION = 1
         const val LOCAL_STORE_FORMAT = "atlasvault-local-store"
@@ -1821,17 +2228,29 @@ internal class AtlasVaultAndroidStorage(
         const val MAX_RECOVERY_IMPORT_JOURNAL_BYTES = 64 * 1024
         const val MAX_SELECTED_VAULT_BYTES = 4 * 1024
         const val MAX_DEVICE_IDENTITY_BYTES = 16 * 1024
+        const val MAX_PAIRING_STATE_BYTES = 2 * 1024 * 1024
+        const val MAX_PAIRING_TRANSACTION_BYTES = 64 * 1024
         const val MAX_PROTECTED_ENVELOPE_OVERHEAD = 4 * 1024
         const val MIGRATION_JOURNAL_FILE = "plaintext-private-state.json.enc"
         const val RECOVERY_IMPORT_JOURNAL_FILE = "recovery-import.json.enc"
         const val SELECTED_VAULT_FILE = "selected-vault.json.enc"
         const val DEVICE_IDENTITY_FILE = "device-identity.bin"
+        const val TRUSTED_DEVICES_FILE = "trusted-devices.json.enc"
+        const val PAIRING_REPLAY_FILE = "pairing-replay.json.enc"
+        const val PAIRING_TRANSACTION_FILE = "pairing-transaction.json.enc"
         const val SAVE_DOCUMENT_REQUEST_CODE = 0x4156
         const val PICK_DOCUMENT_REQUEST_CODE = 0x4157
+        const val SAVE_PAIRING_DOCUMENT_REQUEST_CODE = 0x4158
+        const val PICK_PAIRING_DOCUMENT_REQUEST_CODE = 0x4159
         const val ENCRYPTED_EXPORT_MIME_TYPE =
             "application/vnd.atlasvault+json"
         const val ENCRYPTED_EXPORT_FILENAME =
             "AtlasVault-Encrypted-Backup.atlasvault"
+        const val PAIRING_ARTIFACT_MIME_TYPE =
+            "application/vnd.atlasvault.pairing+json"
+        const val PAIRING_ARTIFACT_FILENAME = "AtlasVault-Pairing.atlaspair"
+        const val PAIRING_ARTIFACT_FORMAT = "atlasvault-pairing-artifact"
+        const val PAIRING_ARTIFACT_VERSION = 1
 
         val SUPPORTED_METHODS = setOf(
             "capabilities",
@@ -1843,6 +2262,19 @@ internal class AtlasVaultAndroidStorage(
             "loadDeviceIdentitySecret",
             "containsDeviceIdentitySecret",
             "deleteDeviceIdentitySecret",
+            "readTrustedDeviceRegistry",
+            "createTrustedDeviceRegistry",
+            "replaceTrustedDeviceRegistry",
+            "readPairingReplayStore",
+            "createPairingReplayStore",
+            "replacePairingReplayStore",
+            "readPairingTransaction",
+            "createPairingTransaction",
+            "replacePairingTransaction",
+            "deletePairingTransaction",
+            "readStagedPairingArtifact",
+            "createStagedPairingArtifact",
+            "deleteStagedPairingArtifact",
             "readLocalStore",
             "createLocalStore",
             "replaceLocalStore",
@@ -1860,9 +2292,17 @@ internal class AtlasVaultAndroidStorage(
             "clearSelectedVault",
             "saveEncryptedExport",
             "pickEncryptedExport",
+            "savePairingArtifact",
+            "pickPairingArtifact",
         )
         val VAULT_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,96}$")
         val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
+        val PAIRING_ARTIFACT_KINDS = setOf(
+            "offer",
+            "acceptance",
+            "delivery",
+            "acknowledgement",
+        )
         val RESERVED_VAULT_IDS = setOf(
             "saved_search",
             "saved_job",
