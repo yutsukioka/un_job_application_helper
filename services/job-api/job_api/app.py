@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import stat
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -30,9 +32,10 @@ from jobagg.filters.saved_searches import (
     save_search,
 )
 from jobagg.filters.schemas import VacancySearchRequest
-from jobagg.scoring import load_strategy_signals, score_jobs
+from jobagg.scoring import StrategySignals, score_jobs
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 
 from job_api.config import ApiSettings, load_settings
 from job_api.models import (
@@ -46,6 +49,11 @@ from job_api.models import (
     SearchResponse,
     TrackerConditionalDeleteRequest,
 )
+from job_api.private_access import (
+    PrivateAccessMiddleware,
+    load_private_access_policy,
+    private_access_rejection,
+)
 from job_api.tracker import (
     compare_and_delete_record,
     create_record,
@@ -58,6 +66,11 @@ _CONDITIONAL_DELETE_PATH = re.compile(
     r"^/api/(?:saved-searches/[^/]+|tracker/[^/]+)/conditional-delete$"
 )
 _CONDITIONAL_IDENTIFIER_PREFIX = "~sha256-"
+_MAX_STRATEGY_BYTES = 1024 * 1024
+_STRATEGY_ERROR = "Strategy file is unavailable."
+_STRATEGY_TERM_LINE = re.compile(r"^\s*\d+\.\s*([^\u2b50\n]+?)\s*(?:[\u2b50]+)?\s*$")
+_CCOG_FULL = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\.\d{2}\b")
+_CCOG_FAMILY = re.compile(r"\b\d\.[A-Za-z0-9]\.\d{2}\b")
 
 
 def _conditional_identifier_segment(value: str) -> str:
@@ -72,7 +85,20 @@ def _conditional_identifier_matches(segment: str, expected: str) -> bool:
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    private_access = load_private_access_policy()
+    strategy_root = Path(
+        os.environ.get("JOB_API_STRATEGY_ROOT", settings.repo_root / "private")
+    )
     app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+    app.add_middleware(PrivateAccessMiddleware, policy=private_access)
+    if private_access.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(private_access.cors_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     @app.exception_handler(RequestValidationError)
     async def conditional_delete_validation_error(
@@ -113,7 +139,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if not settings.db_path.exists():
             return {
                 "status": "missing_db",
-                "db_path": str(settings.db_path),
+                "db_path": None,
                 "schema_version": "unknown",
                 "open_jobs": 0,
                 "enabled_sources": 0,
@@ -121,11 +147,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             }
         with sqlite3.connect(settings.db_path) as conn:
             open_jobs = _scalar(conn, "SELECT COUNT(*) FROM jobs WHERE status = 'open'")
-            enabled_sources = _scalar(conn, "SELECT COUNT(DISTINCT source_id) FROM jobs")
+            enabled_sources = _scalar(
+                conn, "SELECT COUNT(DISTINCT source_id) FROM jobs"
+            )
             last_sync_at = _scalar(conn, "SELECT MAX(observed_at) FROM source_runs")
         return {
             "status": "ok",
-            "db_path": str(settings.db_path),
+            "db_path": None,
             "schema_version": "jobagg-sqlite",
             "open_jobs": open_jobs,
             "enabled_sources": enabled_sources,
@@ -133,17 +161,28 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         }
 
     @app.post("/api/search", response_model=SearchResponse)
-    def search(request: SearchRequest) -> SearchResponse:
+    def search(request: SearchRequest, http_request: Request) -> SearchResponse:
+        if request.score_against:
+            rejection = private_access_rejection(private_access, http_request.scope)
+            if rejection is not None:
+                status_code, detail = rejection
+                raise HTTPException(status_code=status_code, detail=detail)
         _require_db(settings.db_path)
         job_request = _to_jobagg_request(request)
-        response = search_collected_jobs(db(), job_request, include_facets=request.include_facets)
+        response = search_collected_jobs(
+            db(), job_request, include_facets=request.include_facets
+        )
         payload = asdict(response)
-        payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
+        payload["facet_labels"] = _facet_labels(
+            settings.db_path, payload.get("facets") or {}
+        )
         if request.score_against:
-            signals = load_strategy_signals(request.score_against)
+            signals = _load_strategy_signals(strategy_root, request.score_against)
             results = score_jobs(payload["results"], signals)
             if request.min_score is not None:
-                results = [row for row in results if row.get("score", 0) >= request.min_score]
+                results = [
+                    row for row in results if row.get("score", 0) >= request.min_score
+                ]
                 payload["total"] = len(results)
             payload["results"] = results
         return SearchResponse(**payload)
@@ -167,13 +206,17 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.get("/api/facets")
     def facets() -> dict[str, dict[str, int]]:
         _require_db(settings.db_path)
-        response = search_collected_jobs(db(), VacancySearchRequest(limit=0), include_facets=True)
+        response = search_collected_jobs(
+            db(), VacancySearchRequest(limit=0), include_facets=True
+        )
         return response.facets
 
     @app.post("/api/facets")
     def filtered_facets(request: SearchRequest) -> dict[str, dict[str, int]]:
         _require_db(settings.db_path)
-        response = search_collected_jobs(db(), _to_jobagg_request(request), include_facets=True)
+        response = search_collected_jobs(
+            db(), _to_jobagg_request(request), include_facets=True
+        )
         return response.facets
 
     @app.get("/api/taxonomies")
@@ -183,7 +226,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/saved-searches")
     def saved_searches() -> list[dict[str, Any]]:
-        return [search.to_dict() for search in list_saved_searches(settings.saved_searches_path)]
+        return [
+            search.to_dict()
+            for search in list_saved_searches(settings.saved_searches_path)
+        ]
 
     @app.post("/api/saved-searches")
     def upsert_saved_search(search: SavedSearchModel) -> dict[str, Any]:
@@ -205,7 +251,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         response = search_collected_jobs(db(), saved.request, include_facets=True)
         payload = asdict(response)
-        payload["facet_labels"] = _facet_labels(settings.db_path, payload.get("facets") or {})
+        payload["facet_labels"] = _facet_labels(
+            settings.db_path, payload.get("facets") or {}
+        )
         return SearchResponse(**payload)
 
     @app.delete("/api/saved-searches/{name}")
@@ -258,17 +306,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @app.get("/api/updates")
     def updates() -> dict[str, Any]:
         _require_db(settings.db_path)
-        with sqlite3.connect(settings.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            recent_runs = [dict(row) for row in conn.execute(
-                """
-                SELECT source_id, fetched, inserted, updated, missing, closed, observed_at
-                FROM source_runs
-                ORDER BY observed_at DESC
-                LIMIT 25
-                """
-            )]
-        return {"recent_source_runs": recent_runs}
+        return {"recent_source_runs": _recent_source_runs(settings.db_path)}
 
     @app.get("/api/sources")
     def sources() -> dict[str, Any]:
@@ -277,12 +315,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.post("/api/sync/run")
     def run_sync() -> dict[str, str]:
-        raise HTTPException(status_code=501, detail="Sync orchestration is not exposed yet.")
+        raise HTTPException(
+            status_code=501, detail="Sync orchestration is not exposed yet."
+        )
 
     @app.get("/api/sync/runs")
     def sync_runs() -> list[dict[str, Any]]:
         _require_db(settings.db_path)
-        return list(db().iter_source_runs())
+        return _recent_source_runs(settings.db_path)
 
     @app.get("/api/tracker", response_model=list[ApplicationRecord])
     def tracker_records() -> list[ApplicationRecord]:
@@ -354,16 +394,123 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
 
 def _to_jobagg_request(request: SearchRequest) -> VacancySearchRequest:
-    data = request.model_dump(exclude={"include_facets", "include_explain", "score_against", "min_score"})
+    data = request.model_dump(
+        exclude={"include_facets", "include_explain", "score_against", "min_score"}
+    )
     return VacancySearchRequest(**data)
 
 
 def _require_db(path: Path) -> None:
     if not path.exists():
-        raise HTTPException(status_code=503, detail=f"Job database does not exist: {path}")
+        raise HTTPException(status_code=503, detail="Job database is unavailable.")
 
 
-def _job_detail_payload(db_path: Path, database: JobDatabase, job_key: str) -> dict[str, Any]:
+def _recent_source_runs(path: Path) -> list[dict[str, Any]]:
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT source_id, fetched, inserted, updated, missing, closed,
+                       observed_at
+                FROM source_runs
+                ORDER BY observed_at DESC, id DESC
+                LIMIT 25
+                """
+            )
+        ]
+
+
+def _load_strategy_signals(root: Path, raw_path: str) -> StrategySignals:
+    try:
+        contents = _read_strategy_file(root, raw_path)
+        return _decode_strategy_signals(contents)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail=_STRATEGY_ERROR) from None
+
+
+def _read_strategy_file(root: Path, raw_path: str) -> str:
+    resolved_root = root.resolve(strict=True)
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = resolved_root / candidate
+    candidate = Path(os.path.abspath(candidate))
+    relative = candidate.relative_to(resolved_root)
+    if not relative.parts:
+        raise ValueError(_STRATEGY_ERROR)
+
+    current = resolved_root
+    for part in relative.parts:
+        current /= part
+        if stat.S_ISLNK(current.lstat().st_mode):
+            raise ValueError(_STRATEGY_ERROR)
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(candidate, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > _MAX_STRATEGY_BYTES:
+            raise ValueError(_STRATEGY_ERROR)
+        chunks: list[bytes] = []
+        remaining = _MAX_STRATEGY_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        encoded = b"".join(chunks)
+        if len(encoded) > _MAX_STRATEGY_BYTES or len(encoded) != opened.st_size:
+            raise ValueError(_STRATEGY_ERROR)
+    finally:
+        os.close(descriptor)
+    return encoded.decode("utf-8")
+
+
+def _decode_strategy_signals(raw: str) -> StrategySignals:
+    text = raw.strip()
+    if text.startswith("{"):
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(_STRATEGY_ERROR)
+        return StrategySignals(
+            terms=_strategy_values(data.get("terms", [])),
+            ccog_codes=_strategy_values(data.get("ccog_codes", [])),
+            ccog_families=_strategy_values(data.get("ccog_families", [])),
+        )
+
+    terms: list[str] = []
+    for line in raw.splitlines():
+        match = _STRATEGY_TERM_LINE.match(line)
+        if match:
+            term = match.group(1).strip(" -\u00b7:")
+            if term and term.casefold() not in {value.casefold() for value in terms}:
+                terms.append(term)
+    ccog_codes = sorted({match.group(0) for match in _CCOG_FULL.finditer(raw)})
+    ccog_families = sorted({match.group(0) for match in _CCOG_FAMILY.finditer(raw)})
+    covered = {".".join(code.split(".")[:3]) for code in ccog_codes}
+    return StrategySignals(
+        terms=terms,
+        ccog_codes=ccog_codes,
+        ccog_families=[family for family in ccog_families if family not in covered],
+    )
+
+
+def _strategy_values(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        raise ValueError(_STRATEGY_ERROR)
+    return [value for item in raw if (value := str(item).strip())]
+
+
+def _job_detail_payload(
+    db_path: Path, database: JobDatabase, job_key: str
+) -> dict[str, Any]:
     _require_db(db_path)
     job_key = unquote(job_key)
     job = database.get_job(job_key)
@@ -407,12 +554,18 @@ def _taxonomy_metadata(db_path: Path) -> dict[str, Any]:
 
 def _values(conn: sqlite3.Connection, query: str) -> list[str]:
     try:
-        return [row["value"] for row in conn.execute(query) if row["value"] not in (None, "")]
+        return [
+            row["value"]
+            for row in conn.execute(query)
+            if row["value"] not in (None, "")
+        ]
     except sqlite3.Error:
         return []
 
 
-def _facet_labels(db_path: Path, facets: dict[str, dict[str, int]]) -> dict[str, dict[str, str]]:
+def _facet_labels(
+    db_path: Path, facets: dict[str, dict[str, int]]
+) -> dict[str, dict[str, str]]:
     labels: dict[str, dict[str, str]] = {}
     if not facets:
         return labels
@@ -553,15 +706,39 @@ def _job_display_sections(job: dict[str, Any]) -> list[dict[str, Any]]:
     }
     description = str(job.get("description") or "").strip()
     if description and _clean_display_text(description) not in existing_bodies:
-        structured = _structured_description_sections(description, str(job.get("ats_family") or ""))
-        sections.extend(structured or [{"title": "Full Description", "body": _clean_display_text(description)}])
-    sections.append({"title": "Job Record", "rows": _display_rows(job, exclude={"raw", "locations", "classification", "source_features", "deadline_info", "display_sections"})})
+        structured = _structured_description_sections(
+            description, str(job.get("ats_family") or "")
+        )
+        sections.extend(
+            structured
+            or [{"title": "Full Description", "body": _clean_display_text(description)}]
+        )
+    sections.append(
+        {
+            "title": "Job Record",
+            "rows": _display_rows(
+                job,
+                exclude={
+                    "raw",
+                    "locations",
+                    "classification",
+                    "source_features",
+                    "deadline_info",
+                    "display_sections",
+                },
+            ),
+        }
+    )
     if job.get("classification"):
-        sections.append({"title": "Classification", "rows": _display_rows(job["classification"])})
+        sections.append(
+            {"title": "Classification", "rows": _display_rows(job["classification"])}
+        )
     if job.get("locations"):
         sections.append({"title": "Locations", "body": _pretty_json(job["locations"])})
     if job.get("source_features"):
-        sections.append({"title": "Source Features", "rows": _display_rows(job["source_features"])})
+        sections.append(
+            {"title": "Source Features", "rows": _display_rows(job["source_features"])}
+        )
     if raw:
         sections.append({"title": "Raw Source Data", "body": _pretty_json(raw)})
     return sections
@@ -636,7 +813,9 @@ _COMMON_DESCRIPTION_HEADINGS = (
 )
 
 
-def _structured_description_sections(description: str, ats_family: str) -> list[dict[str, Any]]:
+def _structured_description_sections(
+    description: str, ats_family: str
+) -> list[dict[str, Any]]:
     del ats_family
     text = _clean_display_text(description)
     if not text:
@@ -664,7 +843,9 @@ def _structured_description_sections(description: str, ats_family: str) -> list[
     return sections
 
 
-def _append_detail_section(sections: list[dict[str, Any]], title: str, body: str) -> None:
+def _append_detail_section(
+    sections: list[dict[str, Any]], title: str, body: str
+) -> None:
     clean_body = body.strip()
     if not clean_body:
         return
@@ -722,7 +903,9 @@ def _source_deadline_text(raw: dict[str, Any]) -> str | None:
             for key, child in value.items():
                 next_path = f"{path}.{key}" if path else str(key)
                 if _deadline_key(str(key)) and child not in (None, "", [], {}):
-                    candidates.append(f"{_display_label(str(key))}: {_display_value(child)}")
+                    candidates.append(
+                        f"{_display_label(str(key))}: {_display_value(child)}"
+                    )
                 visit(child, next_path)
         elif isinstance(value, list):
             for item in value:
@@ -749,7 +932,9 @@ def _deadline_key(key: str) -> bool:
     )
 
 
-def _display_rows(data: dict[str, Any], *, exclude: set[str] | None = None) -> list[dict[str, str]]:
+def _display_rows(
+    data: dict[str, Any], *, exclude: set[str] | None = None
+) -> list[dict[str, str]]:
     exclude = exclude or set()
     rows: list[dict[str, str]] = []
     for key in sorted(data):
@@ -815,7 +1000,9 @@ def _source_summaries(db_path: Path) -> list[dict[str, Any]]:
                 "observed_at": diagnostic.get("observed_at"),
                 "detail_attempted": diagnostic.get("detail_attempted"),
                 "detail_failed": diagnostic.get("detail_failed"),
-                "missing_transition_allowed": bool(diagnostic.get("missing_transition_allowed"))
+                "missing_transition_allowed": bool(
+                    diagnostic.get("missing_transition_allowed")
+                )
                 if diagnostic.get("missing_transition_allowed") is not None
                 else None,
             }
@@ -847,7 +1034,10 @@ def _display_label(value: str) -> str:
     text = str(value).strip().replace("_", " ")
     if not text:
         return "Unknown"
-    return " ".join(word.upper() if len(word) <= 4 and word.isalpha() else word.capitalize() for word in text.split())
+    return " ".join(
+        word.upper() if len(word) <= 4 and word.isalpha() else word.capitalize()
+        for word in text.split()
+    )
 
 
 def _unv_category_labels() -> dict[str, str]:
@@ -876,9 +1066,9 @@ app = create_app()
 
 
 def main() -> None:
-    import uvicorn
+    from job_api.launcher import main as launch
 
-    uvicorn.run("job_api.app:app", host="127.0.0.1", port=8765, reload=False)
+    launch()
 
 
 if __name__ == "__main__":

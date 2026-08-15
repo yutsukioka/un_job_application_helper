@@ -54,6 +54,20 @@ def _settings(tmp_path: Path) -> ApiSettings:
     )
 
 
+def _with_peer(application: Any, peer: str) -> Any:
+    async def peer_scoped_application(
+        scope: dict[str, Any],
+        receive: Any,
+        send: Any,
+    ) -> None:
+        if scope.get("type") == "http":
+            scope = dict(scope)
+            scope["client"] = (peer, 50123)
+        await application(scope, receive, send)
+
+    return peer_scoped_application
+
+
 def _client(tmp_path: Path) -> TestClient:
     settings = _settings(tmp_path)
     db = JobDatabase(settings.db_path)
@@ -69,7 +83,10 @@ def _client(tmp_path: Path) -> TestClient:
         )
     )
     classify_database(db, force=True)
-    return TestClient(create_app(settings))
+    return TestClient(
+        _with_peer(create_app(settings), "127.0.0.1"),
+        base_url="http://127.0.0.1",
+    )
 
 
 def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -> None:
