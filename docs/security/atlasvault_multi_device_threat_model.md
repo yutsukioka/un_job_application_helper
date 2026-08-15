@@ -456,14 +456,25 @@ cross-process private-authority admission; Apple pairing, creation, and recovery
 import share one pending-transaction authority and pairing mutations fail
 closed after lifecycle loss or cancellation.
 
+Flutter invalidates a scoped operation generation before presentation teardown
+or lifecycle hiding and checks it immediately before every later sensitive
+mutation. Hidden pending transactions continue to block authority changes, and
+the controller performs that check before deactivating an active pairing vault.
+Invitee resume completes the journaled `sas_confirmed` interruption point only
+through exact replay idempotence. Apple rejects newly consumed entries at or
+after expiry and imports artifacts through a no-follow regular-file descriptor
+with a bounded incremental read rather than an unbounded convenience load.
+
 ## 76. Cross-Runtime Text Domain
 
 **Classification: mitigated for signed pairing bootstrap content.** Python,
 Dart, and Swift require every bootstrap JSON string and object key to be
 nonempty printable ASCII before canonical signing, hashing, or delivery. This
 deliberately excludes Unicode normalization and surrogate interpretation from
-the Phase 2F-2 cryptographic domain. Future protocol versions may broaden the
-text domain only with explicit scalar-level canonicalization vectors.
+the Phase 2F-2 cryptographic domain. Swift applies the recursive check during
+direct bootstrap construction as well as decoding. Future protocol versions
+may broaden the text domain only with explicit scalar-level canonicalization
+vectors.
 
 ## 77. Production Readiness Follow-Up
 

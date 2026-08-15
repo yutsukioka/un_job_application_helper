@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -329,28 +330,77 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
                 forKeys: [
                     .isRegularFileKey,
                     .isSymbolicLinkKey,
-                    .fileSizeKey,
                 ]
             )
             guard
                 values.isRegularFile == true,
-                values.isSymbolicLink != true,
-                let byteCount = values.fileSize,
+                values.isSymbolicLink != true
+            else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
+            let descriptor: Int32 =
+                url.withUnsafeFileSystemRepresentation { path in
+                    guard let path else { return -1 }
+                    return Darwin.open(
+                        path,
+                        O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+                    )
+                }
+            guard descriptor >= 0 else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
+            let handle = FileHandle(
+                fileDescriptor: descriptor,
+                closeOnDealloc: true
+            )
+            defer { try? handle.close() }
+            var openedFile = stat()
+            guard
+                fstat(descriptor, &openedFile) == 0,
+                (openedFile.st_mode & S_IFMT) == S_IFREG,
+                let byteCount = Int(exactly: openedFile.st_size),
                 byteCount > 0,
                 byteCount
                     <= AtlasVaultPairingArtifactStageStore.maximumByteCount
             else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
-            let data = try Data(
-                contentsOf: url,
-                options: [.mappedIfSafe, .uncached]
-            )
+            let data = try Self.readBoundedArtifactData(
+                maximumByteCount:
+                    AtlasVaultPairingArtifactStageStore.maximumByteCount
+            ) { requestedByteCount in
+                try handle.read(upToCount: requestedByteCount)
+            }
             guard data.count == byteCount else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
             return try AtlasVaultPairingArtifact.decodeStrict(data)
         }.value
+    }
+
+    nonisolated static func readBoundedArtifactData(
+        maximumByteCount: Int,
+        read: (Int) throws -> Data?
+    ) throws -> Data {
+        guard maximumByteCount > 0 else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
+        var result = Data()
+        while true {
+            let remaining = maximumByteCount - result.count
+            let requestedByteCount = min(64 * 1024, remaining + 1)
+            guard let chunk = try read(requestedByteCount), !chunk.isEmpty else {
+                break
+            }
+            guard chunk.count <= remaining else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
+            result.append(chunk)
+        }
+        guard !result.isEmpty else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
+        return result
     }
 
     private static func presentationStatus(

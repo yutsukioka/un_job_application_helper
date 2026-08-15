@@ -3365,6 +3365,9 @@ final class _ControllerPairingCoordinator
     implements AtlasVaultTrustedPairingCoordinating {
   const _ControllerPairingCoordinator();
 
+  @override
+  void cancelActiveOperation() {}
+
   AtlasVaultTrustedPairingResult _pending() =>
       const AtlasVaultTrustedPairingResult(
         disposition: AtlasVaultTrustedPairingDisposition.deliveryReady,

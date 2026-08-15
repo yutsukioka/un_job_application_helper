@@ -62,10 +62,22 @@ final class AtlasVaultPairingViewTests: XCTestCase {
     func testArtifactImportUsesAnOpenedBoundedFileHandle() throws {
         let source = try Self.source(named: "AtlasVaultPairingView.swift")
 
-        XCTAssertTrue(source.contains("FileHandle(forReadingFrom:"))
+        XCTAssertTrue(source.contains("FileHandle("))
         XCTAssertTrue(source.contains("read(upToCount:"))
         XCTAssertTrue(source.contains("fstat("))
+        XCTAssertTrue(source.contains("O_NOFOLLOW"))
         XCTAssertFalse(source.contains("contentsOf: url"))
+    }
+
+    func testBoundedArtifactReaderRejectsBeforeOverflowAppend() throws {
+        var chunks = [Data([1, 2, 3]), Data([4, 5])]
+
+        XCTAssertThrowsError(
+            try AtlasVaultTrustedPairingPresentationOwner
+                .readBoundedArtifactData(maximumByteCount: 4) { _ in
+                    chunks.isEmpty ? nil : chunks.removeFirst()
+                }
+        )
     }
 
     func testUnsafeLifecycleCancellationDrainsTheRetainedOperation()

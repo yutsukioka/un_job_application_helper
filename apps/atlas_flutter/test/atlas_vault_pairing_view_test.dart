@@ -174,6 +174,7 @@ final class _PairingViewCoordinator
   Future<AtlasVaultTrustedPairingResult>? next;
   int cancelCalls = 0;
 
+  @override
   void cancelActiveOperation() {
     cancelCalls += 1;
   }

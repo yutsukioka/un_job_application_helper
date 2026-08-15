@@ -1618,33 +1618,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     transaction,
                     to: .sasConfirmed
                 )
-                let offerArtifact = try await self.requireArtifact(
-                    .offer,
-                    transaction: confirmed
-                )
-                let offer = try offerArtifact.signedOffer()
-                guard let transcriptHash = confirmed.transcriptSHA256 else {
-                    throw AtlasVaultPairingTransactionError.invalidTransaction
-                }
-                try await self.consumeReplay(
-                    AtlasVaultPairingReplayEntry(
-                        kind: "offer",
-                        objectID: offer.offer.offerID,
-                        transcriptSHA256: transcriptHash,
-                        consumedAt: self.environment.timestamp(),
-                        expiresAt: offer.offer.expiresAt
-                    ),
-                    localDeviceID: identity.deviceID,
-                    permitExactReplay: false
-                )
-                let consumed = try await self.advance(
+                return try await self.completeInviteeSASConfirmation(
                     confirmed,
-                    to: .offerConsumed
-                )
-                return try await self.resultWithSAS(
-                    .codesConfirmed,
-                    transaction: consumed,
-                    identity: identity
+                    identity: identity,
+                    permitExactReplay: false
                 )
             }
 
@@ -1821,6 +1798,15 @@ public actor AtlasVaultTrustedPairingCoordinator:
                transaction.stage == .acknowledgementSaved {
                 try await self.clearTransaction(transaction)
                 return self.fixed(.completed, trusted: true)
+            }
+            if transaction.role == .invitee,
+               transaction.stage == .sasConfirmed,
+               let identity = try await self.environment.loadIdentity() {
+                return try await self.completeInviteeSASConfirmation(
+                    transaction,
+                    identity: identity,
+                    permitExactReplay: true
+                )
             }
             if transaction.role == .invitee,
                Self.isAtLeast(transaction, .deliveryImported) {
@@ -2630,6 +2616,41 @@ public actor AtlasVaultTrustedPairingCoordinator:
         guard try await environment.loadTransaction() == nil else {
             throw AtlasVaultPairingTransactionError.unavailable
         }
+    }
+
+    private func completeInviteeSASConfirmation(
+        _ confirmed: AtlasVaultPairingTransaction,
+        identity: AtlasVaultDeviceIdentity,
+        permitExactReplay: Bool
+    ) async throws -> AtlasVaultTrustedPairingResult {
+        let offerArtifact = try await requireArtifact(
+            .offer,
+            transaction: confirmed
+        )
+        let offer = try offerArtifact.signedOffer()
+        guard let transcriptHash = confirmed.transcriptSHA256 else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
+        try await consumeReplay(
+            AtlasVaultPairingReplayEntry(
+                kind: "offer",
+                objectID: offer.offer.offerID,
+                transcriptSHA256: transcriptHash,
+                consumedAt: environment.timestamp(),
+                expiresAt: offer.offer.expiresAt
+            ),
+            localDeviceID: identity.deviceID,
+            permitExactReplay: permitExactReplay
+        )
+        let consumed = try await advance(
+            confirmed,
+            to: .offerConsumed
+        )
+        return try await resultWithSAS(
+            .codesConfirmed,
+            transaction: consumed,
+            identity: identity
+        )
     }
 
     private func consumeReplay(

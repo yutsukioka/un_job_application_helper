@@ -43,6 +43,12 @@ permits. Apple uses sandboxed file import/export, Android uses SAF without a
 persisted URI permission, and Windows uses owned shell dialogs with
 `FOS_DONTADDTORECENT`.
 
+Apple import opens the selected final component with `O_NOFOLLOW`, verifies the
+opened descriptor is a regular file, and reads it incrementally through the
+same descriptor. The reader requests no more than the remaining 128 MiB bound
+plus one detection byte and rejects overflow before appending it. A metadata
+size check alone is not an accepted bound.
+
 The transaction journal stores canonical artifact hashes and stages only the
 minimum bytes required for interruption recovery. Ephemeral private keys are
 protected transaction state and never appear in `.atlaspair` files.
@@ -70,3 +76,8 @@ public cache, platform protected blob, or backend credential.
 Anyone holding an artifact can copy, delay, or replay it. Authentication,
 expiry, durable replay consumption, explicit SAS confirmation, and transaction
 state are therefore mandatory. File possession alone establishes no trust.
+
+If an invitee resumes from the durable `sas_confirmed` stage, it may complete
+offer consumption only when an existing replay entry is an exact logical and
+transcript match. A new replay entry whose expiry is not strictly after the
+caller-supplied current time is rejected.

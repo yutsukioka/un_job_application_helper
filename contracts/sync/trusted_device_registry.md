@@ -79,6 +79,12 @@ and `expires_at`. `kind` is `offer` or `acknowledgement`. The logical key is
 `kind:object_id`. The same object and transcript is already consumed; the same
 logical key with another transcript is a conflict.
 
+A newly consumed entry must have `expires_at` strictly after the
+caller-supplied current time. Exact already-consumed entries remain idempotent
+even after expiry so a journaled `sas_confirmed` or later transaction can
+finish its interrupted forward-only transition without creating new replay
+state.
+
 The store retains at most 2,048 entries. Before insertion it removes entries
 whose expiry is not after caller-supplied current time, then sorts by expiry,
 kind, and object ID. If still oversized, it removes the earliest entries. No

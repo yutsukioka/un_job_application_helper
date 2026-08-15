@@ -577,6 +577,10 @@ public enum AtlasVaultPairingReplayFoundation {
                 )
             }
             let now = try AtlasVaultTrustedDeviceValidation.date(currentTime)
+            guard try AtlasVaultTrustedDeviceValidation.date(entry.expiresAt)
+                > now else {
+                throw AtlasVaultTrustedDeviceStateError.invalidState
+            }
             var entries = store.entries.filter {
                 guard let expiry = try? AtlasVaultTrustedDeviceValidation.date($0.expiresAt)
                 else { return false }

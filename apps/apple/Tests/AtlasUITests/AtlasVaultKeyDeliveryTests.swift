@@ -32,7 +32,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         )
         let record = try XCTUnwrap(source.records.first)
 
-        for value in ["key-e\u{0301}", "key-\u{1F512}", "key-\nline"] {
+        for value in ["", "key-e\u{0301}", "key-\u{1F512}", "key-\nline"] {
             let invalidRecord = AtlasVaultEncryptedRecordEnvelope(
                 id: record.id,
                 schemaVersion: record.schemaVersion,

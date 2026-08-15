@@ -99,6 +99,47 @@ private enum AtlasVaultKeyDeliveryValidation {
         catch { throw fail() }
     }
 
+    static func requirePrintableASCIIJSON<T: Encodable>(_ value: T) throws {
+        do {
+            let encoded = try JSONEncoder().encode(value)
+            let object = try JSONSerialization.jsonObject(with: encoded)
+            try requirePrintableASCIIJSONValue(object)
+        } catch {
+            throw fail()
+        }
+    }
+
+    private static func requirePrintableASCIIJSONValue(_ value: Any) throws {
+        if value is NSNull || value is NSNumber {
+            return
+        }
+        if let text = value as? String {
+            guard
+                !text.isEmpty,
+                text.unicodeScalars.allSatisfy({
+                    (0x20...0x7E).contains($0.value)
+                })
+            else {
+                throw fail()
+            }
+            return
+        }
+        if let values = value as? [Any] {
+            for item in values {
+                try requirePrintableASCIIJSONValue(item)
+            }
+            return
+        }
+        if let values = value as? [String: Any] {
+            for (key, item) in values {
+                try requirePrintableASCIIJSONValue(key)
+                try requirePrintableASCIIJSONValue(item)
+            }
+            return
+        }
+        throw fail()
+    }
+
     static func vaultID(_ value: String) throws -> String {
         guard (try? AtlasInjectedRootVaultPathLocator.validatedVaultID(value)) == value else {
             throw fail()
@@ -363,6 +404,10 @@ public struct AtlasVaultPairingBootstrap: Codable, Equatable, Sendable {
             version == AtlasVaultKeyDeliveryValidation.version,
             Set(records.map(\.id)).count == records.count
         else { throw AtlasVaultKeyDeliveryValidation.fail() }
+        try AtlasVaultKeyDeliveryValidation.requirePrintableASCIIJSON(
+            vaultMetadata
+        )
+        try AtlasVaultKeyDeliveryValidation.requirePrintableASCIIJSON(records)
         self.format = format
         self.version = version
         self.snapshotID = try AtlasVaultKeyDeliveryValidation.uuid(snapshotID)

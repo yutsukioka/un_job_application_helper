@@ -112,9 +112,29 @@ Apple pairing, creation, and recovery import share one pending-transaction
 authority; pairing mutations additionally fail closed after lifecycle loss or
 task cancellation.
 
+Invitee resume handles the durable `sas_confirmed` interruption point on Dart
+and Swift. It accepts only an exact replay-store duplicate, completes replay
+consumption idempotently, and advances to `offer_consumed`. New Apple replay
+entries are rejected unless their expiry is strictly after the caller-supplied
+current time.
+
+Flutter presentation cancellation invalidates a scoped operation generation
+before draining the retained task. A suspended flow must reauthorize
+immediately before each later transaction, artifact, replay, registry, store,
+key, selection, activation, or cleanup mutation. Backgrounding, leaving the
+Settings tab, hiding the panel, disposal, and terminal stop all invalidate that
+lease. Pending pairing authority remains visible while the panel is hidden,
+and server-authority changes check it before any active vault is deactivated.
+
 Canonical signed bootstrap strings are restricted to nonempty printable ASCII
 on Python, Dart, and Swift. This avoids runtime-dependent Unicode scalar and
-normalization behavior in cryptographic canonicalization.
+normalization behavior in cryptographic canonicalization. Swift enforces the
+same recursive rule during direct bootstrap construction as well as decoding.
+
+Apple artifact import opens the security-scoped final path with `O_NOFOLLOW`,
+verifies the opened descriptor with `fstat`, and performs a bounded chunked
+read that requests at most one byte beyond the remaining limit. It therefore
+rejects growth past the 128 MiB boundary before appending excess bytes.
 
 ## Cross-Platform Ring
 

@@ -51,7 +51,9 @@ acknowledgement.
 
 Every string value and object key in the canonical bootstrap must be nonempty
 printable ASCII (`0x20...0x7E`). Python, Dart, and Swift enforce the same text
-domain before hashing or signature verification.
+domain before hashing or signature verification. The rule applies during
+direct model construction and strict decode, so no runtime can sign a
+bootstrap another runtime must reject solely because it bypassed its decoder.
 
 ## Delivery Encryption
 

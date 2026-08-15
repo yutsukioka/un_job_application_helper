@@ -186,6 +186,7 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
   }
 
   void clearSensitiveInput() {
+    _coordinator.cancelActiveOperation();
     sas = null;
     _generation += 1;
     if (!_disposed) {
@@ -195,7 +196,7 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
 
   void hide() {
     clearSensitiveInput();
-    _clearSafeDetails();
+    _clearSafeDetails(preservePendingTransaction: true);
     status = AtlasVaultTrustedPairingPresentationStatus.hidden;
     if (!_disposed) {
       notifyListeners();
@@ -205,13 +206,14 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
   Future<void> stopAndDrain() async {
     _generation += 1;
     clearSensitiveInput();
+    final coordinatorStop = _coordinator.stop();
     await _operation;
-    await _coordinator.stop();
+    await coordinatorStop;
   }
 
   bool _isCurrent(int generation) => !_disposed && generation == _generation;
 
-  void _clearSafeDetails() {
+  void _clearSafeDetails({bool preservePendingTransaction = false}) {
     role = null;
     stage = null;
     localFingerprint = null;
@@ -219,13 +221,16 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
     sas = null;
     expiresAt = null;
     trusted = false;
-    pendingTransaction = false;
+    if (!preservePendingTransaction) {
+      pendingTransaction = false;
+    }
   }
 
   @override
   void dispose() {
     _disposed = true;
     _generation += 1;
+    _coordinator.cancelActiveOperation();
     _clearSafeDetails();
     super.dispose();
   }

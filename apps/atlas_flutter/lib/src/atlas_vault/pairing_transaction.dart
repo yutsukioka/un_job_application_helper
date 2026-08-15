@@ -610,6 +610,8 @@ final class AtlasVaultTrustedPairingResult {
 }
 
 abstract interface class AtlasVaultTrustedPairingCoordinating {
+  void cancelActiveOperation();
+
   Future<AtlasVaultTrustedPairingResult> inspect();
 
   Future<AtlasVaultTrustedPairingResult> createDeviceIdentity();
@@ -737,6 +739,8 @@ final class AtlasVaultTrustedPairingCoordinator
 
   Future<void>? _operation;
   bool _stopped = false;
+  final Object _operationLeaseKey = Object();
+  int _operationGeneration = 0;
 
   @override
   Future<AtlasVaultTrustedPairingResult> inspect() => _run(() async {
@@ -770,6 +774,7 @@ final class AtlasVaultTrustedPairingCoordinator
               _identityStore,
               identityGenerator: _identityGenerator,
             );
+            _authorizeSensitiveMutation();
             await custody.createPrimaryIdentity();
             identity = await _loadIdentity();
           }
@@ -824,6 +829,7 @@ final class AtlasVaultTrustedPairingCoordinator
           keyEpoch: identity.descriptor.keyEpoch,
           stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
         );
+        _authorizeSensitiveMutation();
         await _transactionStore.create(transaction);
         await _createStaged(artifact);
         await _requireTransaction(transaction);
@@ -948,6 +954,7 @@ final class AtlasVaultTrustedPairingCoordinator
             acceptanceArtifact,
           ],
         );
+        _authorizeSensitiveMutation();
         await _transactionStore.create(transaction);
         await _createStaged(offerArtifact);
         await _createStaged(acceptanceArtifact);
@@ -1100,31 +1107,10 @@ final class AtlasVaultTrustedPairingCoordinator
           transaction,
           AtlasVaultPairingStage.sasConfirmed,
         );
-        final offerArtifact = await _requireStaged(
-          AtlasVaultPairingArtifactKind.offer,
+        return await _completeInviteeSasConfirmation(
           confirmed,
-        );
-        await _consumeReplay(
-          identity.deviceId,
-          AtlasVaultPairingReplayEntry.fromJson(<String, Object?>{
-            'kind': 'offer',
-            'object_id': _signedOffer(offerArtifact).offer.offerId,
-            'transcript_sha256': confirmed.transcriptSha256,
-            'consumed_at': _utc(_now()),
-            'expires_at': _signedOffer(offerArtifact).offer.expiresAt,
-          }),
-        );
-        final consumed = await _advance(
-          confirmed,
-          AtlasVaultPairingStage.offerConsumed,
-        );
-        return _result(
-          AtlasVaultTrustedPairingDisposition.codesConfirmed,
-          consumed,
-          local: identity,
-          peerDeviceId: consumed.peerDeviceId,
-          sas: await _sasFor(consumed, identity),
-          expiresAt: _signedOffer(offerArtifact).offer.expiresAt,
+          identity,
+          acceptExactReplay: false,
         );
       }
       if (transaction.stage != AtlasVaultPairingStage.acceptanceImported) {
@@ -1380,6 +1366,19 @@ final class AtlasVaultTrustedPairingCoordinator
           );
         }
         if (transaction.role == AtlasVaultPairingRole.invitee &&
+            transaction.stage == AtlasVaultPairingStage.sasConfirmed) {
+          final identity = await _requireIdentity();
+          try {
+            return await _completeInviteeSasConfirmation(
+              transaction,
+              identity,
+              acceptExactReplay: true,
+            );
+          } finally {
+            identity.destroy();
+          }
+        }
+        if (transaction.role == AtlasVaultPairingRole.invitee &&
             _stageAtLeast(
               transaction,
               AtlasVaultPairingStage.deliveryImported,
@@ -1469,6 +1468,7 @@ final class AtlasVaultTrustedPairingCoordinator
             throw const AtlasVaultPairingTransactionException();
           }
           if (store != null) {
+            _authorizeSensitiveMutation();
             await localStore.delete(vaultId);
           }
           if (await localStore.read(vaultId) != null) {
@@ -1483,6 +1483,7 @@ final class AtlasVaultTrustedPairingCoordinator
             throw const AtlasVaultPairingTransactionException();
           }
           if (key != null) {
+            _authorizeSensitiveMutation();
             await secure.deleteVaultKey(vaultId);
           }
           if (await secure.containsVaultKey(vaultId)) {
@@ -1504,8 +1505,14 @@ final class AtlasVaultTrustedPairingCoordinator
   );
 
   @override
+  void cancelActiveOperation() {
+    _operationGeneration += 1;
+  }
+
+  @override
   Future<void> stop() async {
     _stopped = true;
+    cancelActiveOperation();
     await _operation;
   }
 
@@ -1631,6 +1638,7 @@ final class AtlasVaultTrustedPairingCoordinator
         }
         final existing = await localStore.read(vaultId);
         if (existing == null) {
+          _authorizeSensitiveMutation();
           await localStore.create(vaultId, store);
         } else if (await atlasVaultSha256Hex(existing.canonicalBytes()) !=
             storeHash) {
@@ -1665,6 +1673,7 @@ final class AtlasVaultTrustedPairingCoordinator
           throw const AtlasVaultPairingTransactionException();
         }
         if (loadedKey == null) {
+          _authorizeSensitiveMutation();
           await secure.createVaultKey(vaultId, vaultKey);
           loadedKey = await secure.loadVaultKey(vaultId);
         }
@@ -1695,6 +1704,7 @@ final class AtlasVaultTrustedPairingCoordinator
       )) {
         final selectedVaultId = await selected.read();
         if (selectedVaultId == null) {
+          _authorizeSensitiveMutation();
           await selected.create(vaultId);
         } else if (selectedVaultId != vaultId) {
           throw const AtlasVaultPairingTransactionException();
@@ -1720,6 +1730,7 @@ final class AtlasVaultTrustedPairingCoordinator
         transaction,
         AtlasVaultPairingStage.runtimeActivated,
       )) {
+        _authorizeSensitiveMutation();
         if (!await _activateInstalledVault(vaultId)) {
           throw const AtlasVaultPairingTransactionException();
         }
@@ -2048,6 +2059,7 @@ final class AtlasVaultTrustedPairingCoordinator
     if (_stopped || _operation != null) {
       return Future<T>.error(const AtlasVaultPairingTransactionException());
     }
+    final generation = ++_operationGeneration;
     final completer = Completer<T>();
     late final Future<void> retained;
     retained = () async {
@@ -2055,7 +2067,12 @@ final class AtlasVaultTrustedPairingCoordinator
         if (_stopped) {
           throw const AtlasVaultPairingTransactionException();
         }
-        completer.complete(await operation());
+        completer.complete(
+          await runZoned(
+            operation,
+            zoneValues: <Object, Object>{_operationLeaseKey: generation},
+          ),
+        );
       } catch (error, stackTrace) {
         completer.completeError(error, stackTrace);
       } finally {
@@ -2066,6 +2083,12 @@ final class AtlasVaultTrustedPairingCoordinator
     }();
     _operation = retained;
     return completer.future;
+  }
+
+  void _authorizeSensitiveMutation() {
+    if (_stopped || Zone.current[_operationLeaseKey] != _operationGeneration) {
+      throw const AtlasVaultPairingTransactionException();
+    }
   }
 
   AtlasVaultTrustedPairingResult _fixed(
@@ -2197,6 +2220,7 @@ final class AtlasVaultTrustedPairingCoordinator
       'updated_at': _utc(_now()),
     });
     validateAtlasVaultPairingTransition(current, replacement);
+    _authorizeSensitiveMutation();
     await _transactionStore.replace(
       replacement,
       expectedSha256: await atlasVaultSha256Hex(current.canonicalBytes()),
@@ -2236,6 +2260,7 @@ final class AtlasVaultTrustedPairingCoordinator
   Future<void> _createStaged(AtlasVaultPairingArtifact artifact) async {
     final existing = await _stageStore.read(artifact.kind);
     if (existing == null) {
+      _authorizeSensitiveMutation();
       await _stageStore.create(artifact);
     } else if (!_constantBytes(
       existing.canonicalBytes(),
@@ -2283,6 +2308,7 @@ final class AtlasVaultTrustedPairingCoordinator
     try {
       final transaction = await _requireStage(expectedRole, expectedStage);
       final artifact = await _requireStaged(kind, transaction);
+      _authorizeSensitiveMutation();
       if (!await _artifactTransport.save(artifact)) {
         return _fixed(AtlasVaultTrustedPairingDisposition.cancelled);
       }
@@ -2391,6 +2417,41 @@ final class AtlasVaultTrustedPairingCoordinator
     pendingTransaction: true,
   );
 
+  Future<AtlasVaultTrustedPairingResult> _completeInviteeSasConfirmation(
+    AtlasVaultPairingTransaction confirmed,
+    AtlasVaultDeviceIdentity identity, {
+    required bool acceptExactReplay,
+  }) async {
+    final offerArtifact = await _requireStaged(
+      AtlasVaultPairingArtifactKind.offer,
+      confirmed,
+    );
+    final offer = _signedOffer(offerArtifact).offer;
+    await _consumeReplay(
+      identity.deviceId,
+      AtlasVaultPairingReplayEntry.fromJson(<String, Object?>{
+        'kind': 'offer',
+        'object_id': offer.offerId,
+        'transcript_sha256': confirmed.transcriptSha256,
+        'consumed_at': _utc(_now()),
+        'expires_at': offer.expiresAt,
+      }),
+      acceptExactDuplicate: acceptExactReplay,
+    );
+    final consumed = await _advance(
+      confirmed,
+      AtlasVaultPairingStage.offerConsumed,
+    );
+    return _result(
+      AtlasVaultTrustedPairingDisposition.codesConfirmed,
+      consumed,
+      local: identity,
+      peerDeviceId: consumed.peerDeviceId,
+      sas: await _sasFor(consumed, identity),
+      expiresAt: offer.expiresAt,
+    );
+  }
+
   Future<Uint8List> _sessionKeyFor(
     AtlasVaultPairingTransaction transaction,
     AtlasVaultDeviceIdentity identity,
@@ -2442,6 +2503,7 @@ final class AtlasVaultTrustedPairingCoordinator
         'updated_at': _utc(_now()),
         'entries': const <Object?>[],
       });
+      _authorizeSensitiveMutation();
       await _replayStore.create(replay);
     }
     if (replay.localDeviceId != localDeviceId) {
@@ -2460,6 +2522,7 @@ final class AtlasVaultTrustedPairingCoordinator
       throw const AtlasVaultTrustedDeviceStateException();
     }
     if (consumed.outcome == AtlasVaultReplayConsumeOutcome.consumed) {
+      _authorizeSensitiveMutation();
       await _replayStore.replace(consumed.store, expectedSha256: digest);
     }
     final restored = await _replayStore.read();
@@ -2488,6 +2551,7 @@ final class AtlasVaultTrustedPairingCoordinator
         'updated_at': _utc(_now()),
         'devices': const <Object?>[],
       });
+      _authorizeSensitiveMutation();
       await _registryStore.create(registry);
     }
     if (registry.localDeviceId != localDeviceId) {
@@ -2501,6 +2565,7 @@ final class AtlasVaultTrustedPairingCoordinator
       updatedAt: _utc(_now()),
     );
     if (committed.outcome == AtlasVaultTrustedDeviceCommitOutcome.committed) {
+      _authorizeSensitiveMutation();
       await _registryStore.replace(committed.registry, expectedSha256: digest);
     }
     final restored = await _registryStore.read();
@@ -2525,11 +2590,13 @@ final class AtlasVaultTrustedPairingCoordinator
           metadata.sha256) {
         throw const AtlasVaultPairingTransactionException();
       }
+      _authorizeSensitiveMutation();
       await _stageStore.delete(metadata.kind, expectedSha256: metadata.sha256);
       if (await _stageStore.read(metadata.kind) != null) {
         throw const AtlasVaultPairingTransactionException();
       }
     }
+    _authorizeSensitiveMutation();
     await _transactionStore.delete(
       expectedSha256: await atlasVaultSha256Hex(transaction.canonicalBytes()),
     );

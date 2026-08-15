@@ -1900,7 +1900,8 @@ class AtlasAppController extends ChangeNotifier
         _recoveryImportAdmissionInProgress ||
         _recoveryImportBlocksLegacyPrivateAuthority ||
         (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
-            false)) {
+            false) ||
+        (_trustedPairingContext?.owner.blocksLegacyPrivateAuthority ?? false)) {
       throw const AtlasVaultPrivateStateException();
     }
     final deactivation = _privateDeactivationOperation;
@@ -2640,7 +2641,8 @@ class AtlasHomeShell extends StatefulWidget {
   State<AtlasHomeShell> createState() => _AtlasHomeShellState();
 }
 
-class _AtlasHomeShellState extends State<AtlasHomeShell> {
+class _AtlasHomeShellState extends State<AtlasHomeShell>
+    with WidgetsBindingObserver {
   AtlasMobileTab _selectedTab = AtlasMobileTab.search;
   late final AtlasAppController _controller;
   late final bool _ownsController;
@@ -2651,6 +2653,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final suppliedController = widget.controller;
     if (suppliedController != null) {
       _controller = suppliedController;
@@ -2675,7 +2678,16 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _clearPairingSensitiveInput();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clearPairingSensitiveInput();
     if (_ownsController) {
       unawaited(_ownedInteroperabilityOwner?.stopAndDrain());
       unawaited(_ownedPairingOwner?.stopAndDrain());
@@ -2717,6 +2729,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
               controller: _controller,
               onSourceSelected: (source) {
                 unawaited(_controller.setSourceFilter(source.sourceID));
+                _dismissPairingForTabChange(AtlasMobileTab.search);
                 setState(() {
                   _selectedTab = AtlasMobileTab.search;
                 });
@@ -2729,8 +2742,10 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTab.index,
         onDestinationSelected: (index) {
+          final selected = AtlasMobileTab.values[index];
+          _dismissPairingForTabChange(selected);
           setState(() {
-            _selectedTab = AtlasMobileTab.values[index];
+            _selectedTab = selected;
           });
         },
         destinations: const [
@@ -2771,6 +2786,17 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       backgroundColor: Colors.transparent,
       builder: (context) => AtlasFilterSheet(controller: _controller),
     );
+  }
+
+  void _clearPairingSensitiveInput() {
+    _controller.trustedPairingContext?.owner.clearSensitiveInput();
+  }
+
+  void _dismissPairingForTabChange(AtlasMobileTab selected) {
+    if (_selectedTab == AtlasMobileTab.settings &&
+        selected != AtlasMobileTab.settings) {
+      _controller.trustedPairingContext?.owner.hide();
+    }
   }
 }
 
