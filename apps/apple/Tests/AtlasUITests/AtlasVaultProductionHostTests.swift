@@ -20,6 +20,20 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
 
+    func testHostRetainsAndDrainsOneTrustedPairingAuthority() throws {
+        let source = try source(named: "AtlasVaultProductionHost.swift")
+
+        for required in [
+            "AtlasVaultTrustedPairingAuthority",
+            "attachTrustedPairingAuthority",
+            "clearSensitiveInput",
+            "stopAndDrain",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(source.contains("createPairingOffer()"))
+    }
+
     func testHostOwnsPrivateSessionAndMutationBoundaries() throws {
         let source = try source(named: "AtlasVaultProductionHost.swift")
 

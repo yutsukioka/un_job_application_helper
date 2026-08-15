@@ -11,6 +11,18 @@ final _cacheFixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
 final _cacheFixtureNow = DateTime.utc(2026, 7, 3, 12);
 
 void main() {
+  test('controller production source owns one explicit pairing context', () {
+    final source = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('AtlasVaultTrustedPairingContext'));
+    expect(source, contains('attachTrustedPairingContext'));
+    expect(source, contains('trustedPairingContext'));
+    expect(source, contains('stopAndDrain'));
+    expect(source, isNot(contains('automaticallyCreatePairing')));
+  });
+
   test(
     'conditional saved-search deletion sends the exact reviewed snapshot',
     () async {
