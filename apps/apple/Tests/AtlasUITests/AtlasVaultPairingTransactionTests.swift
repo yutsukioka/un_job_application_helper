@@ -355,6 +355,23 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertEqual(resumed.disposition, .acknowledgementReady)
     }
 
+    func testDeliveryIntentPermitsExactRetryAfterExpiry() async throws {
+        let journey = try makeJourney(inviteeReplaceFailure: .deliveryImported)
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        let interruptedTransaction = await journey.inviteeState.loadTransaction()
+        let stagedDelivery = await journey.inviteeState.loadArtifact(.delivery)
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(interruptedTransaction?.stage, .offerConsumed)
+        XCTAssertNotNil(interruptedTransaction?.deliverySHA256)
+        XCTAssertNotNil(stagedDelivery)
+        journey.clock.set("2026-08-15T12:11:00Z")
+
+        let resumed = await journey.invitee.importKeyDelivery(delivery)
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+    }
+
     func testFullInviterRegistryRejectsAcceptanceBeforePersistence()
         async throws
     {

@@ -82,6 +82,16 @@ The inviter revalidates the complete signed key request, including expiry,
 immediately before creating a delivery. Pairing transaction decoding accepts
 the same positive 64-bit key-epoch range as the signed device and delivery
 contracts; smaller implementation-specific integer bounds are not imposed.
+Dart derives offer issue and expiry values from one captured clock sample, so
+a second-boundary crossing cannot extend or invalidate the fixed ten-minute
+offer lifetime.
+
+Before persisting an imported acceptance, each inviter reads and verifies its
+trusted-device registry. A full 64-peer registry, a mismatched local-device
+identity, or an invitee already present in the registry fails before the
+acceptance artifact or transaction intent is written. This prevents the
+invitee from installing a vault that the inviter cannot later commit as
+trusted.
 
 Apple now journals an offer before staging it and applies the selected-vault
 absence check only to invitee discard. Both coordinators treat an already
@@ -102,6 +112,13 @@ write. Invitee store and key installation records the expected digest before
 the corresponding create-only platform operation. Resume accepts only an
 absent intended resource or an exact read-back match; discard removes only an
 exact intended resource and clears the transaction last.
+
+A fresh delivery import validates expiry against the current clock before its
+digest enters the protected transaction. Once that exact digest is journaled,
+retries and post-import installation revalidate the authenticated delivery at
+the signed key-request issuance time rather than reapplying wall-clock expiry.
+This preserves the expiry gate for new artifacts while allowing an already
+admitted, hash-bound installation to finish after interruption.
 
 An inviter verifies the signed acknowledgement and binds its invitee identity
 to the authenticated delivery and journaled peer before replay consumption or

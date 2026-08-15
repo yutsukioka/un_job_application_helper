@@ -320,6 +320,40 @@ void main() {
     );
   });
 
+  test('delivery intent permits exact retry after its expiry', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.deliveryImported,
+      inviteeTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+    final deliveryBytes = Uint8List.fromList(journey.mailbox.bytes!);
+    addTearDown(() => deliveryBytes.fillRange(0, deliveryBytes.length, 0));
+
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.offerConsumed,
+    );
+    expect(journey.inviteeTransactions.value?.deliverySha256, isNotNull);
+    expect(
+      journey.inviteeStage.values,
+      contains(AtlasVaultPairingArtifactKind.delivery),
+    );
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 16);
+    journey.mailbox.bytes = Uint8List.fromList(deliveryBytes);
+
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+  });
+
   test('full inviter registry rejects acceptance before persistence', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);

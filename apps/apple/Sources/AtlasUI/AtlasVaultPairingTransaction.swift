@@ -1576,6 +1576,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
             guard Self.equal(proofs.invitee, payload.inviteeProof) else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
+            try await self.requireInviterRegistryAdmission(
+                localDeviceID: identity.deviceID,
+                peerDeviceID: inviteeID
+            )
             let intent = try await self.advance(
                 transaction,
                 to: transaction.stage,
@@ -1731,6 +1735,12 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 .invitee,
                 .offerConsumed
             )
+            let artifactHash = try artifact.sha256Hex()
+            guard transaction.deliverySHA256 == nil
+                || transaction.deliverySHA256 == artifactHash
+            else {
+                throw AtlasVaultPairingTransactionError.stale
+            }
             try await self.preflightInviteeDelivery(
                 artifact,
                 transaction: transaction
@@ -1739,7 +1749,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             let intent = try await self.advance(
                 transaction,
                 to: transaction.stage,
-                deliverySHA256: artifact.sha256Hex(),
+                deliverySHA256: artifactHash,
                 bootstrapSHA256: payload.bootstrap.sha256Hex(),
                 vaultID: payload.signedDelivery.delivery.vaultID,
                 keyEpoch: payload.signedDelivery.delivery.keyEpoch,
@@ -1930,7 +1940,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
     ) async throws {
         var context = try await inviteeContext(
             transaction,
-            candidateDelivery: artifact
+            candidateDelivery: artifact,
+            requiresFreshExpiryValidation: transaction.deliverySHA256 == nil
         )
         defer { Self.wipe(&context.recoveredKey) }
         let delivery = context.delivery.signedDelivery.delivery
@@ -1963,7 +1974,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
         guard let identity = try await environment.loadIdentity() else {
             throw AtlasVaultPairingTransactionError.unavailable
         }
-        var context = try await inviteeContext(starting)
+        var context = try await inviteeContext(
+            starting,
+            requiresFreshExpiryValidation: false
+        )
         defer { Self.wipe(&context.recoveredKey) }
         var transaction = starting
         let delivery = context.delivery.signedDelivery.delivery
@@ -2408,7 +2422,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
 
     private func inviteeContext(
         _ transaction: AtlasVaultPairingTransaction,
-        candidateDelivery: AtlasVaultPairingArtifact? = nil
+        candidateDelivery: AtlasVaultPairingArtifact? = nil,
+        requiresFreshExpiryValidation: Bool = false
     ) async throws -> InviteeContext {
         guard let identity = try await environment.loadIdentity(),
               let transcriptText = transaction.transcriptSHA256,
@@ -2467,7 +2482,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 inviteeEphemeralPrivateKey: transient,
                 bootstrap: delivery.bootstrap,
                 transcriptSHA256: transcript,
-                currentTime: environment.timestamp()
+                // The protected hash records the earlier fresh-expiry gate.
+                currentTime: requiresFreshExpiryValidation
+                    ? environment.timestamp()
+                    : acceptance.signedKeyRequest.request.issuedAt
             )
         } else {
             guard Self.isAtLeast(transaction, .keyCreated),
@@ -2791,6 +2809,31 @@ public actor AtlasVaultTrustedPairingCoordinator:
         )
         try await authorizeSensitiveMutation()
         try await environment.createRegistry(result.registry)
+    }
+
+    private func requireInviterRegistryAdmission(
+        localDeviceID: String,
+        peerDeviceID: String
+    ) async throws {
+        guard let registry = try await environment.loadRegistry() else {
+            return
+        }
+        let maximumPeers = 64
+        for peer in registry.devices {
+            let descriptor = try peer.peerDescriptor.verifiedDescriptor()
+            guard descriptor.deviceID == peer.peerDeviceID else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
+        }
+        guard
+            registry.localDeviceID == localDeviceID,
+            registry.devices.count < maximumPeers,
+            !registry.devices.contains(where: {
+                $0.peerDeviceID == peerDeviceID
+            })
+        else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
     }
 
     private func sessionKey(

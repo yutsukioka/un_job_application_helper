@@ -22,6 +22,7 @@ const _transactionVersion = 1;
 const atlasVaultMaximumPairingStateByteCount = 2 * 1024 * 1024;
 const atlasVaultMaximumPairingTransactionByteCount = 64 * 1024;
 const atlasVaultMaximumPairingArtifactByteCount = 128 * 1024 * 1024;
+const _maximumTrustedPairingPeers = 64;
 
 final class AtlasVaultPairingTransactionException implements Exception {
   const AtlasVaultPairingTransactionException();
@@ -806,8 +807,9 @@ final class AtlasVaultTrustedPairingCoordinator
       }
       identity = await _requireIdentity();
       return await _runtime.withInteroperabilitySession((session) async {
-        final issuedAt = _utc(_now());
-        final expiresAt = _utc(_now().toUtc().add(const Duration(minutes: 10)));
+        final issued = _now().toUtc();
+        final issuedAt = _utc(issued);
+        final expiresAt = _utc(issued.add(const Duration(minutes: 10)));
         final signed = await createAtlasVaultPairingOffer(
           inviter: identity!,
           offerId: _uuidProvider(),
@@ -1048,6 +1050,10 @@ final class AtlasVaultTrustedPairingCoordinator
         );
         sessionKey.fillRange(0, sessionKey.length, 0);
         suppliedInvitee.fillRange(0, suppliedInvitee.length, 0);
+        await _requireInviterRegistryAdmission(
+          localDeviceId: identity.deviceId,
+          peerDeviceId: signedAcceptance.acceptance.invitee.descriptor.deviceId,
+        );
         final intent = await _advance(
           transaction,
           transaction.stage,
@@ -1244,14 +1250,19 @@ final class AtlasVaultTrustedPairingCoordinator
         if (artifact.kind != AtlasVaultPairingArtifactKind.delivery) {
           throw const AtlasVaultPairingTransactionException();
         }
+        final artifactHash = await atlasVaultSha256Hex(
+          artifact.canonicalBytes(),
+        );
+        if (transaction.deliverySha256 != null &&
+            transaction.deliverySha256 != artifactHash) {
+          throw const AtlasVaultPairingTransactionException();
+        }
         await _preflightInviteeDelivery(transaction, artifact);
         final intent = await _advance(
           transaction,
           transaction.stage,
           <String, Object?>{
-            'delivery_sha256': await atlasVaultSha256Hex(
-              artifact.canonicalBytes(),
-            ),
+            'delivery_sha256': artifactHash,
             'bootstrap_sha256': await atlasVaultSha256Hex(
               _bootstrap(artifact).canonicalBytes(),
             ),
@@ -1628,7 +1639,8 @@ final class AtlasVaultTrustedPairingCoordinator
             inviteeEphemeralPrivateKey: ephemeral,
             bootstrap: bootstrap,
             transcriptSha256: transcript,
-            currentTime: _utc(_now()),
+            // The protected delivery hash records the earlier fresh-expiry gate.
+            currentTime: keyRequest.request.issuedAt,
           );
         } finally {
           ephemeral.fillRange(0, ephemeral.length, 0);
@@ -1910,7 +1922,9 @@ final class AtlasVaultTrustedPairingCoordinator
         inviteeEphemeralPrivateKey: ephemeral,
         bootstrap: bootstrap,
         transcriptSha256: transcript,
-        currentTime: _utc(_now()),
+        currentTime: transaction.deliverySha256 == null
+            ? _utc(_now())
+            : keyRequest.request.issuedAt,
       );
       final store = AtlasVaultLocalStore.fromJson(<String, Object?>{
         'format': AtlasVaultLocalStore.format,
@@ -2674,6 +2688,20 @@ final class AtlasVaultTrustedPairingCoordinator
           restored.canonicalBytes(),
           committed.registry.canonicalBytes(),
         )) {
+      throw const AtlasVaultTrustedDeviceStateException();
+    }
+  }
+
+  Future<void> _requireInviterRegistryAdmission({
+    required String localDeviceId,
+    required String peerDeviceId,
+  }) async {
+    final registry = await _registryStore.read();
+    if (registry == null) return;
+    await verifyAtlasVaultTrustedDeviceRegistry(registry);
+    if (registry.localDeviceId != localDeviceId ||
+        registry.devices.length >= _maximumTrustedPairingPeers ||
+        registry.devices.any((device) => device.peerDeviceId == peerDeviceId)) {
       throw const AtlasVaultTrustedDeviceStateException();
     }
   }
