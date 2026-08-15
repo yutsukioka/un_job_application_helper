@@ -181,6 +181,48 @@ void main() {
     expect(journey.mailbox.bytes, isNull);
   });
 
+  test('initial artifacts are recoverable when staging fails', () async {
+    final inviterFailure = await _PairingJourney.create(
+      vector,
+      inviterStageFailure: AtlasVaultPairingArtifactKind.offer,
+    );
+    addTearDown(inviterFailure.stop);
+
+    expect(
+      (await inviterFailure.inviter.createPairingOffer()).disposition,
+      AtlasVaultTrustedPairingDisposition.unavailable,
+    );
+    expect(inviterFailure.inviterTransactions.value, isNotNull);
+    expect(inviterFailure.inviterStage.values, isEmpty);
+    expect(
+      (await inviterFailure.inviter.discardPairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.identityReady,
+    );
+
+    final inviteeFailure = await _PairingJourney.create(
+      vector,
+      inviteeStageFailure: AtlasVaultPairingArtifactKind.acceptance,
+    );
+    addTearDown(inviteeFailure.stop);
+    await inviteeFailure.inviter.createPairingOffer();
+    await inviteeFailure.inviter.savePairingOffer();
+
+    expect(
+      (await inviteeFailure.invitee.importPairingOffer()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(inviteeFailure.inviteeTransactions.value, isNotNull);
+    expect(
+      inviteeFailure.inviteeStage.values.keys,
+      contains(AtlasVaultPairingArtifactKind.offer),
+    );
+    expect(
+      (await inviteeFailure.invitee.discardPairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.identityReady,
+    );
+    expect(inviteeFailure.inviteeStage.values, isEmpty);
+  });
+
   for (final gate in <AtlasVaultPairingCleanInstallDisposition>[
     AtlasVaultPairingCleanInstallDisposition.migrationRequired,
     AtlasVaultPairingCleanInstallDisposition.existingVault,
@@ -300,6 +342,55 @@ void main() {
     expect(journey.inviteeLocal.values, isEmpty);
   });
 
+  test('expired key request fails before delivery creation', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    journey.clock.value = journey.clock.value.add(const Duration(minutes: 11));
+
+    final result = await journey.inviter.confirmCodesMatch();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+  });
+
+  test(
+    'selection clears ephemeral key and acknowledgement records activation',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+      await journey.inviter.confirmCodesMatch();
+      await journey.invitee.confirmCodesMatch();
+      await journey.inviter.saveKeyDelivery();
+      journey.clock.value = DateTime.utc(2026, 8, 15, 10, 9);
+
+      expect(
+        (await journey.invitee.importKeyDelivery()).disposition,
+        AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+      );
+
+      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNull);
+      final acknowledgementArtifact =
+          AtlasVaultPairingArtifact.fromCanonicalBytes(
+            journey.inviteeStage.values[AtlasVaultPairingArtifactKind
+                .acknowledgement]!,
+          );
+      final signed = AtlasVaultSignedPairingAcknowledgement.fromJson(
+        atlasVaultObject(
+          acknowledgementArtifact.payload['signed_acknowledgement'],
+        ),
+      );
+      expect(signed.acknowledgement.installedAt, '2026-08-15T10:09:00Z');
+    },
+  );
+
   test('inviter becomes resume-only after delivery export', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -361,6 +452,22 @@ void main() {
     expect(transaction.ephemeralPrivateKey, everyElement(0));
     expect(copiedSecret, isNot(everyElement(0)));
     copiedSecret.fillRange(0, copiedSecret.length, 0);
+  });
+
+  test('pairing transaction accepts the full signed key epoch range', () {
+    final transaction = AtlasVaultPairingTransaction.fromJson(<String, Object?>{
+      ..._transactionJson(vector),
+      'key_epoch': atlasVaultMaximumDeviceKeyEpoch,
+    });
+
+    expect(transaction.keyEpoch, atlasVaultMaximumDeviceKeyEpoch);
+    expect(
+      () => AtlasVaultPairingTransaction.fromJson(<String, Object?>{
+        ..._transactionJson(vector),
+        'key_epoch': atlasVaultMaximumDeviceKeyEpoch + 1,
+      }),
+      throwsA(isA<AtlasVaultPairingTransactionException>()),
+    );
   });
 
   test(
@@ -633,6 +740,8 @@ final class _PairingJourney {
     Map<String, Object?> vector, {
     AtlasVaultPairingCleanInstallDisposition inviteeCleanDisposition =
         AtlasVaultPairingCleanInstallDisposition.clean,
+    AtlasVaultPairingArtifactKind? inviterStageFailure,
+    AtlasVaultPairingArtifactKind? inviteeStageFailure,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -662,9 +771,11 @@ final class _PairingJourney {
     );
     final inviterStage = AtlasVaultPairingMemoryStageStore(
       events: inviterEvents,
+      failCreateKind: inviterStageFailure,
     );
     final inviteeStage = AtlasVaultPairingMemoryStageStore(
       events: inviteeEvents,
+      failCreateKind: inviteeStageFailure,
     );
     final mailbox = AtlasVaultPairingMailbox();
     final inviterTransport = AtlasVaultPairingMemoryTransport(

@@ -201,8 +201,9 @@ final class AtlasVaultPairingMemoryStageStore
   final Map<AtlasVaultPairingArtifactKind, Uint8List> values =
       <AtlasVaultPairingArtifactKind, Uint8List>{};
   final List<String> events;
+  final AtlasVaultPairingArtifactKind? failCreateKind;
 
-  AtlasVaultPairingMemoryStageStore({List<String>? events})
+  AtlasVaultPairingMemoryStageStore({List<String>? events, this.failCreateKind})
     : events = events ?? <String>[];
 
   @override
@@ -214,6 +215,9 @@ final class AtlasVaultPairingMemoryStageStore
 
   @override
   Future<void> create(AtlasVaultPairingArtifact artifact) async {
+    if (artifact.kind == failCreateKind) {
+      throw StateError('injected stage create failure');
+    }
     if (values.containsKey(artifact.kind)) throw StateError('stage exists');
     events.add('stage.create:${artifact.kind.encoded}');
     values[artifact.kind] = Uint8List.fromList(artifact.canonicalBytes());

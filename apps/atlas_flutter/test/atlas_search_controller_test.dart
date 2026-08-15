@@ -3213,6 +3213,43 @@ void main() {
       migrationAssembly,
       contains('AtlasWindowsDesktopCacheMigrationSource'),
     );
+
+    final androidAdmissionStart = source.indexOf(
+      'final class _AtlasAndroidTrustedPairingAdmission',
+    );
+    final androidAdmissionEnd = source.indexOf(
+      'Future<AtlasVaultPairingCleanInstallDisposition>',
+      androidAdmissionStart,
+    );
+    expect(androidAdmissionStart, isNonNegative);
+    expect(androidAdmissionEnd, greaterThan(androidAdmissionStart));
+    final androidAdmission = source.substring(
+      androidAdmissionStart,
+      androidAdmissionEnd,
+    );
+    expect(
+      androidAdmission,
+      contains('AtlasVaultRecoveryImportTransactionAdmission'),
+    );
+    expect(androidAdmission, contains('runRecoveryImportTransaction<T>'));
+
+    final androidAssemblyStart = source.indexOf(
+      'final keyStore = AtlasAndroidVaultSecureKeyStore();',
+    );
+    final androidAssemblyEnd = source.indexOf(
+      'final pairingOwner = _attachAndroidTrustedPairing(',
+      androidAssemblyStart,
+    );
+    expect(androidAssemblyStart, isNonNegative);
+    expect(androidAssemblyEnd, greaterThan(androidAssemblyStart));
+    final androidAssembly = source.substring(
+      androidAssemblyStart,
+      androidAssemblyEnd,
+    );
+    expect(
+      androidAssembly,
+      contains('importTransactionAdmission: authorityAdmission'),
+    );
     expect(
       migrationAssembly,
       contains('AtlasVaultPlaintextMigrationPresentationOwner('),
