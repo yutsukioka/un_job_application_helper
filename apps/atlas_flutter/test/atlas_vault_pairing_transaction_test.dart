@@ -294,6 +294,117 @@ void main() {
     );
   });
 
+  test('delivery import remains resumable after its expiry', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.storeCreated,
+      inviteeTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.deliveryImported,
+    );
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 16);
+
+    expect(
+      (await journey.invitee.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+  });
+
+  test('full inviter registry rejects acceptance before persistence', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    journey.inviterRegistry.value = await _trustedRegistry(
+      localDeviceId:
+          atlasVaultObject(vector['inviter'])['device_id']! as String,
+      vaultId: journey.vaultId,
+      peerCount: 64,
+    );
+    await _prepareAcceptance(journey);
+
+    final result = await journey.inviter.importPairingAcceptance();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterTransactions.value?.stage,
+      AtlasVaultPairingStage.offerSaved,
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.acceptance)),
+    );
+  });
+
+  test(
+    'already-trusted invitee rejects acceptance before persistence',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      final invitee = await _identityFromVector(vector, 'invitee');
+      try {
+        journey.inviterRegistry.value = await _trustedRegistry(
+          localDeviceId:
+              atlasVaultObject(vector['inviter'])['device_id']! as String,
+          vaultId: journey.vaultId,
+          identities: <AtlasVaultDeviceIdentity>[invitee],
+        );
+        await _prepareAcceptance(journey);
+
+        final result = await journey.inviter.importPairingAcceptance();
+
+        expect(
+          result.disposition,
+          AtlasVaultTrustedPairingDisposition.recoveryRequired,
+        );
+        expect(
+          journey.inviterTransactions.value?.stage,
+          AtlasVaultPairingStage.offerSaved,
+        );
+        expect(
+          journey.inviterStage.values,
+          isNot(contains(AtlasVaultPairingArtifactKind.acceptance)),
+        );
+      } finally {
+        invitee.destroy();
+      }
+    },
+  );
+
+  test('offer expiry derives from one captured issue time', () async {
+    final samples = <DateTime>[
+      DateTime.utc(2026, 8, 15, 10, 5, 0, 900),
+      DateTime.utc(2026, 8, 15, 10, 5, 1, 100),
+    ];
+    var calls = 0;
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterNow: () {
+        final index = calls < samples.length ? calls : samples.length - 1;
+        calls += 1;
+        return samples[index];
+      },
+    );
+    addTearDown(journey.stop);
+
+    final result = await journey.inviter.createPairingOffer();
+
+    expect(result.disposition, AtlasVaultTrustedPairingDisposition.offerReady);
+    expect(calls, 1);
+    expect(result.expiresAt, '2026-08-15T10:15:00Z');
+  });
+
   test('inviter requires an active encrypted vault', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -1195,6 +1306,7 @@ final class _PairingJourney {
     int inviteeDeterminismSeed = 500,
     Future<AtlasVaultPairingCleanInstallDisposition> Function()?
     inviteeCleanInstallProbe,
+    DateTime Function()? inviterNow,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -1323,7 +1435,7 @@ final class _PairingJourney {
       selectedVaultStore: inviterSelected,
       uuidProvider: inviterDeterminism.uuid,
       randomBytes: inviterDeterminism.bytes,
-      now: () => clock.value,
+      now: inviterNow ?? (() => clock.value),
     );
     final invitee = AtlasVaultTrustedPairingCoordinator(
       identityStore: inviteeIdentity,
@@ -1391,11 +1503,15 @@ final class _PairingClock {
 }
 
 Future<void> _exchangeAcceptance(_PairingJourney journey) async {
+  await _prepareAcceptance(journey);
+  await journey.inviter.importPairingAcceptance();
+}
+
+Future<void> _prepareAcceptance(_PairingJourney journey) async {
   await journey.inviter.createPairingOffer();
   await journey.inviter.savePairingOffer();
   await journey.invitee.importPairingOffer();
   await journey.invitee.savePairingAcceptance();
-  await journey.inviter.importPairingAcceptance();
 }
 
 Future<void> _exchangeDelivery(_PairingJourney journey) async {
@@ -1409,8 +1525,22 @@ Future<Uint8List> _identitySecret(
   Map<String, Object?> vector,
   String name,
 ) async {
+  final identity = await _identityFromVector(vector, name);
+  final secret = identity.secretBundle();
+  try {
+    return secret.canonicalBytes();
+  } finally {
+    secret.destroy();
+    identity.destroy();
+  }
+}
+
+Future<AtlasVaultDeviceIdentity> _identityFromVector(
+  Map<String, Object?> vector,
+  String name,
+) async {
   final data = atlasVaultObject(vector[name]);
-  final identity = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+  return AtlasVaultDeviceIdentity.fromPrivateKeys(
     signingPrivateSeed: Uint8List.fromList(
       base64Decode(data['signing_private_seed_b64']! as String),
     ),
@@ -1421,12 +1551,79 @@ Future<Uint8List> _identitySecret(
     keyEpoch: data['key_epoch']! as int,
     expectedDeviceId: data['device_id']! as String,
   );
-  final secret = identity.secretBundle();
+}
+
+Future<AtlasVaultTrustedDeviceRegistry> _trustedRegistry({
+  required String localDeviceId,
+  required String vaultId,
+  int peerCount = 0,
+  List<AtlasVaultDeviceIdentity> identities =
+      const <AtlasVaultDeviceIdentity>[],
+}) async {
+  final generated = <AtlasVaultDeviceIdentity>[];
+  final all = <AtlasVaultDeviceIdentity>[...identities];
   try {
-    return secret.canonicalBytes();
+    for (var index = 0; index < peerCount; index += 1) {
+      final signing = Uint8List.fromList(
+        List<int>.generate(
+          32,
+          (offset) => ((index + 1) * 37 + offset * 11) & 0xff,
+        ),
+      );
+      final agreement = Uint8List.fromList(
+        List<int>.generate(
+          32,
+          (offset) => ((index + 1) * 53 + offset * 17 + 1) & 0xff,
+        ),
+      );
+      final identity = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+        signingPrivateSeed: signing,
+        agreementPrivateKey: agreement,
+        createdAt: '2026-08-15T10:00:00Z',
+      );
+      signing.fillRange(0, signing.length, 0);
+      agreement.fillRange(0, agreement.length, 0);
+      generated.add(identity);
+      all.add(identity);
+    }
+    final peers = <AtlasVaultTrustedDevicePeer>[];
+    for (var index = 0; index < all.length; index += 1) {
+      final identity = all[index];
+      if (identity.deviceId == localDeviceId) {
+        throw StateError('test identity collision');
+      }
+      peers.add(
+        AtlasVaultTrustedDevicePeer.fromJson(<String, Object?>{
+          'peer_device_id': identity.deviceId,
+          'peer_descriptor': (await identity.signDescriptor()).toJson(),
+          'pairing_transcript_sha256': 'a' * 64,
+          'linked_at': '2026-08-15T10:00:00Z',
+          'role': 'inviter',
+          'vault_id': vaultId,
+          'key_epoch': 1,
+          'delivery_id':
+              '65000000-0000-4000-8000-${(index + 1).toString().padLeft(12, '0')}',
+          'acknowledgement_sha256': 'b' * 64,
+        }),
+      );
+    }
+    peers.sort(
+      (left, right) => left.peerDeviceId.compareTo(right.peerDeviceId),
+    );
+    return AtlasVaultTrustedDeviceRegistry.fromJson(<String, Object?>{
+      'format': 'atlasvault-trusted-device-registry',
+      'version': 1,
+      'local_device_id': localDeviceId,
+      'revision': '65000000-0000-4000-8000-000000000099',
+      'parent_revision': null,
+      'created_at': '2026-08-15T10:00:00Z',
+      'updated_at': '2026-08-15T10:00:00Z',
+      'devices': <Object?>[for (final peer in peers) peer.toJson()],
+    });
   } finally {
-    secret.destroy();
-    identity.destroy();
+    for (final identity in generated) {
+      identity.destroy();
+    }
   }
 }
 

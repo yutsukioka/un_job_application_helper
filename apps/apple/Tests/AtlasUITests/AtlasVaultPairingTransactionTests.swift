@@ -338,6 +338,80 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertEqual(accepted.disposition, .acknowledgementReady)
     }
 
+    func testDeliveryImportRemainsResumableAfterExpiry() async throws {
+        let journey = try makeJourney(inviteeReplaceFailure: .storeCreated)
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        let interruptedTransaction = await journey.inviteeState.loadTransaction()
+        XCTAssertEqual(
+            interruptedTransaction?.stage,
+            .deliveryImported
+        )
+        journey.clock.set("2026-08-15T12:11:00Z")
+
+        let resumed = await journey.invitee.resumePairing()
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+    }
+
+    func testFullInviterRegistryRejectsAcceptanceBeforePersistence()
+        async throws
+    {
+        let journey = try makeJourney()
+        let inviterIdentity = await journey.inviterState.loadIdentity()
+        try await journey.inviterState.createRegistry(
+            try trustedRegistry(
+                localDeviceID: inviterIdentity.deviceID,
+                vaultID: journey.vaultID,
+                peerCount: 64
+            )
+        )
+        let acceptance = try await prepareAcceptance(journey)
+
+        let result = await journey.inviter.importPairingAcceptance(acceptance)
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        let transaction = await journey.inviterState.loadTransaction()
+        let persistedAcceptance = await journey.inviterState.loadArtifact(
+            .acceptance
+        )
+        XCTAssertEqual(
+            transaction?.stage,
+            .offerSaved
+        )
+        XCTAssertNil(persistedAcceptance)
+    }
+
+    func testAlreadyTrustedInviteeRejectsAcceptanceBeforePersistence()
+        async throws
+    {
+        let journey = try makeJourney()
+        let inviterIdentity = await journey.inviterState.loadIdentity()
+        let inviteeIdentity = await journey.inviteeState.loadIdentity()
+        try await journey.inviterState.createRegistry(
+            try trustedRegistry(
+                localDeviceID: inviterIdentity.deviceID,
+                vaultID: journey.vaultID,
+                identities: [inviteeIdentity]
+            )
+        )
+        let acceptance = try await prepareAcceptance(journey)
+
+        let result = await journey.inviter.importPairingAcceptance(acceptance)
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        let transaction = await journey.inviterState.loadTransaction()
+        let persistedAcceptance = await journey.inviterState.loadArtifact(
+            .acceptance
+        )
+        XCTAssertEqual(
+            transaction?.stage,
+            .offerSaved
+        )
+        XCTAssertNil(persistedAcceptance)
+    }
+
     func testStoreAndKeyCreateIntentSurvivesJournalAdvanceFailure()
         async throws
     {
@@ -738,9 +812,63 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
-    private func exchangeAcceptance(_ journey: PairingJourneyHarness)
-        async throws
-    {
+    private func trustedRegistry(
+        localDeviceID: String,
+        vaultID: String,
+        peerCount: Int = 0,
+        identities: [AtlasVaultDeviceIdentity] = []
+    ) throws -> AtlasVaultTrustedDeviceRegistry {
+        var peers = [AtlasVaultTrustedDevicePeer]()
+        var peerIdentities = identities
+        for index in 0..<peerCount {
+            let signing = Data((0..<32).map { offset in
+                UInt8(((index + 1) * 37 + offset * 11) & 0xff)
+            })
+            let agreement = Data((0..<32).map { offset in
+                UInt8(((index + 1) * 53 + offset * 17 + 1) & 0xff)
+            })
+            peerIdentities.append(
+                try AtlasVaultDeviceIdentity(
+                    signingPrivateSeed: signing,
+                    agreementPrivateKey: agreement,
+                    createdAt: "2026-08-15T12:00:00Z"
+                )
+            )
+        }
+        for (index, identity) in peerIdentities.enumerated() {
+            guard identity.deviceID != localDeviceID else {
+                throw PairingTransactionTestError.invalidVector
+            }
+            peers.append(
+                try AtlasVaultTrustedDevicePeer(
+                    peerDeviceID: identity.deviceID,
+                    peerDescriptor: identity.signDescriptor(),
+                    pairingTranscriptSHA256: String(repeating: "a", count: 64),
+                    linkedAt: "2026-08-15T12:00:00Z",
+                    role: "inviter",
+                    vaultID: vaultID,
+                    keyEpoch: 1,
+                    deliveryID: String(
+                        format: "65000000-0000-4000-8000-%012d",
+                        index + 1
+                    ),
+                    acknowledgementSHA256: String(repeating: "b", count: 64)
+                )
+            )
+        }
+        return try AtlasVaultTrustedDeviceRegistry(
+            localDeviceID: localDeviceID,
+            revision: "65000000-0000-4000-8000-000000000099",
+            parentRevision: nil,
+            createdAt: "2026-08-15T12:00:00Z",
+            updatedAt: "2026-08-15T12:00:00Z",
+            devices: peers.sorted { $0.peerDeviceID < $1.peerDeviceID }
+        )
+    }
+
+    private func prepareAcceptance(
+        _ journey: PairingJourneyHarness
+    ) async throws -> AtlasVaultPairingArtifact {
         let offerReady = await journey.inviter.createPairingOffer()
         XCTAssertEqual(offerReady.disposition, .offerReady)
         let offer = try await journey.inviter.artifactToSave(.offer)
@@ -757,6 +885,13 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             committed: true
         )
         XCTAssertEqual(acceptanceSaved.disposition, .acceptanceSaved)
+        return acceptance
+    }
+
+    private func exchangeAcceptance(_ journey: PairingJourneyHarness)
+        async throws
+    {
+        let acceptance = try await prepareAcceptance(journey)
         let codes = await journey.inviter.importPairingAcceptance(acceptance)
         XCTAssertEqual(codes.disposition, .codesReady)
     }
