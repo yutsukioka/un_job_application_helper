@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ PRIVATE_ENVIRONMENT = (
     "ATLAS_API_PORT",
     "ATLAS_ALLOW_LAN",
     "ATLAS_TRUST_PROXY_HEADERS",
+    "JOB_API_STRATEGY_ROOT",
 )
 
 
@@ -84,6 +86,71 @@ def test_default_policy_allows_direct_loopback_private_mutation(tmp_path: Path) 
         "/api/saved-searches",
         json={"name": "fake", "summary": "fake", "request": {"text": "fake"}},
     )
+
+    assert response.status_code == 200
+
+
+def test_loopback_rejects_cross_origin_form_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ATLAS_CORS_ORIGINS", "https://trusted.example")
+    client = _client(
+        tmp_path,
+        headers={
+            "Origin": "https://attacker.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+
+    response = client.post(
+        "/api/tracker/jobs/ATTACKER_PRIVATE_JOB",
+        content="",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Private API access denied."}
+    assert _client(tmp_path).get("/api/tracker").json() == []
+
+
+def test_loopback_rejects_cross_site_fetch_metadata_without_origin(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path, headers={"Sec-Fetch-Site": "cross-site"})
+
+    response = client.post("/api/tracker/jobs/ATTACKER_PRIVATE_JOB")
+
+    assert response.status_code == 403
+    assert _client(tmp_path).get("/api/tracker").json() == []
+
+
+def test_loopback_allows_same_origin_browser_mutation(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        headers={
+            "Origin": "http://127.0.0.1",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+
+    response = client.post("/api/tracker/jobs/FAKE_PRIVATE_JOB")
+
+    assert response.status_code == 200
+
+
+def test_loopback_allows_explicit_trusted_browser_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_origin = "https://trusted.example"
+    monkeypatch.setenv("ATLAS_CORS_ORIGINS", trusted_origin)
+    client = _client(
+        tmp_path,
+        headers={"Origin": trusted_origin, "Sec-Fetch-Site": "cross-site"},
+    )
+
+    response = client.post("/api/tracker/jobs/FAKE_PRIVATE_JOB")
 
     assert response.status_code == 200
 
@@ -577,6 +644,7 @@ def test_token_admission_allows_private_strategy_scoring(
     settings = _settings(tmp_path)
     strategy = tmp_path / "strategy.json"
     strategy.write_text('{"terms": []}', encoding="utf-8")
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(tmp_path))
     monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
     monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
     client = TestClient(
@@ -591,6 +659,128 @@ def test_token_admission_allows_private_strategy_scoring(
     )
 
     assert response.status_code == 200
+
+
+def test_strategy_scoring_rejects_path_outside_configured_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy_root = tmp_path / "strategies"
+    strategy_root.mkdir()
+    outside = tmp_path / "PRIVATE_STRATEGY_PATH_SENTINEL.json"
+    outside.write_text(
+        '{"terms": ["PRIVATE_STRATEGY_CONTENT_SENTINEL"]}', encoding="utf-8"
+    )
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(strategy_root))
+    client = _client(tmp_path)
+
+    response = client.post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(outside)},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Strategy file is unavailable."}
+    assert str(outside) not in response.text
+    assert "PRIVATE_STRATEGY_CONTENT_SENTINEL" not in response.text
+
+
+def test_strategy_scoring_rejects_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy_root = tmp_path / "strategies"
+    strategy_root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"terms": []}', encoding="utf-8")
+    link = strategy_root / "linked.json"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(strategy_root))
+
+    response = _client(tmp_path).post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(link)},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Strategy file is unavailable."}
+
+
+def test_strategy_scoring_rejects_oversized_and_nonregular_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy_root = tmp_path / "strategies"
+    strategy_root.mkdir()
+    oversized = strategy_root / "oversized.json"
+    oversized.write_bytes(b" " * (1024 * 1024 + 1))
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(strategy_root))
+    client = _client(tmp_path)
+
+    oversized_response = client.post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(oversized)},
+    )
+    directory_response = client.post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(strategy_root)},
+    )
+
+    assert oversized_response.status_code == 400
+    assert oversized_response.json() == {"detail": "Strategy file is unavailable."}
+    assert directory_response.status_code == 400
+    assert directory_response.json() == {"detail": "Strategy file is unavailable."}
+
+
+def test_public_sync_history_is_bounded_and_error_free(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    private_sentinel = "PRIVATE_REMOTE_ERROR_SENTINEL"
+    with sqlite3.connect(settings.db_path) as connection:
+        for index in range(30):
+            connection.execute(
+                """
+                INSERT INTO source_runs (
+                    source_id, fetched, inserted, updated, unchanged, missing,
+                    closed, errors_json, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"source-{index:02d}",
+                    index,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    f'["{private_sentinel}-{index:02d}"]',
+                    f"2026-01-01T00:{index:02d}:00+00:00",
+                ),
+            )
+
+    response = TestClient(
+        create_app(settings),
+        client=("192.0.2.44", 50123),
+    ).get("/api/sync/runs")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 25
+    assert all(
+        set(run)
+        == {
+            "source_id",
+            "fetched",
+            "inserted",
+            "updated",
+            "missing",
+            "closed",
+            "observed_at",
+        }
+        for run in response.json()
+    )
+    assert private_sentinel not in response.text
 
 
 def test_private_route_classifier_covers_every_audited_route() -> None:
