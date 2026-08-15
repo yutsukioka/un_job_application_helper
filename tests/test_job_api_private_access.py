@@ -60,11 +60,24 @@ def _client(
     headers: dict[str, str] | None = None,
 ) -> TestClient:
     return TestClient(
-        create_app(_settings(tmp_path)),
+        _with_peer(create_app(_settings(tmp_path)), peer),
         base_url="http://127.0.0.1",
-        client=(peer, 50123),
         headers=headers,
     )
+
+
+def _with_peer(application: Any, peer: str) -> Any:
+    async def peer_scoped_application(
+        scope: dict[str, Any],
+        receive: Any,
+        send: Any,
+    ) -> None:
+        if scope.get("type") == "http":
+            scope = dict(scope)
+            scope["client"] = (peer, 50123)
+        await application(scope, receive, send)
+
+    return peer_scoped_application
 
 
 def _request(
@@ -630,7 +643,7 @@ def test_disabled_mode_keeps_public_health_and_search_available(
 
 def test_public_health_does_not_disclose_local_storage_path(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
-    client = TestClient(create_app(settings), client=("192.0.2.44", 50123))
+    client = TestClient(_with_peer(create_app(settings), "192.0.2.44"))
 
     response = client.get("/api/health")
 
@@ -648,7 +661,7 @@ def test_public_missing_database_error_does_not_disclose_storage_path(
         saved_searches_path=tmp_path / "saved-searches.json",
         tracker_path=tmp_path / "tracker.json",
     )
-    client = TestClient(create_app(settings), client=("192.0.2.44", 50123))
+    client = TestClient(_with_peer(create_app(settings), "192.0.2.44"))
 
     response = client.post("/api/search", json={"limit": 1})
 
@@ -664,8 +677,7 @@ def test_non_loopback_search_with_private_strategy_requires_admission(
     sentinel_path = tmp_path / "PRIVATE_STRATEGY_PATH_SENTINEL.json"
     sentinel_path.write_text('{"terms": []}', encoding="utf-8")
     client = TestClient(
-        create_app(settings),
-        client=("192.0.2.44", 50123),
+        _with_peer(create_app(settings), "192.0.2.44"),
         raise_server_exceptions=False,
     )
 
@@ -689,8 +701,7 @@ def test_token_admission_allows_private_strategy_scoring(
     monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
     monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
     client = TestClient(
-        create_app(settings),
-        client=("192.0.2.44", 50123),
+        _with_peer(create_app(settings), "192.0.2.44"),
         headers={"Authorization": f"Bearer {VALID_TOKEN}"},
     )
 
@@ -855,8 +866,7 @@ def test_public_sync_history_is_bounded_and_error_free(tmp_path: Path) -> None:
             )
 
     response = TestClient(
-        create_app(settings),
-        client=("192.0.2.44", 50123),
+        _with_peer(create_app(settings), "192.0.2.44"),
     ).get("/api/sync/runs")
 
     assert response.status_code == 200
@@ -931,10 +941,9 @@ def test_root_path_cannot_hide_private_route_from_admission(
     path: str,
 ) -> None:
     client = TestClient(
-        create_app(_settings(tmp_path)),
+        _with_peer(create_app(_settings(tmp_path)), "192.0.2.44"),
         base_url="http://127.0.0.1/prefix",
         root_path="/prefix",
-        client=("192.0.2.44", 50123),
     )
 
     response = client.request(method, path, json={})
