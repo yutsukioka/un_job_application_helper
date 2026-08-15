@@ -1355,6 +1355,15 @@ final class AtlasVaultTrustedPairingCoordinator
       }
       try {
         if (transaction.role == AtlasVaultPairingRole.invitee &&
+            transaction.stage == AtlasVaultPairingStage.acknowledgementSaved) {
+          await _clearTransaction(transaction);
+          return const AtlasVaultTrustedPairingResult(
+            disposition: AtlasVaultTrustedPairingDisposition.completed,
+            role: AtlasVaultPairingRole.invitee,
+            trusted: true,
+          );
+        }
+        if (transaction.role == AtlasVaultPairingRole.invitee &&
             _stageAtLeast(
               transaction,
               AtlasVaultPairingStage.deliveryImported,
@@ -1411,6 +1420,15 @@ final class AtlasVaultTrustedPairingCoordinator
             AtlasVaultTrustedPairingDisposition.recoveryRequired,
             pending: true,
           );
+        }
+        if (transaction.role == AtlasVaultPairingRole.invitee) {
+          final selected = _requireInstallDependency(_selectedVaultStore);
+          if (await selected.read() != null) {
+            return _fixed(
+              AtlasVaultTrustedPairingDisposition.recoveryRequired,
+              pending: true,
+            );
+          }
         }
         final vaultId = transaction.vaultId;
         if (vaultId != null && transaction.storeSha256 != null) {
@@ -1616,7 +1634,12 @@ final class AtlasVaultTrustedPairingCoordinator
         transaction,
         AtlasVaultPairingStage.selectionCommitted,
       )) {
-        await selected.create(vaultId);
+        final selectedVaultId = await selected.read();
+        if (selectedVaultId == null) {
+          await selected.create(vaultId);
+        } else if (selectedVaultId != vaultId) {
+          throw const AtlasVaultPairingTransactionException();
+        }
         if (await selected.read() != vaultId) {
           throw const AtlasVaultPairingTransactionException();
         }
@@ -1700,6 +1723,10 @@ final class AtlasVaultTrustedPairingCoordinator
           }
         }
       } else {
+        final installedAt = transaction.installedAt;
+        if (installedAt == null) {
+          throw const AtlasVaultPairingTransactionException();
+        }
         acknowledgement = await _deterministicAcknowledgement(
           transaction,
           identity,
@@ -1718,7 +1745,7 @@ final class AtlasVaultTrustedPairingCoordinator
             'peer_device_id': delivery.inviter.descriptor.deviceId,
             'peer_descriptor': delivery.inviter.toJson(),
             'pairing_transcript_sha256': delivery.delivery.transcriptSha256,
-            'linked_at': _utc(_now()),
+            'linked_at': installedAt,
             'role': 'invitee',
             'vault_id': vaultId,
             'key_epoch': delivery.delivery.keyEpoch,

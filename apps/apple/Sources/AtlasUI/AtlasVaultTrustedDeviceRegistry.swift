@@ -568,7 +568,7 @@ public enum AtlasVaultPairingReplayFoundation {
             if let current = store.entries.first(where: {
                 $0.kind == entry.kind && $0.objectID == entry.objectID
             }) {
-                guard current == entry else {
+                guard current.transcriptSHA256 == entry.transcriptSHA256 else {
                     throw AtlasVaultTrustedDeviceStateError.invalidState
                 }
                 return AtlasVaultReplayConsumeResult(

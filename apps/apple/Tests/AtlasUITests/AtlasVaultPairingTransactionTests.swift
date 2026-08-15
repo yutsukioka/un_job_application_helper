@@ -165,12 +165,12 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
         XCTAssertLessThan(
             try XCTUnwrap(
-                inviteeSnapshot.events.lastIndex(of: "registry.commit")
-            ),
-            try XCTUnwrap(
                 inviteeSnapshot.events.firstIndex(
                     of: "artifact.create:acknowledgement"
                 )
+            ),
+            try XCTUnwrap(
+                inviteeSnapshot.events.lastIndex(of: "registry.commit")
             )
         )
         XCTAssertEqual(inviteeSnapshot.events.last, "transaction.delete")

@@ -83,6 +83,17 @@ immediately before creating a delivery. Pairing transaction decoding accepts
 the same positive 64-bit key-epoch range as the signed device and delivery
 contracts; smaller implementation-specific integer bounds are not imposed.
 
+Apple now journals an offer before staging it and applies the selected-vault
+absence check only to invitee discard. Both coordinators treat an already
+matching invitee selection as an interrupted successful create, while discard
+fails closed whenever an invitee selection exists outside the recorded stage.
+The exact signed Apple acknowledgement is hash-bound in the transaction before
+the trust-registry side effect so retries reuse the same bytes even when the
+platform signature differs across invocations. Invitee trust uses the
+journaled installation timestamp, acknowledgement-saved resume retries cleanup,
+and Apple replay duplicates compare their authenticated kind, object ID, and
+transcript rather than local consumption timestamps.
+
 ## Cross-Platform Ring
 
 External fake artifacts exercise Apple inviter to Android invitee, Android
