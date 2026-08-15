@@ -1731,6 +1731,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 .invitee,
                 .offerConsumed
             )
+            try await self.preflightInviteeDelivery(
+                artifact,
+                transaction: transaction
+            )
             let payload = try artifact.deliveryPayload()
             let intent = try await self.advance(
                 transaction,
@@ -1806,6 +1810,20 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     transaction,
                     identity: identity,
                     permitExactReplay: true
+                )
+            }
+            if transaction.role == .inviter,
+               transaction.stage == .trustCommitted {
+                try await self.clearTransaction(transaction)
+                return AtlasVaultTrustedPairingResult(
+                    disposition: .completed,
+                    role: .inviter,
+                    localFingerprint: AtlasVaultPairingFoundation
+                        .deviceFingerprint(transaction.localDeviceID),
+                    peerFingerprint: transaction.peerDeviceID.flatMap(
+                        AtlasVaultPairingFoundation.deviceFingerprint
+                    ),
+                    trusted: true
                 )
             }
             if transaction.role == .invitee,
@@ -1904,6 +1922,34 @@ public actor AtlasVaultTrustedPairingCoordinator:
 
     public func stop() async {
         stopped = true
+    }
+
+    private func preflightInviteeDelivery(
+        _ artifact: AtlasVaultPairingArtifact,
+        transaction: AtlasVaultPairingTransaction
+    ) async throws {
+        var context = try await inviteeContext(
+            transaction,
+            candidateDelivery: artifact
+        )
+        defer { Self.wipe(&context.recoveredKey) }
+        let delivery = context.delivery.signedDelivery.delivery
+        let store = AtlasVaultLocalStoreEnvelope(
+            storeID: transaction.transactionID,
+            createdAt: transaction.createdAt,
+            updatedAt: transaction.createdAt,
+            vaultMetadata: try context.delivery.bootstrap.vaultMetadata
+                .localStoreMetadata(),
+            records: context.delivery.bootstrap.records
+        )
+        guard try await environment.validateProjection(
+            store,
+            delivery.vaultID,
+            context.recoveredKey,
+            false
+        ) else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
     }
 
     private func installInvitee(
@@ -2361,7 +2407,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
     }
 
     private func inviteeContext(
-        _ transaction: AtlasVaultPairingTransaction
+        _ transaction: AtlasVaultPairingTransaction,
+        candidateDelivery: AtlasVaultPairingArtifact? = nil
     ) async throws -> InviteeContext {
         guard let identity = try await environment.loadIdentity(),
               let transcriptText = transaction.transcriptSHA256,
@@ -2375,10 +2422,19 @@ public actor AtlasVaultTrustedPairingCoordinator:
             .acceptance,
             transaction: transaction
         ).acceptancePayload()
-        let delivery = try await requireArtifact(
-            .delivery,
-            transaction: transaction
-        ).deliveryPayload()
+        let deliveryArtifact: AtlasVaultPairingArtifact
+        if let candidateDelivery {
+            guard candidateDelivery.kind == .delivery else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
+            deliveryArtifact = candidateDelivery
+        } else {
+            deliveryArtifact = try await requireArtifact(
+                .delivery,
+                transaction: transaction
+            )
+        }
+        let delivery = try deliveryArtifact.deliveryPayload()
         guard
             delivery.signedDelivery.delivery.inviteeDeviceID
                 == identity.deviceID,

@@ -1244,6 +1244,7 @@ final class AtlasVaultTrustedPairingCoordinator
         if (artifact.kind != AtlasVaultPairingArtifactKind.delivery) {
           throw const AtlasVaultPairingTransactionException();
         }
+        await _preflightInviteeDelivery(transaction, artifact);
         final intent = await _advance(
           transaction,
           transaction.stage,
@@ -1385,6 +1386,21 @@ final class AtlasVaultTrustedPairingCoordinator
             ) &&
             transaction.stage != AtlasVaultPairingStage.acknowledgementSaved) {
           return await _installInvitee(transaction);
+        }
+        if (transaction.role == AtlasVaultPairingRole.inviter &&
+            transaction.stage == AtlasVaultPairingStage.trustCommitted) {
+          await _clearTransaction(transaction);
+          return AtlasVaultTrustedPairingResult(
+            disposition: AtlasVaultTrustedPairingDisposition.completed,
+            role: AtlasVaultPairingRole.inviter,
+            localFingerprint: atlasVaultPairingDeviceFingerprint(
+              transaction.localDeviceId,
+            ),
+            peerFingerprint: transaction.peerDeviceId == null
+                ? null
+                : atlasVaultPairingDeviceFingerprint(transaction.peerDeviceId!),
+            trusted: true,
+          );
         }
         if (transaction.role == AtlasVaultPairingRole.inviter &&
             _stageAtLeast(
@@ -1833,6 +1849,90 @@ final class AtlasVaultTrustedPairingCoordinator
     } finally {
       _wipeBytes(vaultKey);
       _wipeBytes(loadedKey);
+      identity?.destroy();
+    }
+  }
+
+  Future<void> _preflightInviteeDelivery(
+    AtlasVaultPairingTransaction transaction,
+    AtlasVaultPairingArtifact deliveryArtifact,
+  ) async {
+    AtlasVaultDeviceIdentity? identity;
+    Uint8List? sessionKey;
+    Uint8List? suppliedInviter;
+    Uint8List? ephemeral;
+    Uint8List? vaultKey;
+    try {
+      identity = await _requireIdentity();
+      final offerArtifact = await _requireStaged(
+        AtlasVaultPairingArtifactKind.offer,
+        transaction,
+      );
+      final acceptanceArtifact = await _requireStaged(
+        AtlasVaultPairingArtifactKind.acceptance,
+        transaction,
+      );
+      final signedOffer = _signedOffer(offerArtifact);
+      final signedAcceptance = _signedAcceptance(acceptanceArtifact);
+      final keyRequest = _keyRequest(acceptanceArtifact);
+      final delivery = _delivery(deliveryArtifact);
+      final bootstrap = _bootstrap(deliveryArtifact);
+      final transcript = await atlasVaultPairingTranscriptSha256(
+        signedOffer,
+        signedAcceptance,
+      );
+      if (_hexBytes(transcript) != transaction.transcriptSha256 ||
+          delivery.delivery.inviteeDeviceId != identity.deviceId ||
+          delivery.delivery.inviterDeviceId != transaction.peerDeviceId) {
+        throw const AtlasVaultPairingTransactionException();
+      }
+      sessionKey = await _sessionKeyFor(transaction, identity);
+      final proofs = await deriveAtlasVaultPairingProofs(
+        sessionKey: sessionKey,
+        transcriptSha256: transcript,
+      );
+      suppliedInviter = _proof(deliveryArtifact, 'inviter_proof');
+      final expectedInviter = proofs.inviter;
+      try {
+        if (!_constantBytes(expectedInviter, suppliedInviter)) {
+          throw const AtlasVaultPairingException();
+        }
+      } finally {
+        expectedInviter.fillRange(0, expectedInviter.length, 0);
+      }
+      ephemeral = transaction.ephemeralPrivateKey;
+      if (ephemeral == null) {
+        throw const AtlasVaultPairingTransactionException();
+      }
+      vaultKey = await openAtlasVaultKeyDelivery(
+        delivery,
+        keyRequest: keyRequest,
+        inviteeEphemeralPrivateKey: ephemeral,
+        bootstrap: bootstrap,
+        transcriptSha256: transcript,
+        currentTime: _utc(_now()),
+      );
+      final store = AtlasVaultLocalStore.fromJson(<String, Object?>{
+        'format': AtlasVaultLocalStore.format,
+        'version': AtlasVaultLocalStore.version,
+        'store_id': transaction.transactionId,
+        'created_at': transaction.createdAt,
+        'updated_at': transaction.createdAt,
+        'vault_metadata': bootstrap.vaultMetadata.toJson(),
+        'records': <Object?>[
+          for (final record in bootstrap.records) record.toJson(),
+        ],
+      });
+      await _runtime.validateImportProjection(
+        vaultId: delivery.delivery.vaultId,
+        vaultKey: vaultKey,
+        store: store,
+      );
+    } finally {
+      _wipeBytes(sessionKey);
+      _wipeBytes(suppliedInviter);
+      _wipeBytes(ephemeral);
+      _wipeBytes(vaultKey);
       identity?.destroy();
     }
   }
