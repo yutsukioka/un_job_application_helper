@@ -148,9 +148,16 @@ final class AtlasVaultPairingMemoryTransactionStore
     implements AtlasVaultPairingTransactionStore {
   AtlasVaultPairingTransaction? value;
   final List<String> events;
+  final AtlasVaultPairingStage? failReplaceStage;
+  int failReplaceCount;
+  int failDeleteCount;
 
-  AtlasVaultPairingMemoryTransactionStore({List<String>? events})
-    : events = events ?? <String>[];
+  AtlasVaultPairingMemoryTransactionStore({
+    List<String>? events,
+    this.failReplaceStage,
+    this.failReplaceCount = 0,
+    this.failDeleteCount = 0,
+  }) : events = events ?? <String>[];
 
   @override
   Future<AtlasVaultPairingTransaction?> read() async => value == null
@@ -173,6 +180,10 @@ final class AtlasVaultPairingMemoryTransactionStore
     AtlasVaultPairingTransaction transaction, {
     required String expectedSha256,
   }) async {
+    if (transaction.stage == failReplaceStage && failReplaceCount > 0) {
+      failReplaceCount -= 1;
+      throw StateError('injected transaction replace failure');
+    }
     final current = value;
     if (current == null ||
         await atlasVaultSha256Hex(current.canonicalBytes()) != expectedSha256) {
@@ -186,6 +197,10 @@ final class AtlasVaultPairingMemoryTransactionStore
 
   @override
   Future<void> delete({required String expectedSha256}) async {
+    if (failDeleteCount > 0) {
+      failDeleteCount -= 1;
+      throw StateError('injected transaction delete failure');
+    }
     final current = value;
     if (current == null ||
         await atlasVaultSha256Hex(current.canonicalBytes()) != expectedSha256) {

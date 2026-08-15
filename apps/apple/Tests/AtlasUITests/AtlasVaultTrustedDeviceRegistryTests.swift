@@ -67,6 +67,32 @@ final class AtlasVaultTrustedDeviceRegistryTests: XCTestCase {
         )
     }
 
+    func testReplayDuplicateIgnoresLocalConsumptionTimestamps() throws {
+        let root = try loadRoot()
+        let replay = try AtlasVaultPairingReplayStore.decodeStrict(
+            try canonicalData(root["replay_store"])
+        )
+        let existing = try XCTUnwrap(replay.entries.first)
+        let retried = try AtlasVaultPairingReplayEntry(
+            kind: existing.kind,
+            objectID: existing.objectID,
+            transcriptSHA256: existing.transcriptSHA256,
+            consumedAt: "2026-08-15T10:06:00Z",
+            expiresAt: "2026-08-15T10:11:00Z"
+        )
+
+        let result = try AtlasVaultPairingReplayFoundation.consume(
+            retried,
+            in: replay,
+            revision: try string(root["unused_revision"]),
+            updatedAt: "2026-08-15T10:06:00Z",
+            currentTime: "2026-08-15T10:06:00Z"
+        )
+
+        XCTAssertEqual(result.outcome, .alreadyConsumed)
+        XCTAssertEqual(result.store, replay)
+    }
+
     private func loadRoot() throws -> [String: Any] {
         let url = try vectorURL()
         return try dictionary(JSONSerialization.jsonObject(with: Data(contentsOf: url)))

@@ -400,6 +400,116 @@ void main() {
     },
   );
 
+  test('matching unjournaled selection resumes without recreation', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.selectionCommitted,
+      inviteeTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.keyCreated,
+    );
+    expect(journey.inviteeSelected.value, journey.vaultId);
+
+    expect(
+      (await journey.invitee.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+    expect(
+      journey.inviteeEvents.where((event) => event == 'selection.create'),
+      hasLength(1),
+    );
+  });
+
+  test('unjournaled invitee selection blocks destructive discard', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.selectionCommitted,
+      inviteeTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+    await journey.invitee.importKeyDelivery();
+
+    expect(
+      (await journey.invitee.discardPairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeSelected.value, journey.vaultId);
+    expect(journey.inviteeLocal.values, contains(journey.vaultId));
+    expect(journey.inviteeKeys.values, contains(journey.vaultId));
+    expect(journey.inviteeTransactions.value, isNotNull);
+  });
+
+  test('invitee trust retry uses the journaled installation time', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.trustCommitted,
+      inviteeTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 9);
+
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.runtimeActivated,
+    );
+    final committed = journey.inviteeRegistry.value!.devices.single;
+    expect(committed.linkedAt, '2026-08-15T10:09:00Z');
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 10);
+
+    expect(
+      (await journey.invitee.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+    expect(journey.inviteeRegistry.value!.devices.single, committed);
+  });
+
+  test('acknowledgement-saved resume completes cleanup idempotently', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviteeTransactionDeleteFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeDelivery(journey);
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+
+    await expectLater(
+      journey.invitee.savePairingAcknowledgement(),
+      throwsA(isA<StateError>()),
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.acknowledgementSaved,
+    );
+    expect(journey.inviteeStage.values, isEmpty);
+
+    expect(
+      (await journey.invitee.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.completed,
+    );
+    expect(journey.inviteeTransactions.value, isNull);
+  });
+
   test('inviter becomes resume-only after delivery export', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -752,6 +862,9 @@ final class _PairingJourney {
     AtlasVaultPairingArtifactKind? inviterStageFailure,
     AtlasVaultPairingArtifactKind? inviteeStageFailure,
     int inviteeActivationFailures = 0,
+    AtlasVaultPairingStage? inviteeTransactionReplaceFailureStage,
+    int inviteeTransactionReplaceFailures = 0,
+    int inviteeTransactionDeleteFailures = 0,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -778,6 +891,9 @@ final class _PairingJourney {
     );
     final inviteeTransactions = AtlasVaultPairingMemoryTransactionStore(
       events: inviteeEvents,
+      failReplaceStage: inviteeTransactionReplaceFailureStage,
+      failReplaceCount: inviteeTransactionReplaceFailures,
+      failDeleteCount: inviteeTransactionDeleteFailures,
     );
     final inviterStage = AtlasVaultPairingMemoryStageStore(
       events: inviterEvents,
@@ -941,6 +1057,13 @@ Future<void> _exchangeAcceptance(_PairingJourney journey) async {
   await journey.invitee.importPairingOffer();
   await journey.invitee.savePairingAcceptance();
   await journey.inviter.importPairingAcceptance();
+}
+
+Future<void> _exchangeDelivery(_PairingJourney journey) async {
+  await _exchangeAcceptance(journey);
+  await journey.inviter.confirmCodesMatch();
+  await journey.invitee.confirmCodesMatch();
+  await journey.inviter.saveKeyDelivery();
 }
 
 Future<Uint8List> _identitySecret(
