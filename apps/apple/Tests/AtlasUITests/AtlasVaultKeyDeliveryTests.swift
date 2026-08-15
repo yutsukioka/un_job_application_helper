@@ -12,7 +12,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
             var records = try XCTUnwrap(
                 bootstrap["records"] as? [[String: Any]]
             )
-            records[0]["id"] = value
+            records[0]["key_id"] = value
             bootstrap["records"] = records
             let data = try JSONSerialization.data(withJSONObject: bootstrap)
 

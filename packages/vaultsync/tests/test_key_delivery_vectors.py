@@ -139,7 +139,7 @@ def test_pairing_bootstrap_rejects_non_ascii_authenticated_metadata(
 ) -> None:
     root = _root()
     bootstrap = copy.deepcopy(root["bootstrap"])
-    bootstrap["records"][0]["id"] = value
+    bootstrap["records"][0]["key_id"] = value
 
     with pytest.raises(PairingKeyDeliveryError):
         PairingBootstrap.from_dict(bootstrap)

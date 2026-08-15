@@ -140,7 +140,7 @@ void main() {
         for (final record in atlasVaultList(bootstrap['records']))
           <String, Object?>{...atlasVaultObject(record)},
       ];
-      (records.first as Map<String, Object?>)['record_id'] = value;
+      (records.first as Map<String, Object?>)['key_id'] = value;
       bootstrap['records'] = records;
 
       expect(
