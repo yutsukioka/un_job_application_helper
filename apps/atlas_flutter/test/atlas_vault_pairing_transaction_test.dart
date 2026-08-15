@@ -255,6 +255,45 @@ void main() {
     },
   );
 
+  test('foreign delivery fails before journaling or staging', () async {
+    final journey = await _PairingJourney.create(vector);
+    final foreign = await _PairingJourney.create(
+      vector,
+      inviterDeterminismSeed: 30,
+      inviteeDeterminismSeed: 700,
+    );
+    addTearDown(journey.stop);
+    addTearDown(foreign.stop);
+    await _exchangeDelivery(journey);
+    final expectedDelivery = Uint8List.fromList(journey.mailbox.bytes!);
+    await _exchangeDelivery(foreign);
+    journey.mailbox.bytes = Uint8List.fromList(foreign.mailbox.bytes!);
+
+    final rejected = await journey.invitee.importKeyDelivery();
+
+    expect(
+      rejected.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviteeTransactions.value?.stage,
+      AtlasVaultPairingStage.offerConsumed,
+    );
+    expect(journey.inviteeTransactions.value?.deliverySha256, isNull);
+    expect(journey.inviteeTransactions.value?.bootstrapSha256, isNull);
+    expect(journey.inviteeTransactions.value?.vaultId, isNull);
+    expect(
+      journey.inviteeStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+
+    journey.mailbox.bytes = expectedDelivery;
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+  });
+
   test('inviter requires an active encrypted vault', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -757,6 +796,41 @@ void main() {
     expect(journey.inviteeTransactions.value, isNull);
   });
 
+  test(
+    'inviter trust-committed resume completes cleanup idempotently',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviterTransactionDeleteFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeDelivery(journey);
+      expect(
+        (await journey.invitee.importKeyDelivery()).disposition,
+        AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+      );
+      expect(
+        (await journey.invitee.savePairingAcknowledgement()).disposition,
+        AtlasVaultTrustedPairingDisposition.completed,
+      );
+
+      await expectLater(
+        journey.inviter.importPairingAcknowledgement(),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        journey.inviterTransactions.value?.stage,
+        AtlasVaultPairingStage.trustCommitted,
+      );
+      expect(journey.inviterStage.values, isEmpty);
+      expect(
+        (await journey.inviter.resumePairing()).disposition,
+        AtlasVaultTrustedPairingDisposition.completed,
+      );
+      expect(journey.inviterTransactions.value, isNull);
+    },
+  );
+
   test('inviter becomes resume-only after delivery export', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -1113,9 +1187,12 @@ final class _PairingJourney {
     int inviteeActivationFailures = 0,
     AtlasVaultPairingStage? inviterTransactionReplaceFailureStage,
     int inviterTransactionReplaceFailures = 0,
+    int inviterTransactionDeleteFailures = 0,
     AtlasVaultPairingStage? inviteeTransactionReplaceFailureStage,
     int inviteeTransactionReplaceFailures = 0,
     int inviteeTransactionDeleteFailures = 0,
+    int inviterDeterminismSeed = 10,
+    int inviteeDeterminismSeed = 500,
     Future<AtlasVaultPairingCleanInstallDisposition> Function()?
     inviteeCleanInstallProbe,
   }) async {
@@ -1143,6 +1220,7 @@ final class _PairingJourney {
       events: inviterEvents,
       failReplaceStage: inviterTransactionReplaceFailureStage,
       failReplaceCount: inviterTransactionReplaceFailures,
+      failDeleteCount: inviterTransactionDeleteFailures,
     );
     final inviteeTransactions = AtlasVaultPairingMemoryTransactionStore(
       events: inviteeEvents,
@@ -1221,8 +1299,12 @@ final class _PairingJourney {
     );
     inviterEvents.clear();
     inviteeEvents.clear();
-    final inviterDeterminism = AtlasVaultPairingDeterminism(seed: 10);
-    final inviteeDeterminism = AtlasVaultPairingDeterminism(seed: 500);
+    final inviterDeterminism = AtlasVaultPairingDeterminism(
+      seed: inviterDeterminismSeed,
+    );
+    final inviteeDeterminism = AtlasVaultPairingDeterminism(
+      seed: inviteeDeterminismSeed,
+    );
     final clock = _PairingClock(DateTime.utc(2026, 8, 15, 10, 5));
     var activationFailuresRemaining = inviteeActivationFailures;
 

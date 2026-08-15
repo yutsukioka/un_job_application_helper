@@ -320,6 +320,24 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertNil(staged)
     }
 
+    func testForeignDeliveryFailsBeforeJournalingOrStaging() async throws {
+        let journey = try makeJourney()
+        let expectedDelivery = try await prepareDelivery(journey)
+        let before = await journey.inviteeState.loadTransaction()
+        let foreign = try makeJourney()
+        let foreignDelivery = try await prepareDelivery(foreign)
+
+        let rejected = await journey.invitee.importKeyDelivery(foreignDelivery)
+        let after = await journey.inviteeState.loadTransaction()
+        let staged = await journey.inviteeState.loadArtifact(.delivery)
+
+        XCTAssertEqual(rejected.disposition, .recoveryRequired)
+        XCTAssertEqual(after, before)
+        XCTAssertNil(staged)
+        let accepted = await journey.invitee.importKeyDelivery(expectedDelivery)
+        XCTAssertEqual(accepted.disposition, .acknowledgementReady)
+    }
+
     func testStoreAndKeyCreateIntentSurvivesJournalAdvanceFailure()
         async throws
     {
@@ -468,6 +486,45 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertNil(cleared)
     }
 
+    func testInviterTrustCommittedResumeCompletesCleanup() async throws {
+        let journey = try makeJourney(inviterDeleteFailures: 1)
+        let delivery = try await prepareDelivery(journey)
+        let imported = await journey.invitee.importKeyDelivery(delivery)
+        XCTAssertEqual(imported.disposition, .acknowledgementReady)
+        let acknowledgement = try await journey.invitee.artifactToSave(
+            .acknowledgement
+        )
+        let saved = await journey.invitee.pairingArtifactSaveFinished(
+            .acknowledgement,
+            committed: true
+        )
+        XCTAssertEqual(saved.disposition, .completed)
+
+        let interrupted = await journey.inviter.importPairingAcknowledgement(
+            acknowledgement
+        )
+        let transaction = await journey.inviterState.loadTransaction()
+        let offer = await journey.inviterState.loadArtifact(.offer)
+        let acceptance = await journey.inviterState.loadArtifact(.acceptance)
+        let remainingDelivery = await journey.inviterState.loadArtifact(
+            .delivery
+        )
+        let remainingAcknowledgement = await journey.inviterState.loadArtifact(
+            .acknowledgement
+        )
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .trustCommitted)
+        XCTAssertNil(offer)
+        XCTAssertNil(acceptance)
+        XCTAssertNil(remainingDelivery)
+        XCTAssertNil(remainingAcknowledgement)
+        let resumed = await journey.inviter.resumePairing()
+        XCTAssertEqual(resumed.disposition, .completed)
+        let cleared = await journey.inviterState.loadTransaction()
+        XCTAssertNil(cleared)
+    }
+
     func testStrictTransactionAndKeychainStoresUseDeviceOnlyServices() throws {
         let transaction = try AtlasVaultPairingTransaction.decodeStrict(
             Data(Self.transactionJSON.utf8)
@@ -605,6 +662,7 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
     private func makeJourney(
         inviterArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviterReplaceFailure: AtlasVaultPairingStage? = nil,
+        inviterDeleteFailures: Int = 0,
         inviteeArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviteeReplaceFailure: AtlasVaultPairingStage? = nil,
         inviteeDeleteFailures: Int = 0
@@ -640,7 +698,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             failArtifactCreateKind: inviterArtifactFailure,
             failArtifactCreateCount: inviterArtifactFailure == nil ? 0 : 1,
             failTransactionReplaceStage: inviterReplaceFailure,
-            failTransactionReplaceCount: inviterReplaceFailure == nil ? 0 : 1
+            failTransactionReplaceCount: inviterReplaceFailure == nil ? 0 : 1,
+            failTransactionDeleteCount: inviterDeleteFailures
         )
         let inviteeState = PairingCoordinatorState(
             identity: inviteeIdentity,
