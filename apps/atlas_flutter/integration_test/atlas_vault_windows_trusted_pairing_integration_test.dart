@@ -230,6 +230,7 @@ Map<String, Object?> _transactionJson(Map<String, Object?> vector) {
     'stage': 'acceptance_created',
     'created_at': '2026-08-15T10:00:00Z',
     'updated_at': '2026-08-15T10:01:00Z',
+    'installed_at': null,
     'local_device_id': atlasVaultObject(vector['invitee'])['device_id'],
     'peer_device_id': atlasVaultObject(vector['inviter'])['device_id'],
     'transcript_sha256': vector['transcript_sha256'],

@@ -64,6 +64,25 @@ Transactions clear last. Before selection, exact hash-bound reset is allowed.
 After selection, recovery is resume-only. No trust record is created before
 the role-specific commitment condition.
 
+## Review Hardening
+
+Android recovery import and trusted pairing share one admitted transaction
+boundary, so they cannot both pass clean-install checks and persist competing
+authority. Pairing creates its protected transaction before writing any staged
+artifact. A pre-commit discard tolerates an artifact that was never written,
+but rejects and preserves any artifact whose digest differs from the journal.
+
+The invitee journal clears its ephemeral private key when selection commits.
+Post-selection resume reloads the already-protected vault key and verifies its
+recorded digest instead of retaining or recreating ephemeral key material. The
+runtime-activation transition records the actual installation timestamp, and
+the acknowledgement reuses that durable timestamp after interruption.
+
+The inviter revalidates the complete signed key request, including expiry,
+immediately before creating a delivery. Pairing transaction decoding accepts
+the same positive 64-bit key-epoch range as the signed device and delivery
+contracts; smaller implementation-specific integer bounds are not imposed.
+
 ## Cross-Platform Ring
 
 External fake artifacts exercise Apple inviter to Android invitee, Android

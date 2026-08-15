@@ -111,6 +111,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
     public let stage: AtlasVaultPairingStage
     public let createdAt: String
     public let updatedAt: String
+    public let installedAt: String?
     public let localDeviceID: String
     public let peerDeviceID: String?
     public let transcriptSHA256: String?
@@ -137,6 +138,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         case stage
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case installedAt = "installed_at"
         case localDeviceID = "local_device_id"
         case peerDeviceID = "peer_device_id"
         case transcriptSHA256 = "transcript_sha256"
@@ -181,6 +183,9 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
             updatedAt = try AtlasVaultPairingValidation.timestamp(
                 values.decode(String.self, forKey: .updatedAt)
             )
+            installedAt = try values.decodeIfPresent(
+                String.self, forKey: .installedAt
+            ).map(AtlasVaultPairingValidation.timestamp)
             localDeviceID = try Self.deviceID(
                 values.decode(String.self, forKey: .localDeviceID)
             )
@@ -224,17 +229,33 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
                 [AtlasVaultStagedPairingArtifact].self,
                 forKey: .stagedArtifacts
             )
+            let roleStages = Self.stages(for: role)
+            let createdDate = try AtlasVaultPairingValidation.date(createdAt)
+            let updatedDate = try AtlasVaultPairingValidation.date(updatedAt)
+            let installedDate = try installedAt.map(
+                AtlasVaultPairingValidation.date
+            )
+            let runtimeActivated = role == .invitee
+                && roleStages.firstIndex(of: stage).map { stageIndex in
+                    roleStages.firstIndex(of: .runtimeActivated).map {
+                        stageIndex >= $0
+                    } ?? false
+                } ?? false
+            let installedInRange = installedDate.map {
+                $0 >= createdDate && $0 <= updatedDate
+            } ?? true
             guard
                 format == "atlasvault-pairing-transaction",
                 version == 1,
-                try AtlasVaultPairingValidation.date(updatedAt)
-                    >= AtlasVaultPairingValidation.date(createdAt),
-                Self.stages(for: role).contains(stage),
+                updatedDate >= createdDate,
+                roleStages.contains(stage),
                 stagedArtifacts.count <= AtlasVaultPairingArtifactKind.allCases.count,
                 Set(stagedArtifacts.map(\.kind)).count == stagedArtifacts.count,
                 stagedArtifacts.map(\.kind.sortIndex)
                     == stagedArtifacts.map(\.kind.sortIndex).sorted(),
-                !selectionCommitted || role == .invitee
+                !selectionCommitted || role == .invitee,
+                runtimeActivated == (installedAt != nil),
+                installedInRange
             else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
@@ -254,6 +275,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         try values.encode(stage, forKey: .stage)
         try values.encode(createdAt, forKey: .createdAt)
         try values.encode(updatedAt, forKey: .updatedAt)
+        try values.encode(installedAt, forKey: .installedAt)
         try values.encode(localDeviceID, forKey: .localDeviceID)
         try values.encode(peerDeviceID, forKey: .peerDeviceID)
         try values.encode(transcriptSHA256, forKey: .transcriptSHA256)
@@ -307,6 +329,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         role: AtlasVaultPairingRole,
         stage: AtlasVaultPairingStage,
         createdAt: String,
+        installedAt: String? = nil,
         localDeviceID: String,
         peerDeviceID: String? = nil,
         transcriptSHA256: String? = nil,
@@ -333,6 +356,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
             "stage": stage.rawValue,
             "created_at": createdAt,
             "updated_at": createdAt,
+            "installed_at": installedAt ?? NSNull(),
             "local_device_id": localDeviceID,
             "peer_device_id": peerDeviceID ?? NSNull(),
             "transcript_sha256": transcriptSHA256 ?? NSNull(),
@@ -358,6 +382,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         to nextStage: AtlasVaultPairingStage,
         revision nextRevision: String,
         updatedAt: String,
+        installedAt: String? = nil,
         peerDeviceID: String? = nil,
         transcriptSHA256: String? = nil,
         offerSHA256: String? = nil,
@@ -394,6 +419,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         value["parent_revision"] = revision
         value["stage"] = nextStage.rawValue
         value["updated_at"] = updatedAt
+        Self.setIfPresent(installedAt, key: "installed_at", in: &value)
         Self.setIfPresent(peerDeviceID, key: "peer_device_id", in: &value)
         Self.setIfPresent(
             transcriptSHA256,
@@ -447,6 +473,7 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
             replacement.role == role,
             replacement.localDeviceID == localDeviceID,
             replacement.createdAt == createdAt,
+            installedAt == nil || replacement.installedAt == installedAt,
             replacement.parentRevision == revision,
             replacement.revision != revision,
             (!self.selectionCommitted || replacement.selectionCommitted)
@@ -1932,15 +1959,19 @@ public actor AtlasVaultTrustedPairingCoordinator:
             else { throw AtlasVaultPairingTransactionError.unavailable }
             transaction = try await advance(
                 transaction,
-                to: .runtimeActivated
+                to: .runtimeActivated,
+                installedAt: environment.timestamp()
             )
         }
 
+        guard let installedAt = transaction.installedAt else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
+        }
         let acknowledgement = try AtlasVaultKeyDelivery.createAcknowledgement(
             invitee: identity,
             acknowledgementID: transaction.transactionID,
             delivery: context.delivery.signedDelivery,
-            installedAt: transaction.createdAt
+            installedAt: installedAt
         )
         let acknowledgementArtifact = try AtlasVaultPairingArtifact
             .acknowledgement(acknowledgement)
@@ -2157,6 +2188,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
     private func advance(
         _ transaction: AtlasVaultPairingTransaction,
         to stage: AtlasVaultPairingStage,
+        installedAt: String? = nil,
         peerDeviceID: String? = nil,
         transcriptSHA256: String? = nil,
         acceptanceSHA256: String? = nil,
@@ -2175,6 +2207,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             to: stage,
             revision: environment.uuid(),
             updatedAt: environment.timestamp(),
+            installedAt: installedAt,
             peerDeviceID: peerDeviceID,
             transcriptSHA256: transcriptSHA256,
             acceptanceSHA256: acceptanceSHA256,

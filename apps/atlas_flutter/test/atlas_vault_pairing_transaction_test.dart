@@ -361,9 +361,12 @@ void main() {
   });
 
   test(
-    'selection clears ephemeral key and acknowledgement records activation',
+    'selection clears ephemeral key and resume uses the protected vault key',
     () async {
-      final journey = await _PairingJourney.create(vector);
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeActivationFailures: 1,
+      );
       addTearDown(journey.stop);
       await _exchangeAcceptance(journey);
       await journey.inviter.confirmCodesMatch();
@@ -373,6 +376,12 @@ void main() {
 
       expect(
         (await journey.invitee.importKeyDelivery()).disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNull);
+
+      expect(
+        (await journey.invitee.resumePairing()).disposition,
         AtlasVaultTrustedPairingDisposition.acknowledgementReady,
       );
 
@@ -742,6 +751,7 @@ final class _PairingJourney {
         AtlasVaultPairingCleanInstallDisposition.clean,
     AtlasVaultPairingArtifactKind? inviterStageFailure,
     AtlasVaultPairingArtifactKind? inviteeStageFailure,
+    int inviteeActivationFailures = 0,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -843,6 +853,7 @@ final class _PairingJourney {
     final inviterDeterminism = AtlasVaultPairingDeterminism(seed: 10);
     final inviteeDeterminism = AtlasVaultPairingDeterminism(seed: 500);
     final clock = _PairingClock(DateTime.utc(2026, 8, 15, 10, 5));
+    var activationFailuresRemaining = inviteeActivationFailures;
 
     final inviter = AtlasVaultTrustedPairingCoordinator(
       identityStore: inviterIdentity,
@@ -875,6 +886,10 @@ final class _PairingJourney {
       selectedVaultStore: inviteeSelected,
       activateInstalledVault: (candidate) async {
         inviteeEvents.add('runtime.activate');
+        if (activationFailuresRemaining > 0) {
+          activationFailuresRemaining -= 1;
+          return false;
+        }
         return await inviteeRuntime.activateExisting(candidate) ==
             AtlasVaultActivationResult.activated;
       },
@@ -999,6 +1014,7 @@ Map<String, Object?> _transactionJson(Map<String, Object?> vector) {
     'stage': 'acceptance_created',
     'created_at': '2026-08-15T10:00:00Z',
     'updated_at': '2026-08-15T10:01:00Z',
+    'installed_at': null,
     'local_device_id': atlasVaultObject(vector['invitee'])['device_id'],
     'peer_device_id': atlasVaultObject(vector['inviter'])['device_id'],
     'transcript_sha256': vector['transcript_sha256'],

@@ -2836,6 +2836,7 @@ final class _AtlasWindowsTrustedPairingAdmission
 final class _AtlasAndroidTrustedPairingAdmission
     implements
         AtlasVaultPlaintextAuthorityAdmission,
+        AtlasVaultRecoveryImportTransactionAdmission,
         AtlasVaultTrustedPairingTransactionAdmission {
   _AtlasAndroidTrustedPairingAdmission({
     required AtlasVaultPairingTransactionStore pairingTransactionStore,
@@ -2890,6 +2891,10 @@ final class _AtlasAndroidTrustedPairingAdmission
 
   @override
   Future<T> runMigrationTransaction<T>(Future<T> Function() operation) =>
+      _coordinate(operation);
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
       _coordinate(operation);
 
   @override
@@ -3345,6 +3350,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     compatibilitySource: compatibilitySource,
     cacheSource: cacheSource,
     importOperationAdmission: controller,
+    importTransactionAdmission: authorityAdmission,
     activateImportedVault: (vaultId) async =>
         await controller._activateImportedAtlasVault(vaultId) ==
         AtlasVaultActivationResult.activated,
