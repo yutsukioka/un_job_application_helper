@@ -33,6 +33,7 @@ from jobagg.filters.schemas import VacancySearchRequest
 from jobagg.scoring import load_strategy_signals, score_jobs
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 
 from job_api.config import ApiSettings, load_settings
 from job_api.models import (
@@ -45,6 +46,11 @@ from job_api.models import (
     SearchRequest,
     SearchResponse,
     TrackerConditionalDeleteRequest,
+)
+from job_api.private_access import (
+    PrivateAccessMiddleware,
+    load_private_access_policy,
+    private_access_rejection,
 )
 from job_api.tracker import (
     compare_and_delete_record,
@@ -72,7 +78,17 @@ def _conditional_identifier_matches(segment: str, expected: str) -> bool:
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    private_access = load_private_access_policy()
     app = FastAPI(title="UN Job Application Helper API", version="0.1.0")
+    app.add_middleware(PrivateAccessMiddleware, policy=private_access)
+    if private_access.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(private_access.cors_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     @app.exception_handler(RequestValidationError)
     async def conditional_delete_validation_error(
@@ -113,7 +129,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if not settings.db_path.exists():
             return {
                 "status": "missing_db",
-                "db_path": str(settings.db_path),
+                "db_path": None,
                 "schema_version": "unknown",
                 "open_jobs": 0,
                 "enabled_sources": 0,
@@ -125,7 +141,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             last_sync_at = _scalar(conn, "SELECT MAX(observed_at) FROM source_runs")
         return {
             "status": "ok",
-            "db_path": str(settings.db_path),
+            "db_path": None,
             "schema_version": "jobagg-sqlite",
             "open_jobs": open_jobs,
             "enabled_sources": enabled_sources,
@@ -133,7 +149,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         }
 
     @app.post("/api/search", response_model=SearchResponse)
-    def search(request: SearchRequest) -> SearchResponse:
+    def search(request: SearchRequest, http_request: Request) -> SearchResponse:
+        if request.score_against:
+            rejection = private_access_rejection(private_access, http_request.scope)
+            if rejection is not None:
+                status_code, detail = rejection
+                raise HTTPException(status_code=status_code, detail=detail)
         _require_db(settings.db_path)
         job_request = _to_jobagg_request(request)
         response = search_collected_jobs(db(), job_request, include_facets=request.include_facets)
@@ -360,7 +381,7 @@ def _to_jobagg_request(request: SearchRequest) -> VacancySearchRequest:
 
 def _require_db(path: Path) -> None:
     if not path.exists():
-        raise HTTPException(status_code=503, detail=f"Job database does not exist: {path}")
+        raise HTTPException(status_code=503, detail="Job database is unavailable.")
 
 
 def _job_detail_payload(db_path: Path, database: JobDatabase, job_key: str) -> dict[str, Any]:
@@ -876,9 +897,9 @@ app = create_app()
 
 
 def main() -> None:
-    import uvicorn
+    from job_api.launcher import main as launch
 
-    uvicorn.run("job_api.app:app", host="127.0.0.1", port=8765, reload=False)
+    launch()
 
 
 if __name__ == "__main__":

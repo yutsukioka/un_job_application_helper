@@ -69,7 +69,7 @@ def _client(tmp_path: Path) -> TestClient:
         )
     )
     classify_database(db, force=True)
-    return TestClient(create_app(settings))
+    return TestClient(create_app(settings), client=("127.0.0.1", 50123))
 
 
 def test_job_api_health_search_detail_saved_search_and_tracker(tmp_path: Path) -> None:

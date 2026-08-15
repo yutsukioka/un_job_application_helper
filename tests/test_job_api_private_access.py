@@ -20,7 +20,6 @@ from job_api.app import create_app  # noqa: E402
 from job_api.config import ApiSettings  # noqa: E402
 from jobagg.db import JobDatabase  # noqa: E402
 
-
 VALID_TOKEN = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4"
 PRIVATE_ENVIRONMENT = (
     "ATLAS_PRIVATE_API_MODE",
@@ -156,6 +155,18 @@ def test_token_never_appears_in_denial_response(
     assert sentinel not in response.text
 
 
+def test_token_never_appears_in_policy_representation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+    private_access = importlib.import_module("job_api.private_access")
+
+    policy = private_access.load_private_access_policy()
+
+    assert VALID_TOKEN not in repr(policy)
+
+
 def test_token_mode_loads_one_regular_bounded_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -206,6 +217,40 @@ def test_token_mode_rejects_non_regular_or_oversized_token_file(
         create_app(_settings(tmp_path))
 
 
+def test_token_file_error_redacts_path_and_underlying_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_path = tmp_path / "PRIVATE_TOKEN_PATH_SENTINEL"
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN_FILE", str(sentinel_path))
+
+    with pytest.raises(ValueError) as caught:
+        create_app(_settings(tmp_path))
+
+    assert str(sentinel_path) not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+def test_token_mode_rejects_symlink_token_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_file = tmp_path / "private-api-token"
+    token_file.write_text(VALID_TOKEN, encoding="ascii")
+    token_file.chmod(0o600)
+    link = tmp_path / "token-link"
+    try:
+        link.symlink_to(token_file)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable on this platform")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN_FILE", str(link))
+
+    with pytest.raises(ValueError, match="private API configuration"):
+        create_app(_settings(tmp_path))
+
+
 def test_token_mode_rejects_both_secret_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -233,6 +278,25 @@ def test_token_mode_rejects_missing_or_invalid_secret(
         create_app(_settings(tmp_path))
 
 
+def test_token_mode_rejects_duplicate_authorization_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+    client = _client(tmp_path)
+
+    response = client.get(
+        "/api/saved-searches",
+        headers=[
+            ("Authorization", f"Bearer {VALID_TOKEN}"),
+            ("Authorization", f"Bearer {VALID_TOKEN}"),
+        ],
+    )
+
+    assert response.status_code == 403
+
+
 PRIVATE_REQUESTS = (
     ("GET", "/api/saved-searches", None),
     ("POST", "/api/saved-searches", {}),
@@ -244,8 +308,39 @@ PRIVATE_REQUESTS = (
     ("POST", "/api/tracker/jobs/job-key", None),
     ("DELETE", "/api/tracker/record-id", None),
     ("POST", "/api/tracker/record-id/conditional-delete", {}),
+    ("POST", "/api/sync/run", None),
     ("POST", "/api/assistant/runs", {}),
 )
+
+PRIVATE_ROUTE_CONTRACT = {
+    ("GET", "/api/saved-searches"),
+    ("POST", "/api/saved-searches"),
+    ("POST", "/api/saved-searches/{name}/run"),
+    ("DELETE", "/api/saved-searches/{name}"),
+    ("POST", "/api/saved-searches/{name}/conditional-delete"),
+    ("GET", "/api/tracker"),
+    ("POST", "/api/tracker"),
+    ("POST", "/api/tracker/jobs/{job_key}"),
+    ("DELETE", "/api/tracker/{record_id}"),
+    ("POST", "/api/tracker/{record_id}/conditional-delete"),
+    ("POST", "/api/sync/run"),
+    ("POST", "/api/assistant/runs"),
+}
+
+PUBLIC_ROUTE_CONTRACT = {
+    ("GET", "/api/health"),
+    ("POST", "/api/search"),
+    ("GET", "/api/job-detail"),
+    ("GET", "/api/jobs/by-key"),
+    ("GET", "/api/jobs/{job_key}"),
+    ("GET", "/api/jobs/path/{job_key:path}"),
+    ("GET", "/api/facets"),
+    ("POST", "/api/facets"),
+    ("GET", "/api/taxonomies"),
+    ("GET", "/api/updates"),
+    ("GET", "/api/sources"),
+    ("GET", "/api/sync/runs"),
+}
 
 
 @pytest.mark.parametrize(("method", "path", "body"), PRIVATE_REQUESTS)
@@ -275,6 +370,79 @@ def test_disabled_mode_keeps_public_health_and_search_available(
     assert client.post("/api/search", json={"limit": 1}).status_code == 200
 
 
+def test_public_health_does_not_disclose_local_storage_path(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings), client=("192.0.2.44", 50123))
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["db_path"] is None
+    assert str(settings.db_path) not in response.text
+
+
+def test_public_missing_database_error_does_not_disclose_storage_path(
+    tmp_path: Path,
+) -> None:
+    settings = ApiSettings(
+        repo_root=ROOT,
+        db_path=tmp_path / "PRIVATE_DATABASE_PATH_SENTINEL.sqlite3",
+        saved_searches_path=tmp_path / "saved-searches.json",
+        tracker_path=tmp_path / "tracker.json",
+    )
+    client = TestClient(create_app(settings), client=("192.0.2.44", 50123))
+
+    response = client.post("/api/search", json={"limit": 1})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Job database is unavailable."}
+    assert str(settings.db_path) not in response.text
+
+
+def test_non_loopback_search_with_private_strategy_requires_admission(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    sentinel_path = tmp_path / "PRIVATE_STRATEGY_PATH_SENTINEL.json"
+    sentinel_path.write_text('{"terms": []}', encoding="utf-8")
+    client = TestClient(
+        create_app(settings),
+        client=("192.0.2.44", 50123),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(sentinel_path)},
+    )
+
+    assert response.status_code == 403
+    assert str(sentinel_path) not in response.text
+
+
+def test_token_admission_allows_private_strategy_scoring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    strategy = tmp_path / "strategy.json"
+    strategy.write_text('{"terms": []}', encoding="utf-8")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+    client = TestClient(
+        create_app(settings),
+        client=("192.0.2.44", 50123),
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(strategy)},
+    )
+
+    assert response.status_code == 200
+
+
 def test_private_route_classifier_covers_every_audited_route() -> None:
     private_access = importlib.import_module("job_api.private_access")
 
@@ -283,6 +451,27 @@ def test_private_route_classifier_covers_every_audited_route() -> None:
     )
     assert not private_access.is_private_endpoint("/api/health")
     assert not private_access.is_private_endpoint("/api/search")
+
+
+def test_every_api_route_has_an_explicit_public_or_private_classification(
+    tmp_path: Path,
+) -> None:
+    private_access = importlib.import_module("job_api.private_access")
+    application = create_app(_settings(tmp_path))
+    actual = {
+        (method, route.path)
+        for route in application.routes
+        if route.path.startswith("/api/")
+        for method in route.methods
+    }
+
+    assert actual == PRIVATE_ROUTE_CONTRACT | PUBLIC_ROUTE_CONTRACT
+    assert all(
+        private_access.is_private_endpoint(path) for _, path in PRIVATE_ROUTE_CONTRACT
+    )
+    assert not any(
+        private_access.is_private_endpoint(path) for _, path in PUBLIC_ROUTE_CONTRACT
+    )
 
 
 def test_raw_uvicorn_application_still_enforces_direct_peer_policy(
@@ -322,6 +511,36 @@ def test_cors_accepts_only_explicit_origins(
 
     assert accepted.headers["access-control-allow-origin"] == "https://atlas.example"
     assert "access-control-allow-origin" not in rejected.headers
+
+
+def test_cors_preflight_does_not_bypass_private_token_on_actual_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin = "https://atlas.example"
+    monkeypatch.setenv("ATLAS_CORS_ORIGINS", origin)
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+    client = _client(tmp_path, peer="192.0.2.44")
+
+    preflight = client.options(
+        "/api/saved-searches",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "Authorization",
+        },
+    )
+    denied = client.get("/api/saved-searches", headers={"Origin": origin})
+    admitted = client.get(
+        "/api/saved-searches",
+        headers={"Origin": origin, "Authorization": f"Bearer {VALID_TOKEN}"},
+    )
+
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == origin
+    assert denied.status_code == 403
+    assert admitted.status_code == 200
 
 
 def test_cors_rejects_wildcard_when_private_endpoints_exist(
@@ -384,6 +603,30 @@ def test_launcher_rejects_implicit_proxy_trust() -> None:
 
     with pytest.raises(ValueError, match="launch configuration"):
         launcher.load_launch_config({"ATLAS_TRUST_PROXY_HEADERS": "1"})
+
+
+def test_launcher_starts_uvicorn_without_proxy_header_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = importlib.import_module("job_api.launcher")
+    uvicorn = importlib.import_module("uvicorn")
+    captured: dict[str, Any] = {}
+
+    def fake_run(application: str, **options: Any) -> None:
+        captured["application"] = application
+        captured.update(options)
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    launcher.main()
+
+    assert captured == {
+        "application": "job_api.app:app",
+        "host": "127.0.0.1",
+        "port": 8765,
+        "reload": False,
+        "proxy_headers": False,
+    }
 
 
 def test_documentation_has_no_unconditional_unsafe_bind_example() -> None:
