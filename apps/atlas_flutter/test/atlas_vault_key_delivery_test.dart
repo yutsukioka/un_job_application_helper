@@ -129,6 +129,28 @@ void main() {
     expect(artifact.canonicalBytes(), encoded);
   });
 
+  test('pairing bootstrap rejects non-ASCII authenticated metadata', () {
+    for (final value in <String>[
+      'record-e\u0301',
+      'record-\u{1F512}',
+      'record-\nline',
+    ]) {
+      final bootstrap = atlasVaultObject(root['bootstrap']);
+      final records = <Object?>[
+        for (final record in atlasVaultList(bootstrap['records']))
+          <String, Object?>{...atlasVaultObject(record)},
+      ];
+      (records.first as Map<String, Object?>)['record_id'] = value;
+      bootstrap['records'] = records;
+
+      expect(
+        () => AtlasVaultPairingBootstrap.fromJson(bootstrap),
+        throwsA(isA<AtlasVaultKeyDeliveryException>()),
+        reason: value,
+      );
+    }
+  });
+
   test(
     'wrong key material and expired delivery fail without secrets',
     () async {

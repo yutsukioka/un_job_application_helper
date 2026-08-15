@@ -3,6 +3,26 @@ import XCTest
 @testable import AtlasUI
 
 final class AtlasVaultKeyDeliveryTests: XCTestCase {
+    func testPairingBootstrapRejectsNonASCIIAuthenticatedMetadata() throws {
+        let root = try loadRoot()
+        let source = try XCTUnwrap(root["bootstrap"] as? [String: Any])
+
+        for value in ["record-e\u{0301}", "record-\u{1F512}", "record-\nline"] {
+            var bootstrap = source
+            var records = try XCTUnwrap(
+                bootstrap["records"] as? [[String: Any]]
+            )
+            records[0]["id"] = value
+            bootstrap["records"] = records
+            let data = try JSONSerialization.data(withJSONObject: bootstrap)
+
+            XCTAssertThrowsError(
+                try AtlasVaultPairingBootstrap.decodeStrict(data),
+                value
+            )
+        }
+    }
+
     func testSASBootstrapDeliveryAndAcknowledgementMatchVector() throws {
         let root = try loadRoot()
         let inviter = try identity(root, name: "inviter")

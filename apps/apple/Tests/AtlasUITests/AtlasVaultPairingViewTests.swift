@@ -51,9 +51,31 @@ final class AtlasVaultPairingViewTests: XCTestCase {
             "resumePairing",
             "discardPairing",
             "stopAndDrain",
+            "operationTask?.cancel()",
+            "await retained?.value",
+            "defer",
         ] {
             XCTAssertTrue(source.contains(required), required)
         }
+    }
+
+    func testUnsafeLifecycleCancellationDrainsTheRetainedOperation()
+        async
+    {
+        let coordinator = PairingViewCancellationCoordinator()
+        let owner = AtlasVaultTrustedPairingPresentationOwner(
+            coordinator: coordinator
+        )
+        owner.createPairingOffer()
+        await coordinator.waitUntilStarted()
+
+        await owner.clearSensitiveInput()
+        let observedCancellation = await coordinator.observedCancellation()
+        await coordinator.release()
+        await owner.stopAndDrain()
+
+        XCTAssertTrue(observedCancellation)
+        XCTAssertFalse(owner.isBusy)
     }
 
     private static func source(named name: String) throws -> String {
@@ -68,4 +90,86 @@ final class AtlasVaultPairingViewTests: XCTestCase {
             .appendingPathComponent(name)
         return try String(contentsOf: url, encoding: .utf8)
     }
+}
+
+private actor PairingViewCancellationCoordinator:
+    AtlasVaultTrustedPairingCoordinating
+{
+    private var started = false
+    private var released = false
+    private var cancelled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() { released = true }
+    func observedCancellation() -> Bool { cancelled }
+
+    func createPairingOffer() async -> AtlasVaultTrustedPairingResult {
+        started = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+        while !released {
+            if Task.isCancelled {
+                cancelled = true
+                break
+            }
+            await Task.yield()
+        }
+        return AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+
+    func inspect() async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .ready)
+    }
+    func createDeviceIdentity() async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .identityReady)
+    }
+    func artifactToSave(
+        _ kind: AtlasVaultPairingArtifactKind
+    ) async throws -> AtlasVaultPairingArtifact {
+        throw AtlasVaultPairingTransactionError.unavailable
+    }
+    func pairingArtifactSaveFinished(
+        _ kind: AtlasVaultPairingArtifactKind,
+        committed: Bool
+    ) async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func importPairingOffer(
+        _ artifact: AtlasVaultPairingArtifact
+    ) async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func importPairingAcceptance(
+        _ artifact: AtlasVaultPairingArtifact
+    ) async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func confirmCodesMatch() async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func importKeyDelivery(
+        _ artifact: AtlasVaultPairingArtifact
+    ) async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func importPairingAcknowledgement(
+        _ artifact: AtlasVaultPairingArtifact
+    ) async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func resumePairing() async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func discardPairing() async -> AtlasVaultTrustedPairingResult {
+        AtlasVaultTrustedPairingResult(disposition: .cancelled)
+    }
+    func stop() async { released = true }
 }

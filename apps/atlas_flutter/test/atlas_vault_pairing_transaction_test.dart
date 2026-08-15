@@ -129,7 +129,7 @@ void main() {
     expect(keyCreate, lessThan(selectionCreate));
     expect(selectionCreate, lessThan(activation));
     expect(activation, lessThan(trust));
-    expect(trust, lessThan(acknowledgementStage));
+    expect(acknowledgementStage, lessThan(trust));
 
     final installed = journey.inviteeLocal.values[journey.vaultId]!;
     expect(
@@ -166,6 +166,91 @@ void main() {
       expect(journey.inviteeIdentity.loadCalls, 0);
       expect(journey.inviterEvents, isEmpty);
       expect(journey.inviteeEvents, isEmpty);
+    },
+  );
+
+  test(
+    'forged acknowledgement cannot enroll a third device or poison staging',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      await _exchangeDelivery(journey);
+      final deliveryArtifact = AtlasVaultPairingArtifact.fromCanonicalBytes(
+        journey.inviterStage.values[AtlasVaultPairingArtifactKind.delivery]!,
+      );
+      final delivery = AtlasVaultSignedVaultKeyDelivery.fromJson(
+        atlasVaultObject(deliveryArtifact.payload['signed_delivery']),
+      );
+      final attacker = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+        signingPrivateSeed: Uint8List.fromList(
+          List<int>.generate(32, (i) => i + 1),
+        ),
+        agreementPrivateKey: Uint8List.fromList(
+          List<int>.generate(32, (i) => i + 65),
+        ),
+        createdAt: '2026-08-15T10:00:00Z',
+      );
+      addTearDown(attacker.destroy);
+      final acknowledgement =
+          AtlasVaultPairingAcknowledgement.fromJson(<String, Object?>{
+            'format': 'atlasvault-pairing-acknowledgement',
+            'version': 1,
+            'acknowledgement_id': '54000000-0000-4000-8000-000000000001',
+            'delivery_id': delivery.delivery.deliveryId,
+            'transcript_sha256': delivery.delivery.transcriptSha256,
+            'inviter_device_id': delivery.delivery.inviterDeviceId,
+            'invitee_device_id': attacker.deviceId,
+            'vault_id': delivery.delivery.vaultId,
+            'key_epoch': delivery.delivery.keyEpoch,
+            'bootstrap_sha256': delivery.delivery.bootstrapSha256,
+            'installed_at': '2026-08-15T10:09:00Z',
+          });
+      final forged = AtlasVaultSignedPairingAcknowledgement.fromJson(
+        <String, Object?>{
+          'format': 'atlasvault-signed-pairing-acknowledgement',
+          'version': 1,
+          'acknowledgement': acknowledgement.toJson(),
+          'invitee': (await attacker.signDescriptor()).toJson(),
+          'signature': base64Encode(
+            await attacker.signBytes(<int>[
+              ...utf8.encode(
+                'atlasvault-pairing-acknowledgement-signature-v1:',
+              ),
+              ...acknowledgement.canonicalBytes(),
+            ]),
+          ),
+        },
+      );
+      final forgedArtifact = AtlasVaultPairingArtifact.fromJson(
+        <String, Object?>{
+          'format': 'atlasvault-pairing-artifact',
+          'version': 1,
+          'kind': 'acknowledgement',
+          'payload': <String, Object?>{
+            'signed_acknowledgement': forged.toJson(),
+          },
+        },
+      );
+      journey.mailbox.bytes = Uint8List.fromList(
+        forgedArtifact.canonicalBytes(),
+      );
+
+      final result = await journey.inviter.importPairingAcknowledgement();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviterTransactions.value?.stage,
+        AtlasVaultPairingStage.deliverySaved,
+      );
+      expect(journey.inviterRegistry.value, isNull);
+      expect(journey.inviterReplay.value, isNull);
+      expect(
+        journey.inviterStage.values,
+        isNot(contains(AtlasVaultPairingArtifactKind.acknowledgement)),
+      );
     },
   );
 
@@ -426,6 +511,91 @@ void main() {
     );
     expect(
       journey.inviteeEvents.where((event) => event == 'selection.create'),
+      hasLength(1),
+    );
+  });
+
+  for (final failure
+      in <(AtlasVaultPairingStage, AtlasVaultPairingStage, String)>[
+        (
+          AtlasVaultPairingStage.storeCreated,
+          AtlasVaultPairingStage.deliveryImported,
+          'store',
+        ),
+        (
+          AtlasVaultPairingStage.keyCreated,
+          AtlasVaultPairingStage.storeCreated,
+          'key',
+        ),
+      ]) {
+    test(
+      '${failure.$3} create intent survives journal advance interruption',
+      () async {
+        final journey = await _PairingJourney.create(
+          vector,
+          inviteeTransactionReplaceFailureStage: failure.$1,
+          inviteeTransactionReplaceFailures: 1,
+        );
+        addTearDown(journey.stop);
+        await _exchangeDelivery(journey);
+
+        final interrupted = await journey.invitee.importKeyDelivery();
+        final transaction = journey.inviteeTransactions.value;
+
+        expect(
+          interrupted.disposition,
+          AtlasVaultTrustedPairingDisposition.recoveryRequired,
+        );
+        expect(transaction?.stage, failure.$2);
+        if (failure.$3 == 'store') {
+          expect(transaction?.storeSha256, isNotNull);
+        } else {
+          expect(transaction?.vaultKeySha256, isNotNull);
+        }
+        expect(
+          (await journey.invitee.resumePairing()).disposition,
+          AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+        );
+        expect(
+          journey.inviteeEvents.where(
+            (event) => event == '${failure.$3}.create',
+          ),
+          hasLength(1),
+        );
+      },
+    );
+  }
+
+  test('orphaned generated delivery is authenticated and resumed', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.deliveryCreated,
+      inviterTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+
+    final interrupted = await journey.inviter.confirmCodesMatch();
+
+    expect(
+      interrupted.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterTransactions.value?.stage,
+      AtlasVaultPairingStage.sasConfirmed,
+    );
+    expect(
+      journey.inviterStage.values,
+      contains(AtlasVaultPairingArtifactKind.delivery),
+    );
+    expect(
+      (await journey.inviter.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.deliveryReady,
+    );
+    expect(
+      journey.inviterEvents.where((event) => event == 'stage.create:delivery'),
       hasLength(1),
     );
   });
@@ -820,6 +990,7 @@ final class _PairingJourney {
     required this.inviteeTransactions,
     required this.inviterStage,
     required this.inviteeStage,
+    required this.inviterReplay,
     required this.inviteeReplay,
     required this.mailbox,
     required this.inviterRuntime,
@@ -843,6 +1014,7 @@ final class _PairingJourney {
   final AtlasVaultPairingMemoryTransactionStore inviteeTransactions;
   final AtlasVaultPairingMemoryStageStore inviterStage;
   final AtlasVaultPairingMemoryStageStore inviteeStage;
+  final AtlasVaultPairingMemoryReplayStore inviterReplay;
   final AtlasVaultPairingMemoryReplayStore inviteeReplay;
   final AtlasVaultPairingMailbox mailbox;
   final AtlasVaultPrivateStateRuntime inviterRuntime;
@@ -862,6 +1034,8 @@ final class _PairingJourney {
     AtlasVaultPairingArtifactKind? inviterStageFailure,
     AtlasVaultPairingArtifactKind? inviteeStageFailure,
     int inviteeActivationFailures = 0,
+    AtlasVaultPairingStage? inviterTransactionReplaceFailureStage,
+    int inviterTransactionReplaceFailures = 0,
     AtlasVaultPairingStage? inviteeTransactionReplaceFailureStage,
     int inviteeTransactionReplaceFailures = 0,
     int inviteeTransactionDeleteFailures = 0,
@@ -888,6 +1062,8 @@ final class _PairingJourney {
     );
     final inviterTransactions = AtlasVaultPairingMemoryTransactionStore(
       events: inviterEvents,
+      failReplaceStage: inviterTransactionReplaceFailureStage,
+      failReplaceCount: inviterTransactionReplaceFailures,
     );
     final inviteeTransactions = AtlasVaultPairingMemoryTransactionStore(
       events: inviteeEvents,
@@ -1025,6 +1201,7 @@ final class _PairingJourney {
       inviteeTransactions: inviteeTransactions,
       inviterStage: inviterStage,
       inviteeStage: inviteeStage,
+      inviterReplay: inviterReplay,
       inviteeReplay: inviteeReplay,
       mailbox: mailbox,
       inviterRuntime: inviterRuntime,

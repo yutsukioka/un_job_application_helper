@@ -3232,6 +3232,27 @@ void main() {
       contains('AtlasVaultRecoveryImportTransactionAdmission'),
     );
     expect(androidAdmission, contains('runRecoveryImportTransaction<T>'));
+    expect(androidAdmission, contains('_rejectCompetingTransactions('));
+    expect(androidAdmission, contains('allowMigration: true'));
+    expect(androidAdmission, contains('allowRecoveryImport: true'));
+    expect(androidAdmission, contains('allowPairing: true'));
+
+    final windowsAdmissionStart = source.indexOf(
+      'final class _AtlasWindowsTrustedPairingAdmission',
+    );
+    final windowsAdmissionEnd = source.indexOf(
+      'final class _AtlasAndroidTrustedPairingAdmission',
+      windowsAdmissionStart,
+    );
+    expect(windowsAdmissionStart, isNonNegative);
+    expect(windowsAdmissionEnd, greaterThan(windowsAdmissionStart));
+    final windowsAdmission = source.substring(
+      windowsAdmissionStart,
+      windowsAdmissionEnd,
+    );
+    expect(windowsAdmission, contains('_rejectPendingPairing('));
+    expect(windowsAdmission, contains('runMigrationTransaction<T>'));
+    expect(windowsAdmission, contains('runRecoveryImportTransaction<T>'));
 
     final androidAssemblyStart = source.indexOf(
       'final keyStore = AtlasAndroidVaultSecureKeyStore();',

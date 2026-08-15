@@ -272,6 +272,153 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
+    func testForgedAcknowledgementCannotEnrollThirdDeviceOrPoisonState()
+        async throws
+    {
+        let journey = try makeJourney()
+        let deliveryArtifact = try await prepareDelivery(journey)
+        let delivery = try deliveryArtifact.deliveryPayload().signedDelivery
+        let attacker = try AtlasVaultDeviceIdentity.generate(
+            createdAt: "2026-08-15T12:00:00Z"
+        )
+        let value = delivery.delivery
+        let acknowledgement = try AtlasVaultPairingAcknowledgement(
+            acknowledgementID: "54000000-0000-4000-8000-000000000001",
+            deliveryID: value.deliveryID,
+            transcriptSHA256: value.transcriptSHA256,
+            inviterDeviceID: value.inviterDeviceID,
+            inviteeDeviceID: attacker.deviceID,
+            vaultID: value.vaultID,
+            keyEpoch: value.keyEpoch,
+            bootstrapSHA256: value.bootstrapSHA256,
+            installedAt: "2026-08-15T12:09:00Z"
+        )
+        let forged = try AtlasVaultSignedPairingAcknowledgement(
+            acknowledgement: acknowledgement,
+            invitee: attacker.signDescriptor(),
+            signature: attacker.sign(
+                Data(
+                    "atlasvault-pairing-acknowledgement-signature-v1:".utf8
+                ) + acknowledgement.canonicalData()
+            )
+        )
+
+        let result = await journey.inviter.importPairingAcknowledgement(
+            try .acknowledgement(forged)
+        )
+        let transaction = await journey.inviterState.loadTransaction()
+        let registry = await journey.inviterState.loadRegistry()
+        let replay = await journey.inviterState.loadReplay()
+        let staged = await journey.inviterState.loadArtifact(
+            .acknowledgement
+        )
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .deliverySaved)
+        XCTAssertNil(registry)
+        XCTAssertNil(replay)
+        XCTAssertNil(staged)
+    }
+
+    func testStoreAndKeyCreateIntentSurvivesJournalAdvanceFailure()
+        async throws
+    {
+        for (failedStage, priorStage, label) in [
+            (
+                AtlasVaultPairingStage.storeCreated,
+                AtlasVaultPairingStage.deliveryImported,
+                "store"
+            ),
+            (
+                AtlasVaultPairingStage.keyCreated,
+                AtlasVaultPairingStage.storeCreated,
+                "key"
+            ),
+        ] {
+            let journey = try makeJourney(
+                inviteeReplaceFailure: failedStage
+            )
+            let delivery = try await prepareDelivery(journey)
+
+            let interrupted = await journey.invitee.importKeyDelivery(
+                delivery
+            )
+            let transaction = await journey.inviteeState.loadTransaction()
+
+            XCTAssertEqual(
+                interrupted.disposition,
+                .recoveryRequired,
+                label
+            )
+            XCTAssertEqual(transaction?.stage, priorStage, label)
+            if label == "store" {
+                XCTAssertNotNil(transaction?.storeSHA256, label)
+            } else {
+                XCTAssertNotNil(transaction?.vaultKeySHA256, label)
+            }
+            let resumed = await journey.invitee.resumePairing()
+            XCTAssertEqual(resumed.disposition, .acknowledgementReady, label)
+            let snapshot = await journey.inviteeState.snapshot()
+            XCTAssertEqual(
+                snapshot.events.filter { $0 == "\(label).create" }.count,
+                1,
+                label
+            )
+        }
+    }
+
+    func testGeneratedDeliveryOrphanIsAuthenticatedAndResumed()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviterReplaceFailure: .deliveryCreated
+        )
+        try await exchangeAcceptance(journey)
+
+        let interrupted = await journey.inviter.confirmCodesMatch()
+        let transaction = await journey.inviterState.loadTransaction()
+        let staged = await journey.inviterState.loadArtifact(.delivery)
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .sasConfirmed)
+        XCTAssertNotNil(staged)
+        let resumed = await journey.inviter.resumePairing()
+        XCTAssertEqual(resumed.disposition, .deliveryReady)
+        let snapshot = await journey.inviterState.snapshot()
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "artifact.create:delivery" }.count,
+            1
+        )
+    }
+
+    func testAcknowledgementRestagesAfterFirstCreateFailure()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviteeArtifactFailure: .acknowledgement
+        )
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        let transaction = await journey.inviteeState.loadTransaction()
+        let staged = await journey.inviteeState.loadArtifact(
+            .acknowledgement
+        )
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .runtimeActivated)
+        XCTAssertNil(staged)
+        let resumed = await journey.invitee.resumePairing()
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+        let snapshot = await journey.inviteeState.snapshot()
+        XCTAssertEqual(
+            snapshot.events.filter {
+                $0 == "artifact.create:acknowledgement"
+            }.count,
+            1
+        )
+    }
+
     func testAppleAcknowledgementSavedResumeCompletesCleanup() async throws {
         let journey = try makeJourney(inviteeDeleteFailures: 1)
         let delivery = try await prepareDelivery(journey)
@@ -428,6 +575,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
 
     private func makeJourney(
         inviterArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
+        inviterReplaceFailure: AtlasVaultPairingStage? = nil,
+        inviteeArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviteeReplaceFailure: AtlasVaultPairingStage? = nil,
         inviteeDeleteFailures: Int = 0
     ) throws -> PairingJourneyHarness {
@@ -459,12 +608,17 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             identity: inviterIdentity,
             activeVault: activeVault,
             cleanInstall: .existingVault,
-            failArtifactCreateKind: inviterArtifactFailure
+            failArtifactCreateKind: inviterArtifactFailure,
+            failArtifactCreateCount: inviterArtifactFailure == nil ? 0 : 1,
+            failTransactionReplaceStage: inviterReplaceFailure,
+            failTransactionReplaceCount: inviterReplaceFailure == nil ? 0 : 1
         )
         let inviteeState = PairingCoordinatorState(
             identity: inviteeIdentity,
             activeVault: nil,
             cleanInstall: .clean,
+            failArtifactCreateKind: inviteeArtifactFailure,
+            failArtifactCreateCount: inviteeArtifactFailure == nil ? 0 : 1,
             failTransactionReplaceStage: inviteeReplaceFailure,
             failTransactionReplaceCount: inviteeReplaceFailure == nil ? 0 : 1,
             failTransactionDeleteCount: inviteeDeleteFailures
@@ -615,6 +769,7 @@ private actor PairingCoordinatorState {
     private var active = false
     private var events: [String] = []
     private let failArtifactCreateKind: AtlasVaultPairingArtifactKind?
+    private var failArtifactCreateCount: Int
     private let failTransactionReplaceStage: AtlasVaultPairingStage?
     private var failTransactionReplaceCount: Int
     private var failTransactionDeleteCount: Int
@@ -624,6 +779,7 @@ private actor PairingCoordinatorState {
         activeVault: AtlasVaultPairingActiveVault?,
         cleanInstall: AtlasVaultPairingCleanInstallDisposition,
         failArtifactCreateKind: AtlasVaultPairingArtifactKind? = nil,
+        failArtifactCreateCount: Int = 0,
         failTransactionReplaceStage: AtlasVaultPairingStage? = nil,
         failTransactionReplaceCount: Int = 0,
         failTransactionDeleteCount: Int = 0
@@ -633,6 +789,7 @@ private actor PairingCoordinatorState {
         cleanInstallDisposition = cleanInstall
         selectedVault = activeVault?.vaultID
         self.failArtifactCreateKind = failArtifactCreateKind
+        self.failArtifactCreateCount = failArtifactCreateCount
         self.failTransactionReplaceStage = failTransactionReplaceStage
         self.failTransactionReplaceCount = failTransactionReplaceCount
         self.failTransactionDeleteCount = failTransactionDeleteCount
@@ -690,7 +847,9 @@ private actor PairingCoordinatorState {
         artifacts[kind.rawValue]
     }
     func createArtifact(_ value: AtlasVaultPairingArtifact) throws {
-        if value.kind == failArtifactCreateKind {
+        if value.kind == failArtifactCreateKind,
+           failArtifactCreateCount > 0 {
+            failArtifactCreateCount -= 1
             throw AtlasVaultPairingTransactionError.unavailable
         }
         guard artifacts[value.kind.rawValue] == nil else {

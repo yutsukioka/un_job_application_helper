@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 from pathlib import Path
 
@@ -130,6 +131,18 @@ def test_sas_request_bootstrap_delivery_and_acknowledgement_match_vector() -> No
 
     assert offer.offer.inviter.descriptor.device_id == inviter.device_id
     assert acceptance.acceptance.invitee.descriptor.device_id == invitee.device_id
+
+
+@pytest.mark.parametrize("value", ["record-e\u0301", "record-\U0001f512", "record-\nline"])
+def test_pairing_bootstrap_rejects_non_ascii_authenticated_metadata(
+    value: str,
+) -> None:
+    root = _root()
+    bootstrap = copy.deepcopy(root["bootstrap"])
+    bootstrap["records"][0]["id"] = value
+
+    with pytest.raises(PairingKeyDeliveryError):
+        PairingBootstrap.from_dict(bootstrap)
 
 
 @pytest.mark.parametrize(
