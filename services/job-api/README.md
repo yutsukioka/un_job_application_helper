@@ -48,9 +48,10 @@ python -m job_api.launcher
 
 Delete the external token file after stopping the service. The launcher rejects
 a LAN bind unless LAN opt-in, token mode, and one valid token source are all
-present. Direct Uvicorn invocation is unsupported, but the application still
-enforces private-route admission if the launcher is bypassed. Forwarding headers
-do not influence loopback admission.
+present. The validated launcher disables proxy-header trust and access logging.
+Direct Uvicorn invocation is unsupported, but the application still enforces
+private-route admission if the launcher is bypassed. Forwarding headers do not
+influence loopback admission.
 
 Cross-origin browser access is disabled by default. Set
 `ATLAS_CORS_ORIGINS` to an exact comma-separated origin list when required.

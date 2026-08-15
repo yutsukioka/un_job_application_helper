@@ -138,6 +138,21 @@ def test_token_mode_requires_exact_bearer_token(
     assert response.status_code == expected_status
 
 
+def test_token_in_query_string_is_not_an_authentication_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+
+    response = _client(tmp_path).get(
+        "/api/saved-searches",
+        params={"access_token": VALID_TOKEN},
+    )
+
+    assert response.status_code == 403
+
+
 def test_token_never_appears_in_denial_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -626,6 +641,7 @@ def test_launcher_starts_uvicorn_without_proxy_header_trust(
         "port": 8765,
         "reload": False,
         "proxy_headers": False,
+        "access_log": False,
     }
 
 

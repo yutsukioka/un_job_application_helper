@@ -62,7 +62,8 @@ Token mode loads exactly one of:
 Both sources together fail startup. A token is ASCII, uses bearer-token-safe
 characters, and is at least 32 bytes long. Operators must generate at least 32
 bytes of cryptographic entropy. Verification uses `secrets.compare_digest`.
-Responses and application code never log the configured or supplied token.
+Responses and application code never log the configured or supplied token. A
+query-string value is never accepted as authentication.
 
 The token-file path must name one regular, bounded file. On POSIX, group or
 other permissions are rejected. The file must contain only the token: embedded
@@ -78,9 +79,11 @@ is accepted only when all of the following hold:
 - private mode is `token`;
 - one valid token source is configured.
 
-The launcher disables Uvicorn proxy-header trust. LAN operation should be used
-only on a network the operator controls. The bearer token is sent over HTTP, so
-an untrusted or monitored network is outside this phase's security claim.
+The launcher disables Uvicorn proxy-header trust and access logging so a caller
+cannot place credential text in a logged URL or query string. LAN operation
+should be used only on a network the operator controls. The bearer token is sent
+over HTTP, so an untrusted or monitored network is outside this phase's security
+claim.
 
 ## CORS
 

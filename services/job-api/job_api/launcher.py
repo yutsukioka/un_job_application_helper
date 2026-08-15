@@ -65,6 +65,7 @@ def main() -> None:
         port=config.port,
         reload=False,
         proxy_headers=False,
+        access_log=False,
     )
 
 

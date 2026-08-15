@@ -22,7 +22,7 @@ launch path.
    unsafe CORS value.
 3. For the validated launcher, parse host and port.
 4. Require explicit LAN opt-in and token mode for every non-loopback bind.
-5. Start Uvicorn without proxy-header trust.
+5. Start Uvicorn without proxy-header trust or access logging.
 6. Reconstruct the same immutable policy when Uvicorn imports the application.
 
 Application construction reads configuration but performs no network bind and
@@ -88,9 +88,8 @@ policy if raw Uvicorn is used.
 ## Failure and Privacy Properties
 
 Configuration errors are fixed and redacted. Request denials do not echo the
-token, private content, peer address, or token-file path. Access logs may record
-the HTTP request line and status, but the token remains in an Authorization
-header and is not logged by this implementation.
+token, private content, peer address, or token-file path. The validated launcher
+disables access logs, and query-string values are never accepted as credentials.
 
 ## Verification
 
