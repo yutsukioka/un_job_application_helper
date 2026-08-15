@@ -29,7 +29,7 @@ class LaunchConfig:
 def load_launch_config(environment: Mapping[str, str] | None = None) -> LaunchConfig:
     environment = os.environ if environment is None else environment
     policy = load_private_access_policy(environment)
-    host = environment.get(HOST_ENVIRONMENT, "127.0.0.1")
+    raw_host = environment.get(HOST_ENVIRONMENT, "127.0.0.1")
     raw_port = environment.get(PORT_ENVIRONMENT, "8765")
     allow_lan = environment.get(ALLOW_LAN_ENVIRONMENT, "0")
     trust_proxy = environment.get(TRUST_PROXY_ENVIRONMENT)
@@ -39,14 +39,19 @@ def load_launch_config(environment: Mapping[str, str] | None = None) -> LaunchCo
     except ValueError:
         raise ValueError("Invalid API launch configuration.") from None
     if (
-        not host
-        or host != host.strip()
+        not raw_host
+        or raw_host != raw_host.strip()
         or not 1 <= port <= 65535
         or allow_lan not in {"0", "1"}
         or trust_proxy is not None
     ):
         raise ValueError("Invalid API launch configuration.")
 
+    host = (
+        "127.0.0.1"
+        if raw_host.casefold() in {"localhost", "localhost."}
+        else raw_host
+    )
     if not is_loopback_address(host) and (
         allow_lan != "1" or policy.mode is not PrivateAccessMode.TOKEN
     ):

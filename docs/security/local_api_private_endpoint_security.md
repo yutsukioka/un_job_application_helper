@@ -83,6 +83,10 @@ is accepted only when all of the following hold:
 - private mode is `token`;
 - one valid token source is configured.
 
+The reserved `localhost` name, including case-insensitive and trailing-dot
+forms, is normalized to `127.0.0.1`. Other hostnames are not treated as
+loopback because their resolution is outside this launch policy.
+
 The launcher disables Uvicorn proxy-header trust and access logging so a caller
 cannot place credential text in a logged URL or query string. LAN operation
 should be used only on a network the operator controls. The bearer token is sent

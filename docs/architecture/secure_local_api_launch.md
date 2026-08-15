@@ -81,7 +81,9 @@ Wildcard reflection and credentialed wildcard requests are impossible.
 ## Launch Profiles
 
 Default development uses `python -m job_api.launcher` and binds
-`127.0.0.1:8765`. A deliberate LAN session sets `ATLAS_API_HOST`,
+`127.0.0.1:8765`. The reserved `localhost` spelling is normalized to the same
+numeric loopback address before binding; arbitrary hostnames are not resolved
+as loopback authority. A deliberate LAN session sets `ATLAS_API_HOST`,
 `ATLAS_ALLOW_LAN`, token mode, and one external token source. Disabled mode is
 not accepted for LAN binding because it cannot claim usable private
 functionality.

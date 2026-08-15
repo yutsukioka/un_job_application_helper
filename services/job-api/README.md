@@ -30,6 +30,10 @@ are private. The sync command and search requests that read a local
 search/detail, facets, taxonomies, source/update summaries, and sync status
 remain available.
 
+An explicit `ATLAS_API_HOST=localhost` (including its case-insensitive and
+trailing-dot forms) is normalized to `127.0.0.1` before Uvicorn binds. Other
+hostnames are not trusted as loopback launch authority.
+
 ### Token-protected LAN launch
 
 LAN binding is opt-in and exposes public routes to the local network. Use an
