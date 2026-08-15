@@ -55,12 +55,13 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
         let identifiers = PairingIdentifierSequence()
         let random = PairingRandomSequence()
+        let clock = PairingClock(timestamp)
         let inviter = AtlasVaultTrustedPairingCoordinator(
             environment: pairingEnvironment(
                 state: inviterState,
                 identifiers: identifiers,
                 random: random,
-                timestamp: timestamp
+                timestamp: { clock.now() }
             )
         )
         let invitee = AtlasVaultTrustedPairingCoordinator(
@@ -68,7 +69,7 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
                 state: inviteeState,
                 identifiers: identifiers,
                 random: random,
-                timestamp: timestamp
+                timestamp: { clock.now() }
             )
         )
 
@@ -108,6 +109,7 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             committed: true
         )
         XCTAssertEqual(deliverySaved.disposition, .deliverySaved)
+        clock.set("2026-08-15T12:09:00Z")
         let acknowledgementReady = await invitee.importKeyDelivery(delivery)
         XCTAssertEqual(
             acknowledgementReady.disposition,
@@ -115,6 +117,11 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
         let acknowledgement = try await invitee.artifactToSave(
             .acknowledgement
+        )
+        XCTAssertEqual(
+            try acknowledgement.signedAcknowledgement()
+                .acknowledgement.installedAt,
+            "2026-08-15T12:09:00Z"
         )
         let acknowledgementSaved = await invitee
             .pairingArtifactSaveFinished(
@@ -582,11 +589,27 @@ private final class PairingRandomSequence: @unchecked Sendable {
     }
 }
 
+private final class PairingClock: @unchecked Sendable {
+    private let value: Mutex<String>
+
+    init(_ value: String) {
+        self.value = Mutex(value)
+    }
+
+    func now() -> String {
+        value.withLock { $0 }
+    }
+
+    func set(_ replacement: String) {
+        value.withLock { $0 = replacement }
+    }
+}
+
 private func pairingEnvironment(
     state: PairingCoordinatorState,
     identifiers: PairingIdentifierSequence,
     random: PairingRandomSequence,
-    timestamp: String
+    timestamp: @escaping @Sendable () -> String
 ) -> AtlasVaultTrustedPairingEnvironment {
     AtlasVaultTrustedPairingEnvironment(
         loadIdentity: { await state.loadIdentity() },
@@ -642,7 +665,7 @@ private func pairingEnvironment(
             return await state.isActive()
         },
         uuid: { identifiers.next() },
-        timestamp: { timestamp },
+        timestamp: timestamp,
         randomBytes: { try random.next(count: $0) }
     )
 }
