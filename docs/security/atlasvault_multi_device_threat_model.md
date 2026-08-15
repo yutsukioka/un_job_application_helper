@@ -377,3 +377,68 @@ scope expansion, or any implementation of trust/linking/key delivery before a
 separate review. Different valid signed envelopes may have different transcript
 hashes; treating that expected difference as equivalent to a mismatch for the
 same bytes is incorrect.
+
+## 67. Phase 2F-2 Local Onboarding Boundary
+
+Phase 2F-2 authorizes explicit file-mediated pairing, durable local replay
+consumption, authenticated encrypted vault-key delivery, clean-install
+installation, and bilateral local trust records. It does not authorize a
+backend, network transport, synchronized records, revocation, or rotation.
+
+## 68. Stolen Pairing Artifact
+
+**Classification: mitigated for confidentiality and trust; denial remains.**
+Offer and acceptance artifacts are signed and transcript-bound. Delivery is
+encrypted to the invitee ephemeral X25519 key and binds both device IDs,
+request, bootstrap, vault, epoch, expiry, and delivery ID. A thief can delete,
+delay, copy, or replay files, but cannot decrypt the vault key without the
+protected ephemeral private key. Durable replay state rejects consumed logical
+objects. File possession alone never commits trust.
+
+## 69. Authentication-String Mismatch
+
+**Classification: fail closed.** Both users must explicitly confirm the same
+six-byte SAS rendered as `XXXX-XXXX-XXXX`. Delivery and installation remain
+blocked until the role-specific confirmation. The UI warns users to compare on
+both recognized devices rather than through the artifact channel.
+
+## 70. Transaction Interruption
+
+**Classification: mitigated locally.** Platform-protected transaction state,
+hash-bound staged artifacts, monotonic stages, create-only resources, and
+read-back verification support resume. Before selected-vault creation, reset
+deletes only exact staged resources. After selection, reset is unavailable and
+the transaction is resume-only. Transaction clearing is last.
+
+## 71. Registry Equivocation
+
+**Classification: partially mitigated locally; synchronization deferred.** A
+device-local registry is strict, revisioned, create-only, descriptor-verified,
+and conflict-safe. No server or peer can replace a committed logical peer
+silently. Registries are not synchronized, so cross-device list convergence,
+server equivocation detection, and monotonic rollback protection remain open.
+
+## 72. Delivery-Key And Ephemeral-Key Lifetime
+
+**Classification: mitigated best-effort.** Delivery uses fresh ephemeral
+X25519, transcript-salted HKDF-SHA256, and AES-256-GCM. The delivery key,
+shared secret, and raw vault key are process-local and wiped where mutable.
+The invitee ephemeral private key may persist only inside protected transaction
+state until installation or permitted cleanup.
+
+## 73. Bilateral Trust Asymmetry
+
+**Classification: explicitly ordered.** The invitee commits inviter trust only
+after store/key/selection installation, runtime activation, and bootstrap
+verification. The inviter commits invitee trust only after verifying and
+durably consuming the signed installation acknowledgement. An interrupted
+exchange can therefore be incomplete but cannot silently claim bilateral
+completion.
+
+## 74. Remaining Multi-Device Risks
+
+Phase 2F-2 still has no ongoing ciphertext exchange, synchronized registry,
+malicious-server rollback state, remote removal, compromise recovery, or vault
+key rotation. A previously paired stolen device remains trusted until a later
+revocation and epoch-rotation phase. The local onboarding milestone must not be
+described as full multi-device readiness.

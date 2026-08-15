@@ -10,7 +10,9 @@ from vaultsync.pairing_artifacts import PairingArtifact, PairingArtifactError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-VECTOR_PATH = REPO_ROOT / "contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json"
+VECTOR_PATH = (
+    REPO_ROOT / "contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json"
+)
 
 
 def test_all_pairing_artifacts_match_strict_canonical_vector_bytes() -> None:
@@ -36,3 +38,16 @@ def test_pairing_artifacts_reject_unknown_fields_kinds_and_noncanonical_bytes() 
     encoded = base64.b64decode(root["artifacts"]["offer"]["canonical_b64"], validate=True)
     with pytest.raises(PairingArtifactError):
         PairingArtifact.from_canonical_bytes(b" " + encoded)
+
+
+def test_pairing_artifact_payload_cannot_mutate_validated_bytes() -> None:
+    root = json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
+    encoded = base64.b64decode(root["artifacts"]["delivery"]["canonical_b64"], validate=True)
+    artifact = PairingArtifact.from_canonical_bytes(encoded)
+
+    with pytest.raises(TypeError):
+        artifact.payload["bootstrap"] = {}
+    with pytest.raises(TypeError):
+        artifact.payload["bootstrap"]["snapshot_id"] = "changed"
+
+    assert artifact.canonical_bytes() == encoded

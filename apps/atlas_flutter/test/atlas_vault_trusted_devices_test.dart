@@ -32,6 +32,34 @@ void main() {
     );
   });
 
+  test('registry descriptor signatures are verified on trusted load', () async {
+    final encoded = base64Decode(
+      root['trusted_registry_canonical_b64']! as String,
+    );
+    final verified = await decodeAndVerifyAtlasVaultTrustedDeviceRegistry(
+      encoded,
+    );
+    expect(verified.toJson(), root['trusted_registry']);
+
+    final tampered = jsonDecode(jsonEncode(root['trusted_registry']));
+    final devices = (tampered as Map<String, dynamic>)['devices']! as List;
+    final descriptor =
+        (devices.single as Map<String, dynamic>)['peer_descriptor']!
+            as Map<String, dynamic>;
+    final signature = base64Decode(descriptor['signature']! as String);
+    signature[0] ^= 1;
+    descriptor['signature'] = base64Encode(signature);
+
+    await expectLater(
+      verifyAtlasVaultTrustedDeviceRegistry(
+        AtlasVaultTrustedDeviceRegistry.fromJson(
+          Map<String, Object?>.from(tampered),
+        ),
+      ),
+      throwsA(isA<AtlasVaultTrustedDeviceStateException>()),
+    );
+  });
+
   test('trust is create-only, idempotent, and conflict safe', () async {
     final empty = AtlasVaultTrustedDeviceRegistry.fromJson(
       atlasVaultObject(root['empty_trusted_registry']),
@@ -39,7 +67,7 @@ void main() {
     final peer = AtlasVaultTrustedDevicePeer.fromJson(
       atlasVaultObject(root['trusted_peer']),
     );
-    final committed = commitAtlasVaultTrustedDevice(
+    final committed = await commitAtlasVaultTrustedDevice(
       empty,
       peer,
       revision: root['registry_commit_revision']! as String,
@@ -48,7 +76,7 @@ void main() {
     expect(committed.outcome, AtlasVaultTrustedDeviceCommitOutcome.committed);
     expect(committed.registry.toJson(), root['trusted_registry']);
 
-    final duplicate = commitAtlasVaultTrustedDevice(
+    final duplicate = await commitAtlasVaultTrustedDevice(
       committed.registry,
       peer,
       revision: root['unused_revision']! as String,

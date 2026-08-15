@@ -115,6 +115,20 @@ void main() {
     }
   });
 
+  test('validated artifact payload cannot mutate canonical bytes', () {
+    final value = atlasVaultObject(
+      atlasVaultObject(root['artifacts'])['delivery'],
+    );
+    final encoded = _bytes(value['canonical_b64']);
+    final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(encoded);
+
+    artifact.payload['bootstrap'] = <String, Object?>{};
+    final nested = atlasVaultObject(artifact.payload['bootstrap']);
+    nested['snapshot_id'] = 'changed';
+
+    expect(artifact.canonicalBytes(), encoded);
+  });
+
   test(
     'wrong key material and expired delivery fail without secrets',
     () async {

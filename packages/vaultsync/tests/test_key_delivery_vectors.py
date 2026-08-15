@@ -120,9 +120,7 @@ def test_sas_request_bootstrap_delivery_and_acknowledgement_match_vector() -> No
         installed_at=root["installed_at"],
     )
     assert acknowledgement.to_dict() == root["signed_acknowledgement"]
-    assert acknowledgement.canonical_bytes() == _bytes(
-        root["signed_acknowledgement_canonical_b64"]
-    )
+    assert acknowledgement.canonical_bytes() == _bytes(root["signed_acknowledgement_canonical_b64"])
     verify_pairing_acknowledgement(
         acknowledgement,
         delivery=delivery,
@@ -179,6 +177,22 @@ def test_signature_ciphertext_expiry_and_acknowledgement_tamper_fail() -> None:
             inviter_device_id=root["inviter"]["device_id"],
             invitee_device_id=root["invitee"]["device_id"],
         )
+
+    signature_tamper = dict(root["signed_delivery"])
+    signature = bytearray(_bytes(signature_tamper["signature"]))
+    signature[0] ^= 1
+    signature_tamper["signature"] = base64.b64encode(signature).decode("ascii")
+    with pytest.raises(PairingKeyDeliveryError):
+        SignedVaultKeyDelivery.from_dict(signature_tamper)
+
+    ciphertext_tamper = dict(root["signed_delivery"])
+    delivery_value = dict(ciphertext_tamper["delivery"])
+    ciphertext = bytearray(_bytes(delivery_value["ciphertext"]))
+    ciphertext[-1] ^= 1
+    delivery_value["ciphertext"] = base64.b64encode(ciphertext).decode("ascii")
+    ciphertext_tamper["delivery"] = delivery_value
+    with pytest.raises(PairingKeyDeliveryError):
+        SignedVaultKeyDelivery.from_dict(ciphertext_tamper)
 
 
 def test_all_zero_ephemeral_secret_and_errors_fail_closed_without_secrets() -> None:

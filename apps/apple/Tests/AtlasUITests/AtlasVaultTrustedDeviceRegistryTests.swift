@@ -45,6 +45,26 @@ final class AtlasVaultTrustedDeviceRegistryTests: XCTestCase {
         )
         XCTAssertEqual(duplicate.outcome, .alreadyTrusted)
         XCTAssertEqual(duplicate.registry, committed.registry)
+
+        let conflict = try AtlasVaultTrustedDevicePeer(
+            peerDeviceID: peer.peerDeviceID,
+            peerDescriptor: peer.peerDescriptor,
+            pairingTranscriptSHA256: peer.pairingTranscriptSHA256,
+            linkedAt: peer.linkedAt,
+            role: peer.role,
+            vaultID: peer.vaultID,
+            keyEpoch: peer.keyEpoch,
+            deliveryID: try string(root["conflicting_delivery_id"]),
+            acknowledgementSHA256: peer.acknowledgementSHA256
+        )
+        XCTAssertThrowsError(
+            try AtlasVaultTrustedDeviceRegistryFoundation.commit(
+                conflict,
+                to: committed.registry,
+                revision: try string(root["unused_revision"]),
+                updatedAt: try string(root["later_timestamp"])
+            )
+        )
     }
 
     private func loadRoot() throws -> [String: Any] {

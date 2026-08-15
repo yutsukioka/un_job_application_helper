@@ -227,3 +227,27 @@ does not establish device trust, transport a vault key, persist replay state,
 implement QR pairing, register devices with a backend, synchronize records,
 revoke devices, or rotate keys. All pre-existing vector JSON files remain
 unchanged.
+
+## Trusted Pairing And Key-Delivery Vector
+
+`atlasvault_trusted_pairing_delivery_vectors_v1.json` is fake deterministic
+test data for Phase 2F-2. Python is the reference generator. The fixture reuses
+the Phase 2F-1 fake identities and fixed signed offer/acceptance, then adds a
+six-byte SAS, invitee and inviter ephemeral X25519 keys, a signed key request,
+an encrypted bootstrap, transcript-salted HKDF-SHA256 delivery key,
+AES-256-GCM vault-key ciphertext, signed acknowledgement, trusted-device
+registry, durable replay state, and all four canonical `.atlaspair` envelopes.
+
+Python and Dart reproduce the fixed deterministic instances. Swift strictly
+decodes, preserves, and verifies every fixed Python envelope. Consistent with
+the device-identity vector contract, fresh CryptoKit Ed25519 signatures need
+not equal the fixed signature bytes; Swift separately proves fresh signatures
+valid while matching unsigned payloads, hashes, AAD, ciphertext, and recovered
+vault key.
+
+The bootstrap contains one fake unsupported encrypted private record and one
+encrypted tombstone drawn from established fake interoperability data. Their
+encrypted bytes and order remain unchanged. The fixture contains a clearly
+marked fake vault key and fake private keys solely for deterministic tests.
+Production secrets or user data are absent. Generated role-cycle artifacts
+belong only in the external persistent checkpoint and never in the repository.
