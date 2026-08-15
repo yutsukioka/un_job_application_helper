@@ -16,6 +16,7 @@ MINIMUM_TOKEN_BYTES = 32
 MAXIMUM_TOKEN_FILE_BYTES = 4096
 
 _TOKEN_PATTERN = re.compile(rb"[A-Za-z0-9._~+/-]+={0,2}\Z")
+_AUTHORIZATION_PATTERN = re.compile(r"Bearer +([^\s]+)\Z", re.IGNORECASE | re.ASCII)
 _CONFIGURATION_ERROR = "Invalid private API configuration."
 
 
@@ -40,11 +41,12 @@ class PrivateApiToken:
         return cls(encoded)
 
     def matches_authorization(self, header: str | None) -> bool:
-        if header is None or not header.startswith("Bearer "):
+        if header is None:
             return False
-        candidate = header[len("Bearer ") :]
-        if not candidate:
+        match = _AUTHORIZATION_PATTERN.fullmatch(header)
+        if match is None:
             return False
+        candidate = match.group(1)
         try:
             candidate_bytes = candidate.encode("ascii")
         except UnicodeEncodeError:

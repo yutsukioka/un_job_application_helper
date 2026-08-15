@@ -126,7 +126,14 @@ def test_loopback_peer_rejects_dns_rebinding_host(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "host",
-    ["localhost", "localhost:8765", "127.0.0.7:8765", "[::1]:8765"],
+    [
+        "localhost",
+        "LOCALHOST:8765",
+        "localhost.:8765",
+        "127.0.0.7:8765",
+        "[::1]:8765",
+        "[::ffff:127.0.0.1]:8765",
+    ],
 )
 def test_loopback_peer_accepts_only_loopback_host_allowlist(
     tmp_path: Path,
@@ -151,6 +158,24 @@ def test_loopback_peer_rejects_ambiguous_or_duplicate_host(tmp_path: Path) -> No
 
     assert ambiguous.status_code == 403
     assert duplicate.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "[::1",
+        "[::1]suffix",
+        "::1",
+        "localhost:0",
+        "localhost:65536",
+        "localhost@attacker.example",
+        "localhost,attacker.example",
+    ],
+)
+def test_loopback_peer_rejects_malformed_host(tmp_path: Path, host: str) -> None:
+    response = _client(tmp_path, headers={"Host": host}).get("/api/tracker")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -198,6 +223,51 @@ def test_bearer_scheme_uses_http_case_and_space_grammar(
         tmp_path,
         peer="192.0.2.44",
         headers={"Authorization": authorization},
+    ).get("/api/saved-searches")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        f"Bearer\t{VALID_TOKEN}",
+        f"Bearer {VALID_TOKEN} ",
+        f" Bearer {VALID_TOKEN}",
+        f"Bearer {VALID_TOKEN} extra",
+    ],
+)
+def test_bearer_grammar_rejects_ambiguous_whitespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    authorization: str,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+
+    response = _client(
+        tmp_path,
+        peer="192.0.2.44",
+        headers={"Authorization": authorization},
+    ).get("/api/saved-searches")
+
+    assert response.status_code == 403
+
+
+def test_valid_token_is_authority_for_deliberate_non_loopback_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+
+    response = _client(
+        tmp_path,
+        peer="192.0.2.44",
+        headers={
+            "Host": "atlas-lan.example:8765",
+            "Authorization": f"Bearer {VALID_TOKEN}",
+        },
     ).get("/api/saved-searches")
 
     assert response.status_code == 200
@@ -562,7 +632,20 @@ def test_raw_uvicorn_application_still_enforces_direct_peer_policy(
     assert response.status_code == 403
 
 
-def test_root_path_cannot_hide_private_route_from_admission(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/saved-searches"),
+        ("GET", "/api/tracker"),
+        ("POST", "/api/sync/run"),
+        ("POST", "/api/assistant/runs"),
+    ],
+)
+def test_root_path_cannot_hide_private_route_from_admission(
+    tmp_path: Path,
+    method: str,
+    path: str,
+) -> None:
     client = TestClient(
         create_app(_settings(tmp_path)),
         base_url="http://127.0.0.1/prefix",
@@ -570,7 +653,7 @@ def test_root_path_cannot_hide_private_route_from_admission(tmp_path: Path) -> N
         client=("192.0.2.44", 50123),
     )
 
-    response = client.get("/api/tracker")
+    response = client.request(method, path, json={})
 
     assert response.status_code == 403
 

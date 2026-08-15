@@ -23,13 +23,16 @@ admission in `create_app`.
 `ATLAS_PRIVATE_API_MODE` accepts exactly:
 
 - `loopback`: the default. A private request is admitted only when its direct
-  socket peer is IPv4 or IPv6 loopback. No bearer token is needed.
+  socket peer is IPv4 or IPv6 loopback and its single Host header names
+  `localhost` or a loopback IP literal. No bearer token is needed.
 - `token`: every private request, including loopback requests, needs one exact
   `Authorization: Bearer ...` credential.
 - `disabled`: every private route returns a fixed unavailable response.
 
 There is no open mode. Proxy and forwarding headers do not affect peer
-classification.
+classification. Host validation prevents a DNS-rebinding hostname from using a
+loopback socket peer as private authority. Token mode relies on its bearer
+credential and permits the deliberately configured LAN host.
 
 ## Private Routes
 
@@ -61,7 +64,8 @@ Token mode loads exactly one of:
 
 Both sources together fail startup. A token is ASCII, uses bearer-token-safe
 characters, and is at least 32 bytes long. Operators must generate at least 32
-bytes of cryptographic entropy. Verification uses `secrets.compare_digest`.
+bytes of cryptographic entropy. The Bearer scheme is parsed case-insensitively
+with HTTP space grammar, and secret verification uses `secrets.compare_digest`.
 Responses and application code never log the configured or supplied token. A
 query-string value is never accepted as authentication.
 

@@ -90,7 +90,9 @@ class PrivateAccessMiddleware:
         self._policy = policy
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not is_private_endpoint(scope.get("path", "")):
+        if scope["type"] != "http" or not is_private_endpoint(
+            _root_relative_route_path(scope)
+        ):
             await self._app(scope, receive, send)
             return
 
@@ -112,7 +114,11 @@ def private_access_rejection(
         return 503, _ACCESS_UNAVAILABLE
     if policy.mode is PrivateAccessMode.LOOPBACK:
         client = scope.get("client")
-        if client is not None and is_loopback_address(client[0]):
+        if (
+            client is not None
+            and is_loopback_address(client[0])
+            and _has_allowed_loopback_host(scope)
+        ):
             return None
         return 403, _ACCESS_DENIED
 
@@ -124,6 +130,68 @@ def private_access_rejection(
     ):
         return None
     return 403, _ACCESS_DENIED
+
+
+def _root_relative_route_path(scope: Scope) -> str:
+    path = scope.get("path", "")
+    root_path = scope.get("root_path", "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
+
+
+def _has_allowed_loopback_host(scope: Scope) -> bool:
+    host_values = Headers(scope=scope).getlist("host")
+    return len(host_values) == 1 and _is_allowed_loopback_host(host_values[0])
+
+
+def _is_allowed_loopback_host(value: str) -> bool:
+    if (
+        not value
+        or value != value.strip()
+        or any(character in value for character in "/\\@,\x00")
+    ):
+        return False
+
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0:
+            return False
+        hostname = value[1:closing]
+        remainder = value[closing + 1 :]
+        if remainder and not _is_valid_host_port(remainder):
+            return False
+        return is_loopback_address(hostname)
+
+    if value.count(":") > 1:
+        return False
+    hostname, separator, port = value.rpartition(":")
+    if not separator:
+        hostname = value
+    elif not _is_valid_port(port):
+        return False
+
+    if hostname.casefold() in {"localhost", "localhost."}:
+        return True
+    return is_loopback_address(hostname)
+
+
+def _is_valid_host_port(remainder: str) -> bool:
+    return remainder.startswith(":") and _is_valid_port(remainder[1:])
+
+
+def _is_valid_port(value: str) -> bool:
+    if not value.isascii() or not value.isdecimal():
+        return False
+    try:
+        port = int(value, 10)
+    except ValueError:
+        return False
+    return 1 <= port <= 65535
 
 
 def _parse_cors_origins(raw_value: str | None) -> tuple[str, ...]:

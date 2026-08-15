@@ -33,14 +33,19 @@ does not emit credential material.
 The ASGI middleware runs before request-body parsing or route execution. Public
 paths continue directly. Private paths are handled as follows:
 
-- loopback mode parses only `scope["client"]`; forwarded headers are ignored;
+- loopback mode parses `scope["client"]` and requires one loopback Host header;
+  forwarded headers are ignored;
 - token mode requires exactly one Authorization header and an exact bearer
   token match;
 - disabled mode rejects before route validation or store access.
 
 IPv4 loopback, IPv6 loopback, and IPv4-mapped IPv6 loopback are admitted in
-loopback mode. Missing, malformed, hostname, and non-loopback peer values are
-denied.
+loopback mode. Hostnames other than `localhost`, malformed or duplicate Host
+headers, and non-loopback peer values are denied to prevent DNS rebinding.
+
+Before classification, the middleware removes `scope["root_path"]` only when it
+is an exact path prefix with a segment boundary. This mirrors Starlette route
+matching and keeps mounted private routes inside the admission boundary.
 
 ## Route Classification
 
@@ -93,10 +98,11 @@ disables access logs, and query-string values are never accepted as credentials.
 
 ## Verification
 
-Deterministic tests cover all modes, all private route families, forwarded
-header bypass attempts, malformed secret sources, exact CORS, launcher bind
-validation, and direct application enforcement. A live non-loopback interface
-test uses fake state and a temporary owner-only token file.
+Deterministic tests cover all modes, all private route families, DNS rebinding,
+mounted root paths, forwarding-header bypass attempts, HTTP Bearer grammar,
+malformed secret sources, exact CORS, launcher bind validation, and direct
+application enforcement. A live non-loopback interface test uses fake state and
+a temporary owner-only token file.
 
 ## Limitations
 
