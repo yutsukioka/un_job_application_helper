@@ -1280,6 +1280,64 @@ public struct AtlasVaultPairingArtifact: Sendable {
         AtlasVaultKeyDeliveryValidation.sha256Hex(encoded)
     }
 
+    public func signedOffer() throws -> AtlasVaultSignedPairingOffer {
+        let payload = try payload(for: .offer)
+        return try AtlasVaultSignedPairingOffer.decodeStrict(
+            Self.canonicalObjectData(payload["signed_offer"])
+        )
+    }
+
+    public func acceptancePayload() throws
+        -> AtlasVaultPairingAcceptanceArtifactPayload
+    {
+        let payload = try payload(for: .acceptance)
+        guard let proofText = payload["invitee_proof"] as? String else {
+            throw AtlasVaultKeyDeliveryValidation.fail()
+        }
+        return try AtlasVaultPairingAcceptanceArtifactPayload(
+            signedAcceptance: AtlasVaultSignedPairingAcceptance.decodeStrict(
+                Self.canonicalObjectData(payload["signed_acceptance"])
+            ),
+            signedKeyRequest: AtlasVaultSignedPairingKeyRequest.decodeStrict(
+                Self.canonicalObjectData(payload["signed_key_request"])
+            ),
+            inviteeProof: AtlasVaultKeyDeliveryValidation.base64(
+                proofText,
+                length: AtlasVaultKeyDeliveryValidation.keyLength
+            )
+        )
+    }
+
+    public func deliveryPayload() throws
+        -> AtlasVaultPairingDeliveryArtifactPayload
+    {
+        let payload = try payload(for: .delivery)
+        guard let proofText = payload["inviter_proof"] as? String else {
+            throw AtlasVaultKeyDeliveryValidation.fail()
+        }
+        return try AtlasVaultPairingDeliveryArtifactPayload(
+            signedDelivery: AtlasVaultSignedVaultKeyDelivery.decodeStrict(
+                Self.canonicalObjectData(payload["signed_delivery"])
+            ),
+            bootstrap: AtlasVaultPairingBootstrap.decodeStrict(
+                Self.canonicalObjectData(payload["bootstrap"])
+            ),
+            inviterProof: AtlasVaultKeyDeliveryValidation.base64(
+                proofText,
+                length: AtlasVaultKeyDeliveryValidation.keyLength
+            )
+        )
+    }
+
+    public func signedAcknowledgement() throws
+        -> AtlasVaultSignedPairingAcknowledgement
+    {
+        let payload = try payload(for: .acknowledgement)
+        return try AtlasVaultSignedPairingAcknowledgement.decodeStrict(
+            Self.canonicalObjectData(payload["signed_acknowledgement"])
+        )
+    }
+
     private static func make(
         kind: AtlasVaultPairingArtifactKind,
         payload: [String: Any]
@@ -1299,6 +1357,30 @@ public struct AtlasVaultPairingArtifact: Sendable {
 
     private static func object(_ data: Data) throws -> Any {
         try JSONSerialization.jsonObject(with: data)
+    }
+
+    private func payload(
+        for expectedKind: AtlasVaultPairingArtifactKind
+    ) throws -> [String: Any] {
+        guard
+            kind == expectedKind,
+            let root = try JSONSerialization.jsonObject(with: encoded)
+                as? [String: Any],
+            let payload = root["payload"] as? [String: Any]
+        else {
+            throw AtlasVaultKeyDeliveryValidation.fail()
+        }
+        return payload
+    }
+
+    private static func canonicalObjectData(_ value: Any?) throws -> Data {
+        guard let value else {
+            throw AtlasVaultKeyDeliveryValidation.fail()
+        }
+        return try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
     }
 
     private static func validate(
@@ -1364,5 +1446,43 @@ public struct AtlasVaultPairingArtifact: Sendable {
         guard let number = value as? NSNumber else { return false }
         if CFGetTypeID(number) == CFBooleanGetTypeID() { return false }
         return number.intValue == expected && number.doubleValue == Double(expected)
+    }
+}
+
+public struct AtlasVaultPairingAcceptanceArtifactPayload: Sendable {
+    public let signedAcceptance: AtlasVaultSignedPairingAcceptance
+    public let signedKeyRequest: AtlasVaultSignedPairingKeyRequest
+    public let inviteeProof: Data
+
+    public init(
+        signedAcceptance: AtlasVaultSignedPairingAcceptance,
+        signedKeyRequest: AtlasVaultSignedPairingKeyRequest,
+        inviteeProof: Data
+    ) throws {
+        guard inviteeProof.count == 32 else {
+            throw AtlasVaultKeyDeliveryError.verificationFailed
+        }
+        self.signedAcceptance = signedAcceptance
+        self.signedKeyRequest = signedKeyRequest
+        self.inviteeProof = Data(inviteeProof)
+    }
+}
+
+public struct AtlasVaultPairingDeliveryArtifactPayload: Sendable {
+    public let signedDelivery: AtlasVaultSignedVaultKeyDelivery
+    public let bootstrap: AtlasVaultPairingBootstrap
+    public let inviterProof: Data
+
+    public init(
+        signedDelivery: AtlasVaultSignedVaultKeyDelivery,
+        bootstrap: AtlasVaultPairingBootstrap,
+        inviterProof: Data
+    ) throws {
+        guard inviterProof.count == 32 else {
+            throw AtlasVaultKeyDeliveryError.verificationFailed
+        }
+        self.signedDelivery = signedDelivery
+        self.bootstrap = bootstrap
+        self.inviterProof = Data(inviterProof)
     }
 }

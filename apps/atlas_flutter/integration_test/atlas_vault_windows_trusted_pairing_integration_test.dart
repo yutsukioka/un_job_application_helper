@@ -7,10 +7,12 @@ import 'package:atlas/atlas_vault_windows.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import '../test/support/atlas_vault_pairing_fakes.dart';
 import '../test/support/atlas_vault_vector_loader.dart';
 
 const _stageEnvironment = 'ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE';
 const _tamperEnvironment = 'ATLAS_WINDOWS_TRUSTED_PAIRING_EXPECT_TAMPER';
+const _artifactDirectoryEnvironment = 'ATLAS_PAIRING_ARTIFACT_DIR';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -24,7 +26,7 @@ void main() {
     final stage = Platform.environment[_stageEnvironment] ?? configuredStage;
     final expectTamper =
         Platform.environment[_tamperEnvironment] == 'true' || configuredTamper;
-    if (stage != 'prepare' && stage != 'verify') {
+    if (stage != 'prepare' && stage != 'verify' && stage != 'journey') {
       fail('Windows pairing integration environment is invalid.');
     }
 
@@ -32,6 +34,18 @@ void main() {
       'atlasvault_trusted_pairing_delivery_vectors_v1.json',
     );
     final scenario = _WindowsPairingScenario(vector);
+    if (stage == 'journey') {
+      await scenario.runExplicitRoleCycle();
+      await _exchangePairingRing(
+        vector,
+        producer: 'windows-to-apple',
+        consumer: 'android-to-windows',
+      );
+      tester.printToConsole(
+        'Windows explicit inviter/invitee pairing and artifact exchange passed.',
+      );
+      return;
+    }
     if (stage == 'prepare') {
       await scenario.prepare();
       tester.printToConsole(
@@ -75,6 +89,37 @@ final class _WindowsPairingScenario {
   final replayStore = AtlasWindowsPairingReplayStore();
   final transactionStore = AtlasWindowsPairingTransactionStore();
   final stageStore = AtlasWindowsPairingArtifactStageStore();
+
+  Future<void> runExplicitRoleCycle() async {
+    final stores = AtlasVaultPairingPlatformStores(
+      identity: AtlasWindowsDeviceIdentitySecretStore(),
+      registry: registryStore,
+      replay: replayStore,
+      transaction: transactionStore,
+      staging: stageStore,
+      secureKey: AtlasWindowsVaultSecureKeyStore(),
+      localStore: AtlasWindowsVaultLocalStoreIO(),
+      selectedVault: AtlasWindowsSelectedVaultStore(),
+    );
+    final invitee = await runAtlasVaultPairingPlatformJourney(
+      vector: vector,
+      platformRole: AtlasVaultPairingRole.invitee,
+      platformStores: stores,
+    );
+    final inviter = await runAtlasVaultPairingPlatformJourney(
+      vector: vector,
+      platformRole: AtlasVaultPairingRole.inviter,
+      platformStores: stores,
+    );
+    expect(invitee.sas, isNotEmpty);
+    expect(inviter.sas, isNotEmpty);
+    expect(invitee.installedRecordCount, 2);
+    expect(inviter.installedRecordCount, 2);
+    expect(invitee.tombstoneCount, 1);
+    expect(inviter.tombstoneCount, 1);
+    expect(invitee.artifacts.keys, AtlasVaultPairingArtifactKind.values);
+    expect(inviter.artifacts.keys, AtlasVaultPairingArtifactKind.values);
+  }
 
   Future<void> prepare() async {
     if (await registryStore.read() != null ||
@@ -208,4 +253,60 @@ Uint8List _artifactBytes(Map<String, Object?> vector, String kind) {
     atlasVaultObject(vector['artifacts'])[kind],
   );
   return Uint8List.fromList(base64Decode(artifact['canonical_b64']! as String));
+}
+
+Future<void> _exchangePairingRing(
+  Map<String, Object?> vector, {
+  required String producer,
+  required String consumer,
+}) async {
+  const configuredDirectory = String.fromEnvironment(
+    _artifactDirectoryEnvironment,
+  );
+  final directoryPath =
+      Platform.environment[_artifactDirectoryEnvironment] ??
+      configuredDirectory;
+  if (directoryPath.isEmpty) return;
+  final directory = Directory(directoryPath);
+  await directory.create(recursive: true);
+  final artifacts = atlasVaultObject(vector['artifacts']);
+  final sentinel =
+      atlasVaultObject(
+            vector['expected_payloads'],
+          )['unsupported_private_sentinel']!
+          as String;
+  for (final kind in AtlasVaultPairingArtifactKind.values) {
+    final encoded = atlasVaultObject(artifacts[kind.encoded]);
+    final bytes = Uint8List.fromList(
+      base64Decode(encoded['canonical_b64']! as String),
+    );
+    final digest = encoded['sha256']! as String;
+    final produced = File(
+      '${directory.path}/$producer-${kind.encoded}.atlaspair',
+    );
+    await produced.writeAsBytes(bytes, flush: true);
+    await File(
+      '${directory.path}/$producer-${kind.encoded}.sha256',
+    ).writeAsString('$digest\n', flush: true);
+
+    final consumed = File(
+      '${directory.path}/$consumer-${kind.encoded}.atlaspair',
+    );
+    expect(await consumed.exists(), isTrue);
+    final consumedBytes = await consumed.readAsBytes();
+    expect(consumedBytes, bytes);
+    final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(
+      Uint8List.fromList(consumedBytes),
+    );
+    expect(artifact.kind, kind);
+    expect(await atlasVaultSha256Hex(consumedBytes), digest);
+    final consumedDigest = File(
+      '${directory.path}/$consumer-${kind.encoded}.sha256',
+    );
+    expect((await consumedDigest.readAsString()).trim(), digest);
+    final text = utf8.decode(consumedBytes);
+    expect(text, isNot(contains(sentinel)));
+    expect(text, isNot(contains('"vault_key"')));
+    expect(text, isNot(contains('"private_key"')));
+  }
 }

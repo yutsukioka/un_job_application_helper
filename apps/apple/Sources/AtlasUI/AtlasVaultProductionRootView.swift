@@ -10,6 +10,7 @@ public struct AtlasVaultProductionRootView: View {
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private let savedSearchContext: AtlasVaultSavedSearchContext?
+    private let pairingContext: AtlasVaultTrustedPairingContext?
 
     public init(
         owner: AtlasVaultProductionPresentationOwner,
@@ -23,6 +24,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryExportContext = nil
         recoveryImportContext = nil
         savedSearchContext = nil
+        pairingContext = nil
     }
 
     public init(
@@ -38,6 +40,7 @@ public struct AtlasVaultProductionRootView: View {
         recoveryExportContext = nil
         recoveryImportContext = nil
         savedSearchContext = nil
+        pairingContext = nil
     }
 
     public init(
@@ -53,6 +56,7 @@ public struct AtlasVaultProductionRootView: View {
         self.recoveryExportContext = recoveryExportContext
         recoveryImportContext = nil
         savedSearchContext = nil
+        pairingContext = nil
     }
 
     public init(
@@ -69,6 +73,7 @@ public struct AtlasVaultProductionRootView: View {
         self.recoveryExportContext = recoveryExportContext
         recoveryImportContext = nil
         savedSearchContext = nil
+        pairingContext = nil
     }
 
     public init(
@@ -78,7 +83,8 @@ public struct AtlasVaultProductionRootView: View {
         creationContext: AtlasLocalVaultCreationContext?,
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
         recoveryImportContext: AtlasVaultRecoveryImportContext?,
-        savedSearchContext: AtlasVaultSavedSearchContext? = nil
+        savedSearchContext: AtlasVaultSavedSearchContext? = nil,
+        pairingContext: AtlasVaultTrustedPairingContext? = nil
     ) {
         self.owner = owner
         self.publicShellActions = publicShellActions
@@ -87,6 +93,7 @@ public struct AtlasVaultProductionRootView: View {
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
         self.savedSearchContext = savedSearchContext
+        self.pairingContext = pairingContext
     }
 
     public var body: some View {
@@ -97,7 +104,8 @@ public struct AtlasVaultProductionRootView: View {
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
-            savedSearchContext: savedSearchContext
+            savedSearchContext: savedSearchContext,
+            pairingContext: pairingContext
         )
     }
 }
@@ -111,9 +119,23 @@ private struct AtlasVaultProductionRootContent: View {
     let recoveryExportContext: AtlasVaultRecoveryExportContext?
     let recoveryImportContext: AtlasVaultRecoveryImportContext?
     let savedSearchContext: AtlasVaultSavedSearchContext?
+    let pairingContext: AtlasVaultTrustedPairingContext?
 
     @ViewBuilder
     var body: some View {
+        if let pairingContext {
+            AtlasVaultPairingEnabledRoot(
+                flowState: state,
+                owner: pairingContext.owner,
+                content: authorityFlow
+            )
+        } else {
+            authorityFlow
+        }
+    }
+
+    @ViewBuilder
+    private var authorityFlow: some View {
         if let recoveryImportContext {
             AtlasVaultRecoveryImportEnabledRoot(
                 flowState: state,
@@ -161,6 +183,80 @@ private struct AtlasVaultProductionRootContent: View {
                 savedSearchContext: savedSearchContext
             )
         }
+    }
+}
+
+@MainActor
+private struct AtlasVaultPairingEnabledRoot<Content: View>: View {
+    let flowState: AtlasLockedShellUnlockFlowState
+    @ObservedObject var owner: AtlasVaultTrustedPairingPresentationOwner
+    let content: Content
+    @State private var isPairingPresented = false
+    @State private var pairingPresentationClaim =
+        AtlasVaultPairingPresentationClaim()
+
+    var body: some View {
+        content
+            .safeAreaInset(edge: .bottom) {
+                if showsPairingAction {
+                    HStack {
+                        Spacer()
+                        Button {
+                            presentPairing()
+                        } label: {
+                            Label(
+                                "Pair Trusted Device",
+                                systemImage: "person.2.badge.key"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(.bar)
+                }
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: {
+                        isPairingPresented
+                            && owner.ownsPresentation(
+                                pairingPresentationClaim
+                            )
+                            && owner.status != .hidden
+                    },
+                    set: { presented in
+                        isPairingPresented = presented
+                        if !presented,
+                           owner.releasePresentation(
+                               pairingPresentationClaim
+                           ) {
+                            owner.dismiss()
+                        }
+                    }
+                )
+            ) {
+                AtlasVaultPairingView(owner: owner)
+            }
+            .onChange(of: owner.status) { _, status in
+                if status == .hidden {
+                    isPairingPresented = false
+                }
+            }
+    }
+
+    private var showsPairingAction: Bool {
+        (flowState.mode == .lockedPublic
+            || flowState.mode == .unlockedTransition)
+            && !isPairingPresented
+    }
+
+    private func presentPairing() {
+        guard owner.claimPresentation(pairingPresentationClaim) else {
+            return
+        }
+        owner.present()
+        isPairingPresented = true
     }
 }
 

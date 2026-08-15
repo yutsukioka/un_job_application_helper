@@ -20,6 +20,304 @@ void main() {
     );
   });
 
+  test('device fingerprint is canonical and cross-platform stable', () {
+    expect(
+      atlasVaultPairingDeviceFingerprint(
+        atlasVaultObject(vector['inviter'])['device_id']! as String,
+      ),
+      'E198-A89D-6D33-8FB2',
+    );
+    expect(
+      () => atlasVaultPairingDeviceFingerprint('invalid'),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
+
+  test('platform integration journey is reusable across both roles', () async {
+    final stores = AtlasVaultPairingPlatformStores(
+      identity: AtlasVaultPairingMemoryIdentityStore(),
+      registry: AtlasVaultPairingMemoryRegistryStore(),
+      replay: AtlasVaultPairingMemoryReplayStore(),
+      transaction: AtlasVaultPairingMemoryTransactionStore(),
+      staging: AtlasVaultPairingMemoryStageStore(),
+      secureKey: AtlasVaultPairingMemorySecureKeyStore(),
+      localStore: AtlasVaultPairingMemoryLocalStore(),
+      selectedVault: AtlasVaultPairingMemorySelectedVaultStore(),
+    );
+    final invitee = await runAtlasVaultPairingPlatformJourney(
+      vector: vector,
+      platformRole: AtlasVaultPairingRole.invitee,
+      platformStores: stores,
+    );
+    final inviter = await runAtlasVaultPairingPlatformJourney(
+      vector: vector,
+      platformRole: AtlasVaultPairingRole.inviter,
+      platformStores: stores,
+    );
+    expect(invitee.artifacts, hasLength(4));
+    expect(inviter.artifacts, hasLength(4));
+    expect(invitee.tombstoneCount, 1);
+    expect(inviter.tombstoneCount, 1);
+  });
+
+  test('explicit pairing installs then trusts in the reviewed order', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+
+    expect(
+      (await journey.inviter.inspect()).disposition,
+      AtlasVaultTrustedPairingDisposition.identityReady,
+    );
+    expect(
+      (await journey.invitee.inspect()).disposition,
+      AtlasVaultTrustedPairingDisposition.identityReady,
+    );
+
+    expect(
+      (await journey.inviter.createPairingOffer()).disposition,
+      AtlasVaultTrustedPairingDisposition.offerReady,
+    );
+    expect(
+      (await journey.inviter.savePairingOffer()).disposition,
+      AtlasVaultTrustedPairingDisposition.offerSaved,
+    );
+    final inviteeAcceptance = await journey.invitee.importPairingOffer();
+    expect(
+      inviteeAcceptance.disposition,
+      AtlasVaultTrustedPairingDisposition.acceptanceReady,
+    );
+    expect(inviteeAcceptance.sas, isNotNull);
+    expect(
+      (await journey.invitee.savePairingAcceptance()).disposition,
+      AtlasVaultTrustedPairingDisposition.acceptanceSaved,
+    );
+    final inviterCodes = await journey.inviter.importPairingAcceptance();
+    final inviteeCodes = await journey.invitee.inspect();
+    expect(
+      inviterCodes.disposition,
+      AtlasVaultTrustedPairingDisposition.codesReady,
+    );
+    expect(inviterCodes.sas, inviteeCodes.sas);
+
+    expect(
+      (await journey.inviter.confirmCodesMatch()).disposition,
+      AtlasVaultTrustedPairingDisposition.deliveryReady,
+    );
+    expect(
+      (await journey.invitee.confirmCodesMatch()).disposition,
+      AtlasVaultTrustedPairingDisposition.codesConfirmed,
+    );
+    expect(
+      (await journey.inviter.saveKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.deliverySaved,
+    );
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+    );
+
+    final storeCreate = journey.inviteeEvents.indexOf('store.create');
+    final keyCreate = journey.inviteeEvents.indexOf('key.create');
+    final selectionCreate = journey.inviteeEvents.indexOf('selection.create');
+    final activation = journey.inviteeEvents.indexOf('runtime.activate');
+    final trust = journey.inviteeEvents.lastIndexOf('registry.replace');
+    final acknowledgementStage = journey.inviteeEvents.indexOf(
+      'stage.create:acknowledgement',
+    );
+    expect(storeCreate, greaterThanOrEqualTo(0));
+    expect(storeCreate, lessThan(keyCreate));
+    expect(keyCreate, lessThan(selectionCreate));
+    expect(selectionCreate, lessThan(activation));
+    expect(activation, lessThan(trust));
+    expect(trust, lessThan(acknowledgementStage));
+
+    final installed = journey.inviteeLocal.values[journey.vaultId]!;
+    expect(
+      installed.records.map((record) => record.toJson()).toList(),
+      journey.bootstrap.records.map((record) => record.toJson()).toList(),
+    );
+    expect(installed.records.where((record) => record.deleted), isNotEmpty);
+
+    expect(
+      (await journey.invitee.savePairingAcknowledgement()).disposition,
+      AtlasVaultTrustedPairingDisposition.completed,
+    );
+    expect(
+      (await journey.inviter.importPairingAcknowledgement()).disposition,
+      AtlasVaultTrustedPairingDisposition.completed,
+    );
+    expect(journey.inviterRegistry.value!.devices, hasLength(1));
+    expect(journey.inviteeRegistry.value!.devices, hasLength(1));
+    expect(journey.inviterTransactions.value, isNull);
+    expect(journey.inviteeTransactions.value, isNull);
+    expect(
+      journey.inviteeEvents.lastIndexOf('transaction.delete'),
+      greaterThan(journey.inviteeEvents.lastIndexOf('stage.delete:offer')),
+    );
+  });
+
+  test(
+    'pairing construction performs no identity or platform operation',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+
+      expect(journey.inviterIdentity.loadCalls, 0);
+      expect(journey.inviteeIdentity.loadCalls, 0);
+      expect(journey.inviterEvents, isEmpty);
+      expect(journey.inviteeEvents, isEmpty);
+    },
+  );
+
+  test('inviter requires an active encrypted vault', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await journey.inviterRuntime.deactivate();
+
+    final result = await journey.inviter.createPairingOffer();
+
+    expect(result.disposition, AtlasVaultTrustedPairingDisposition.unavailable);
+    expect(journey.inviterTransactions.value, isNull);
+    expect(journey.mailbox.bytes, isNull);
+  });
+
+  for (final gate in <AtlasVaultPairingCleanInstallDisposition>[
+    AtlasVaultPairingCleanInstallDisposition.migrationRequired,
+    AtlasVaultPairingCleanInstallDisposition.existingVault,
+    AtlasVaultPairingCleanInstallDisposition.unavailable,
+  ]) {
+    test('invitee clean-install gate reports ${gate.name}', () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeCleanDisposition: gate,
+      );
+      addTearDown(journey.stop);
+      await journey.inviter.createPairingOffer();
+      await journey.inviter.savePairingOffer();
+
+      final result = await journey.invitee.importPairingOffer();
+
+      expect(result.disposition.name, gate.name);
+      expect(journey.inviteeTransactions.value, isNull);
+      expect(journey.inviteeStage.values, isEmpty);
+      expect(journey.mailbox.bytes, isNotNull);
+    });
+  }
+
+  test('both code confirmations gate delivery and installation', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+
+    final earlyDelivery = await journey.inviter.saveKeyDelivery();
+    final earlyInstall = await journey.invitee.importKeyDelivery();
+    expect(
+      earlyDelivery.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      earlyInstall.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeLocal.values, isEmpty);
+
+    await journey.inviter.confirmCodesMatch();
+    expect(
+      (await journey.inviter.saveKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.deliverySaved,
+    );
+    expect(
+      (await journey.invitee.importKeyDelivery()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeLocal.values, isEmpty);
+  });
+
+  test(
+    'pre-selection discard preserves replay and clears staged secrets',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+      await journey.invitee.confirmCodesMatch();
+
+      expect(journey.inviteeReplay.value?.entries, hasLength(1));
+      expect(journey.inviteeTransactions.value?.ephemeralPrivateKey, isNotNull);
+
+      final result = await journey.invitee.discardPairing();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.identityReady,
+      );
+      expect(journey.inviteeTransactions.value, isNull);
+      expect(journey.inviteeStage.values, isEmpty);
+      expect(journey.inviteeReplay.value?.entries, hasLength(1));
+      expect(journey.inviteeLocal.values, isEmpty);
+      expect(journey.inviteeKeys.values, isEmpty);
+      expect(journey.inviteeSelected.value, isNull);
+      expect(journey.inviteeRegistry.value, isNull);
+    },
+  );
+
+  test('consumed offer is rejected after discard and restart', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    await journey.invitee.confirmCodesMatch();
+    final offerBytes = Uint8List.fromList(
+      journey.inviterStage.values[AtlasVaultPairingArtifactKind.offer]!,
+    );
+    await journey.invitee.discardPairing();
+    journey.mailbox.bytes = offerBytes;
+
+    expect(
+      (await journey.invitee.importPairingOffer()).disposition,
+      AtlasVaultTrustedPairingDisposition.acceptanceReady,
+    );
+    await journey.invitee.savePairingAcceptance();
+    expect(
+      (await journey.invitee.confirmCodesMatch()).disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeReplay.value?.entries, hasLength(1));
+  });
+
+  test('expired offer fails before invitee transaction creation', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await journey.inviter.createPairingOffer();
+    await journey.inviter.savePairingOffer();
+    journey.clock.value = journey.clock.value.add(const Duration(minutes: 11));
+
+    final result = await journey.invitee.importPairingOffer();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeTransactions.value, isNull);
+    expect(journey.inviteeLocal.values, isEmpty);
+  });
+
+  test('inviter becomes resume-only after delivery export', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    await journey.inviter.confirmCodesMatch();
+    await journey.invitee.confirmCodesMatch();
+    await journey.inviter.saveKeyDelivery();
+
+    final result = await journey.inviter.discardPairing();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviterTransactions.value, isNotNull);
+    expect(journey.inviterStage.values, isNotEmpty);
+  });
+
   test('pairing transaction is strict canonical and forward-only', () {
     final transaction = AtlasVaultPairingTransaction.fromJson(
       _transactionJson(vector),
@@ -282,6 +580,266 @@ void main() {
       contains('kPairingStatePlaintextMaximumLength = 2 * 1024 * 1024'),
     );
   });
+}
+
+final class _PairingJourney {
+  _PairingJourney({
+    required this.inviter,
+    required this.invitee,
+    required this.inviterIdentity,
+    required this.inviteeIdentity,
+    required this.inviterRegistry,
+    required this.inviteeRegistry,
+    required this.inviterTransactions,
+    required this.inviteeTransactions,
+    required this.inviterStage,
+    required this.inviteeStage,
+    required this.inviteeReplay,
+    required this.mailbox,
+    required this.inviterRuntime,
+    required this.inviteeLocal,
+    required this.inviteeKeys,
+    required this.inviteeSelected,
+    required this.bootstrap,
+    required this.vaultId,
+    required this.inviterEvents,
+    required this.inviteeEvents,
+    required this.clock,
+  });
+
+  final AtlasVaultTrustedPairingCoordinator inviter;
+  final AtlasVaultTrustedPairingCoordinator invitee;
+  final AtlasVaultPairingMemoryIdentityStore inviterIdentity;
+  final AtlasVaultPairingMemoryIdentityStore inviteeIdentity;
+  final AtlasVaultPairingMemoryRegistryStore inviterRegistry;
+  final AtlasVaultPairingMemoryRegistryStore inviteeRegistry;
+  final AtlasVaultPairingMemoryTransactionStore inviterTransactions;
+  final AtlasVaultPairingMemoryTransactionStore inviteeTransactions;
+  final AtlasVaultPairingMemoryStageStore inviterStage;
+  final AtlasVaultPairingMemoryStageStore inviteeStage;
+  final AtlasVaultPairingMemoryReplayStore inviteeReplay;
+  final AtlasVaultPairingMailbox mailbox;
+  final AtlasVaultPrivateStateRuntime inviterRuntime;
+  final AtlasVaultPairingMemoryLocalStore inviteeLocal;
+  final AtlasVaultPairingMemorySecureKeyStore inviteeKeys;
+  final AtlasVaultPairingMemorySelectedVaultStore inviteeSelected;
+  final AtlasVaultPairingBootstrap bootstrap;
+  final String vaultId;
+  final List<String> inviterEvents;
+  final List<String> inviteeEvents;
+  final _PairingClock clock;
+
+  static Future<_PairingJourney> create(
+    Map<String, Object?> vector, {
+    AtlasVaultPairingCleanInstallDisposition inviteeCleanDisposition =
+        AtlasVaultPairingCleanInstallDisposition.clean,
+  }) async {
+    final inviterEvents = <String>[];
+    final inviteeEvents = <String>[];
+    final inviterIdentity = AtlasVaultPairingMemoryIdentityStore(
+      await _identitySecret(vector, 'inviter'),
+    );
+    final inviteeIdentity = AtlasVaultPairingMemoryIdentityStore(
+      await _identitySecret(vector, 'invitee'),
+    );
+    final inviterRegistry = AtlasVaultPairingMemoryRegistryStore(
+      events: inviterEvents,
+    );
+    final inviteeRegistry = AtlasVaultPairingMemoryRegistryStore(
+      events: inviteeEvents,
+    );
+    final inviterReplay = AtlasVaultPairingMemoryReplayStore(
+      events: inviterEvents,
+    );
+    final inviteeReplay = AtlasVaultPairingMemoryReplayStore(
+      events: inviteeEvents,
+    );
+    final inviterTransactions = AtlasVaultPairingMemoryTransactionStore(
+      events: inviterEvents,
+    );
+    final inviteeTransactions = AtlasVaultPairingMemoryTransactionStore(
+      events: inviteeEvents,
+    );
+    final inviterStage = AtlasVaultPairingMemoryStageStore(
+      events: inviterEvents,
+    );
+    final inviteeStage = AtlasVaultPairingMemoryStageStore(
+      events: inviteeEvents,
+    );
+    final mailbox = AtlasVaultPairingMailbox();
+    final inviterTransport = AtlasVaultPairingMemoryTransport(
+      mailbox,
+      events: inviterEvents,
+    );
+    final inviteeTransport = AtlasVaultPairingMemoryTransport(
+      mailbox,
+      events: inviteeEvents,
+    );
+    final inviterKeys = AtlasVaultPairingMemorySecureKeyStore(
+      events: inviterEvents,
+    );
+    final inviteeKeys = AtlasVaultPairingMemorySecureKeyStore(
+      events: inviteeEvents,
+    );
+    final inviterLocal = AtlasVaultPairingMemoryLocalStore(
+      events: inviterEvents,
+    );
+    final inviteeLocal = AtlasVaultPairingMemoryLocalStore(
+      events: inviteeEvents,
+    );
+    final inviterSelected = AtlasVaultPairingMemorySelectedVaultStore(
+      events: inviterEvents,
+    );
+    final inviteeSelected = AtlasVaultPairingMemorySelectedVaultStore(
+      events: inviteeEvents,
+    );
+    final bootstrap = AtlasVaultPairingBootstrap.fromJson(
+      atlasVaultObject(vector['bootstrap']),
+    );
+    final vaultId = bootstrap.vaultMetadata.vaultId;
+    final vaultKey = Uint8List.fromList(
+      base64Decode(vector['test_only_vault_key_b64']! as String),
+    );
+    inviterKeys.values[vaultId] = Uint8List.fromList(vaultKey);
+    inviterLocal.values[vaultId] = AtlasVaultLocalStore.fromJson(
+      <String, Object?>{
+        'format': AtlasVaultLocalStore.format,
+        'version': AtlasVaultLocalStore.version,
+        'store_id': '53000000-0000-4000-8000-000000000001',
+        'created_at': '2026-08-15T10:00:00Z',
+        'updated_at': '2026-08-15T10:00:00Z',
+        'vault_metadata': bootstrap.vaultMetadata.toJson(),
+        'records': <Object?>[
+          for (final record in bootstrap.records) record.toJson(),
+        ],
+      },
+    );
+    inviterSelected.value = vaultId;
+    final inviterRuntime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: inviterKeys,
+      localStoreIO: inviterLocal,
+    );
+    final inviteeRuntime = AtlasVaultPrivateStateRuntime(
+      secureKeyStore: inviteeKeys,
+      localStoreIO: inviteeLocal,
+    );
+    expect(
+      await inviterRuntime.activateExisting(vaultId),
+      AtlasVaultActivationResult.activated,
+    );
+    inviterEvents.clear();
+    inviteeEvents.clear();
+    final inviterDeterminism = AtlasVaultPairingDeterminism(seed: 10);
+    final inviteeDeterminism = AtlasVaultPairingDeterminism(seed: 500);
+    final clock = _PairingClock(DateTime.utc(2026, 8, 15, 10, 5));
+
+    final inviter = AtlasVaultTrustedPairingCoordinator(
+      identityStore: inviterIdentity,
+      registryStore: inviterRegistry,
+      replayStore: inviterReplay,
+      transactionStore: inviterTransactions,
+      stageStore: inviterStage,
+      artifactTransport: inviterTransport,
+      runtime: inviterRuntime,
+      cleanInstallProbe: () async =>
+          AtlasVaultPairingCleanInstallDisposition.existingVault,
+      secureKeyStore: inviterKeys,
+      localStoreIO: inviterLocal,
+      selectedVaultStore: inviterSelected,
+      uuidProvider: inviterDeterminism.uuid,
+      randomBytes: inviterDeterminism.bytes,
+      now: () => clock.value,
+    );
+    final invitee = AtlasVaultTrustedPairingCoordinator(
+      identityStore: inviteeIdentity,
+      registryStore: inviteeRegistry,
+      replayStore: inviteeReplay,
+      transactionStore: inviteeTransactions,
+      stageStore: inviteeStage,
+      artifactTransport: inviteeTransport,
+      runtime: inviteeRuntime,
+      cleanInstallProbe: () async => inviteeCleanDisposition,
+      secureKeyStore: inviteeKeys,
+      localStoreIO: inviteeLocal,
+      selectedVaultStore: inviteeSelected,
+      activateInstalledVault: (candidate) async {
+        inviteeEvents.add('runtime.activate');
+        return await inviteeRuntime.activateExisting(candidate) ==
+            AtlasVaultActivationResult.activated;
+      },
+      uuidProvider: inviteeDeterminism.uuid,
+      randomBytes: inviteeDeterminism.bytes,
+      now: () => clock.value,
+    );
+    vaultKey.fillRange(0, vaultKey.length, 0);
+    return _PairingJourney(
+      inviter: inviter,
+      invitee: invitee,
+      inviterIdentity: inviterIdentity,
+      inviteeIdentity: inviteeIdentity,
+      inviterRegistry: inviterRegistry,
+      inviteeRegistry: inviteeRegistry,
+      inviterTransactions: inviterTransactions,
+      inviteeTransactions: inviteeTransactions,
+      inviterStage: inviterStage,
+      inviteeStage: inviteeStage,
+      inviteeReplay: inviteeReplay,
+      mailbox: mailbox,
+      inviterRuntime: inviterRuntime,
+      inviteeLocal: inviteeLocal,
+      inviteeKeys: inviteeKeys,
+      inviteeSelected: inviteeSelected,
+      bootstrap: bootstrap,
+      vaultId: vaultId,
+      inviterEvents: inviterEvents,
+      inviteeEvents: inviteeEvents,
+      clock: clock,
+    );
+  }
+
+  Future<void> stop() async {
+    await inviter.stop();
+    await invitee.stop();
+  }
+}
+
+final class _PairingClock {
+  _PairingClock(this.value);
+
+  DateTime value;
+}
+
+Future<void> _exchangeAcceptance(_PairingJourney journey) async {
+  await journey.inviter.createPairingOffer();
+  await journey.inviter.savePairingOffer();
+  await journey.invitee.importPairingOffer();
+  await journey.invitee.savePairingAcceptance();
+  await journey.inviter.importPairingAcceptance();
+}
+
+Future<Uint8List> _identitySecret(
+  Map<String, Object?> vector,
+  String name,
+) async {
+  final data = atlasVaultObject(vector[name]);
+  final identity = await AtlasVaultDeviceIdentity.fromPrivateKeys(
+    signingPrivateSeed: Uint8List.fromList(
+      base64Decode(data['signing_private_seed_b64']! as String),
+    ),
+    agreementPrivateKey: Uint8List.fromList(
+      base64Decode(data['agreement_private_key_b64']! as String),
+    ),
+    createdAt: data['created_at']! as String,
+    keyEpoch: data['key_epoch']! as int,
+    expectedDeviceId: data['device_id']! as String,
+  );
+  final secret = identity.secretBundle();
+  try {
+    return secret.canonicalBytes();
+  } finally {
+    secret.destroy();
+    identity.destroy();
+  }
 }
 
 final class _PairingStores {

@@ -215,9 +215,21 @@ public actor AtlasVaultProductionHost:
         SavedSearchHandoffOperation?
     private var barrierOperation: BarrierOperation?
     private var stopOperation: StopOperation?
+    private var trustedPairingAuthority:
+        (any AtlasVaultTrustedPairingAuthority)?
 
     public init(dependencies: AtlasVaultProductionHostDependencies) {
         self.dependencies = dependencies
+    }
+
+    public func attachTrustedPairingAuthority(
+        _ authority: any AtlasVaultTrustedPairingAuthority
+    ) -> Bool {
+        if let trustedPairingAuthority {
+            return trustedPairingAuthority === authority
+        }
+        trustedPairingAuthority = authority
+        return true
     }
 
     public func start() async throws -> AtlasLockedShellUnlockFlowState {
@@ -256,6 +268,7 @@ public actor AtlasVaultProductionHost:
             return flowState()
         }
         if lifetime == .inactive, !presentationWasStarted {
+            await trustedPairingAuthority?.stopAndDrain()
             explicitLockRequestedDuringStart = false
             closeUnlockAdmission()
             lifetime = .stopped
@@ -925,6 +938,7 @@ public actor AtlasVaultProductionHost:
             safeReopenGeneration = nil
         }
         if event.closesUnlockAdmission {
+            await trustedPairingAuthority?.clearSensitiveInput()
             invalidateSafeLifecycleCheck()
             lifecycleAdmissionPermitted = false
             closeUnlockAdmission()
@@ -1161,6 +1175,7 @@ public actor AtlasVaultProductionHost:
     }
 
     private func performStop() async -> AtlasLockedShellUnlockFlowState {
+        await trustedPairingAuthority?.stopAndDrain()
         await awaitStartingOperationBeforeStop()
         let activeSavedSearchHandoff = savedSearchHandoffOperation
         guard presentationWasStarted else {

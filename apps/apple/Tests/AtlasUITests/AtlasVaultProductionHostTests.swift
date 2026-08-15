@@ -34,6 +34,25 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         XCTAssertFalse(source.contains("createPairingOffer()"))
     }
 
+    func testHostClearsPairingInputOnLifecycleLossAndDrainsOnStop()
+        async throws
+    {
+        let graph = try makeGraph()
+        let authority = HostTrustedPairingAuthorityFake()
+        let attached = await graph.host.attachTrustedPairingAuthority(
+            authority
+        )
+        XCTAssertTrue(attached)
+
+        _ = await graph.host.handleLifecycleEvent(.didEnterBackground)
+        let clearCount = await authority.clearCount()
+        XCTAssertEqual(clearCount, 1)
+
+        _ = await graph.host.stop()
+        let stopCount = await authority.stopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
     func testHostOwnsPrivateSessionAndMutationBoundaries() throws {
         let source = try source(named: "AtlasVaultProductionHost.swift")
 
@@ -7152,6 +7171,24 @@ private func expectNotEqual<Value: Equatable>(
     } catch {
         XCTFail("Unexpected error: \(error)", file: file, line: line)
     }
+}
+
+private actor HostTrustedPairingAuthorityFake:
+    AtlasVaultTrustedPairingAuthority
+{
+    private var clears = 0
+    private var stops = 0
+
+    func clearSensitiveInput() {
+        clears += 1
+    }
+
+    func stopAndDrain() {
+        stops += 1
+    }
+
+    func clearCount() -> Int { clears }
+    func stopCount() -> Int { stops }
 }
 
 private func expectTrue(

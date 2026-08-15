@@ -175,6 +175,7 @@ class AtlasAppController extends ChangeNotifier
   bool _crossProcessPlaintextAuthorityBlocked = false;
   AtlasVaultPlaintextMigrationContext? _plaintextMigrationContext;
   AtlasVaultInteroperabilityContext? _interoperabilityContext;
+  AtlasVaultTrustedPairingContext? _trustedPairingContext;
   bool _recoveryImportAdmissionInProgress = false;
   bool _recoveryImportBlocksLegacyPrivateAuthority = false;
   int _connectionOperationSequence = 0;
@@ -191,12 +192,15 @@ class AtlasAppController extends ChangeNotifier
         _recoveryImportBlocksLegacyPrivateAuthority ||
         (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
             false) ||
+        (_trustedPairingContext?.owner.blocksLegacyPrivateAuthority ?? false) ||
         (_privateStatePersistence?.isActive ?? false);
   }
 
   bool get _plaintextMigrationBlocksPersistedCacheWrites {
     return _recoveryImportAdmissionInProgress ||
-        (_plaintextMigrationContext?.owner.blocksPersistedCacheWrites ?? false);
+        (_plaintextMigrationContext?.owner.blocksPersistedCacheWrites ??
+            false) ||
+        (_trustedPairingContext?.owner.blocksPersistedCacheWrites ?? false);
   }
 
   AtlasVaultPlaintextMigrationContext? get plaintextMigrationContext =>
@@ -204,6 +208,9 @@ class AtlasAppController extends ChangeNotifier
 
   AtlasVaultInteroperabilityContext? get interoperabilityContext =>
       _interoperabilityContext;
+
+  AtlasVaultTrustedPairingContext? get trustedPairingContext =>
+      _trustedPairingContext;
 
   void attachPlaintextMigrationContext(
     AtlasVaultPlaintextMigrationContext context,
@@ -221,6 +228,13 @@ class AtlasAppController extends ChangeNotifier
       throw const AtlasVaultInteroperabilityException();
     }
     _interoperabilityContext = context;
+  }
+
+  void attachTrustedPairingContext(AtlasVaultTrustedPairingContext context) {
+    if (_trustedPairingContext != null) {
+      throw const AtlasVaultPairingTransactionException();
+    }
+    _trustedPairingContext = context;
   }
 
   void _recoveryImportPendingDidChange(bool pending) {
@@ -2632,6 +2646,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   late final bool _ownsController;
   AtlasVaultPlaintextMigrationPresentationOwner? _ownedMigrationOwner;
   AtlasVaultInteroperabilityPresentationOwner? _ownedInteroperabilityOwner;
+  AtlasVaultTrustedPairingPresentationOwner? _ownedPairingOwner;
 
   @override
   void initState() {
@@ -2645,6 +2660,7 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
       _controller = assembly.controller;
       _ownedMigrationOwner = assembly.migrationOwner;
       _ownedInteroperabilityOwner = assembly.interoperabilityOwner;
+      _ownedPairingOwner = assembly.pairingOwner;
       _ownsController = true;
     }
     if (_ownsController) {
@@ -2662,6 +2678,8 @@ class _AtlasHomeShellState extends State<AtlasHomeShell> {
   void dispose() {
     if (_ownsController) {
       unawaited(_ownedInteroperabilityOwner?.stopAndDrain());
+      unawaited(_ownedPairingOwner?.stopAndDrain());
+      _ownedPairingOwner?.dispose();
       _ownedInteroperabilityOwner?.dispose();
       _ownedMigrationOwner?.dispose();
       _controller.dispose();
@@ -2761,11 +2779,292 @@ final class _AtlasDefaultControllerAssembly {
     required this.controller,
     this.migrationOwner,
     this.interoperabilityOwner,
+    this.pairingOwner,
   });
 
   final AtlasAppController controller;
   final AtlasVaultPlaintextMigrationPresentationOwner? migrationOwner;
   final AtlasVaultInteroperabilityPresentationOwner? interoperabilityOwner;
+  final AtlasVaultTrustedPairingPresentationOwner? pairingOwner;
+}
+
+final class _AtlasWindowsTrustedPairingAdmission
+    implements
+        AtlasVaultPlaintextAuthorityAdmission,
+        AtlasVaultRecoveryImportTransactionAdmission,
+        AtlasVaultTrustedPairingTransactionAdmission {
+  const _AtlasWindowsTrustedPairingAdmission({
+    required AtlasWindowsPlaintextAuthorityAdmission base,
+    required AtlasVaultPairingTransactionStore pairingTransactionStore,
+  }) : // Keep public dependency labels explicit at the assembly boundary.
+       // ignore: prefer_initializing_formals
+       _base = base,
+       // ignore: prefer_initializing_formals
+       _pairingTransactionStore = pairingTransactionStore;
+
+  final AtlasWindowsPlaintextAuthorityAdmission _base;
+  final AtlasVaultPairingTransactionStore _pairingTransactionStore;
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    return _base.runMigrationTransaction(() async {
+      final transaction = await _pairingTransactionStore.read();
+      try {
+        if (transaction != null) {
+          throw const AtlasVaultPlaintextAuthorityAdmissionException();
+        }
+      } finally {
+        transaction?.destroy();
+      }
+      return _base.runLegacyPrivateOperation(operation);
+    });
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) =>
+      _base.runMigrationTransaction(operation);
+
+  @override
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
+      _base.runRecoveryImportTransaction(operation);
+
+  @override
+  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) =>
+      _base.runMigrationTransaction(operation);
+}
+
+final class _AtlasAndroidTrustedPairingAdmission
+    implements
+        AtlasVaultPlaintextAuthorityAdmission,
+        AtlasVaultTrustedPairingTransactionAdmission {
+  _AtlasAndroidTrustedPairingAdmission({
+    required AtlasVaultPairingTransactionStore pairingTransactionStore,
+    required AtlasVaultProtectedMigrationJournalStore migrationJournalStore,
+    required AtlasVaultProtectedRecoveryImportJournalStore
+    recoveryImportJournalStore,
+    required AtlasVaultSelectedVaultStore selectedVaultStore,
+  }) : // Keep public dependency labels explicit at the assembly boundary.
+       // ignore: prefer_initializing_formals
+       _pairingTransactionStore = pairingTransactionStore,
+       // ignore: prefer_initializing_formals
+       _migrationJournalStore = migrationJournalStore,
+       // ignore: prefer_initializing_formals
+       _recoveryImportJournalStore = recoveryImportJournalStore,
+       // ignore: prefer_initializing_formals
+       _selectedVaultStore = selectedVaultStore;
+
+  static final Object _leaseKey = Object();
+  Future<void> _queue = Future<void>.value();
+
+  final AtlasVaultPairingTransactionStore _pairingTransactionStore;
+  final AtlasVaultProtectedMigrationJournalStore _migrationJournalStore;
+  final AtlasVaultProtectedRecoveryImportJournalStore
+  _recoveryImportJournalStore;
+  final AtlasVaultSelectedVaultStore _selectedVaultStore;
+
+  @override
+  Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
+    return _coordinate(() async {
+      AtlasVaultPairingTransaction? pairing;
+      Uint8List? migration;
+      Uint8List? recoveryImport;
+      try {
+        pairing = await _pairingTransactionStore.read();
+        migration = await _migrationJournalStore.read();
+        recoveryImport = await _recoveryImportJournalStore.read();
+        final selected = await _selectedVaultStore.read();
+        if (pairing != null ||
+            migration != null ||
+            recoveryImport != null ||
+            selected != null) {
+          throw const AtlasVaultPlaintextAuthorityAdmissionException();
+        }
+        return operation();
+      } finally {
+        pairing?.destroy();
+        migration?.fillRange(0, migration.length, 0);
+        recoveryImport?.fillRange(0, recoveryImport.length, 0);
+      }
+    });
+  }
+
+  @override
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) =>
+      _coordinate(operation);
+
+  @override
+  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) =>
+      _coordinate(operation);
+
+  Future<T> _coordinate<T>(Future<T> Function() operation) async {
+    if (Zone.current[_leaseKey] == this) {
+      return operation();
+    }
+    final previous = _queue;
+    final release = Completer<void>();
+    _queue = release.future;
+    await previous;
+    try {
+      return await runZoned(
+        operation,
+        zoneValues: <Object, Object>{_leaseKey: this},
+      );
+    } finally {
+      release.complete();
+    }
+  }
+}
+
+Future<AtlasVaultPairingCleanInstallDisposition>
+_inspectTrustedPairingCleanInstall({
+  required AtlasAppController controller,
+  required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasVaultSelectedVaultStore selectedVaultStore,
+  required AtlasVaultProtectedMigrationJournalStore migrationJournalStore,
+  required AtlasVaultProtectedRecoveryImportJournalStore
+  recoveryImportJournalStore,
+  required AtlasLocalCacheMigrationSource cacheSource,
+  required AtlasVaultCompatibilityPrivateSource compatibilitySource,
+}) async {
+  Uint8List? migration;
+  Uint8List? recoveryImport;
+  try {
+    if (runtime.isActive || await selectedVaultStore.read() != null) {
+      return AtlasVaultPairingCleanInstallDisposition.existingVault;
+    }
+    migration = await migrationJournalStore.read();
+    recoveryImport = await recoveryImportJournalStore.read();
+    if (migration != null || recoveryImport != null) {
+      return AtlasVaultPairingCleanInstallDisposition.recoveryRequired;
+    }
+    if (controller.savedSearches.isNotEmpty ||
+        controller.trackerRecords.isNotEmpty) {
+      return AtlasVaultPairingCleanInstallDisposition.migrationRequired;
+    }
+    final cache = await cacheSource.readPrivateStateForMigration();
+    if (cache.containsPrivateState) {
+      return AtlasVaultPairingCleanInstallDisposition.migrationRequired;
+    }
+    final compatibility = await compatibilitySource
+        .readCompatibilityPrivateState();
+    if (compatibility.savedSearches.isNotEmpty ||
+        compatibility.trackerRecords.isNotEmpty) {
+      return AtlasVaultPairingCleanInstallDisposition.migrationRequired;
+    }
+    return AtlasVaultPairingCleanInstallDisposition.clean;
+  } on AtlasVaultPlaintextAuthorityAdmissionException {
+    return AtlasVaultPairingCleanInstallDisposition.recoveryRequired;
+  } catch (_) {
+    return AtlasVaultPairingCleanInstallDisposition.unavailable;
+  } finally {
+    migration?.fillRange(0, migration.length, 0);
+    recoveryImport?.fillRange(0, recoveryImport.length, 0);
+  }
+}
+
+AtlasVaultTrustedPairingPresentationOwner _attachWindowsTrustedPairing({
+  required AtlasAppController controller,
+  required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasWindowsVaultSecureKeyStore secureKeyStore,
+  required AtlasWindowsVaultLocalStoreIO localStoreIO,
+  required AtlasWindowsSelectedVaultStore selectedVaultStore,
+  required AtlasWindowsProtectedMigrationJournalStore migrationJournalStore,
+  required AtlasWindowsProtectedRecoveryImportJournalStore
+  recoveryImportJournalStore,
+  required AtlasWindowsPairingTransactionStore transactionStore,
+  required AtlasVaultTrustedPairingTransactionAdmission transactionAdmission,
+}) {
+  final compatibilitySource = _AtlasControllerCompatibilityMigrationSource(
+    controller,
+  );
+  final cacheSource = _AtlasResolvedLocalCacheMigrationSource(() async {
+    await controller._drainCacheWriteForMigration();
+    return AtlasWindowsDesktopCacheMigrationSource(
+      await resolveAtlasPersistentCacheLocation(importLegacyCache: false),
+    );
+  });
+  final coordinator = AtlasVaultTrustedPairingCoordinator(
+    identityStore: AtlasWindowsDeviceIdentitySecretStore(),
+    registryStore: AtlasWindowsTrustedDeviceRegistryStore(),
+    replayStore: AtlasWindowsPairingReplayStore(),
+    transactionStore: transactionStore,
+    stageStore: AtlasWindowsPairingArtifactStageStore(),
+    artifactTransport: AtlasWindowsPairingArtifactTransport(),
+    runtime: runtime,
+    cleanInstallProbe: () => _inspectTrustedPairingCleanInstall(
+      controller: controller,
+      runtime: runtime,
+      selectedVaultStore: selectedVaultStore,
+      migrationJournalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
+      cacheSource: cacheSource,
+      compatibilitySource: compatibilitySource,
+    ),
+    secureKeyStore: secureKeyStore,
+    localStoreIO: localStoreIO,
+    selectedVaultStore: selectedVaultStore,
+    activateInstalledVault: (vaultId) async =>
+        await controller._activateImportedAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated,
+    transactionAdmission: transactionAdmission,
+  );
+  final owner = AtlasVaultTrustedPairingPresentationOwner(
+    coordinator: coordinator,
+  );
+  controller.attachTrustedPairingContext(
+    AtlasVaultTrustedPairingContext(owner: owner),
+  );
+  return owner;
+}
+
+AtlasVaultTrustedPairingPresentationOwner _attachAndroidTrustedPairing({
+  required AtlasAppController controller,
+  required AtlasVaultPrivateStateRuntime runtime,
+  required AtlasAndroidVaultSecureKeyStore secureKeyStore,
+  required AtlasAndroidVaultLocalStoreIO localStoreIO,
+  required AtlasAndroidSelectedVaultStore selectedVaultStore,
+  required AtlasAndroidProtectedMigrationJournalStore migrationJournalStore,
+  required AtlasAndroidProtectedRecoveryImportJournalStore
+  recoveryImportJournalStore,
+  required AtlasAndroidPairingTransactionStore transactionStore,
+  required AtlasVaultTrustedPairingTransactionAdmission transactionAdmission,
+}) {
+  final compatibilitySource = _AtlasControllerCompatibilityMigrationSource(
+    controller,
+  );
+  final cacheSource = _AtlasControllerCacheMigrationSource(controller);
+  final coordinator = AtlasVaultTrustedPairingCoordinator(
+    identityStore: AtlasAndroidDeviceIdentitySecretStore(),
+    registryStore: AtlasAndroidTrustedDeviceRegistryStore(),
+    replayStore: AtlasAndroidPairingReplayStore(),
+    transactionStore: transactionStore,
+    stageStore: AtlasAndroidPairingArtifactStageStore(),
+    artifactTransport: AtlasAndroidPairingArtifactTransport(),
+    runtime: runtime,
+    cleanInstallProbe: () => _inspectTrustedPairingCleanInstall(
+      controller: controller,
+      runtime: runtime,
+      selectedVaultStore: selectedVaultStore,
+      migrationJournalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
+      cacheSource: cacheSource,
+      compatibilitySource: compatibilitySource,
+    ),
+    secureKeyStore: secureKeyStore,
+    localStoreIO: localStoreIO,
+    selectedVaultStore: selectedVaultStore,
+    activateInstalledVault: (vaultId) async =>
+        await controller._activateImportedAtlasVault(vaultId) ==
+        AtlasVaultActivationResult.activated,
+    transactionAdmission: transactionAdmission,
+  );
+  final owner = AtlasVaultTrustedPairingPresentationOwner(
+    coordinator: coordinator,
+  );
+  controller.attachTrustedPairingContext(
+    AtlasVaultTrustedPairingContext(owner: owner),
+  );
+  return owner;
 }
 
 AtlasVaultPlaintextMigrationPresentationOwner _attachWindowsMigration({
@@ -2829,7 +3128,7 @@ AtlasVaultInteroperabilityPresentationOwner _attachWindowsEncryptedBackup({
   required AtlasWindowsProtectedMigrationJournalStore migrationJournalStore,
   required AtlasWindowsProtectedRecoveryImportJournalStore
   recoveryImportJournalStore,
-  required AtlasWindowsPlaintextAuthorityAdmission authorityAdmission,
+  required AtlasVaultRecoveryImportTransactionAdmission authorityAdmission,
 }) {
   final documentTransport = AtlasWindowsEncryptedDocumentTransport();
   final inMemorySource = _AtlasControllerPlaintextMigrationSource(controller);
@@ -2887,12 +3186,17 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     final migrationJournalStore = AtlasWindowsProtectedMigrationJournalStore();
     final recoveryImportJournalStore =
         AtlasWindowsProtectedRecoveryImportJournalStore();
-    final authorityAdmission = AtlasWindowsPlaintextAuthorityAdmission(
+    final transactionStore = AtlasWindowsPairingTransactionStore();
+    final baseAuthorityAdmission = AtlasWindowsPlaintextAuthorityAdmission(
       locationProvider: () =>
           resolveAtlasPersistentCacheLocation(importLegacyCache: false),
       journalStore: migrationJournalStore,
       recoveryImportJournalStore: recoveryImportJournalStore,
       selectedVaultStore: selectedVaultStore,
+    );
+    final authorityAdmission = _AtlasWindowsTrustedPairingAdmission(
+      base: baseAuthorityAdmission,
+      pairingTransactionStore: transactionStore,
     );
     final runtime = AtlasVaultPrivateStateRuntime(
       secureKeyStore: keyStore,
@@ -2938,10 +3242,22 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
       recoveryImportJournalStore: recoveryImportJournalStore,
       authorityAdmission: authorityAdmission,
     );
+    final pairingOwner = _attachWindowsTrustedPairing(
+      controller: controller,
+      runtime: runtime,
+      secureKeyStore: keyStore,
+      localStoreIO: localStore,
+      selectedVaultStore: selectedVaultStore,
+      migrationJournalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
+      transactionStore: transactionStore,
+      transactionAdmission: authorityAdmission,
+    );
     return _AtlasDefaultControllerAssembly(
       controller: controller,
       migrationOwner: owner,
       interoperabilityOwner: interoperabilityOwner,
+      pairingOwner: pairingOwner,
     );
   }
 
@@ -2959,6 +3275,13 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   final migrationJournalStore = AtlasAndroidProtectedMigrationJournalStore();
   final recoveryImportJournalStore =
       AtlasAndroidProtectedRecoveryImportJournalStore();
+  final transactionStore = AtlasAndroidPairingTransactionStore();
+  final authorityAdmission = _AtlasAndroidTrustedPairingAdmission(
+    pairingTransactionStore: transactionStore,
+    migrationJournalStore: migrationJournalStore,
+    recoveryImportJournalStore: recoveryImportJournalStore,
+    selectedVaultStore: selectedVaultStore,
+  );
   final runtime = AtlasVaultPrivateStateRuntime(
     secureKeyStore: keyStore,
     localStoreIO: localStore,
@@ -2966,6 +3289,7 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   final controller = AtlasAppController(
     localCacheStoreFactory: _defaultCacheStore,
     privateStatePersistence: runtime,
+    plaintextAuthorityAdmission: authorityAdmission,
     recoveryImportPending: () async {
       final bytes = await recoveryImportJournalStore.read();
       try {
@@ -3032,10 +3356,22 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
   controller.attachInteroperabilityContext(
     AtlasVaultInteroperabilityContext(owner: interoperabilityOwner),
   );
+  final pairingOwner = _attachAndroidTrustedPairing(
+    controller: controller,
+    runtime: runtime,
+    secureKeyStore: keyStore,
+    localStoreIO: localStore,
+    selectedVaultStore: selectedVaultStore,
+    migrationJournalStore: migrationJournalStore,
+    recoveryImportJournalStore: recoveryImportJournalStore,
+    transactionStore: transactionStore,
+    transactionAdmission: authorityAdmission,
+  );
   return _AtlasDefaultControllerAssembly(
     controller: controller,
     migrationOwner: owner,
     interoperabilityOwner: interoperabilityOwner,
+    pairingOwner: pairingOwner,
   );
 }
 
@@ -6214,6 +6550,14 @@ class _AtlasSettingsPanelState extends State<AtlasSettingsPanel> {
               title: 'Encrypted Interoperability',
               children: <Widget>[
                 AtlasVaultInteroperabilityPanel(owner: context.owner),
+              ],
+            ),
+          ],
+          if (controller.trustedPairingContext case final context?) ...[
+            _SettingsSection(
+              title: 'Trusted Devices',
+              children: <Widget>[
+                AtlasVaultTrustedPairingPanel(owner: context.owner),
               ],
             ),
           ],

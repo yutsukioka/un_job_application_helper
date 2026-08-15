@@ -507,6 +507,7 @@ public final class AtlasVaultProductionCompositionHarness:
     private let recoveryExportContext: AtlasVaultRecoveryExportContext?
     private let recoveryImportContext: AtlasVaultRecoveryImportContext?
     private let savedSearchContext: AtlasVaultSavedSearchContext?
+    private let pairingContext: AtlasVaultTrustedPairingContext?
     private let savedSearchHandoffCoordinator:
         (any AtlasVaultSavedSearchPublicHandoffCoordinating)?
     private var lifetime: Lifetime = .inactive
@@ -533,6 +534,7 @@ public final class AtlasVaultProductionCompositionHarness:
             recoveryExportContext: nil,
             recoveryImportContext: nil,
             savedSearchContext: nil,
+            pairingContext: nil,
             savedSearchHandoffCoordinator: nil
         )
     }
@@ -555,6 +557,7 @@ public final class AtlasVaultProductionCompositionHarness:
             recoveryExportContext: nil,
             recoveryImportContext: nil,
             savedSearchContext: nil,
+            pairingContext: nil,
             savedSearchHandoffCoordinator: nil
         )
     }
@@ -569,6 +572,7 @@ public final class AtlasVaultProductionCompositionHarness:
         recoveryExportContext: AtlasVaultRecoveryExportContext?,
         recoveryImportContext: AtlasVaultRecoveryImportContext? = nil,
         savedSearchContext: AtlasVaultSavedSearchContext? = nil,
+        pairingContext: AtlasVaultTrustedPairingContext? = nil,
         savedSearchHandoffCoordinator:
             (any AtlasVaultSavedSearchPublicHandoffCoordinating)? = nil
     ) {
@@ -579,6 +583,7 @@ public final class AtlasVaultProductionCompositionHarness:
         self.recoveryExportContext = recoveryExportContext
         self.recoveryImportContext = recoveryImportContext
         self.savedSearchContext = savedSearchContext
+        self.pairingContext = pairingContext
         self.savedSearchHandoffCoordinator =
             savedSearchHandoffCoordinator
 
@@ -655,6 +660,14 @@ public final class AtlasVaultProductionCompositionHarness:
             break
         }
 
+        if let pairingOwner = pairingContext?.owner,
+           let productionHost = host as? AtlasVaultProductionHost,
+           !(await productionHost.attachTrustedPairingAuthority(pairingOwner))
+        {
+            throw AtlasVaultProductionCompositionError
+                .privateFeatureUnavailable
+        }
+
         lifetime = .starting
         let identifier = UUID()
         let host = host
@@ -718,6 +731,7 @@ public final class AtlasVaultProductionCompositionHarness:
         let recoveryOwner = recoveryExportContext?.owner
         let recoveryImportOwner = recoveryImportContext?.owner
         let savedSearchOwner = savedSearchContext?.owner
+        let pairingOwner = pairingContext?.owner
         let savedSearchHandoffCoordinator =
             savedSearchHandoffCoordinator
         savedSearchOwner?.hidePrivatePresentation()
@@ -736,6 +750,9 @@ public final class AtlasVaultProductionCompositionHarness:
             }
             if let recoveryImportOwner {
                 await recoveryImportOwner.stop()
+            }
+            if let pairingOwner {
+                await pairingOwner.stopAndDrain()
             }
             let state = await hostState
             if let savedSearchOwner {
@@ -763,7 +780,8 @@ public final class AtlasVaultProductionCompositionHarness:
             creationContext: creationContext,
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
-            savedSearchContext: savedSearchContext
+            savedSearchContext: savedSearchContext,
+            pairingContext: pairingContext
         )
     }
 
@@ -799,6 +817,10 @@ public final class AtlasVaultProductionCompositionHarness:
         AtlasVaultSavedSearchContext?
     {
         savedSearchContext
+    }
+
+    var pairingContextForTesting: AtlasVaultTrustedPairingContext? {
+        pairingContext
     }
 
     func waitUntilStoppingForTesting() async {
@@ -1398,12 +1420,269 @@ public enum AtlasVaultProductionCompositionFactory {
             owner: recoveryOwner,
             actions: recoveryActions
         )
+        let deviceIdentityStore = AtlasKeychainDeviceIdentityStore(
+            client: keychainClient
+        )
+        let trustedDeviceRegistryStore =
+            AtlasKeychainTrustedDeviceRegistryStore(
+                client: keychainClient
+            )
+        let pairingReplayStore = AtlasKeychainPairingReplayStore(
+            client: keychainClient
+        )
+        let pairingTransactionStore =
+            AtlasKeychainPairingTransactionStore(
+                client: keychainClient
+            )
+        let pairingArtifactStageStore:
+            @Sendable () throws -> AtlasVaultPairingArtifactStageStore = {
+                let root = try rootProvider.rootDirectory()
+                    .appendingPathComponent(
+                        AtlasInjectedRootVaultPathLocator.atlasDirectoryName,
+                        isDirectory: true
+                    )
+                    .appendingPathComponent("Pairing", isDirectory: true)
+                    .appendingPathComponent("v1", isDirectory: true)
+                    .appendingPathComponent("Staging", isDirectory: true)
+                return try AtlasVaultPairingArtifactStageStore(root: root)
+            }
+        let pairingCoordinator = AtlasVaultTrustedPairingCoordinator(
+            environment: AtlasVaultTrustedPairingEnvironment(
+                loadIdentity: {
+                    guard var data = try deviceIdentityStore
+                        .loadPrimaryIdentity() else {
+                        return nil
+                    }
+                    defer { data.resetBytes(in: 0..<data.count) }
+                    return try AtlasVaultDeviceIdentitySecret
+                        .decodeStrict(data)
+                        .loadIdentity()
+                },
+                createIdentity: {
+                    let identity = try AtlasVaultDeviceIdentity.generate()
+                    var data = try identity.secretBundle().canonicalData()
+                    defer { data.resetBytes(in: 0..<data.count) }
+                    try deviceIdentityStore.createPrimaryIdentity(data)
+                    return identity
+                },
+                loadTransaction: {
+                    try pairingTransactionStore.load()
+                },
+                createTransaction: { transaction in
+                    try pairingTransactionStore.create(transaction)
+                },
+                replaceTransaction: { transaction, expectedSHA256 in
+                    try pairingTransactionStore.replace(
+                        transaction,
+                        expectedSHA256: expectedSHA256
+                    )
+                },
+                deleteTransaction: { expectedSHA256 in
+                    try pairingTransactionStore.delete(
+                        expectedSHA256: expectedSHA256
+                    )
+                },
+                loadArtifact: { kind in
+                    try pairingArtifactStageStore().read(kind: kind)
+                },
+                createArtifact: { artifact in
+                    try pairingArtifactStageStore().create(artifact)
+                },
+                deleteArtifact: { kind, expectedSHA256 in
+                    try pairingArtifactStageStore().delete(
+                        kind: kind,
+                        expectedSHA256: expectedSHA256
+                    )
+                },
+                loadRegistry: {
+                    try trustedDeviceRegistryStore.load()
+                },
+                createRegistry: { registry in
+                    try trustedDeviceRegistryStore.create(registry)
+                },
+                replaceRegistry: { registry, expectedSHA256 in
+                    try trustedDeviceRegistryStore.replace(
+                        registry,
+                        expectedSHA256: expectedSHA256
+                    )
+                },
+                loadReplay: {
+                    try pairingReplayStore.load()
+                },
+                createReplay: { replay in
+                    try pairingReplayStore.create(replay)
+                },
+                replaceReplay: { replay, expectedSHA256 in
+                    try pairingReplayStore.replace(
+                        replay,
+                        expectedSHA256: expectedSHA256
+                    )
+                },
+                activeVault: {
+                    guard
+                        case let .selected(selected) =
+                            try await vaultSelector.selectVaultID(),
+                        await runtime.status() == .unlocked,
+                        var key = try runtimeServices.keyStore.loadVaultKey(
+                            for: selected.vaultID
+                        )
+                    else {
+                        return nil
+                    }
+                    defer { key.resetBytes(in: 0..<key.count) }
+                    let root = try runtimeServices.rootDirectoryProvider
+                        .rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(
+                            rootURL: root,
+                            vaultID: selected.vaultID
+                        )
+                    let session = try AtlasVaultUnlockedSession(
+                        vaultID: selected.vaultID,
+                        vaultKey: key
+                    )
+                    guard let store = try services.persistenceCoordinator
+                        .loadEncryptedStore(for: session) else {
+                        return nil
+                    }
+                    return try AtlasVaultPairingActiveVault(
+                        vaultID: selected.vaultID,
+                        store: store,
+                        keyMaterial: key
+                    )
+                },
+                cleanInstall: {
+                    do {
+                        switch try await vaultSelector.selectVaultID() {
+                        case .selected:
+                            return .existingVault
+                        case .none:
+                            break
+                        }
+                        guard await runtime.status() == .locked else {
+                            return .unavailable
+                        }
+                        guard
+                            try creationJournalStore.loadJournal() == nil,
+                            try recoveryImportJournalStore.loadJournal() == nil
+                        else {
+                            return .recoveryRequired
+                        }
+                        async let savedSearches = apiClient.savedSearches()
+                        async let trackerRecords = apiClient.trackerRecords()
+                        guard
+                            try await savedSearches.isEmpty,
+                            try await trackerRecords.isEmpty
+                        else {
+                            return .migrationRequired
+                        }
+                        return .clean
+                    } catch {
+                        return .unavailable
+                    }
+                },
+                loadStore: { vaultID, key in
+                    let root = try runtimeServices.rootDirectoryProvider
+                        .rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(rootURL: root, vaultID: vaultID)
+                    let session = try AtlasVaultUnlockedSession(
+                        vaultID: vaultID,
+                        vaultKey: key
+                    )
+                    return try services.persistenceCoordinator
+                        .loadEncryptedStore(for: session)
+                },
+                createStore: { store, vaultID, key in
+                    let root = try runtimeServices.rootDirectoryProvider
+                        .rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(rootURL: root, vaultID: vaultID)
+                    let session = try AtlasVaultUnlockedSession(
+                        vaultID: vaultID,
+                        vaultKey: key
+                    )
+                    _ = try services.persistenceCoordinator
+                        .saveEncryptedStoreAtomically(
+                            store,
+                            for: session,
+                            overwrite: false
+                        )
+                },
+                deleteStore: { vaultID in
+                    let root = try runtimeServices.rootDirectoryProvider
+                        .rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(rootURL: root, vaultID: vaultID)
+                    let url = try services.pathLocator.localStoreURL(
+                        vaultID: vaultID
+                    )
+                    try atomicFileSystemClient.removeItemIfExists(at: url)
+                    try atomicFileSystemClient.synchronizeDirectory(
+                        at: url.deletingLastPathComponent()
+                    )
+                },
+                loadStoredKey: { vaultID in
+                    try runtimeServices.keyStore.loadVaultKey(for: vaultID)
+                },
+                createStoredKey: { key, vaultID in
+                    try vaultKeyCreator.createVaultKey(key, for: vaultID)
+                },
+                deleteStoredKey: { vaultID in
+                    try runtimeServices.keyStore.deleteVaultKey(for: vaultID)
+                },
+                selectedVault: {
+                    switch try await vaultSelector.selectVaultID() {
+                    case let .selected(selected): selected.vaultID
+                    case .none: nil
+                    }
+                },
+                createSelection: { vaultID in
+                    try await vaultSelector.createSelection(
+                        AtlasSelectedVaultID(validating: vaultID)
+                    )
+                },
+                activate: { vaultID, key in
+                    try await runtime.activate(
+                        AtlasVaultRuntimeActivationRequest(
+                            vaultID: vaultID,
+                            suppliedVaultKey: key
+                        )
+                    )
+                    return await runtime.status() == .unlocked
+                },
+                validateProjection: { store, vaultID, key, active in
+                    let root = try runtimeServices.rootDirectoryProvider
+                        .rootDirectory()
+                    let services = try runtimeServices.perVaultFactory
+                        .makeServices(rootURL: root, vaultID: vaultID)
+                    let session = try AtlasVaultUnlockedSession(
+                        vaultID: vaultID,
+                        vaultKey: key
+                    )
+                    let projection = try services.recordHydrator.hydrate(
+                        records: store.records,
+                        session: session
+                    )
+                    guard active else { return true }
+                    return try await runtime.privateState().state
+                        == projection
+                }
+            )
+        )
+        let pairingOwner = AtlasVaultTrustedPairingPresentationOwner(
+            coordinator: pairingCoordinator
+        )
+        let pairingContext = AtlasVaultTrustedPairingContext(
+            owner: pairingOwner
+        )
         let lifecycleForwarder = AtlasVaultProductionLifecycleForwarder(
             source: lifecycleEvents,
             host: host,
             eventObserver: { event in
                 switch event {
                 case .willTerminate:
+                    await pairingOwner.stopAndDrain()
                     await savedSearchHandoffCoordinator.stop()
                     await savedSearchOwner
                         .stopAndDrainPrivateSession()
@@ -1412,6 +1691,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 case .willResignActive,
                      .didEnterBackground,
                      .protectedDataBecameUnavailable:
+                    await pairingOwner.clearSensitiveInput()
                     await savedSearchOwner
                         .hidePrivatePresentation()
                     await recoveryOwner.dismissForUnsafeLifecycle()
@@ -1433,6 +1713,7 @@ public enum AtlasVaultProductionCompositionFactory {
             recoveryExportContext: recoveryExportContext,
             recoveryImportContext: recoveryImportContext,
             savedSearchContext: savedSearchContext,
+            pairingContext: pairingContext,
             savedSearchHandoffCoordinator:
                 savedSearchHandoffCoordinator
         )
