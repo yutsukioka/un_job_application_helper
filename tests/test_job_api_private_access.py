@@ -125,6 +125,28 @@ def test_loopback_rejects_cross_site_fetch_metadata_without_origin(
     assert _client(tmp_path).get("/api/tracker").json() == []
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/x-www-form-urlencoded",
+        "multipart/form-data; boundary=fake",
+        "text/plain",
+    ],
+)
+def test_loopback_rejects_browser_simple_form_without_metadata(
+    tmp_path: Path,
+    content_type: str,
+) -> None:
+    response = _client(tmp_path).post(
+        "/api/tracker/jobs/ATTACKER_PRIVATE_JOB",
+        content="",
+        headers={"Content-Type": content_type},
+    )
+
+    assert response.status_code == 403
+    assert _client(tmp_path).get("/api/tracker").json() == []
+
+
 def test_loopback_allows_same_origin_browser_mutation(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
