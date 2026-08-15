@@ -757,6 +757,59 @@ def test_strategy_scoring_rejects_oversized_and_nonregular_inputs(
     assert directory_response.json() == {"detail": "Strategy file is unavailable."}
 
 
+def test_strategy_scoring_rejects_fifo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO creation unavailable")
+    strategy_root = tmp_path / "strategies"
+    strategy_root.mkdir()
+    fifo = strategy_root / "strategy.fifo"
+    os.mkfifo(fifo)
+    monkeypatch.setenv("JOB_API_STRATEGY_ROOT", str(strategy_root))
+
+    response = _client(tmp_path).post(
+        "/api/search",
+        json={"limit": 1, "score_against": str(fifo)},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Strategy file is unavailable."}
+
+
+def test_bounded_strategy_parser_preserves_json_and_markdown_signals(
+    tmp_path: Path,
+) -> None:
+    application = importlib.import_module("job_api.app")
+    strategy_root = tmp_path / "strategies"
+    strategy_root.mkdir()
+    json_strategy = strategy_root / "strategy.json"
+    json_strategy.write_text(
+        '{"terms":["Programme Management"],"ccog_codes":["1.A.06.04"],'
+        '"ccog_families":["1.A.07"]}',
+        encoding="utf-8",
+    )
+    markdown_strategy = strategy_root / "strategy.md"
+    markdown_strategy.write_text(
+        "1. Programme Management \u2b50\u2b50\u2b50\nCodes: 1.A.06.04 and 1.A.07\n",
+        encoding="utf-8",
+    )
+
+    json_signals = application._load_strategy_signals(strategy_root, str(json_strategy))
+    markdown_signals = application._load_strategy_signals(
+        strategy_root,
+        str(markdown_strategy),
+    )
+
+    assert json_signals.terms == ["Programme Management"]
+    assert json_signals.ccog_codes == ["1.A.06.04"]
+    assert json_signals.ccog_families == ["1.A.07"]
+    assert markdown_signals.terms == ["Programme Management"]
+    assert markdown_signals.ccog_codes == ["1.A.06.04"]
+    assert markdown_signals.ccog_families == ["1.A.07"]
+
+
 def test_public_sync_history_is_bounded_and_error_free(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     private_sentinel = "PRIVATE_REMOTE_ERROR_SENTINEL"

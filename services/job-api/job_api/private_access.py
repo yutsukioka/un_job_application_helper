@@ -24,6 +24,10 @@ CORS_ORIGINS_ENVIRONMENT = "ATLAS_CORS_ORIGINS"
 
 _PRIVATE_PREFIXES = ("/api/saved-searches", "/api/tracker")
 _PRIVATE_EXACT_PATHS = frozenset({"/api/assistant/runs", "/api/sync/run"})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_SIMPLE_BROWSER_CONTENT_TYPES = frozenset(
+    {"application/x-www-form-urlencoded", "multipart/form-data", "text/plain"}
+)
 _ACCESS_DENIED = "Private API access denied."
 _ACCESS_UNAVAILABLE = "Private API access unavailable."
 
@@ -112,6 +116,8 @@ def private_access_rejection(
 ) -> tuple[int, str] | None:
     if policy.mode is PrivateAccessMode.DISABLED:
         return 503, _ACCESS_UNAVAILABLE
+    if not _browser_private_operation_is_admitted(policy, scope):
+        return 403, _ACCESS_DENIED
     if policy.mode is PrivateAccessMode.LOOPBACK:
         client = scope.get("client")
         if (
@@ -130,6 +136,69 @@ def private_access_rejection(
     ):
         return None
     return 403, _ACCESS_DENIED
+
+
+def _browser_private_operation_is_admitted(
+    policy: PrivateAccessPolicy,
+    scope: Scope,
+) -> bool:
+    if scope.get("method", "GET").upper() in _SAFE_METHODS:
+        return True
+
+    headers = Headers(scope=scope)
+    content_type = headers.get("content-type", "").partition(";")[0].strip().casefold()
+    if content_type in _SIMPLE_BROWSER_CONTENT_TYPES:
+        return False
+    origin_values = headers.getlist("origin")
+    fetch_site_values = headers.getlist("sec-fetch-site")
+    if len(origin_values) > 1 or len(fetch_site_values) > 1:
+        return False
+
+    origin = origin_values[0] if origin_values else None
+    if origin is not None and not (
+        origin in policy.cors_origins or _origin_matches_request(origin, scope)
+    ):
+        return False
+
+    if not fetch_site_values:
+        return True
+    fetch_site = fetch_site_values[0]
+    if fetch_site not in {"same-origin", "same-site", "cross-site", "none"}:
+        return False
+    if fetch_site == "cross-site":
+        return origin is not None and origin in policy.cors_origins
+    if fetch_site == "same-site":
+        return origin is not None
+    return True
+
+
+def _origin_matches_request(origin: str, scope: Scope) -> bool:
+    host_values = Headers(scope=scope).getlist("host")
+    if len(host_values) != 1:
+        return False
+    try:
+        parsed_origin = urlsplit(origin)
+        parsed_target = urlsplit(f"{scope.get('scheme', 'http')}://{host_values[0]}")
+        origin_port = parsed_origin.port or _default_port(parsed_origin.scheme)
+        target_port = parsed_target.port or _default_port(parsed_target.scheme)
+    except ValueError:
+        return False
+    return (
+        parsed_origin.scheme.casefold() == parsed_target.scheme.casefold()
+        and parsed_origin.hostname is not None
+        and parsed_target.hostname is not None
+        and parsed_origin.hostname.casefold() == parsed_target.hostname.casefold()
+        and origin_port == target_port
+        and parsed_origin.username is None
+        and parsed_origin.password is None
+        and not parsed_origin.path
+        and not parsed_origin.query
+        and not parsed_origin.fragment
+    )
+
+
+def _default_port(scheme: str) -> int | None:
+    return {"http": 80, "https": 443}.get(scheme.casefold())
 
 
 def _root_relative_route_path(scope: Scope) -> str:

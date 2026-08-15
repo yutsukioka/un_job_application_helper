@@ -101,6 +101,22 @@ duplicates, user information, paths, queries, fragments, and wildcard origins
 are rejected. Credentials are disabled; only the Authorization and Content-Type
 request headers are admitted.
 
+Unsafe private requests carrying browser `Origin` or Fetch Metadata are
+admitted only when same-origin or when the exact origin is explicitly trusted.
+Browser-simple form content types are rejected, so cross-site form mutations
+still fail if browser metadata is absent or stripped.
+Native loopback clients without browser-origin metadata retain the documented
+no-token workflow.
+
+## Local Strategy Files
+
+`score_against` resolves beneath `JOB_API_STRATEGY_ROOT`, which defaults to the
+repository `private` directory. Every path component is checked, symlinks and
+non-regular files are rejected, and the file is read through a 1 MiB bound
+before UTF-8 decoding. Errors are fixed and disclose neither path nor content.
+Public sync history returns only 25 recent count/timestamp summaries and omits
+stored error detail.
+
 ## Failure Behavior
 
 Denied token or peer requests return one fixed 403 response. Disabled mode
@@ -121,4 +137,13 @@ configuration prevents application startup.
 ## Deferred Work
 
 This package does not add Apple token UI, TLS termination, trusted reverse
-proxies, remote account authentication, cloud access, or device pairing.
+proxies, remote account authentication, cloud access, or device pairing. A LAN
+bearer token remains observable and replayable by an attacker who can monitor
+or alter that network, so the LAN profile is limited to temporary testing on a
+controlled network and is not a production remote-access boundary.
+
+Security-event auditing, authentication throttling, token expiry, scoped or
+revocable credentials, general public-request and concurrency limits, private
+response cache directives, and production OpenAPI exposure policy also remain
+separate hardening work. The default loopback boundary and explicit LAN gate do
+not claim those controls.

@@ -78,6 +78,17 @@ CORS remains outside the private admission middleware so a valid preflight can
 complete; the actual private request still requires its bearer credential.
 Wildcard reflection and credentialed wildcard requests are impossible.
 
+For unsafe private methods, browser-origin admission is a second independent
+check. Same-origin requests and exact configured origins are accepted;
+cross-site Origin, Fetch Metadata, and browser-simple form requests are denied
+before route execution.
+Native loopback callers without browser headers remain compatible.
+
+The API resolves `score_against` only beneath `JOB_API_STRATEGY_ROOT`, checks
+every path component, rejects symlinks and non-regular files, and performs a
+bounded 1 MiB read before parsing. Public sync history is a 25-entry allowlisted
+summary without stored error payloads.
+
 ## Launch Profiles
 
 Default development uses `python -m job_api.launcher` and binds
@@ -110,5 +121,8 @@ a temporary owner-only token file.
 
 Token-mode HTTP does not encrypt LAN traffic and is not suitable for hostile
 networks. No trusted-proxy mode exists. The Apple app does not gain token UI in
-this package. Pairing, device identity, and remote services remain separate
-phases.
+this package. Redacted security auditing, throttling, expiring or revocable
+credentials, broad public-endpoint resource limits, and production API-document
+exposure policy are not implemented here. Pairing, device identity, and remote
+services remain separate phases. This package is a fail-closed local boundary,
+not a general production network-security boundary.

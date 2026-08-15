@@ -60,7 +60,17 @@ header to prevent browser DNS rebinding.
 
 Cross-origin browser access is disabled by default. Set
 `ATLAS_CORS_ORIGINS` to an exact comma-separated origin list when required.
-Wildcard origins are rejected. See
+Wildcard origins are rejected. Unsafe private requests carrying browser
+metadata must be same-origin or come from an explicitly configured origin;
+browser-simple form encodings are rejected. Native loopback clients that send
+no browser-origin metadata remain supported.
+
+Strategy scoring accepts files only beneath `JOB_API_STRATEGY_ROOT`, which
+defaults to the repository's `private` directory. Strategy files are bounded
+to 1 MiB and symlinks and non-regular files are rejected. Public sync history
+is a bounded, error-free summary. LAN token mode does not provide transport
+encryption and is for temporary testing on a controlled network, not production
+remote access. See
 `docs/security/local_api_private_endpoint_security.md` for the operational
 policy.
 
