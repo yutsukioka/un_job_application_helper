@@ -93,6 +93,30 @@ final class AtlasVaultTrustedDeviceRegistryTests: XCTestCase {
         XCTAssertEqual(result.store, replay)
     }
 
+    func testReplayRejectsNewEntryExpiredAtCurrentTime() throws {
+        let root = try loadRoot()
+        let replay = try AtlasVaultPairingReplayStore.decodeStrict(
+            try canonicalData(root["replay_store"])
+        )
+        let expired = try AtlasVaultPairingReplayEntry(
+            kind: "offer",
+            objectID: "55000000-0000-4000-8000-000000000001",
+            transcriptSHA256: String(repeating: "d", count: 64),
+            consumedAt: "2026-08-15T10:05:59Z",
+            expiresAt: "2026-08-15T10:06:00Z"
+        )
+
+        XCTAssertThrowsError(
+            try AtlasVaultPairingReplayFoundation.consume(
+                expired,
+                in: replay,
+                revision: try string(root["unused_revision"]),
+                updatedAt: "2026-08-15T10:06:00Z",
+                currentTime: "2026-08-15T10:06:00Z"
+            )
+        )
+    }
+
     private func loadRoot() throws -> [String: Any] {
         let url = try vectorURL()
         return try dictionary(JSONSerialization.jsonObject(with: Data(contentsOf: url)))

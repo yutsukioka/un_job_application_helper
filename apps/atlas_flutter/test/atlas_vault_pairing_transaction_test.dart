@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/atlas_vault_windows.dart';
@@ -600,6 +601,82 @@ void main() {
     );
   });
 
+  test(
+    'invitee resumes replay consumption after SAS journal advance',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeTransactionReplaceFailureStage:
+            AtlasVaultPairingStage.offerConsumed,
+        inviteeTransactionReplaceFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+
+      final interrupted = await journey.invitee.confirmCodesMatch();
+
+      expect(
+        interrupted.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviteeTransactions.value?.stage,
+        AtlasVaultPairingStage.sasConfirmed,
+      );
+      expect(journey.inviteeReplay.value?.entries, hasLength(1));
+
+      final resumed = await journey.invitee.resumePairing();
+
+      expect(
+        resumed.disposition,
+        AtlasVaultTrustedPairingDisposition.codesConfirmed,
+      );
+      expect(
+        journey.inviteeTransactions.value?.stage,
+        AtlasVaultPairingStage.offerConsumed,
+      );
+      expect(journey.inviteeReplay.value?.entries, hasLength(1));
+    },
+  );
+
+  test(
+    'presentation cancellation prevents a post-await pairing mutation',
+    () async {
+      final cleanInstallEntered = Completer<void>();
+      final releaseCleanInstall = Completer<void>();
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeCleanInstallProbe: () async {
+          cleanInstallEntered.complete();
+          await releaseCleanInstall.future;
+          return AtlasVaultPairingCleanInstallDisposition.clean;
+        },
+      );
+      final owner = AtlasVaultTrustedPairingPresentationOwner(
+        coordinator: journey.invitee,
+      );
+      addTearDown(() async {
+        if (!releaseCleanInstall.isCompleted) {
+          releaseCleanInstall.complete();
+        }
+        await owner.stopAndDrain();
+        owner.dispose();
+        await journey.inviter.stop();
+      });
+      await journey.inviter.createPairingOffer();
+      await journey.inviter.savePairingOffer();
+
+      final importOperation = owner.importPairingOffer();
+      await cleanInstallEntered.future;
+      owner.clearSensitiveInput();
+      releaseCleanInstall.complete();
+      await importOperation;
+
+      expect(journey.inviteeTransactions.value, isNull);
+      expect(journey.inviteeStage.values, isEmpty);
+    },
+  );
+
   test('unjournaled invitee selection blocks destructive discard', () async {
     final journey = await _PairingJourney.create(
       vector,
@@ -1039,6 +1116,8 @@ final class _PairingJourney {
     AtlasVaultPairingStage? inviteeTransactionReplaceFailureStage,
     int inviteeTransactionReplaceFailures = 0,
     int inviteeTransactionDeleteFailures = 0,
+    Future<AtlasVaultPairingCleanInstallDisposition> Function()?
+    inviteeCleanInstallProbe,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -1172,7 +1251,8 @@ final class _PairingJourney {
       stageStore: inviteeStage,
       artifactTransport: inviteeTransport,
       runtime: inviteeRuntime,
-      cleanInstallProbe: () async => inviteeCleanDisposition,
+      cleanInstallProbe:
+          inviteeCleanInstallProbe ?? (() async => inviteeCleanDisposition),
       secureKeyStore: inviteeKeys,
       localStoreIO: inviteeLocal,
       selectedVaultStore: inviteeSelected,

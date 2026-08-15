@@ -48,6 +48,31 @@ void main() {
 
     owner.clearSensitiveInput();
     expect(owner.sas, isNull);
+    expect(coordinator.cancelCalls, 1);
+  });
+
+  test('pairing stop signals cancellation before draining', () async {
+    final coordinator = _PairingViewCoordinator();
+    final owner = AtlasVaultTrustedPairingPresentationOwner(
+      coordinator: coordinator,
+    );
+    addTearDown(owner.dispose);
+    final blocked = Completer<AtlasVaultTrustedPairingResult>();
+    coordinator.next = blocked.future;
+    final operation = owner.resumePairing();
+
+    final stopping = owner.stopAndDrain();
+    await Future<void>.value();
+    final cancellationObservedBeforeCompletion = coordinator.cancelCalls;
+    blocked.complete(
+      const AtlasVaultTrustedPairingResult(
+        disposition: AtlasVaultTrustedPairingDisposition.cancelled,
+      ),
+    );
+    await operation;
+    await stopping;
+
+    expect(cancellationObservedBeforeCompletion, 1);
   });
 
   test('pairing view exposes only explicit trusted-device actions', () {
@@ -125,12 +150,33 @@ void main() {
       }
     },
   );
+
+  test('Flutter shell cancels pairing on lifecycle and tab dismissal', () {
+    final source = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('with WidgetsBindingObserver'));
+    expect(source, contains('void didChangeAppLifecycleState('));
+    expect(
+      source,
+      contains(
+        '_controller.trustedPairingContext?.owner.clearSensitiveInput()',
+      ),
+    );
+    expect(source, contains('_dismissPairingForTabChange('));
+  });
 }
 
 final class _PairingViewCoordinator
     implements AtlasVaultTrustedPairingCoordinating {
   final List<String> calls = <String>[];
   Future<AtlasVaultTrustedPairingResult>? next;
+  int cancelCalls = 0;
+
+  void cancelActiveOperation() {
+    cancelCalls += 1;
+  }
 
   Future<AtlasVaultTrustedPairingResult> _result(String call) async {
     calls.add(call);

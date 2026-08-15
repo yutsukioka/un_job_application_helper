@@ -391,6 +391,35 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
+    func testInviteeResumesReplayConsumptionAfterSASJournalAdvance()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviteeReplaceFailure: .offerConsumed
+        )
+        try await exchangeAcceptance(journey)
+
+        let interrupted = await journey.invitee.confirmCodesMatch()
+        let interruptedTransaction = await journey.inviteeState.loadTransaction()
+        let interruptedSnapshot = await journey.inviteeState.snapshot()
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(interruptedTransaction?.stage, .sasConfirmed)
+        XCTAssertEqual(interruptedSnapshot.events.filter {
+            $0 == "replay.commit"
+        }.count, 1)
+
+        let resumed = await journey.invitee.resumePairing()
+        let resumedTransaction = await journey.inviteeState.loadTransaction()
+        let resumedSnapshot = await journey.inviteeState.snapshot()
+
+        XCTAssertEqual(resumed.disposition, .codesConfirmed)
+        XCTAssertEqual(resumedTransaction?.stage, .offerConsumed)
+        XCTAssertEqual(resumedSnapshot.events.filter {
+            $0 == "replay.commit"
+        }.count, 1)
+    }
+
     func testAcknowledgementRestagesAfterFirstCreateFailure()
         async throws
     {

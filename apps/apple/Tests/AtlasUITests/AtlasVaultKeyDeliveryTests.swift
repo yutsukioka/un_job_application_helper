@@ -23,6 +23,38 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         }
     }
 
+    func testPairingBootstrapInitializerRejectsNonASCIIAuthenticatedMetadata()
+        throws
+    {
+        let root = try loadRoot()
+        let source = try AtlasVaultPairingBootstrap.decodeStrict(
+            try data(root["bootstrap_canonical_b64"])
+        )
+        let record = try XCTUnwrap(source.records.first)
+
+        for value in ["key-e\u{0301}", "key-\u{1F512}", "key-\nline"] {
+            let invalidRecord = AtlasVaultEncryptedRecordEnvelope(
+                id: record.id,
+                schemaVersion: record.schemaVersion,
+                revision: record.revision,
+                parentRevision: record.parentRevision,
+                deleted: record.deleted,
+                keyID: value,
+                nonce: record.nonce,
+                ciphertext: record.ciphertext
+            )
+            XCTAssertThrowsError(
+                try AtlasVaultPairingBootstrap(
+                    snapshotID: source.snapshotID,
+                    createdAt: source.createdAt,
+                    vaultMetadata: source.vaultMetadata,
+                    records: [invalidRecord] + Array(source.records.dropFirst())
+                ),
+                value
+            )
+        }
+    }
+
     func testSASBootstrapDeliveryAndAcknowledgementMatchVector() throws {
         let root = try loadRoot()
         let inviter = try identity(root, name: "inviter")

@@ -59,6 +59,15 @@ final class AtlasVaultPairingViewTests: XCTestCase {
         }
     }
 
+    func testArtifactImportUsesAnOpenedBoundedFileHandle() throws {
+        let source = try Self.source(named: "AtlasVaultPairingView.swift")
+
+        XCTAssertTrue(source.contains("FileHandle(forReadingFrom:"))
+        XCTAssertTrue(source.contains("read(upToCount:"))
+        XCTAssertTrue(source.contains("fstat("))
+        XCTAssertFalse(source.contains("contentsOf: url"))
+    }
+
     func testUnsafeLifecycleCancellationDrainsTheRetainedOperation()
         async
     {
