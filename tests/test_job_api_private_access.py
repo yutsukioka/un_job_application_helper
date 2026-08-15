@@ -738,6 +738,16 @@ def test_launcher_defaults_to_loopback() -> None:
     assert config.port == 8765
 
 
+@pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "localhost."])
+def test_launcher_normalizes_reserved_localhost_names(host: str) -> None:
+    launcher = importlib.import_module("job_api.launcher")
+
+    config = launcher.load_launch_config({"ATLAS_API_HOST": host})
+
+    assert config.host == "127.0.0.1"
+    assert config.private_access.mode.value == "loopback"
+
+
 @pytest.mark.parametrize(
     "environment",
     [
