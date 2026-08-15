@@ -58,6 +58,7 @@ def _client(
 ) -> TestClient:
     return TestClient(
         create_app(_settings(tmp_path)),
+        base_url="http://127.0.0.1",
         client=(peer, 50123),
         headers=headers,
     )
@@ -113,6 +114,45 @@ def test_ipv4_mapped_loopback_peer_is_treated_as_loopback(tmp_path: Path) -> Non
     assert response.status_code == 200
 
 
+def test_loopback_peer_rejects_dns_rebinding_host(tmp_path: Path) -> None:
+    response = _client(
+        tmp_path,
+        headers={"Host": "attacker-controlled.example"},
+    ).get("/api/saved-searches")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Private API access denied."}
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["localhost", "localhost:8765", "127.0.0.7:8765", "[::1]:8765"],
+)
+def test_loopback_peer_accepts_only_loopback_host_allowlist(
+    tmp_path: Path,
+    host: str,
+) -> None:
+    response = _client(tmp_path, headers={"Host": host}).get("/api/saved-searches")
+
+    assert response.status_code == 200
+
+
+def test_loopback_peer_rejects_ambiguous_or_duplicate_host(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    ambiguous = client.get(
+        "/api/saved-searches",
+        headers={"Host": "127.0.0.1.attacker.example"},
+    )
+    duplicate = client.get(
+        "/api/saved-searches",
+        headers=[("Host", "127.0.0.1"), ("Host", "localhost")],
+    )
+
+    assert ambiguous.status_code == 403
+    assert duplicate.status_code == 403
+
+
 @pytest.mark.parametrize(
     ("authorization", "expected_status"),
     [
@@ -136,6 +176,31 @@ def test_token_mode_requires_exact_bearer_token(
     response = _client(tmp_path, headers=headers).get("/api/saved-searches")
 
     assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        f"bearer {VALID_TOKEN}",
+        f"BEARER {VALID_TOKEN}",
+        f"Bearer  {VALID_TOKEN}",
+    ],
+)
+def test_bearer_scheme_uses_http_case_and_space_grammar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    authorization: str,
+) -> None:
+    monkeypatch.setenv("ATLAS_PRIVATE_API_MODE", "token")
+    monkeypatch.setenv("ATLAS_PRIVATE_API_TOKEN", VALID_TOKEN)
+
+    response = _client(
+        tmp_path,
+        peer="192.0.2.44",
+        headers={"Authorization": authorization},
+    ).get("/api/saved-searches")
+
+    assert response.status_code == 200
 
 
 def test_token_in_query_string_is_not_an_authentication_source(
@@ -493,6 +558,19 @@ def test_raw_uvicorn_application_still_enforces_direct_peer_policy(
     tmp_path: Path,
 ) -> None:
     response = _client(tmp_path, peer="198.51.100.19").get("/api/tracker")
+
+    assert response.status_code == 403
+
+
+def test_root_path_cannot_hide_private_route_from_admission(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(_settings(tmp_path)),
+        base_url="http://127.0.0.1/prefix",
+        root_path="/prefix",
+        client=("192.0.2.44", 50123),
+    )
+
+    response = client.get("/api/tracker")
 
     assert response.status_code == 403
 
