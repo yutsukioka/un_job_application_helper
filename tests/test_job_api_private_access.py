@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import sqlite3
@@ -73,6 +74,24 @@ def _request(
     body: dict[str, Any] | None,
 ) -> Any:
     return client.request(method, path, json=body)
+
+
+def test_test_clients_do_not_require_newer_client_keyword() -> None:
+    incompatible_calls: list[tuple[str, int]] = []
+    for path in (
+        ROOT / "tests/test_job_api_private_access.py",
+        ROOT / "tests/test_job_api_contract.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name) or node.func.id != "TestClient":
+                continue
+            if any(keyword.arg == "client" for keyword in node.keywords):
+                incompatible_calls.append((str(path.relative_to(ROOT)), node.lineno))
+
+    assert incompatible_calls == []
 
 
 def test_default_policy_allows_direct_loopback_private_read(tmp_path: Path) -> None:
