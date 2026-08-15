@@ -49,6 +49,10 @@ The bootstrap excludes local-store ID and timestamps, selection, public cache,
 plaintext, and raw vault key. Its canonical SHA-256 binds delivery and
 acknowledgement.
 
+Every string value and object key in the canonical bootstrap must be nonempty
+printable ASCII (`0x20...0x7E`). Python, Dart, and Swift enforce the same text
+domain before hashing or signature verification.
+
 ## Delivery Encryption
 
 The inviter creates a fresh ephemeral X25519 key. Both sides derive the
@@ -92,7 +96,10 @@ ID, key epoch, bootstrap SHA-256, and installation time. The signature domain
 is `atlasvault-pairing-acknowledgement-signature-v1:`.
 
 The invitee commits inviter trust only after activation. The inviter commits
-invitee trust only after verifying and durably consuming the acknowledgement.
+invitee trust only after verifying the acknowledgement signature, requiring its
+invitee identity to equal the authenticated delivery and journaled peer, and
+durably consuming the acknowledgement. The invitee stages and reads back the
+exact signed acknowledgement before committing inviter trust.
 
 ## Secret Lifetime And Failure
 
@@ -106,4 +113,6 @@ ciphertext, or acknowledgement fails without installation or trust commitment.
 
 This contract has no backend, ongoing synchronization, existing-vault merge,
 revocation, or key rotation. Key epoch is authenticated but not advanced by
-Phase 2F-2.
+Phase 2F-2. A monotonic post-presentation deadline, aggregate protected-state
+bounds, and explicit inviter step-up authorization are separately tracked in
+issue #101 and block a production multi-device-readiness claim.

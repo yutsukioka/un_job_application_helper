@@ -442,3 +442,36 @@ malicious-server rollback state, remote removal, compromise recovery, or vault
 key rotation. A previously paired stolen device remains trusted until a later
 revocation and epoch-rotation phase. The local onboarding milestone must not be
 described as full multi-device readiness.
+
+## 75. Pairing Transaction Race Hardening
+
+**Classification: mitigated for this local onboarding boundary.** Imported
+artifacts and generated delivery or acknowledgement artifacts are hash-bound in
+protected transaction state before create-only staging. Store and protected-key
+digests are journaled before platform creation. Resume adopts only an absent
+intended resource or an exact authenticated/read-back match. The inviter
+verifies acknowledgement signature and delivery-bound invitee identity before
+replay or trust mutation. Android and Windows use their established
+cross-process private-authority admission; Apple pairing, creation, and recovery
+import share one pending-transaction authority and pairing mutations fail
+closed after lifecycle loss or cancellation.
+
+## 76. Cross-Runtime Text Domain
+
+**Classification: mitigated for signed pairing bootstrap content.** Python,
+Dart, and Swift require every bootstrap JSON string and object key to be
+nonempty printable ASCII before canonical signing, hashing, or delivery. This
+deliberately excludes Unicode normalization and surrogate interpretation from
+the Phase 2F-2 cryptographic domain. Future protocol versions may broaden the
+text domain only with explicit scalar-level canonicalization vectors.
+
+## 77. Production Readiness Follow-Up
+
+**Classification: release blocking for production multi-device use.** Issue
+#101 tracks three controls outside this phase's fixed 53-file scope: a monotonic
+local deadline after artifact presentation, aggregate byte/resource bounds for
+protected pairing state, and explicit step-up authorization immediately before
+an inviter releases encrypted vault-key material. Phase 2F-2 may establish the
+reviewed local onboarding primitive, but production multi-device readiness must
+not be claimed until those controls receive their own implementation and
+verification gate.

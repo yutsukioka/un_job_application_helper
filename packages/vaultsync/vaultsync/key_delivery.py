@@ -81,6 +81,27 @@ def _exact_keys(value: Mapping[str, Any], expected: set[str]) -> None:
         raise _invalid_delivery()
 
 
+def _require_printable_ascii_json(value: Any) -> None:
+    if value is None or isinstance(value, (bool, int)):
+        return
+    if isinstance(value, str):
+        if not value or any(
+            ord(character) < 0x20 or ord(character) > 0x7E for character in value
+        ):
+            raise _invalid_delivery()
+        return
+    if isinstance(value, list):
+        for item in value:
+            _require_printable_ascii_json(item)
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _require_printable_ascii_json(key)
+            _require_printable_ascii_json(item)
+        return
+    raise _invalid_delivery()
+
+
 def _integer(value: Any) -> int:
     if type(value) is not int:
         raise _invalid_delivery()
@@ -459,6 +480,7 @@ class PairingBootstrap:
             if len({record.id for record in records}) != len(records):
                 raise _invalid_delivery()
             object.__setattr__(self, "records", records)
+            _require_printable_ascii_json(self.to_dict())
         except PairingKeyDeliveryError:
             raise
         except Exception as exc:

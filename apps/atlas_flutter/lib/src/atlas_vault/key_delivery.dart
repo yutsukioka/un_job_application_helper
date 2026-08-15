@@ -357,7 +357,7 @@ final class AtlasVaultPairingBootstrap {
       if (records.map((record) => record.id).toSet().length != records.length) {
         throw const AtlasVaultKeyDeliveryException();
       }
-      return AtlasVaultPairingBootstrap._(
+      final bootstrap = AtlasVaultPairingBootstrap._(
         snapshotId: requireAtlasVaultCanonicalUuid(
           value['snapshot_id'],
           field: 'snapshot_id',
@@ -374,6 +374,8 @@ final class AtlasVaultPairingBootstrap {
         ),
         records: records,
       );
+      _requirePrintableAsciiJson(bootstrap.toJson());
+      return bootstrap;
     } catch (_) {
       throw const AtlasVaultKeyDeliveryException();
     }
@@ -635,6 +637,22 @@ final class AtlasVaultSignedVaultKeyDelivery {
   Uint8List canonicalBytes() => encodeCanonicalJson(toJson());
 }
 
+Future<AtlasVaultVaultKeyDelivery> verifyAtlasVaultSignedVaultKeyDelivery(
+  AtlasVaultSignedVaultKeyDelivery signed,
+) async {
+  try {
+    await _verifySignedDescriptorPayload(
+      signed.inviter,
+      signed.signature,
+      _deliverySignatureDomain,
+      signed.delivery.canonicalBytes(),
+    );
+    return signed.delivery;
+  } catch (_) {
+    throw const AtlasVaultKeyDeliveryException();
+  }
+}
+
 Future<String> deriveAtlasVaultPairingSas(
   Uint8List pairingSessionKey,
   Uint8List transcriptSha256,
@@ -764,13 +782,7 @@ Future<Uint8List> openAtlasVaultKeyDelivery(
   Uint8List? plaintext;
   Uint8List? ephemeralPrivateKey;
   try {
-    await _verifySignedDescriptorPayload(
-      signed.inviter,
-      signed.signature,
-      _deliverySignatureDomain,
-      signed.delivery.canonicalBytes(),
-    );
-    final value = signed.delivery;
+    final value = await verifyAtlasVaultSignedVaultKeyDelivery(signed);
     final transcript = _copyExact(transcriptSha256, _keyLength);
     final request = await verifyAtlasVaultPairingKeyRequest(
       keyRequest,
@@ -820,6 +832,33 @@ Future<Uint8List> openAtlasVaultKeyDelivery(
     atlasVaultWipeBytesInternal(plaintext);
     atlasVaultWipeBytesInternal(ephemeralPrivateKey);
   }
+}
+
+void _requirePrintableAsciiJson(Object? value) {
+  if (value == null || value is bool || value is int) {
+    return;
+  }
+  if (value is String) {
+    if (value.isEmpty ||
+        value.codeUnits.any((unit) => unit < 0x20 || unit > 0x7e)) {
+      throw const AtlasVaultKeyDeliveryException();
+    }
+    return;
+  }
+  if (value is List<Object?>) {
+    for (final item in value) {
+      _requirePrintableAsciiJson(item);
+    }
+    return;
+  }
+  if (value is Map<String, Object?>) {
+    for (final entry in value.entries) {
+      _requirePrintableAsciiJson(entry.key);
+      _requirePrintableAsciiJson(entry.value);
+    }
+    return;
+  }
+  throw const AtlasVaultKeyDeliveryException();
 }
 
 final class AtlasVaultPairingAcknowledgement {

@@ -194,6 +194,10 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
 
     public func clearSensitiveInput() async {
         clearSensitiveInputNow()
+        let retained = operationTask
+        operationTask?.cancel()
+        await retained?.value
+        operationTask = nil
     }
 
     public func stopAndDrain() async {
@@ -201,6 +205,7 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         generation &+= 1
         clearSensitiveInputNow()
         let retained = operationTask
+        operationTask?.cancel()
         await retained?.value
         operationTask = nil
         await coordinator.stop()
@@ -260,6 +265,11 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         let operationGeneration = generation
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.isCurrent(operationGeneration) {
+                    self.operationTask = nil
+                }
+            }
             do {
                 let value = try await operation()
                 guard self.isCurrent(operationGeneration) else { return }
@@ -269,8 +279,6 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
                 self.clearSensitiveInputNow()
                 self.status = .failed
             }
-            guard self.isCurrent(operationGeneration) else { return }
-            self.operationTask = nil
         }
         operationTask = task
     }

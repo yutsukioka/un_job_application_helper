@@ -87,12 +87,34 @@ Apple now journals an offer before staging it and applies the selected-vault
 absence check only to invitee discard. Both coordinators treat an already
 matching invitee selection as an interrupted successful create, while discard
 fails closed whenever an invitee selection exists outside the recorded stage.
-The exact signed Apple acknowledgement is hash-bound in the transaction before
-the trust-registry side effect so retries reuse the same bytes even when the
-platform signature differs across invocations. Invitee trust uses the
-journaled installation timestamp, acknowledgement-saved resume retries cleanup,
-and Apple replay duplicates compare their authenticated kind, object ID, and
-transcript rather than local consumption timestamps.
+The exact signed acknowledgement is hash-bound and staged before the
+trust-registry side effect. Resume reuses an existing staged acknowledgement;
+when creation failed before any artifact existed, it may replace only the
+unmaterialized same-stage intent and then stage the new signed bytes before
+trust. Invitee trust uses the journaled installation timestamp,
+acknowledgement-saved resume retries cleanup, and Apple replay duplicates
+compare their authenticated kind, object ID, and transcript rather than local
+consumption timestamps.
+
+Imported acceptance, delivery, and acknowledgement artifacts are also
+hash-bound in a same-stage journal transition before their create-only staging
+write. Invitee store and key installation records the expected digest before
+the corresponding create-only platform operation. Resume accepts only an
+absent intended resource or an exact read-back match; discard removes only an
+exact intended resource and clears the transaction last.
+
+An inviter verifies the signed acknowledgement and binds its invitee identity
+to the authenticated delivery and journaled peer before replay consumption or
+trust mutation. Android and Windows pairing operations run through their
+existing cross-process private-authority admission and reject competing
+pairing, plaintext-migration, recovery-import, or selected-vault authority.
+Apple pairing, creation, and recovery import share one pending-transaction
+authority; pairing mutations additionally fail closed after lifecycle loss or
+task cancellation.
+
+Canonical signed bootstrap strings are restricted to nonempty printable ASCII
+on Python, Dart, and Swift. This avoids runtime-dependent Unicode scalar and
+normalization behavior in cryptographic canonicalization.
 
 ## Cross-Platform Ring
 
@@ -122,10 +144,13 @@ secret-free errors. Checkpoints B and C add real platform persistence,
 transport, interruption, role-cycle, build, and cross-process evidence before
 merge.
 
-Go only when all three checkpoints, the exact 53-file scope, all three role
-cycles, platform builds, exact-head reviews, and artifact scans pass. Ongoing
-ciphertext synchronization, trusted-list convergence, revocation, and key
-rotation remain deferred.
+Go only for this bounded local onboarding milestone when all three checkpoints,
+the exact 53-file scope, all three role cycles, platform builds, exact-head
+reviews, and artifact scans pass. Production multi-device readiness remains a
+no-go until issue #101 adds a monotonic post-presentation deadline, aggregate
+protected-state bounds, and explicit step-up authorization before vault-key
+release. Ongoing ciphertext synchronization, trusted-list convergence,
+revocation, and key rotation remain deferred.
 
 ## Next Product Gate
 

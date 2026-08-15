@@ -1003,11 +1003,16 @@ public enum AtlasVaultProductionCompositionFactory {
             )
         let pendingTransactionAuthority =
             AtlasVaultPendingTransactionAuthority()
+        let pairingTransactionStore =
+            AtlasKeychainPairingTransactionStore(
+                client: keychainClient
+            )
         let hostVaultSelector =
             AtlasPendingVaultTransactionSelectionGate(
                 selector: vaultSelector,
                 hasPendingCreation: {
                     try creationJournalStore.loadJournal() != nil
+                        || pairingTransactionStore.load() != nil
                 },
                 hasPendingImport: {
                     try recoveryImportJournalStore.loadJournal() != nil
@@ -1084,6 +1089,25 @@ public enum AtlasVaultProductionCompositionFactory {
             builder: AtlasVaultProductionHostBuilder()
         )
         let host = hostFactory.makeHost()
+        let authorizeSensitivePairingMutation: @Sendable () async -> Bool = {
+            do { try Task.checkCancellation() } catch { return false }
+            let lifecycleStatus = await lifecycle.status()
+            guard
+                !lifecycleStatus.hasPendingGraceLock,
+                lifecycleStatus.failure == nil
+            else { return false }
+            switch lifecycleStatus.lastEvent {
+            case .didBecomeActive,
+                 .protectedDataBecameAvailable:
+                return true
+            case .none,
+                 .willResignActive,
+                 .didEnterBackground,
+                 .willTerminate,
+                 .protectedDataBecameUnavailable:
+                return false
+            }
+        }
         guard
             let privateMutationHost =
                 host as? any AtlasVaultPrivateMutationHosting,
@@ -1198,6 +1222,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 journalStore: recoveryImportJournalStore,
                 hasPendingCreation: {
                     try creationJournalStore.loadJournal() != nil
+                        || pairingTransactionStore.load() != nil
                 },
                 transactionAuthority: pendingTransactionAuthority,
                 fileReader: AtlasVaultRecoveryImportFileReader(),
@@ -1304,6 +1329,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 creator: creationCoordinator,
                 hasPendingImport: {
                     try recoveryImportJournalStore.loadJournal() != nil
+                        || pairingTransactionStore.load() != nil
                 },
                 transactionAuthority: pendingTransactionAuthority
             )
@@ -1430,10 +1456,6 @@ public enum AtlasVaultProductionCompositionFactory {
         let pairingReplayStore = AtlasKeychainPairingReplayStore(
             client: keychainClient
         )
-        let pairingTransactionStore =
-            AtlasKeychainPairingTransactionStore(
-                client: keychainClient
-            )
         let pairingArtifactStageStore:
             @Sendable () throws -> AtlasVaultPairingArtifactStageStore = {
                 let root = try rootProvider.rootDirectory()
@@ -1667,7 +1689,11 @@ public enum AtlasVaultProductionCompositionFactory {
                     guard active else { return true }
                     return try await runtime.privateState().state
                         == projection
-                }
+                },
+                transactionAdmission: { operation in
+                    try await pendingTransactionAuthority.perform(operation)
+                },
+                authorizeSensitiveMutation: authorizeSensitivePairingMutation
             )
         )
         let pairingOwner = AtlasVaultTrustedPairingPresentationOwner(

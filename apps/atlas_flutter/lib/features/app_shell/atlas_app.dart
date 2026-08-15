@@ -2796,41 +2796,100 @@ final class _AtlasWindowsTrustedPairingAdmission
   const _AtlasWindowsTrustedPairingAdmission({
     required AtlasWindowsPlaintextAuthorityAdmission base,
     required AtlasVaultPairingTransactionStore pairingTransactionStore,
+    required AtlasVaultProtectedMigrationJournalStore migrationJournalStore,
+    required AtlasVaultProtectedRecoveryImportJournalStore
+    recoveryImportJournalStore,
+    required AtlasVaultSelectedVaultStore selectedVaultStore,
   }) : // Keep public dependency labels explicit at the assembly boundary.
        // ignore: prefer_initializing_formals
        _base = base,
        // ignore: prefer_initializing_formals
-       _pairingTransactionStore = pairingTransactionStore;
+       _pairingTransactionStore = pairingTransactionStore,
+       // ignore: prefer_initializing_formals
+       _migrationJournalStore = migrationJournalStore,
+       // ignore: prefer_initializing_formals
+       _recoveryImportJournalStore = recoveryImportJournalStore,
+       // ignore: prefer_initializing_formals
+       _selectedVaultStore = selectedVaultStore;
 
   final AtlasWindowsPlaintextAuthorityAdmission _base;
   final AtlasVaultPairingTransactionStore _pairingTransactionStore;
+  final AtlasVaultProtectedMigrationJournalStore _migrationJournalStore;
+  final AtlasVaultProtectedRecoveryImportJournalStore
+  _recoveryImportJournalStore;
+  final AtlasVaultSelectedVaultStore _selectedVaultStore;
 
   @override
   Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
     return _base.runMigrationTransaction(() async {
-      final transaction = await _pairingTransactionStore.read();
-      try {
-        if (transaction != null) {
-          throw const AtlasVaultPlaintextAuthorityAdmissionException();
-        }
-      } finally {
-        transaction?.destroy();
-      }
+      await _rejectCompetingTransactions(rejectSelected: true);
       return _base.runLegacyPrivateOperation(operation);
     });
   }
 
   @override
-  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) =>
-      _base.runMigrationTransaction(operation);
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) {
+    return _base.runMigrationTransaction(() async {
+      await _rejectPendingPairing();
+      await _rejectCompetingTransactions(allowMigration: true);
+      return operation();
+    });
+  }
 
   @override
-  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
-      _base.runRecoveryImportTransaction(operation);
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) {
+    return _base.runRecoveryImportTransaction(() async {
+      await _rejectPendingPairing();
+      await _rejectCompetingTransactions(allowRecoveryImport: true);
+      return operation();
+    });
+  }
 
   @override
-  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) =>
-      _base.runMigrationTransaction(operation);
+  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) {
+    return _base.runMigrationTransaction(() async {
+      await _rejectCompetingTransactions(allowPairing: true);
+      return operation();
+    });
+  }
+
+  Future<void> _rejectPendingPairing() async {
+    final transaction = await _pairingTransactionStore.read();
+    try {
+      if (transaction != null) {
+        throw const AtlasVaultPlaintextAuthorityAdmissionException();
+      }
+    } finally {
+      transaction?.destroy();
+    }
+  }
+
+  Future<void> _rejectCompetingTransactions({
+    bool allowMigration = false,
+    bool allowRecoveryImport = false,
+    bool allowPairing = false,
+    bool rejectSelected = false,
+  }) async {
+    AtlasVaultPairingTransaction? pairing;
+    Uint8List? migration;
+    Uint8List? recoveryImport;
+    try {
+      pairing = await _pairingTransactionStore.read();
+      migration = await _migrationJournalStore.read();
+      recoveryImport = await _recoveryImportJournalStore.read();
+      final selected = rejectSelected ? await _selectedVaultStore.read() : null;
+      if ((!allowPairing && pairing != null) ||
+          (!allowMigration && migration != null) ||
+          (!allowRecoveryImport && recoveryImport != null) ||
+          selected != null) {
+        throw const AtlasVaultPlaintextAuthorityAdmissionException();
+      }
+    } finally {
+      pairing?.destroy();
+      migration?.fillRange(0, migration.length, 0);
+      recoveryImport?.fillRange(0, recoveryImport.length, 0);
+    }
+  }
 }
 
 final class _AtlasAndroidTrustedPairingAdmission
@@ -2866,40 +2925,61 @@ final class _AtlasAndroidTrustedPairingAdmission
   @override
   Future<T> runLegacyPrivateOperation<T>(Future<T> Function() operation) {
     return _coordinate(() async {
-      AtlasVaultPairingTransaction? pairing;
-      Uint8List? migration;
-      Uint8List? recoveryImport;
-      try {
-        pairing = await _pairingTransactionStore.read();
-        migration = await _migrationJournalStore.read();
-        recoveryImport = await _recoveryImportJournalStore.read();
-        final selected = await _selectedVaultStore.read();
-        if (pairing != null ||
-            migration != null ||
-            recoveryImport != null ||
-            selected != null) {
-          throw const AtlasVaultPlaintextAuthorityAdmissionException();
-        }
-        return operation();
-      } finally {
-        pairing?.destroy();
-        migration?.fillRange(0, migration.length, 0);
-        recoveryImport?.fillRange(0, recoveryImport.length, 0);
-      }
+      await _rejectCompetingTransactions(rejectSelected: true);
+      return operation();
     });
   }
 
   @override
-  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) =>
-      _coordinate(operation);
+  Future<T> runMigrationTransaction<T>(Future<T> Function() operation) {
+    return _coordinate(() async {
+      await _rejectCompetingTransactions(allowMigration: true);
+      return operation();
+    });
+  }
 
   @override
-  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) =>
-      _coordinate(operation);
+  Future<T> runRecoveryImportTransaction<T>(Future<T> Function() operation) {
+    return _coordinate(() async {
+      await _rejectCompetingTransactions(allowRecoveryImport: true);
+      return operation();
+    });
+  }
 
   @override
-  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) =>
-      _coordinate(operation);
+  Future<T> runTrustedPairingTransaction<T>(Future<T> Function() operation) {
+    return _coordinate(() async {
+      await _rejectCompetingTransactions(allowPairing: true);
+      return operation();
+    });
+  }
+
+  Future<void> _rejectCompetingTransactions({
+    bool allowMigration = false,
+    bool allowRecoveryImport = false,
+    bool allowPairing = false,
+    bool rejectSelected = false,
+  }) async {
+    AtlasVaultPairingTransaction? pairing;
+    Uint8List? migration;
+    Uint8List? recoveryImport;
+    try {
+      pairing = await _pairingTransactionStore.read();
+      migration = await _migrationJournalStore.read();
+      recoveryImport = await _recoveryImportJournalStore.read();
+      final selected = rejectSelected ? await _selectedVaultStore.read() : null;
+      if ((!allowPairing && pairing != null) ||
+          (!allowMigration && migration != null) ||
+          (!allowRecoveryImport && recoveryImport != null) ||
+          selected != null) {
+        throw const AtlasVaultPlaintextAuthorityAdmissionException();
+      }
+    } finally {
+      pairing?.destroy();
+      migration?.fillRange(0, migration.length, 0);
+      recoveryImport?.fillRange(0, recoveryImport.length, 0);
+    }
+  }
 
   Future<T> _coordinate<T>(Future<T> Function() operation) async {
     if (Zone.current[_leaseKey] == this) {
@@ -3202,6 +3282,9 @@ _AtlasDefaultControllerAssembly _buildDefaultControllerAssembly() {
     final authorityAdmission = _AtlasWindowsTrustedPairingAdmission(
       base: baseAuthorityAdmission,
       pairingTransactionStore: transactionStore,
+      migrationJournalStore: migrationJournalStore,
+      recoveryImportJournalStore: recoveryImportJournalStore,
+      selectedVaultStore: selectedVaultStore,
     );
     final runtime = AtlasVaultPrivateStateRuntime(
       secureKeyStore: keyStore,

@@ -1120,6 +1120,12 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
             Data,
             Bool
         ) async throws -> Bool
+    public let transactionAdmission:
+        @Sendable (
+            @escaping @Sendable () async throws
+                -> AtlasVaultTrustedPairingResult
+        ) async throws -> AtlasVaultTrustedPairingResult
+    public let authorizeSensitiveMutation: @Sendable () async -> Bool
     public let uuid: @Sendable () -> String
     public let timestamp: @Sendable () -> String
     public let randomBytes: @Sendable (Int) throws -> Data
@@ -1196,6 +1202,15 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
             Data,
             Bool
         ) async throws -> Bool,
+        transactionAdmission: @escaping @Sendable (
+            @escaping @Sendable () async throws
+                -> AtlasVaultTrustedPairingResult
+        ) async throws -> AtlasVaultTrustedPairingResult = { operation in
+            try await operation()
+        },
+        authorizeSensitiveMutation: @escaping @Sendable () async -> Bool = {
+            true
+        },
         uuid: @escaping @Sendable () -> String = {
             UUID().uuidString.lowercased()
         },
@@ -1247,6 +1262,8 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
         self.createSelection = createSelection
         self.activate = activate
         self.validateProjection = validateProjection
+        self.transactionAdmission = transactionAdmission
+        self.authorizeSensitiveMutation = authorizeSensitiveMutation
         self.uuid = uuid
         self.timestamp = timestamp
         self.randomBytes = randomBytes
@@ -1258,6 +1275,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
 {
     private let environment: AtlasVaultTrustedPairingEnvironment
     private var operationInProgress = false
+    private var pendingAdmittedOperation: (
+        id: UUID,
+        operation: () async throws -> AtlasVaultTrustedPairingResult
+    )?
     private var stopped = false
 
     public init(environment: AtlasVaultTrustedPairingEnvironment) {
@@ -1286,6 +1307,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             if let existing = try await self.environment.loadIdentity() {
                 identity = existing
             } else {
+                try await self.authorizeSensitiveMutation()
                 identity = try await self.environment.createIdentity()
             }
             return self.fixed(.identityReady, local: identity)
@@ -1327,6 +1349,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 keyEpoch: identity.descriptor.keyEpoch,
                 stagedArtifacts: try self.metadata(for: [artifact])
             )
+            try await self.authorizeSensitiveMutation()
             try await self.environment.createTransaction(transaction)
             try await self.requireTransaction(transaction)
             try await self.stage(artifact)
@@ -1497,6 +1520,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     for: [artifact, acceptanceArtifact]
                 )
             )
+            try await self.authorizeSensitiveMutation()
             try await self.environment.createTransaction(transaction)
             try await self.requireTransaction(transaction)
             try await self.stage(artifact)
@@ -1552,14 +1576,18 @@ public actor AtlasVaultTrustedPairingCoordinator:
             guard Self.equal(proofs.invitee, payload.inviteeProof) else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
-            try await self.stage(artifact)
-            let updated = try await self.advance(
+            let intent = try await self.advance(
                 transaction,
-                to: .acceptanceImported,
+                to: transaction.stage,
                 peerDeviceID: inviteeID,
                 transcriptSHA256: Self.hex(transcript),
                 acceptanceSHA256: artifact.sha256Hex(),
                 stagedArtifacts: try self.metadata(for: [offerArtifact, artifact])
+            )
+            try await self.stage(artifact)
+            let updated = try await self.advance(
+                intent,
+                to: .acceptanceImported
             )
             return self.result(
                 .codesReady,
@@ -1685,10 +1713,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 bootstrap: bootstrap,
                 inviterProof: proofs.inviter
             )
-            try await self.stage(artifact)
-            let updated = try await self.advance(
+            let intent = try await self.advance(
                 confirmed,
-                to: .deliveryCreated,
+                to: confirmed.stage,
                 deliverySHA256: artifact.sha256Hex(),
                 bootstrapSHA256: bootstrap.sha256Hex(),
                 vaultID: active.vaultID,
@@ -1696,6 +1723,11 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     transaction: confirmed,
                     artifact: artifact
                 )
+            )
+            try await self.stage(artifact)
+            let updated = try await self.advance(
+                intent,
+                to: .deliveryCreated
             )
             return self.result(
                 .deliveryReady,
@@ -1723,10 +1755,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 .offerConsumed
             )
             let payload = try artifact.deliveryPayload()
-            try await self.stage(artifact)
-            let imported = try await self.advance(
+            let intent = try await self.advance(
                 transaction,
-                to: .deliveryImported,
+                to: transaction.stage,
                 deliverySHA256: artifact.sha256Hex(),
                 bootstrapSHA256: payload.bootstrap.sha256Hex(),
                 vaultID: payload.signedDelivery.delivery.vaultID,
@@ -1735,6 +1766,11 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     transaction: transaction,
                     artifact: artifact
                 )
+            )
+            try await self.stage(artifact)
+            let imported = try await self.advance(
+                intent,
+                to: .deliveryImported
             )
             return try await self.installInvitee(imported)
         }
@@ -1751,15 +1787,24 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 .inviter,
                 .deliverySaved
             )
-            try await self.stage(artifact)
-            let imported = try await self.advance(
+            _ = try await self.verifiedInviterAcknowledgement(
                 transaction,
-                to: .acknowledgementImported,
+                identity: identity,
+                candidate: artifact
+            )
+            let intent = try await self.advance(
+                transaction,
+                to: transaction.stage,
                 acknowledgementSHA256: artifact.sha256Hex(),
                 stagedArtifacts: try self.mergedMetadata(
                     transaction: transaction,
                     artifact: artifact
                 )
+            )
+            try await self.stage(artifact)
+            let imported = try await self.advance(
+                intent,
+                to: .acknowledgementImported
             )
             return try await self.completeInviterAcknowledgement(
                 imported,
@@ -1788,6 +1833,15 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     transaction,
                     identity: identity
                 )
+            }
+            if transaction.role == .inviter,
+               transaction.stage == .sasConfirmed,
+               let identity = try await self.environment.loadIdentity(),
+               let recovered = try await self.resumeGeneratedDeliveryOrphan(
+                   transaction,
+                   identity: identity
+               ) {
+                return recovered
             }
             return try await self.result(for: transaction, identity: nil)
         }
@@ -1818,17 +1872,18 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 defer { Self.wipe(&context.recoveredKey) }
                 let vaultID = context.delivery.signedDelivery.delivery.vaultID
                 if let expectedStoreHash = transaction.storeSHA256 {
-                    guard
-                        let stored = try await self.environment.loadStore(
-                            vaultID,
-                            context.recoveredKey
-                        ),
-                        Self.sha256(try AtlasVaultLocalStoreIO.encode(stored))
-                            == expectedStoreHash
-                    else {
-                        throw AtlasVaultPairingTransactionError.stale
+                    if let stored = try await self.environment.loadStore(
+                        vaultID,
+                        context.recoveredKey
+                    ) {
+                        guard Self.sha256(
+                            try AtlasVaultLocalStoreIO.encode(stored)
+                        ) == expectedStoreHash else {
+                            throw AtlasVaultPairingTransactionError.stale
+                        }
+                        try await self.authorizeSensitiveMutation()
+                        try await self.environment.deleteStore(vaultID)
                     }
-                    try await self.environment.deleteStore(vaultID)
                     guard try await self.environment.loadStore(
                         vaultID,
                         context.recoveredKey
@@ -1841,13 +1896,15 @@ public actor AtlasVaultTrustedPairingCoordinator:
                         vaultID
                     )
                     defer { if storedKey != nil { Self.wipe(&storedKey!) } }
-                    guard let key = storedKey,
-                          Self.sha256(key) == expectedKeyHash,
-                          Self.equal(key, context.recoveredKey)
-                    else {
-                        throw AtlasVaultPairingTransactionError.stale
+                    if let key = storedKey {
+                        guard Self.sha256(key) == expectedKeyHash,
+                              Self.equal(key, context.recoveredKey)
+                        else {
+                            throw AtlasVaultPairingTransactionError.stale
+                        }
+                        try await self.authorizeSensitiveMutation()
+                        try await self.environment.deleteStoredKey(vaultID)
                     }
-                    try await self.environment.deleteStoredKey(vaultID)
                     guard try await self.environment.loadStoredKey(vaultID)
                         == nil else {
                         throw AtlasVaultPairingTransactionError.unavailable
@@ -1867,6 +1924,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         _ starting: AtlasVaultPairingTransaction
     ) async throws -> AtlasVaultTrustedPairingResult {
         if !Self.isAtLeast(starting, .storeCreated),
+           starting.storeSHA256 == nil,
            let blocked = cleanInstallResult(await environment.cleanInstall()) {
             return blocked
         }
@@ -1898,11 +1956,31 @@ public actor AtlasVaultTrustedPairingCoordinator:
         let keyHash = Self.sha256(context.recoveredKey)
 
         if !Self.isAtLeast(transaction, .storeCreated) {
-            try await environment.createStore(
-                store,
+            if transaction.storeSHA256 == nil {
+                transaction = try await advance(
+                    transaction,
+                    to: transaction.stage,
+                    storeSHA256: storeHash
+                )
+            } else if transaction.storeSHA256 != storeHash {
+                throw AtlasVaultPairingTransactionError.stale
+            }
+            if let existing = try await environment.loadStore(
                 vaultID,
                 context.recoveredKey
-            )
+            ) {
+                guard existing == store,
+                      Self.sha256(try AtlasVaultLocalStoreIO.encode(existing))
+                        == storeHash
+                else { throw AtlasVaultPairingTransactionError.collision }
+            } else {
+                try await authorizeSensitiveMutation()
+                try await environment.createStore(
+                    store,
+                    vaultID,
+                    context.recoveredKey
+                )
+            }
             guard let readBack = try await environment.loadStore(
                 vaultID,
                 context.recoveredKey
@@ -1911,8 +1989,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             else { throw AtlasVaultPairingTransactionError.unavailable }
             transaction = try await advance(
                 transaction,
-                to: .storeCreated,
-                storeSHA256: storeHash
+                to: .storeCreated
             )
         } else {
             guard transaction.storeSHA256 == storeHash,
@@ -1925,8 +2002,24 @@ public actor AtlasVaultTrustedPairingCoordinator:
         }
 
         if !Self.isAtLeast(transaction, .keyCreated) {
-            try await environment.createStoredKey(context.recoveredKey, vaultID)
             var readBack = try await environment.loadStoredKey(vaultID)
+            if transaction.vaultKeySHA256 == nil {
+                transaction = try await advance(
+                    transaction,
+                    to: transaction.stage,
+                    vaultKeySHA256: keyHash
+                )
+            } else if transaction.vaultKeySHA256 != keyHash {
+                throw AtlasVaultPairingTransactionError.stale
+            }
+            if readBack == nil {
+                try await authorizeSensitiveMutation()
+                try await environment.createStoredKey(
+                    context.recoveredKey,
+                    vaultID
+                )
+                readBack = try await environment.loadStoredKey(vaultID)
+            }
             defer { if readBack != nil { Self.wipe(&readBack!) } }
             guard let readBack,
                   Self.equal(readBack, context.recoveredKey),
@@ -1934,8 +2027,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             else { throw AtlasVaultPairingTransactionError.unavailable }
             transaction = try await advance(
                 transaction,
-                to: .keyCreated,
-                vaultKeySHA256: keyHash
+                to: .keyCreated
             )
         } else {
             var readBack = try await environment.loadStoredKey(vaultID)
@@ -1949,6 +2041,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         if !Self.isAtLeast(transaction, .selectionCommitted) {
             let selectedVaultID = try await environment.selectedVault()
             if selectedVaultID == nil {
+                try await authorizeSensitiveMutation()
                 try await environment.createSelection(vaultID)
             } else if selectedVaultID != vaultID {
                 throw AtlasVaultPairingTransactionError.collision
@@ -1967,6 +2060,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         }
 
         if !Self.isAtLeast(transaction, .runtimeActivated) {
+            try await authorizeSensitiveMutation()
             guard try await environment.activate(vaultID, context.recoveredKey),
                   try await environment.validateProjection(
                     store,
@@ -1992,11 +2086,11 @@ public actor AtlasVaultTrustedPairingCoordinator:
             installedAt: installedAt
         )
         let acknowledgementArtifact: AtlasVaultPairingArtifact
-        if transaction.acknowledgementSHA256 != nil {
-            acknowledgementArtifact = try await requireArtifact(
-                .acknowledgement,
-                transaction: transaction
-            )
+        if let existing = try await environment.loadArtifact(.acknowledgement) {
+            guard let expectedHash = transaction.acknowledgementSHA256,
+                  try existing.sha256Hex() == expectedHash
+            else { throw AtlasVaultPairingTransactionError.stale }
+            acknowledgementArtifact = existing
         } else {
             let generated = try AtlasVaultPairingArtifact
                 .acknowledgement(expectedAcknowledgement)
@@ -2012,6 +2106,14 @@ public actor AtlasVaultTrustedPairingCoordinator:
             try await stage(generated)
             acknowledgementArtifact = generated
         }
+        let restored = try await requireArtifact(
+            .acknowledgement,
+            transaction: transaction
+        )
+        guard Self.equal(
+            try restored.canonicalData(),
+            try acknowledgementArtifact.canonicalData()
+        ) else { throw AtlasVaultPairingTransactionError.stale }
         let acknowledgement = try acknowledgementArtifact
             .signedAcknowledgement()
         _ = try AtlasVaultKeyDelivery.verifyAcknowledgement(
@@ -2051,15 +2153,6 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 transaction,
                 to: .acknowledgementCreated
             )
-        } else {
-            let restored = try await requireArtifact(
-                .acknowledgement,
-                transaction: transaction
-            )
-            guard Self.equal(
-                try restored.canonicalData(),
-                try acknowledgementArtifact.canonicalData()
-            ) else { throw AtlasVaultPairingTransactionError.stale }
         }
         return result(
             .acknowledgementReady,
@@ -2070,15 +2163,137 @@ public actor AtlasVaultTrustedPairingCoordinator:
         )
     }
 
-    private func completeInviterAcknowledgement(
+    private func resumeGeneratedDeliveryOrphan(
         _ starting: AtlasVaultPairingTransaction,
         identity: AtlasVaultDeviceIdentity
-    ) async throws -> AtlasVaultTrustedPairingResult {
-        var transaction = starting
-        let acknowledgementArtifact = try await requireArtifact(
-            .acknowledgement,
-            transaction: transaction
+    ) async throws -> AtlasVaultTrustedPairingResult? {
+        guard let artifact = try await environment.loadArtifact(.delivery) else {
+            return nil
+        }
+        let artifactData = try artifact.canonicalData()
+        let artifactHash = try artifact.sha256Hex()
+        if let metadata = starting.stagedArtifacts.first(where: {
+            $0.kind == .delivery
+        }) {
+            guard metadata.sha256 == artifactHash,
+                  metadata.byteCount == artifactData.count
+            else { throw AtlasVaultPairingTransactionError.stale }
+        }
+        let offer = try await requireArtifact(
+            .offer,
+            transaction: starting
+        ).signedOffer()
+        let acceptance = try await requireArtifact(
+            .acceptance,
+            transaction: starting
+        ).acceptancePayload()
+        let payload = try artifact.deliveryPayload()
+        let signedDelivery = payload.signedDelivery
+        let delivery = try AtlasVaultKeyDelivery.verifyDeliverySignature(
+            signedDelivery
         )
+        let transcript = try AtlasVaultPairingFoundation.transcriptSHA256(
+            offer: offer,
+            acceptance: acceptance.signedAcceptance
+        )
+        guard let peerDeviceID = starting.peerDeviceID,
+              starting.transcriptSHA256 == Self.hex(transcript)
+        else { throw AtlasVaultPairingTransactionError.invalidTransaction }
+        _ = try AtlasVaultKeyDelivery.verifyKeyRequest(
+            acceptance.signedKeyRequest,
+            transcriptSHA256: transcript,
+            inviterDeviceID: identity.deviceID,
+            inviteeDeviceID: peerDeviceID,
+            currentTime: environment.timestamp()
+        )
+        guard let active = try await environment.activeVault() else {
+            throw AtlasVaultPairingTransactionError.unavailable
+        }
+        let expectedMetadata = try AtlasVaultVersionedWrappedKeyMetadata(
+            localStoreMetadata: active.store.vaultMetadata
+        )
+        var session = try await sessionKey(
+            transaction: starting,
+            identity: identity
+        )
+        defer { Self.wipe(&session) }
+        let proofs = try AtlasVaultPairingFoundation.deriveProofs(
+            sessionKey: session,
+            transcriptSHA256: transcript
+        )
+        let bootstrapHash = try payload.bootstrap.sha256Hex()
+        guard
+            Self.equal(proofs.inviter, payload.inviterProof),
+            delivery.inviterDeviceID == identity.deviceID,
+            delivery.inviteeDeviceID == peerDeviceID,
+            delivery.transcriptSHA256 == Self.hex(transcript),
+            delivery.requestSHA256
+                == (try acceptance.signedKeyRequest.sha256Hex()),
+            delivery.vaultID == active.vaultID,
+            delivery.keyEpoch == starting.keyEpoch,
+            delivery.bootstrapSHA256 == bootstrapHash,
+            delivery.expiresAt == acceptance.signedKeyRequest.request.expiresAt,
+            payload.bootstrap.vaultMetadata == expectedMetadata,
+            payload.bootstrap.records == active.store.records,
+            starting.deliverySHA256 == nil
+                || starting.deliverySHA256 == artifactHash,
+            starting.bootstrapSHA256 == nil
+                || starting.bootstrapSHA256 == bootstrapHash,
+            starting.vaultID == nil || starting.vaultID == active.vaultID
+        else { throw AtlasVaultPairingTransactionError.invalidTransaction }
+
+        var transaction = starting
+        if transaction.deliverySHA256 == nil
+            || transaction.stagedArtifacts.first(where: {
+                $0.kind == .delivery
+            }) == nil
+        {
+            transaction = try await advance(
+                transaction,
+                to: transaction.stage,
+                deliverySHA256: artifactHash,
+                bootstrapSHA256: bootstrapHash,
+                vaultID: active.vaultID,
+                stagedArtifacts: try mergedMetadata(
+                    transaction: transaction,
+                    artifact: artifact
+                )
+            )
+        }
+        transaction = try await advance(
+            transaction,
+            to: .deliveryCreated
+        )
+        return result(
+            .deliveryReady,
+            transaction,
+            identity: identity,
+            peerDeviceID: peerDeviceID,
+            sas: try AtlasVaultKeyDelivery.deriveSAS(
+                pairingSessionKey: session,
+                transcriptSHA256: transcript
+            ),
+            expiresAt: acceptance.signedKeyRequest.request.expiresAt
+        )
+    }
+
+    private func verifiedInviterAcknowledgement(
+        _ transaction: AtlasVaultPairingTransaction,
+        identity: AtlasVaultDeviceIdentity,
+        candidate: AtlasVaultPairingArtifact? = nil
+    ) async throws -> (
+        acknowledgement: AtlasVaultSignedPairingAcknowledgement,
+        delivery: AtlasVaultSignedVaultKeyDelivery
+    ) {
+        let acknowledgementArtifact: AtlasVaultPairingArtifact
+        if let candidate {
+            acknowledgementArtifact = candidate
+        } else {
+            acknowledgementArtifact = try await requireArtifact(
+                .acknowledgement,
+                transaction: transaction
+            )
+        }
         let deliveryArtifact = try await requireArtifact(
             .delivery,
             transaction: transaction
@@ -2086,12 +2301,32 @@ public actor AtlasVaultTrustedPairingCoordinator:
         let acknowledgement = try acknowledgementArtifact
             .signedAcknowledgement()
         let delivery = try deliveryArtifact.deliveryPayload().signedDelivery
+        let expectedInvitee = delivery.delivery.inviteeDeviceID
+        guard transaction.role == .inviter,
+              transaction.peerDeviceID == expectedInvitee,
+              acknowledgement.invitee.descriptor.deviceID == expectedInvitee,
+              acknowledgement.acknowledgement.inviteeDeviceID == expectedInvitee
+        else { throw AtlasVaultPairingTransactionError.invalidTransaction }
         _ = try AtlasVaultKeyDelivery.verifyAcknowledgement(
             acknowledgement,
             delivery: delivery,
             inviterDeviceID: identity.deviceID,
-            inviteeDeviceID: acknowledgement.invitee.descriptor.deviceID
+            inviteeDeviceID: expectedInvitee
         )
+        return (acknowledgement, delivery)
+    }
+
+    private func completeInviterAcknowledgement(
+        _ starting: AtlasVaultPairingTransaction,
+        identity: AtlasVaultDeviceIdentity
+    ) async throws -> AtlasVaultTrustedPairingResult {
+        var transaction = starting
+        let verified = try await verifiedInviterAcknowledgement(
+            transaction,
+            identity: identity
+        )
+        let acknowledgement = verified.acknowledgement
+        let delivery = verified.delivery
         if transaction.stage == .acknowledgementImported {
             try await consumeReplay(
                 AtlasVaultPairingReplayEntry(
@@ -2206,15 +2441,46 @@ public actor AtlasVaultTrustedPairingCoordinator:
     }
 
     private func run(
-        _ operation: () async throws -> AtlasVaultTrustedPairingResult
+        _ operation: @escaping () async throws
+            -> AtlasVaultTrustedPairingResult
     ) async -> AtlasVaultTrustedPairingResult {
         guard !stopped, !operationInProgress else {
             return fixed(.unavailable)
         }
         operationInProgress = true
-        defer { operationInProgress = false }
-        do { return try await operation() }
+        let operationID = UUID()
+        pendingAdmittedOperation = (operationID, operation)
+        defer {
+            pendingAdmittedOperation = nil
+            operationInProgress = false
+        }
+        do {
+            return try await environment.transactionAdmission { [weak self] in
+                guard let self else {
+                    throw AtlasVaultPairingTransactionError.unavailable
+                }
+                return try await self.executeAdmitted(operationID)
+            }
+        }
         catch { return fixed(.recoveryRequired, pending: true) }
+    }
+
+    private func executeAdmitted(
+        _ operationID: UUID
+    ) async throws -> AtlasVaultTrustedPairingResult {
+        guard let pendingAdmittedOperation,
+              pendingAdmittedOperation.id == operationID
+        else { throw AtlasVaultPairingTransactionError.unavailable }
+        try Task.checkCancellation()
+        return try await pendingAdmittedOperation.operation()
+    }
+
+    private func authorizeSensitiveMutation() async throws {
+        try Task.checkCancellation()
+        guard await environment.authorizeSensitiveMutation() else {
+            throw AtlasVaultPairingTransactionError.unavailable
+        }
+        try Task.checkCancellation()
     }
 
     private func requireStage(
@@ -2265,6 +2531,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             selectionCommitted: selectionCommitted,
             stagedArtifacts: stagedArtifacts
         )
+        try await authorizeSensitiveMutation()
         try await environment.replaceTransaction(
             replacement,
             transaction.sha256Hex()
@@ -2291,6 +2558,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 try artifact.canonicalData()
             ) else { throw AtlasVaultPairingTransactionError.collision }
         } else {
+            try await authorizeSensitiveMutation()
             try await environment.createArtifact(artifact)
         }
         guard let readBack = try await environment.loadArtifact(artifact.kind),
@@ -2348,6 +2616,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             guard try artifact.sha256Hex() == metadata.sha256 else {
                 throw AtlasVaultPairingTransactionError.stale
             }
+            try await authorizeSensitiveMutation()
             try await environment.deleteArtifact(
                 metadata.kind,
                 metadata.sha256
@@ -2356,6 +2625,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 throw AtlasVaultPairingTransactionError.unavailable
             }
         }
+        try await authorizeSensitiveMutation()
         try await environment.deleteTransaction(transaction.sha256Hex())
         guard try await environment.loadTransaction() == nil else {
             throw AtlasVaultPairingTransactionError.unavailable
@@ -2380,6 +2650,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 throw AtlasVaultPairingTransactionError.collision
             }
             if result.outcome == .consumed {
+                try await authorizeSensitiveMutation()
                 try await environment.replaceReplay(
                     result.store,
                     try Self.sha256(current.canonicalData())
@@ -2402,6 +2673,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             updatedAt: now,
             currentTime: now
         )
+        try await authorizeSensitiveMutation()
         try await environment.createReplay(result.store)
     }
 
@@ -2418,6 +2690,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 updatedAt: now
             )
             if result.outcome == .committed {
+                try await authorizeSensitiveMutation()
                 try await environment.replaceRegistry(
                     result.registry,
                     try Self.sha256(current.canonicalData())
@@ -2439,6 +2712,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             revision: environment.uuid(),
             updatedAt: now
         )
+        try await authorizeSensitiveMutation()
         try await environment.createRegistry(result.registry)
     }
 

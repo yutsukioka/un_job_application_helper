@@ -84,6 +84,10 @@ whose expiry is not after caller-supplied current time, then sorts by expiry,
 kind, and object ID. If still oversized, it removes the earliest entries. No
 in-memory permissive fallback is allowed.
 
+The 64-peer and 2,048-entry limits are logical-count limits, not aggregate-byte
+limits. Production multi-device use remains blocked on the aggregate protected
+state and resource bounds tracked in issue #101.
+
 ## Protection And Non-Goals
 
 Registry and replay bytes are device-local protected state: device-only

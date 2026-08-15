@@ -1051,16 +1051,7 @@ public enum AtlasVaultKeyDelivery {
                     == AtlasVaultKeyDeliveryValidation.keyLength,
                 transcriptSHA256.count == AtlasVaultKeyDeliveryValidation.keyLength
             else { throw AtlasVaultKeyDeliveryValidation.fail() }
-            let inviter = try AtlasVaultKeyDeliveryValidation.verify(
-                descriptor: signed.inviter,
-                signature: signed.signature,
-                domain: AtlasVaultKeyDeliveryValidation.deliverySignatureDomain,
-                payload: signed.delivery.canonicalData()
-            )
-            let value = signed.delivery
-            guard inviter.deviceID == value.inviterDeviceID else {
-                throw AtlasVaultKeyDeliveryValidation.fail()
-            }
+            let value = try verifyDeliverySignature(signed)
             let request = try verifyKeyRequest(
                 keyRequest,
                 transcriptSHA256: transcriptSHA256,
@@ -1100,6 +1091,24 @@ public enum AtlasVaultKeyDelivery {
                 throw AtlasVaultKeyDeliveryValidation.fail()
             }
             return opened
+        } catch { throw AtlasVaultKeyDeliveryValidation.fail() }
+    }
+
+    @discardableResult
+    public static func verifyDeliverySignature(
+        _ signed: AtlasVaultSignedVaultKeyDelivery
+    ) throws -> AtlasVaultVaultKeyDelivery {
+        do {
+            let inviter = try AtlasVaultKeyDeliveryValidation.verify(
+                descriptor: signed.inviter,
+                signature: signed.signature,
+                domain: AtlasVaultKeyDeliveryValidation.deliverySignatureDomain,
+                payload: signed.delivery.canonicalData()
+            )
+            guard inviter.deviceID == signed.delivery.inviterDeviceID else {
+                throw AtlasVaultKeyDeliveryValidation.fail()
+            }
+            return signed.delivery
         } catch { throw AtlasVaultKeyDeliveryValidation.fail() }
     }
 

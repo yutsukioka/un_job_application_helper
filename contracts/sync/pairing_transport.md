@@ -47,6 +47,18 @@ The transaction journal stores canonical artifact hashes and stages only the
 minimum bytes required for interruption recovery. Ephemeral private keys are
 protected transaction state and never appear in `.atlaspair` files.
 
+For each imported or generated artifact, the transaction records its expected
+kind, byte count, and SHA-256 in a same-stage protected-journal transition
+before the create-only staging write. Resume accepts an existing artifact only
+when the complete canonical bytes match that intent. A generated delivery may
+be adopted after interruption only after signature verification and complete
+transaction binding. The invitee stages and reads back its signed
+acknowledgement before committing inviter trust.
+
+The platform transports enforce per-artifact bounds. Aggregate protected-state
+bounds, a monotonic local deadline after presentation, and inviter step-up
+authorization are tracked as production-readiness blockers in issue #101.
+
 ## Privacy
 
 Artifacts may contain public descriptors, UUIDs, timestamps, nonces, signed
