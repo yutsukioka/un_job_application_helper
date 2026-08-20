@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 APPLE_ROOT="$REPO_ROOT/apps/apple"
+FLUTTER_ROOT="$REPO_ROOT/apps/atlas_flutter"
 TEMP_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/atlasvault-swift-ci.XXXXXX")"
-readonly SCRIPT_DIR REPO_ROOT APPLE_ROOT TEMP_ROOT
+readonly SCRIPT_DIR REPO_ROOT APPLE_ROOT FLUTTER_ROOT TEMP_ROOT
 
 cleanup() {
   rm -rf "$TEMP_ROOT"
@@ -20,7 +21,14 @@ fi
 cd "$APPLE_ROOT"
 
 swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing)Tests'
-swift test --scratch-path "$TEMP_ROOT/full"
+swift test --scratch-path "$TEMP_ROOT/full" --filter 'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
+swift test --scratch-path "$TEMP_ROOT/full" --skip 'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
+
+cd "$FLUTTER_ROOT"
+flutter pub get
+flutter test test/tab_golden_test.dart test/search_golden_test.dart
+
+cd "$APPLE_ROOT"
 
 xcodebuild -scheme AtlasApple -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TEMP_ROOT/AtlasApple" CODE_SIGNING_ALLOWED=NO build
 

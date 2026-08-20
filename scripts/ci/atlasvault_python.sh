@@ -29,9 +29,11 @@ python -m pytest "${focused_tests[@]}"
 
 python -m pytest packages/vaultsync/tests
 
-if [[ -f tests/test_job_api_private_access.py ]]; then
-  python -m pytest tests/test_job_api_private_access.py
+if [[ ! -f tests/test_job_api_private_access.py ]]; then
+  printf 'The secure-local-API admission test is missing.\n' >&2
+  exit 1
 fi
+python -m pytest tests/test_job_api_private_access.py
 
 python - <<'PY'
 import json
@@ -44,6 +46,48 @@ for path in paths:
     with path.open("r", encoding="utf-8") as handle:
         json.load(handle)
 print(f"Validated {len(paths)} AtlasVault JSON vectors.")
+PY
+
+python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/atlasvault-platform-integration.yml"
+).read_text(encoding="utf-8")
+required = (
+    "pairing_scenario:",
+    "ATLAS_PAIRING_ARTIFACT_DIR",
+    "ATLAS_TRUSTED_PAIRING_VECTOR_B64",
+    "ATLAS_PAIRING_RING_STAGE=produce",
+    "ATLAS_PAIRING_RING_STAGE=verify",
+    "--no-uninstall",
+    "adb shell run-as",
+    "adb exec-out run-as",
+    "ATLAS_WINDOWS_STORAGE_TEST_STAGE",
+    "ATLAS_WINDOWS_PRIVATE_TEST_STAGE",
+    "AtlasIOSFlutterEncryptedInteroperabilityTests",
+    "apple-to-android-",
+    "android-to-windows-",
+    "windows-to-apple-",
+)
+missing = [marker for marker in required if marker not in workflow]
+if missing:
+    raise SystemExit("AtlasVault integration isolation policy is incomplete.")
+if workflow.count("pairing_scenario:") != 2:
+    raise SystemExit("Android and Windows pairing scenarios must be isolated.")
+
+android = workflow.split(
+    'if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]', 1
+)[1].split("\n            else", 1)[0]
+windows = workflow.split(
+    'if ("${{ matrix.pairing_scenario }}" -eq "persistence")', 1
+)[1].split("\n          else", 1)[0]
+if "TRUSTED_PAIRING_STAGE=journey" in android or "TRUSTED_PAIRING_STAGE=journey" in windows:
+    raise SystemExit("Pairing journey must use a fresh matrix runner.")
+android_journey = workflow.split("\n            else", 1)[1].split("\n            fi", 1)[0]
+if "--dart-define=ATLAS_PAIRING_ARTIFACT_DIR=" not in android_journey:
+    raise SystemExit("Android pairing artifact exchange must use app-private staging.")
+print("Validated isolated pairing persistence and canonical artifact-ring policy.")
 PY
 
 if rg -n 'requests\.|urllib\.|httpx\.|aiohttp\.|socket\.' packages/vaultsync/vaultsync/device_identity.py packages/vaultsync/vaultsync/pairing.py packages/vaultsync/vaultsync/key_delivery.py packages/vaultsync/vaultsync/pairing_artifacts.py packages/vaultsync/vaultsync/trusted_devices.py; then

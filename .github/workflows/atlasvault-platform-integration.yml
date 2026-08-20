@@ -17,9 +17,15 @@ env:
 
 jobs:
   android:
-    name: Android / Fake AtlasVault Integrations
+    name: Android / Fake AtlasVault Integrations / ${{ matrix.pairing_scenario }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pairing_scenario:
+          - persistence
+          - journey
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -47,19 +53,100 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
+            set -euo pipefail
+            vector_root="$GITHUB_WORKSPACE/contracts/sync/test_vectors"
+            interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_ios_flutter_interop_vectors_v1.json")"
+            windows_interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_windows_interop_vectors_v1.json")"
+            identity_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_device_identity_pairing_vectors_v1.json")"
+            pairing_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_trusted_pairing_delivery_vectors_v1.json")"
             cd apps/atlas_flutter
             flutter pub get
-            flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_private_state_integration_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_plaintext_migration_integration_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554
-            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
-            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
-            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=journey
-            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
-            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+            if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]; then
+              flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_private_state_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_plaintext_migration_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64" --dart-define=ATLAS_WINDOWS_INTEROP_VECTOR_B64="$windows_interop_vector_b64"
+              flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64"
+              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+            else
+              app_id="com.yutsukioka.jobagg.atlas"
+              device_ring_relative="files/atlas-pairing-ring"
+              device_ring="/data/user/0/$app_id/$device_ring_relative"
+              host_ring="$RUNNER_TEMP/atlas-pairing-ring"
+              mkdir -p "$host_ring"
+              cleanup_android_pairing() {
+                adb shell run-as "$app_id" rm -rf "$device_ring_relative" >/dev/null 2>&1 || true
+                adb uninstall "$app_id" >/dev/null 2>&1 || true
+                rm -rf "$host_ring"
+              }
+              trap cleanup_android_pairing EXIT
+              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
+            import base64
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
+            vector = json.loads(vector_path.read_text(encoding="utf-8"))
+            for kind, entry in vector["artifacts"].items():
+                payload = base64.b64decode(entry["canonical_b64"], validate=True)
+                digest = hashlib.sha256(payload).hexdigest()
+                if digest != entry["sha256"]:
+                    raise SystemExit("Pairing vector digest mismatch.")
+                (root / f"apple-to-android-{kind}.atlaspair").write_bytes(payload)
+                (root / f"apple-to-android-{kind}.sha256").write_text(
+                    f"{digest}\n", encoding="ascii"
+                )
+            PY
+              flutter build apk --debug --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64"
+              adb install -r build/app/outputs/flutter-apk/app-debug.apk >/dev/null
+              adb shell run-as "$app_id" mkdir -p "$device_ring_relative"
+              for path in "$host_ring"/apple-to-android-*; do
+                name="$(basename "$path")"
+                adb push "$path" "/data/local/tmp/$name" >/dev/null
+                adb shell chmod 0644 "/data/local/tmp/$name"
+                adb shell run-as "$app_id" cp "/data/local/tmp/$name" "$device_ring_relative/$name"
+                adb shell rm -f "/data/local/tmp/$name"
+              done
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_PAIRING_ARTIFACT_DIR="$device_ring" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=journey
+              for kind in offer acceptance delivery acknowledgement; do
+                for extension in atlaspair sha256; do
+                  name="android-to-windows-$kind.$extension"
+                  adb exec-out run-as "$app_id" cat "$device_ring_relative/$name" > "$host_ring/$name"
+                done
+              done
+              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
+            import base64
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
+            vector = json.loads(vector_path.read_text(encoding="utf-8"))
+            sentinel = vector["expected_payloads"]["unsupported_private_sentinel"].encode()
+            for prefix in ("apple-to-android", "android-to-windows"):
+                for kind, entry in vector["artifacts"].items():
+                    expected = base64.b64decode(entry["canonical_b64"], validate=True)
+                    artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
+                    digest = hashlib.sha256(artifact).hexdigest()
+                    recorded = (root / f"{prefix}-{kind}.sha256").read_text(
+                        encoding="ascii"
+                    ).strip()
+                    if artifact != expected or digest != entry["sha256"] or recorded != digest:
+                        raise SystemExit("Android pairing artifact-ring mismatch.")
+                    if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
+                        raise SystemExit("Android pairing artifact contains forbidden plaintext.")
+            print("Validated Android canonical pairing artifact ring.")
+            PY
+            fi
 
       - name: Enforce Android artifact policy
         if: always()
@@ -69,9 +156,15 @@ jobs:
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
 
   windows:
-    name: Windows / Deterministic Native Integrations
+    name: Windows / Deterministic Native Integrations / ${{ matrix.pairing_scenario }}
     runs-on: windows-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pairing_scenario:
+          - persistence
+          - journey
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -91,28 +184,85 @@ jobs:
           Set-Location apps\atlas_flutter
           flutter pub get
           if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed" }
-          $Tests = @(
-            "integration_test\atlas_vault_windows_storage_integration_test.dart",
-            "integration_test\atlas_vault_windows_private_state_integration_test.dart",
-            "integration_test\atlas_vault_windows_plaintext_migration_integration_test.dart",
-            "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart",
-            "integration_test\atlas_vault_windows_interoperability_integration_test.dart",
-            "integration_test\atlas_vault_windows_interoperability_recovery_test.dart"
-          )
-          foreach ($Test in $Tests) {
-            flutter test $Test -d windows
-            if ($LASTEXITCODE -ne 0) { throw "$Test failed" }
+          if ("${{ matrix.pairing_scenario }}" -eq "persistence") {
+            $env:ATLAS_WINDOWS_STORAGE_TEST_VAULT_ID = "c1000000-0000-4000-8000-000000000001"
+            $env:ATLAS_WINDOWS_STORAGE_TEST_STAGE = "prepare"
+            flutter test integration_test\atlas_vault_windows_storage_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows storage prepare failed" }
+            $env:ATLAS_WINDOWS_STORAGE_TEST_STAGE = "verify"
+            flutter test integration_test\atlas_vault_windows_storage_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows storage verify failed" }
+            Remove-Item Env:ATLAS_WINDOWS_STORAGE_TEST_STAGE
+            Remove-Item Env:ATLAS_WINDOWS_STORAGE_TEST_VAULT_ID
+
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_VAULT_ID = "c1000000-0000-4000-8000-000000000002"
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE = "prepare"
+            flutter test integration_test\atlas_vault_windows_private_state_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows private-state prepare failed" }
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE = "verify"
+            flutter test integration_test\atlas_vault_windows_private_state_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows private-state verify failed" }
+            Remove-Item Env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE
+            Remove-Item Env:ATLAS_WINDOWS_PRIVATE_TEST_VAULT_ID
+
+            $Tests = @(
+              "integration_test\atlas_vault_windows_plaintext_migration_integration_test.dart",
+              "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart",
+              "integration_test\atlas_vault_windows_interoperability_integration_test.dart",
+              "integration_test\atlas_vault_windows_interoperability_recovery_test.dart"
+            )
+            foreach ($Test in $Tests) {
+              flutter test $Test -d windows
+              if ($LASTEXITCODE -ne 0) { throw "$Test failed" }
+            }
+            flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+            if ($LASTEXITCODE -ne 0) { throw "Windows identity prepare failed" }
+            flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+            if ($LASTEXITCODE -ne 0) { throw "Windows identity verify failed" }
+            flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=prepare
+            if ($LASTEXITCODE -ne 0) { throw "Windows pairing prepare failed" }
+            flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=verify
+            if ($LASTEXITCODE -ne 0) { throw "Windows pairing verify failed" }
           }
-          flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
-          if ($LASTEXITCODE -ne 0) { throw "Windows identity prepare failed" }
-          flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
-          if ($LASTEXITCODE -ne 0) { throw "Windows identity verify failed" }
-          flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=journey
-          if ($LASTEXITCODE -ne 0) { throw "Windows pairing journey failed" }
-          flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=prepare
-          if ($LASTEXITCODE -ne 0) { throw "Windows pairing prepare failed" }
-          flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=verify
-          if ($LASTEXITCODE -ne 0) { throw "Windows pairing verify failed" }
+          else {
+            $Ring = Join-Path $env:RUNNER_TEMP "atlas-pairing-ring"
+            New-Item -ItemType Directory -Path $Ring -Force | Out-Null
+            try {
+              $VectorPath = "..\..\contracts\sync\test_vectors\atlasvault_trusted_pairing_delivery_vectors_v1.json"
+              $Vector = Get-Content -LiteralPath $VectorPath -Raw | ConvertFrom-Json
+              foreach ($Kind in @("offer", "acceptance", "delivery", "acknowledgement")) {
+                $Entry = $Vector.artifacts.PSObject.Properties[$Kind].Value
+                $Bytes = [Convert]::FromBase64String([string] $Entry.canonical_b64)
+                $Sha256 = [Security.Cryptography.SHA256]::Create()
+                try {
+                  $Hash = $Sha256.ComputeHash($Bytes)
+                  $Digest = ([BitConverter]::ToString($Hash)).Replace("-", "").ToLowerInvariant()
+                }
+                finally {
+                  $Sha256.Dispose()
+                }
+                if ($Digest -ne [string] $Entry.sha256) {
+                  throw "Pairing vector digest mismatch."
+                }
+                [IO.File]::WriteAllBytes(
+                  (Join-Path $Ring "android-to-windows-$Kind.atlaspair"),
+                  $Bytes
+                )
+                [IO.File]::WriteAllText(
+                  (Join-Path $Ring "android-to-windows-$Kind.sha256"),
+                  "$Digest`n",
+                  [Text.Encoding]::ASCII
+                )
+                [Array]::Clear($Bytes, 0, $Bytes.Length)
+              }
+              $env:ATLAS_PAIRING_ARTIFACT_DIR = $Ring
+              flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=journey
+              if ($LASTEXITCODE -ne 0) { throw "Windows pairing journey failed" }
+            }
+            finally {
+              Remove-Item -LiteralPath $Ring -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
 
       - name: Enforce Windows artifact policy
         if: always()
@@ -138,7 +288,17 @@ jobs:
       - name: Run Apple fake-data integration tests
         working-directory: apps/apple
         run: |
-          swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-integration" --filter 'AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing|TrustedDeviceRegistry)Tests'
+          set -euo pipefail
+          ring="$RUNNER_TEMP/atlas-pairing-ring"
+          mkdir -p "$ring"
+          trap 'rm -rf "$ring"' EXIT
+          swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-integration" --filter '(AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing|TrustedDeviceRegistry)Tests|AtlasIOSFlutterEncryptedInteroperabilityTests)'
+          ATLAS_PAIRING_ARTIFACT_DIR="$ring" ATLAS_PAIRING_RING_STAGE=produce swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-ring-produce" --filter 'testExternalAppleAndroidWindowsPairingRingUsesCanonicalArtifacts'
+          for kind in offer acceptance delivery acknowledgement; do
+            cp "$ring/apple-to-android-$kind.atlaspair" "$ring/windows-to-apple-$kind.atlaspair"
+            cp "$ring/apple-to-android-$kind.sha256" "$ring/windows-to-apple-$kind.sha256"
+          done
+          ATLAS_PAIRING_ARTIFACT_DIR="$ring" ATLAS_PAIRING_RING_STAGE=verify swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-ring-verify" --filter 'testExternalAppleAndroidWindowsPairingRingUsesCanonicalArtifacts'
           xcodebuild -scheme AtlasApple -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/AtlasAppleIntegration" CODE_SIGNING_ALLOWED=NO build
           xcodebuild -project AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/AtlasIOSHostIntegration" CODE_SIGNING_ALLOWED=NO build
 

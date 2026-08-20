@@ -23,7 +23,18 @@ if (( ${#focused[@]} == 0 )); then
   exit 1
 fi
 flutter test "${focused[@]}"
-flutter test
+
+mapfile -t full_tests < <(
+  find test -type f -name '*_test.dart' \
+    ! -name 'search_golden_test.dart' \
+    ! -name 'tab_golden_test.dart' \
+    -print | sort
+)
+if (( ${#full_tests[@]} == 0 )); then
+  printf 'No full Flutter test set was found.\n' >&2
+  exit 1
+fi
+flutter test "${full_tests[@]}"
 flutter build apk --debug
 
 if rg -n 'initState.*pair|automatically.*pair|initState.*import|initState.*export' lib/src/atlas_vault lib/features/app_shell/atlas_app.dart; then

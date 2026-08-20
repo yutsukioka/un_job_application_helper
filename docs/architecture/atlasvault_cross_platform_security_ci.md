@@ -26,18 +26,28 @@ relevant pushes to `master`, and explicit manual dispatch. Concurrency is
 grouped by workflow and ref, with stale work cancelled. Workflow permissions
 are limited to `contents: read`.
 
+GitHub reports `master` as the repository default branch and every security
+phase in this milestone targets it. Older repository text describing `master`
+as a legacy snapshot is not branch-authority evidence for this workflow.
+
 The workflow has four independent jobs:
 
 - Python runs focused identity, pairing, delivery, artifact, and registry
   vectors, the full VaultSync suite, secure-local-API admission tests, JSON
   vector validation, source guards, and repository artifact checks.
-- Flutter runs the reviewed Flutter 3.44.4 toolchain, formatting, analysis,
-  focused AtlasVault tests, the full Flutter suite, and an Android Debug build.
+- Flutter runs the reviewed Flutter 3.44.4 toolchain on Ubuntu, formatting,
+  analysis, focused AtlasVault tests, every host-independent Flutter test, and
+  an Android Debug build. The two host-sensitive golden files run on macOS,
+  where their established host gates retain pixel or semantic coverage.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
-  suite, and generic Simulator builds for AtlasApple and AtlasIOSHost.
+  suite, the host-supported Flutter goldens, and generic Simulator builds for
+  AtlasApple and AtlasIOSHost. One lifecycle test runs in its own Swift test
+  process before the rest of the suite to remove unrelated runner scheduling
+  from its cancellation assertion; no test is omitted.
 - Windows runs formatting, analysis, focused and full Flutter tests, Windows
   Debug and Release builds, native DPAPI/document source guards, and repository
-  artifact checks.
+  artifact checks. Test files run serially to avoid Windows directory-handle
+  contention during deterministic cleanup.
 
 Third-party actions are pinned to immutable Git commit SHAs.
 
@@ -46,19 +56,36 @@ Third-party actions are pinned to immutable Git commit SHAs.
 `atlasvault-platform-integration.yml` runs only on manual dispatch and a
 nightly schedule. It uses deterministic fake data.
 
-The Android job exercises Keystore storage, migration and recovery,
-interoperability and recovery, device identity persistence, trusted pairing,
-replay behavior, fresh-process verification, and cleanup on an emulator.
+The Android job uses separate fresh-runner matrix legs for protected-state
+persistence and the explicit pairing journey. The persistence leg runs
+prepare before verify. The journey leg seeds fake inbound Apple artifacts from
+the checked-in canonical vector in app-private storage, injects that same
+test-only vector at compile time, then pulls and validates Android output in a
+runner-temporary ring. Package state is retained only across explicit
+prepare/verify pairs and is removed after each scenario.
 
-The Windows job runs deterministic native storage, migration, interoperability,
-identity, and trusted-pairing integrations supported by the hosted runner. It
-does not claim Parallels-specific architecture, interactive desktop dialogs, or
-the separately archived Parallels fresh-process evidence.
+The Windows job also separates persistence and journey onto fresh matrix
+runners. This prevents the journey's intentionally retained empty registry and
+replay authorities from invalidating a later create-only persistence test. Its
+journey leg seeds fake inbound Android artifacts from the same canonical vector
+and validates Windows output. It does not claim Parallels-specific
+architecture, interactive desktop dialogs, or the separately archived
+Parallels fresh-process evidence.
+
+Windows storage and private-state persistence tests receive explicit stable
+fake vault IDs and run prepare before verify. The Apple integration filter also
+includes the encrypted recovery-export/import interoperability class.
 
 The Apple job runs simulator-compatible Swift identity, pairing, key-delivery,
-interoperability, registry, replay, and transaction tests. It does not claim
-physical-device Keychain, biometric, Secure Enclave, or fresh user-presence
-behavior.
+interoperability, registry, replay, and transaction tests. It explicitly runs
+both the artifact-ring produce and verify stages in a runner-temporary
+directory. It does not claim physical-device Keychain, biometric, Secure
+Enclave, or fresh user-presence behavior.
+
+The hosted jobs do not transfer pairing files between runners. Each platform
+strictly validates fake canonical ingress and egress against the shared vector,
+which exercises the platform parsers without uploading forbidden pairing
+documents or weakening job isolation.
 
 ## Artifact Policy
 
@@ -77,6 +104,8 @@ The following must never be uploaded:
 - migration, import, or pairing journals.
 
 Runner scripts fail when forbidden generated files are found in the repository.
+Temporary fake pairing-ring files are confined to the runner temporary
+directory, are never uploaded, and are removed on exit.
 
 ## Runner Safety
 
@@ -107,6 +136,8 @@ Package verification requires:
 - shell and PowerShell syntax checks;
 - successful local platform scripts where the host supports them;
 - successful GitHub jobs on the exact PR head;
+- isolated Android and Windows pairing persistence/journey scenarios;
+- non-skipping Apple, Android, and Windows canonical artifact-ring checks;
 - no repository AtlasVault artifact;
 - exactly seven changed files;
 - clean exact-head Codex review;

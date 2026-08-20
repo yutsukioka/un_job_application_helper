@@ -39,10 +39,10 @@ try {
         "test\atlas_vault_windows_storage_test.dart",
         "test\atlas_search_controller_test.dart"
     )
-    & flutter test @Focused
+    & flutter test --concurrency=1 @Focused
     Assert-LastExitCode "Focused AtlasVault Flutter tests"
 
-    & flutter test
+    & flutter test --concurrency=1
     Assert-LastExitCode "Full Flutter tests"
 
     & flutter build windows --debug
