@@ -898,6 +898,10 @@ final class AtlasVaultTrustedPairingCoordinator
         if (offer.inviter.descriptor.deviceId == identity.deviceId) {
           throw const AtlasVaultPairingException();
         }
+        await _requireRegistryAdmission(
+          localDeviceId: identity.deviceId,
+          peerDeviceId: offer.inviter.descriptor.deviceId,
+        );
         final acceptance = await createAtlasVaultPairingAcceptance(
           invitee: identity,
           signedOffer: signedOffer,
@@ -1056,7 +1060,7 @@ final class AtlasVaultTrustedPairingCoordinator
         );
         sessionKey.fillRange(0, sessionKey.length, 0);
         suppliedInvitee.fillRange(0, suppliedInvitee.length, 0);
-        await _requireInviterRegistryAdmission(
+        await _requireRegistryAdmission(
           localDeviceId: identity.deviceId,
           peerDeviceId: signedAcceptance.acceptance.invitee.descriptor.deviceId,
         );
@@ -1664,6 +1668,7 @@ final class AtlasVaultTrustedPairingCoordinator
       );
       final storeHash = await atlasVaultSha256Hex(store.canonicalBytes());
       final keyHash = await atlasVaultSha256Hex(vaultKey);
+      var installedStore = store;
 
       if (!_stageAtLeast(transaction, AtlasVaultPairingStage.storeCreated)) {
         if (transaction.storeSha256 == null) {
@@ -1688,17 +1693,34 @@ final class AtlasVaultTrustedPairingCoordinator
             await atlasVaultSha256Hex(readBack.canonicalBytes()) != storeHash) {
           throw const AtlasVaultPairingTransactionException();
         }
+        installedStore = readBack;
         transaction = await _advance(
           transaction,
           AtlasVaultPairingStage.storeCreated,
         );
       } else {
         final readBack = await localStore.read(vaultId);
-        if (readBack == null ||
-            transaction.storeSha256 != storeHash ||
-            await atlasVaultSha256Hex(readBack.canonicalBytes()) != storeHash) {
+        if (readBack == null || transaction.storeSha256 != storeHash) {
           throw const AtlasVaultPairingTransactionException();
         }
+        final readBackHash = await atlasVaultSha256Hex(
+          readBack.canonicalBytes(),
+        );
+        if (readBackHash != storeHash) {
+          if (!_stageAtLeast(
+                transaction,
+                AtlasVaultPairingStage.selectionCommitted,
+              ) ||
+              !_sameInstalledStoreIdentity(readBack, store)) {
+            throw const AtlasVaultPairingTransactionException();
+          }
+          await _runtime.validateImportProjection(
+            vaultId: vaultId,
+            vaultKey: vaultKey,
+            store: readBack,
+          );
+        }
+        installedStore = readBack;
       }
       if (!_stageAtLeast(transaction, AtlasVaultPairingStage.keyCreated)) {
         loadedKey = await secure.loadVaultKey(vaultId);
@@ -1785,10 +1807,10 @@ final class AtlasVaultTrustedPairingCoordinator
         await _runtime.validateImportProjection(
           vaultId: vaultId,
           vaultKey: vaultKey,
-          store: store,
+          store: installedStore,
         );
         if (snapshot.savedSearches.length + snapshot.trackerRecords.length >
-            bootstrap.records.length) {
+            installedStore.records.length) {
           throw const AtlasVaultPairingTransactionException();
         }
         transaction = await _advance(
@@ -2745,7 +2767,7 @@ final class AtlasVaultTrustedPairingCoordinator
     }
   }
 
-  Future<void> _requireInviterRegistryAdmission({
+  Future<void> _requireRegistryAdmission({
     required String localDeviceId,
     required String peerDeviceId,
   }) async {
@@ -2757,6 +2779,15 @@ final class AtlasVaultTrustedPairingCoordinator
         registry.devices.any((device) => device.peerDeviceId == peerDeviceId)) {
       throw const AtlasVaultTrustedDeviceStateException();
     }
+  }
+
+  bool _sameInstalledStoreIdentity(
+    AtlasVaultLocalStore current,
+    AtlasVaultLocalStore imported,
+  ) {
+    return current.storeId == imported.storeId &&
+        current.createdAt == imported.createdAt &&
+        current.vaultMetadata == imported.vaultMetadata;
   }
 
   Future<void> _clearTransaction(
