@@ -90,6 +90,25 @@ if "--dart-define=ATLAS_PAIRING_ARTIFACT_DIR=" not in android_journey:
 print("Validated isolated pairing persistence and canonical artifact-ring policy.")
 PY
 
+python - <<'PY'
+import re
+from pathlib import Path
+
+scripts = (
+    Path("scripts/ci/atlasvault_python.sh"),
+    Path("scripts/ci/atlasvault_flutter.sh"),
+)
+undeclared_rg = re.compile(r"^\s*(?:if\s+)?rg(?:\s|$)")
+matches = []
+for path in scripts:
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if undeclared_rg.search(line):
+            matches.append(f"{path}:{line_number}")
+if matches:
+    raise SystemExit("AtlasVault CI scripts use undeclared ripgrep commands.")
+print("Validated standard-tool-only AtlasVault source guards.")
+PY
+
 if rg -n 'requests\.|urllib\.|httpx\.|aiohttp\.|socket\.' packages/vaultsync/vaultsync/device_identity.py packages/vaultsync/vaultsync/pairing.py packages/vaultsync/vaultsync/key_delivery.py packages/vaultsync/vaultsync/pairing_artifacts.py packages/vaultsync/vaultsync/trusted_devices.py; then
   printf 'Network access is not permitted in AtlasVault pairing primitives.\n' >&2
   exit 1
