@@ -70,6 +70,32 @@ final class AtlasVaultPairingViewTests: XCTestCase {
         )
     }
 
+    func testInteractiveDismissIsDisabledWhilePairingIsBusy() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        XCTAssertTrue(
+            source.contains(".interactiveDismissDisabled(owner.isBusy)")
+        )
+    }
+
+    func testSuccessfulExportsAreReadBackBeforeJournalAdvance() throws {
+        let source = try Self.source(named: "AtlasVaultPairingView.swift")
+
+        for required in [
+            "completePendingSave(at:",
+            "savedPairingArtifactMatches",
+            "readArtifact(from: url)",
+            "constantTimeEqual",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(
+            source.contains("committed: (try? result.get()) != nil")
+        )
+    }
+
     func testArtifactImportUsesAnOpenedBoundedFileHandle() throws {
         let source = try Self.source(named: "AtlasVaultPairingView.swift")
 

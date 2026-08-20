@@ -117,6 +117,50 @@ final class AtlasVaultTrustedDeviceRegistryTests: XCTestCase {
         )
     }
 
+    func testFullReplayStoreRejectsInsteadOfDroppingNewEntry() throws {
+        let root = try loadRoot()
+        let empty = try AtlasVaultPairingReplayStore.decodeStrict(
+            try canonicalData(root["empty_replay_store"])
+        )
+        let entries = try (1...2_048).map { index in
+            try AtlasVaultPairingReplayEntry(
+                kind: "offer",
+                objectID: String(
+                    format: "10000000-0000-4000-8000-%012llx",
+                    Int64(index)
+                ),
+                transcriptSHA256: String(repeating: "a", count: 64),
+                consumedAt: "2026-08-15T10:00:00Z",
+                expiresAt: "2026-08-15T11:00:00Z"
+            )
+        }
+        let full = try AtlasVaultPairingReplayStore(
+            localDeviceID: empty.localDeviceID,
+            revision: "20000000-0000-4000-8000-000000000001",
+            parentRevision: nil,
+            createdAt: "2026-08-15T10:00:00Z",
+            updatedAt: "2026-08-15T10:00:00Z",
+            entries: entries
+        )
+        let incoming = try AtlasVaultPairingReplayEntry(
+            kind: "offer",
+            objectID: "20000000-0000-4000-8000-000000000002",
+            transcriptSHA256: String(repeating: "b", count: 64),
+            consumedAt: "2026-08-15T10:05:00Z",
+            expiresAt: "2026-08-15T10:30:00Z"
+        )
+
+        XCTAssertThrowsError(
+            try AtlasVaultPairingReplayFoundation.consume(
+                incoming,
+                in: full,
+                revision: "20000000-0000-4000-8000-000000000003",
+                updatedAt: "2026-08-15T10:05:00Z",
+                currentTime: "2026-08-15T10:05:00Z"
+            )
+        )
+    }
+
     private func loadRoot() throws -> [String: Any] {
         let url = try vectorURL()
         return try dictionary(JSONSerialization.jsonObject(with: Data(contentsOf: url)))

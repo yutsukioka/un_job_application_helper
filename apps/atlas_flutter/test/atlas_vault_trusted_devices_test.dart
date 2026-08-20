@@ -127,4 +127,47 @@ void main() {
       ),
     );
   });
+
+  test('full replay store rejects instead of dropping new entry', () {
+    final empty = AtlasVaultPairingReplayStore.fromJson(
+      atlasVaultObject(root['empty_replay_store']),
+    );
+    final entries = List<AtlasVaultPairingReplayEntry>.generate(
+      2048,
+      (index) => AtlasVaultPairingReplayEntry.fromJson(<String, Object?>{
+        'kind': 'offer',
+        'object_id':
+            '10000000-0000-4000-8000-'
+            '${(index + 1).toRadixString(16).padLeft(12, '0')}',
+        'transcript_sha256': List<String>.filled(64, 'a').join(),
+        'consumed_at': '2026-08-15T10:00:00Z',
+        'expires_at': '2026-08-15T11:00:00Z',
+      }),
+    );
+    final full = AtlasVaultPairingReplayStore.fromJson(<String, Object?>{
+      ...empty.toJson(),
+      'revision': '20000000-0000-4000-8000-000000000001',
+      'created_at': '2026-08-15T10:00:00Z',
+      'updated_at': '2026-08-15T10:00:00Z',
+      'entries': <Object?>[for (final entry in entries) entry.toJson()],
+    });
+    final incoming = AtlasVaultPairingReplayEntry.fromJson(<String, Object?>{
+      'kind': 'offer',
+      'object_id': '20000000-0000-4000-8000-000000000002',
+      'transcript_sha256': List<String>.filled(64, 'b').join(),
+      'consumed_at': '2026-08-15T10:05:00Z',
+      'expires_at': '2026-08-15T10:30:00Z',
+    });
+
+    expect(
+      () => consumeAtlasVaultPairingReplay(
+        full,
+        incoming,
+        revision: '20000000-0000-4000-8000-000000000003',
+        updatedAt: '2026-08-15T10:05:00Z',
+        currentTime: '2026-08-15T10:05:00Z',
+      ),
+      throwsA(isA<AtlasVaultTrustedDeviceStateException>()),
+    );
+  });
 }

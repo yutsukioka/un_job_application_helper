@@ -133,6 +133,44 @@ def test_replay_consumption_rejects_conflict_and_prunes_deterministically() -> N
         )
 
 
+def test_full_replay_store_rejects_instead_of_dropping_new_entry() -> None:
+    root = _root()
+    empty = PairingReplayStore.from_dict(root["empty_replay_store"])
+    entries = tuple(
+        PairingReplayEntry(
+            kind="offer",
+            object_id=f"10000000-0000-4000-8000-{index:012x}",
+            transcript_sha256="a" * 64,
+            consumed_at="2026-08-15T10:00:00Z",
+            expires_at="2026-08-15T11:00:00Z",
+        )
+        for index in range(1, 2_049)
+    )
+    full = replace(
+        empty,
+        revision="20000000-0000-4000-8000-000000000001",
+        created_at="2026-08-15T10:00:00Z",
+        updated_at="2026-08-15T10:00:00Z",
+        entries=entries,
+    )
+    incoming = PairingReplayEntry(
+        kind="offer",
+        object_id="20000000-0000-4000-8000-000000000002",
+        transcript_sha256="b" * 64,
+        consumed_at="2026-08-15T10:05:00Z",
+        expires_at="2026-08-15T10:30:00Z",
+    )
+
+    with pytest.raises(TrustedDeviceStateError):
+        consume_pairing_replay(
+            full,
+            incoming,
+            revision="20000000-0000-4000-8000-000000000003",
+            updated_at="2026-08-15T10:05:00Z",
+            current_time="2026-08-15T10:05:00Z",
+        )
+
+
 def test_state_errors_never_echo_private_or_identifier_values() -> None:
     secret = "FAKE_SECRET_MUST_NOT_APPEAR"
     with pytest.raises(TrustedDeviceStateError) as raised:

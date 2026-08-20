@@ -512,6 +512,24 @@ void main() {
     expect(journey.mailbox.bytes, isNull);
   });
 
+  test('offer creation uses the shared transaction admission', () async {
+    final admission = _RejectingPairingTransactionAdmission();
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterTransactionAdmission: admission,
+    );
+    addTearDown(journey.stop);
+
+    await expectLater(
+      journey.inviter.createPairingOffer(),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(admission.calls, 1);
+    expect(journey.inviterTransactions.value, isNull);
+    expect(journey.inviterStage.values, isEmpty);
+  });
+
   test('initial artifacts are recoverable when staging fails', () async {
     final inviterFailure = await _PairingJourney.create(
       vector,
@@ -844,6 +862,38 @@ void main() {
       journey.inviterEvents.where((event) => event == 'stage.create:delivery'),
       hasLength(1),
     );
+  });
+
+  test('generated delivery intent is journaled before staging', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterStageFailure: AtlasVaultPairingArtifactKind.delivery,
+    );
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+
+    final interrupted = await journey.inviter.confirmCodesMatch();
+    final transaction = journey.inviterTransactions.value;
+
+    expect(
+      interrupted.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(transaction?.stage, AtlasVaultPairingStage.sasConfirmed);
+    expect(transaction?.deliverySha256, isNotNull);
+    expect(
+      transaction?.stagedArtifacts.map((artifact) => artifact.kind),
+      contains(AtlasVaultPairingArtifactKind.delivery),
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+    expect(
+      (await journey.inviter.discardPairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.identityReady,
+    );
+    expect(journey.inviterTransactions.value, isNull);
   });
 
   test(
@@ -1408,6 +1458,7 @@ final class _PairingJourney {
     inviteeCleanInstallProbe,
     DateTime Function()? inviterNow,
     int inviterIdentityKeyEpoch = 1,
+    AtlasVaultTrustedPairingTransactionAdmission? inviterTransactionAdmission,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -1541,6 +1592,7 @@ final class _PairingJourney {
       uuidProvider: inviterDeterminism.uuid,
       randomBytes: inviterDeterminism.bytes,
       now: inviterNow ?? (() => clock.value),
+      transactionAdmission: inviterTransactionAdmission,
     );
     final invitee = AtlasVaultTrustedPairingCoordinator(
       identityStore: inviteeIdentity,
@@ -1765,6 +1817,19 @@ final class _PairingStores {
   final AtlasVaultPairingTransactionStore transaction;
   final AtlasVaultPairingArtifactStageStore staging;
   final AtlasVaultPairingArtifactTransport transport;
+}
+
+final class _RejectingPairingTransactionAdmission
+    implements AtlasVaultTrustedPairingTransactionAdmission {
+  int calls = 0;
+
+  @override
+  Future<T> runTrustedPairingTransaction<T>(
+    Future<T> Function() operation,
+  ) async {
+    calls += 1;
+    throw StateError('pairing admission rejected');
+  }
 }
 
 Map<String, Object?> _transactionJson(Map<String, Object?> vector) {
