@@ -1,0 +1,124 @@
+name: AtlasVault Cross-Platform Security
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/ci/atlasvault_*"
+      - "packages/vaultsync/**"
+      - "contracts/sync/**"
+      - "apps/atlas_flutter/**"
+      - "apps/apple/**"
+      - "services/job-api/**"
+      - "tests/test_job_api_private_access.py"
+      - "docs/security/**"
+      - "docs/architecture/atlasvault_cross_platform_security_ci.md"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/**"
+      - "scripts/ci/atlasvault_*"
+      - "packages/vaultsync/**"
+      - "contracts/sync/**"
+      - "apps/atlas_flutter/**"
+      - "apps/apple/**"
+      - "services/job-api/**"
+      - "tests/test_job_api_private_access.py"
+      - "docs/security/**"
+      - "docs/architecture/atlasvault_cross_platform_security_ci.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.44.4"
+
+jobs:
+  python:
+    name: Python / VaultSync
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            packages/jobagg/pyproject.toml
+            packages/vaultsync/pyproject.toml
+            services/job-api/pyproject.toml
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "packages/jobagg[dev]"
+          python -m pip install -e "services/job-api[dev]"
+          python -m pip install -e "packages/vaultsync[dev]"
+
+      - name: Run AtlasVault Python security checks
+        run: ./scripts/ci/atlasvault_python.sh
+
+  flutter:
+    name: Flutter / AtlasVault and Android Debug
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "${{ env.FLUTTER_VERSION }}"
+          channel: stable
+          cache: true
+
+      - name: Run AtlasVault Flutter security checks
+        run: ./scripts/ci/atlasvault_flutter.sh
+
+  swift:
+    name: Swift / AtlasVault and Apple Simulator Builds
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run AtlasVault Swift security checks
+        run: ./scripts/ci/atlasvault_swift.sh
+
+  windows:
+    name: Windows / AtlasVault Debug and Release
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "${{ env.FLUTTER_VERSION }}"
+          channel: stable
+          cache: true
+
+      - name: Run AtlasVault Windows security checks
+        shell: pwsh
+        run: "& .\\scripts\\ci\\atlasvault_windows.ps1"

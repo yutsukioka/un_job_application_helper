@@ -73,4 +73,3 @@ $Forbidden = Get-ChildItem -LiteralPath $RepoRoot -Recurse -File |
 if ($Forbidden) {
     throw "Forbidden AtlasVault artifact found in the repository."
 }
-
