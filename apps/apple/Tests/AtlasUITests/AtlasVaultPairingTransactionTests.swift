@@ -379,6 +379,43 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
+    func testAppleActivationJournalFailureResumesAfterPrivateMutation()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviteeReplaceFailure: .runtimeActivated,
+            inviteeRejectsRepeatedActivation: true
+        )
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        let interruptedTransaction = await journey.inviteeState.loadTransaction()
+        let runtimeIsActive = await journey.inviteeState.isActive()
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(
+            interruptedTransaction?.stage,
+            .selectionCommitted
+        )
+        XCTAssertTrue(runtimeIsActive)
+
+        try await journey.inviteeState.rewriteActiveStoreAfterPrivateMutation(
+            updatedAt: "2026-08-15T12:01:00Z"
+        )
+
+        let resumed = await journey.invitee.resumePairing()
+        let snapshot = await journey.inviteeState.snapshot()
+
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+        XCTAssertEqual(
+            snapshot.stores[journey.vaultID]?.updatedAt,
+            "2026-08-15T12:01:00Z"
+        )
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "runtime.activate" }.count,
+            1
+        )
+    }
+
     func testAppleTrustRetryUsesStableInstallationTime() async throws {
         let journey = try makeJourney(
             inviteeReplaceFailure: .trustCommitted
@@ -1350,6 +1387,23 @@ private actor PairingCoordinatorState {
         return true
     }
     func isActive() -> Bool { active }
+
+    func rewriteActiveStoreAfterPrivateMutation(updatedAt: String) throws {
+        guard active,
+              let selectedVault,
+              let current = stores[selectedVault]
+        else { throw AtlasVaultPairingTransactionError.unavailable }
+        stores[selectedVault] = AtlasVaultLocalStoreEnvelope(
+            format: current.format,
+            version: current.version,
+            storeID: current.storeID,
+            createdAt: current.createdAt,
+            updatedAt: updatedAt,
+            vaultMetadata: current.vaultMetadata,
+            records: current.records
+        )
+        events.append("store.private-mutation")
+    }
 
     func snapshot() -> PairingCoordinatorSnapshot {
         PairingCoordinatorSnapshot(
