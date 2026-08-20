@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'package:atlas/atlas.dart' as app;
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/atlas_vault_windows.dart';
@@ -476,6 +477,79 @@ void main() {
       }
     },
   );
+
+  test('full invitee registry rejects offer before persistence', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    journey.inviteeRegistry.value = await _trustedRegistry(
+      localDeviceId:
+          atlasVaultObject(vector['invitee'])['device_id']! as String,
+      vaultId: journey.vaultId,
+      peerCount: 64,
+    );
+    await journey.inviter.createPairingOffer();
+    await journey.inviter.savePairingOffer();
+
+    final result = await journey.invitee.importPairingOffer();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeTransactions.value, isNull);
+    expect(journey.inviteeStage.values, isEmpty);
+  });
+
+  test(
+    'mismatched invitee registry rejects offer before persistence',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      journey.inviteeRegistry.value = await _trustedRegistry(
+        localDeviceId:
+            atlasVaultObject(vector['inviter'])['device_id']! as String,
+        vaultId: journey.vaultId,
+      );
+      await journey.inviter.createPairingOffer();
+      await journey.inviter.savePairingOffer();
+
+      final result = await journey.invitee.importPairingOffer();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(journey.inviteeTransactions.value, isNull);
+      expect(journey.inviteeStage.values, isEmpty);
+    },
+  );
+
+  test('already-trusted inviter rejects offer before persistence', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    final inviter = await _identityFromVector(vector, 'inviter');
+    try {
+      journey.inviteeRegistry.value = await _trustedRegistry(
+        localDeviceId:
+            atlasVaultObject(vector['invitee'])['device_id']! as String,
+        vaultId: journey.vaultId,
+        identities: <AtlasVaultDeviceIdentity>[inviter],
+      );
+      await journey.inviter.createPairingOffer();
+      await journey.inviter.savePairingOffer();
+
+      final result = await journey.invitee.importPairingOffer();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(journey.inviteeTransactions.value, isNull);
+      expect(journey.inviteeStage.values, isEmpty);
+    } finally {
+      inviter.destroy();
+    }
+  });
 
   test('offer expiry derives from one captured issue time', () async {
     final samples = <DateTime>[
@@ -1061,6 +1135,47 @@ void main() {
     },
   );
 
+  test(
+    'active store mutation resumes after activation journal failure',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeTransactionReplaceFailureStage:
+            AtlasVaultPairingStage.runtimeActivated,
+        inviteeTransactionReplaceFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeDelivery(journey);
+
+      expect(
+        (await journey.invitee.importKeyDelivery()).disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviteeTransactions.value?.stage,
+        AtlasVaultPairingStage.selectionCommitted,
+      );
+      await journey.inviteeRuntime.saveSearch(
+        app.AtlasSavedSearch(
+          name: 'Mutation after activation',
+          request: const app.AtlasSearchRequest(text: 'recovery'),
+          createdAt: '2026-08-15T10:09:00Z',
+          updatedAt: '2026-08-15T10:09:00Z',
+        ),
+      );
+
+      expect(
+        (await journey.invitee.resumePairing()).disposition,
+        AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+      );
+      final snapshot = await journey.inviteeRuntime.read();
+      expect(
+        snapshot.savedSearches.map((search) => search.name),
+        contains('Mutation after activation'),
+      );
+    },
+  );
+
   test('invitee trust retry uses the journaled installation time', () async {
     final journey = await _PairingJourney.create(
       vector,
@@ -1473,6 +1588,7 @@ final class _PairingJourney {
     required this.inviterTransport,
     required this.mailbox,
     required this.inviterRuntime,
+    required this.inviteeRuntime,
     required this.inviteeLocal,
     required this.inviteeKeys,
     required this.inviteeSelected,
@@ -1498,6 +1614,7 @@ final class _PairingJourney {
   final AtlasVaultPairingMemoryTransport inviterTransport;
   final AtlasVaultPairingMailbox mailbox;
   final AtlasVaultPrivateStateRuntime inviterRuntime;
+  final AtlasVaultPrivateStateRuntime inviteeRuntime;
   final AtlasVaultPairingMemoryLocalStore inviteeLocal;
   final AtlasVaultPairingMemorySecureKeyStore inviteeKeys;
   final AtlasVaultPairingMemorySelectedVaultStore inviteeSelected;
@@ -1705,6 +1822,7 @@ final class _PairingJourney {
       inviterTransport: inviterTransport,
       mailbox: mailbox,
       inviterRuntime: inviterRuntime,
+      inviteeRuntime: inviteeRuntime,
       inviteeLocal: inviteeLocal,
       inviteeKeys: inviteeKeys,
       inviteeSelected: inviteeSelected,
