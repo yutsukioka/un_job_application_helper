@@ -59,6 +59,17 @@ final class AtlasVaultPairingViewTests: XCTestCase {
         }
     }
 
+    func testCodesMatchIsDisabledWhenSensitiveCodeIsAbsent() throws {
+        let source = try Self.source(named: "AtlasVaultPairingView.swift")
+
+        XCTAssertTrue(
+            source.contains(
+                "Button(\"Codes Match\") { owner.confirmCodesMatch() }\n" +
+                    "                .disabled(owner.sas == nil)"
+            )
+        )
+    }
+
     func testArtifactImportUsesAnOpenedBoundedFileHandle() throws {
         let source = try Self.source(named: "AtlasVaultPairingView.swift")
 

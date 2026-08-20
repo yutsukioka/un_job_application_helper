@@ -354,6 +354,67 @@ void main() {
     );
   });
 
+  test('expired delivery is not handed to document transport', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    await journey.inviter.confirmCodesMatch();
+    await journey.invitee.confirmCodesMatch();
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 16);
+
+    final result = await journey.inviter.saveKeyDelivery();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterTransactions.value?.stage,
+      AtlasVaultPairingStage.deliveryCreated,
+    );
+    expect(journey.mailbox.bytes, isNull);
+  });
+
+  test('delivery expiring during save is not marked saved', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    await journey.inviter.confirmCodesMatch();
+    await journey.invitee.confirmCodesMatch();
+    journey.inviterTransport.beforeSave = (_) async {
+      journey.clock.value = DateTime.utc(2026, 8, 15, 10, 16);
+    };
+
+    final result = await journey.inviter.saveKeyDelivery();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterTransactions.value?.stage,
+      AtlasVaultPairingStage.deliveryCreated,
+    );
+  });
+
+  test('pairing uses the vault epoch instead of the identity epoch', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterIdentityKeyEpoch: 7,
+    );
+    addTearDown(journey.stop);
+
+    await journey.inviter.createPairingOffer();
+
+    final secretBytes = await journey.inviterIdentity.loadPrimaryIdentity();
+    final secret = AtlasVaultDeviceIdentitySecret.fromJson(
+      atlasVaultObject(jsonDecode(utf8.decode(secretBytes!))),
+    );
+    addTearDown(secret.destroy);
+    expect(secret.keyEpoch, 7);
+    expect(journey.inviterTransactions.value?.keyEpoch, 1);
+  });
+
   test('full inviter registry rejects acceptance before persistence', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -1259,6 +1320,9 @@ void main() {
     expect(android, contains('noBackupFilesDir'));
     expect(android, contains('ACTION_OPEN_DOCUMENT'));
     expect(android, contains('ACTION_CREATE_DOCUMENT'));
+    expect(android, contains('val restored = readEncryptedDocument(uri)'));
+    expect(android, contains('MessageDigest.isEqual(bytes, restored)'));
+    expect(android, contains('restored.fill(0)'));
     expect(android, isNot(contains('takePersistableUriPermission')));
     expect(android, isNot(contains('FLAG_GRANT_PERSISTABLE_URI_PERMISSION')));
     expect(android, contains('MAX_PAIRING_STATE_BYTES = 2 * 1024 * 1024'));
@@ -1288,6 +1352,7 @@ final class _PairingJourney {
     required this.inviteeStage,
     required this.inviterReplay,
     required this.inviteeReplay,
+    required this.inviterTransport,
     required this.mailbox,
     required this.inviterRuntime,
     required this.inviteeLocal,
@@ -1312,6 +1377,7 @@ final class _PairingJourney {
   final AtlasVaultPairingMemoryStageStore inviteeStage;
   final AtlasVaultPairingMemoryReplayStore inviterReplay;
   final AtlasVaultPairingMemoryReplayStore inviteeReplay;
+  final AtlasVaultPairingMemoryTransport inviterTransport;
   final AtlasVaultPairingMailbox mailbox;
   final AtlasVaultPrivateStateRuntime inviterRuntime;
   final AtlasVaultPairingMemoryLocalStore inviteeLocal;
@@ -1341,11 +1407,16 @@ final class _PairingJourney {
     Future<AtlasVaultPairingCleanInstallDisposition> Function()?
     inviteeCleanInstallProbe,
     DateTime Function()? inviterNow,
+    int inviterIdentityKeyEpoch = 1,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
     final inviterIdentity = AtlasVaultPairingMemoryIdentityStore(
-      await _identitySecret(vector, 'inviter'),
+      await _identitySecret(
+        vector,
+        'inviter',
+        keyEpoch: inviterIdentityKeyEpoch,
+      ),
     );
     final inviteeIdentity = AtlasVaultPairingMemoryIdentityStore(
       await _identitySecret(vector, 'invitee'),
@@ -1511,6 +1582,7 @@ final class _PairingJourney {
       inviteeStage: inviteeStage,
       inviterReplay: inviterReplay,
       inviteeReplay: inviteeReplay,
+      inviterTransport: inviterTransport,
       mailbox: mailbox,
       inviterRuntime: inviterRuntime,
       inviteeLocal: inviteeLocal,
@@ -1557,9 +1629,10 @@ Future<void> _exchangeDelivery(_PairingJourney journey) async {
 
 Future<Uint8List> _identitySecret(
   Map<String, Object?> vector,
-  String name,
-) async {
-  final identity = await _identityFromVector(vector, name);
+  String name, {
+  int? keyEpoch,
+}) async {
+  final identity = await _identityFromVector(vector, name, keyEpoch: keyEpoch);
   final secret = identity.secretBundle();
   try {
     return secret.canonicalBytes();
@@ -1571,8 +1644,9 @@ Future<Uint8List> _identitySecret(
 
 Future<AtlasVaultDeviceIdentity> _identityFromVector(
   Map<String, Object?> vector,
-  String name,
-) async {
+  String name, {
+  int? keyEpoch,
+}) async {
   final data = atlasVaultObject(vector[name]);
   return AtlasVaultDeviceIdentity.fromPrivateKeys(
     signingPrivateSeed: Uint8List.fromList(
@@ -1582,7 +1656,7 @@ Future<AtlasVaultDeviceIdentity> _identityFromVector(
       base64Decode(data['agreement_private_key_b64']! as String),
     ),
     createdAt: data['created_at']! as String,
-    keyEpoch: data['key_epoch']! as int,
+    keyEpoch: keyEpoch ?? data['key_epoch']! as int,
     expectedDeviceId: data['device_id']! as String,
   );
 }

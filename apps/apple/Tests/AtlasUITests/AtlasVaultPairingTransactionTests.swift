@@ -225,6 +225,80 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertNil(delivery)
     }
 
+    func testExpiredAppleDeliveryCannotBeMarkedSaved() async throws {
+        let journey = try makeJourney()
+        try await exchangeAcceptance(journey)
+        let inviterConfirmed = await journey.inviter.confirmCodesMatch()
+        let inviteeConfirmed = await journey.invitee.confirmCodesMatch()
+        XCTAssertEqual(inviterConfirmed.disposition, .deliveryReady)
+        XCTAssertEqual(inviteeConfirmed.disposition, .codesConfirmed)
+        _ = try await journey.inviter.artifactToSave(.delivery)
+        journey.clock.set("2026-08-15T12:11:00Z")
+
+        let result = await journey.inviter.pairingArtifactSaveFinished(
+            .delivery,
+            committed: true
+        )
+        let transaction = await journey.inviterState.loadTransaction()
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .deliveryCreated)
+    }
+
+    func testPairingUsesVaultEpochInsteadOfIdentityEpoch() async throws {
+        let journey = try makeJourney(inviterIdentityKeyEpoch: 7)
+
+        let result = await journey.inviter.createPairingOffer()
+        let identity = await journey.inviterState.loadIdentity()
+        let transaction = await journey.inviterState.loadTransaction()
+
+        XCTAssertEqual(result.disposition, .offerReady)
+        XCTAssertEqual(identity.descriptor.keyEpoch, 7)
+        XCTAssertEqual(transaction?.keyEpoch, 1)
+    }
+
+    func testReplayStoreMustBelongToCurrentIdentity() async throws {
+        let journey = try makeJourney()
+        try await exchangeAcceptance(journey)
+        let foreign = try AtlasVaultDeviceIdentity.generate(
+            createdAt: "2026-08-15T12:00:00Z"
+        )
+        let replay = try AtlasVaultPairingReplayStore(
+            localDeviceID: foreign.deviceID,
+            revision: "65000000-0000-4000-8000-000000000081",
+            parentRevision: nil,
+            createdAt: "2026-08-15T12:00:00Z",
+            updatedAt: "2026-08-15T12:00:00Z",
+            entries: []
+        )
+        try await journey.inviteeState.createReplay(replay)
+
+        let result = await journey.invitee.confirmCodesMatch()
+        let current = await journey.inviteeState.loadReplay()
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        XCTAssertEqual(current, replay)
+    }
+
+    func testTrustedRegistryMustBelongToCurrentIdentity() async throws {
+        let journey = try makeJourney()
+        let delivery = try await prepareDelivery(journey)
+        let foreign = try AtlasVaultDeviceIdentity.generate(
+            createdAt: "2026-08-15T12:00:00Z"
+        )
+        let registry = try trustedRegistry(
+            localDeviceID: foreign.deviceID,
+            vaultID: journey.vaultID
+        )
+        try await journey.inviteeState.createRegistry(registry)
+
+        let result = await journey.invitee.importKeyDelivery(delivery)
+        let current = await journey.inviteeState.loadRegistry()
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        XCTAssertEqual(current, registry)
+    }
+
     func testAppleSelectionInterruptionResumesWithoutRecreation() async throws {
         let journey = try makeJourney(
             inviteeReplaceFailure: .selectionCommitted
@@ -751,6 +825,7 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
     }
 
     private func makeJourney(
+        inviterIdentityKeyEpoch: Int = 1,
         inviterArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviterReplaceFailure: AtlasVaultPairingStage? = nil,
         inviterDeleteFailures: Int = 0,
@@ -760,7 +835,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
     ) throws -> PairingJourneyHarness {
         let timestamp = "2026-08-15T12:00:00Z"
         let inviterIdentity = try AtlasVaultDeviceIdentity.generate(
-            createdAt: timestamp
+            createdAt: timestamp,
+            keyEpoch: inviterIdentityKeyEpoch
         )
         let inviteeIdentity = try AtlasVaultDeviceIdentity.generate(
             createdAt: timestamp

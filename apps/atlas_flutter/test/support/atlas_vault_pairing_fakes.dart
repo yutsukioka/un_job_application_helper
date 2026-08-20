@@ -265,6 +265,7 @@ final class AtlasVaultPairingMemoryTransport
   final List<String> events;
   bool cancelNextPick = false;
   bool cancelNextSave = false;
+  Future<void> Function(AtlasVaultPairingArtifact artifact)? beforeSave;
 
   @override
   Future<AtlasVaultPairingArtifact?> pick() async {
@@ -286,6 +287,7 @@ final class AtlasVaultPairingMemoryTransport
       cancelNextSave = false;
       return false;
     }
+    await beforeSave?.call(artifact);
     if (mailbox.bytes != null) throw StateError('mailbox occupied');
     mailbox.bytes = Uint8List.fromList(artifact.canonicalBytes());
     events.add('transport.save:${artifact.kind.encoded}');

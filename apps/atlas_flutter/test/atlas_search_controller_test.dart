@@ -2109,6 +2109,46 @@ void main() {
     },
   );
 
+  test(
+    'durable pairing journal blocks authority change before first inspection',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _RecordingTransport()),
+        privateStatePersistence: privatePersistence,
+      );
+      final coordinator = _ControllerPairingCoordinator();
+      final owner = AtlasVaultTrustedPairingPresentationOwner(
+        coordinator: coordinator,
+      );
+      addTearDown(() async {
+        await owner.stopAndDrain();
+        owner.dispose();
+        controller.dispose();
+      });
+      controller.attachTrustedPairingContext(
+        AtlasVaultTrustedPairingContext(owner: owner),
+      );
+      expect(owner.pendingTransaction, isFalse);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      await controller.saveAndReload(replacementAuthority);
+
+      expect(coordinator.inspectCalls, 1);
+      expect(owner.pendingTransaction, isTrue);
+      expect(controller.baseURL, originalAuthority);
+      expect(privatePersistence.isActive, isTrue);
+      expect(privatePersistence.calls, isNot(contains('deactivate')));
+    },
+  );
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(
@@ -3363,7 +3403,7 @@ void main() {
 
 final class _ControllerPairingCoordinator
     implements AtlasVaultTrustedPairingCoordinating {
-  const _ControllerPairingCoordinator();
+  int inspectCalls = 0;
 
   @override
   void cancelActiveOperation() {}
@@ -3377,7 +3417,10 @@ final class _ControllerPairingCoordinator
       );
 
   @override
-  Future<AtlasVaultTrustedPairingResult> inspect() async => _pending();
+  Future<AtlasVaultTrustedPairingResult> inspect() async {
+    inspectCalls += 1;
+    return _pending();
+  }
 
   @override
   Future<AtlasVaultTrustedPairingResult> createDeviceIdentity() async =>
