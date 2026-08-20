@@ -1176,6 +1176,45 @@ void main() {
     },
   );
 
+  test(
+    'locked store mutation resumes after activation journal failure',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeTransactionReplaceFailureStage:
+            AtlasVaultPairingStage.runtimeActivated,
+        inviteeTransactionReplaceFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeDelivery(journey);
+
+      expect(
+        (await journey.invitee.importKeyDelivery()).disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      await journey.inviteeRuntime.saveSearch(
+        app.AtlasSavedSearch(
+          name: 'Mutation before restart',
+          request: const app.AtlasSearchRequest(text: 'locked recovery'),
+          createdAt: '2026-08-15T10:09:00Z',
+          updatedAt: '2026-08-15T10:09:00Z',
+        ),
+      );
+      await journey.inviteeRuntime.deactivate();
+
+      expect(
+        (await journey.invitee.resumePairing()).disposition,
+        AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+      );
+      expect(journey.inviteeRuntime.isActiveVault(journey.vaultId), isTrue);
+      final snapshot = await journey.inviteeRuntime.read();
+      expect(
+        snapshot.savedSearches.map((search) => search.name),
+        contains('Mutation before restart'),
+      );
+    },
+  );
+
   test('invitee trust retry uses the journaled installation time', () async {
     final journey = await _PairingJourney.create(
       vector,
