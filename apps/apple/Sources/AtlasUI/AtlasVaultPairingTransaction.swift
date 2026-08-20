@@ -2130,15 +2130,31 @@ public actor AtlasVaultTrustedPairingCoordinator:
         }
 
         if !Self.isAtLeast(transaction, .runtimeActivated) {
-            try await authorizeSensitiveMutation()
-            guard try await environment.activate(vaultID, context.recoveredKey),
-                  try await environment.validateProjection(
-                    store,
+            if let active = try await environment.activeVault() {
+                let keyMatches = active.withKeyMaterial { activeKey in
+                    var copy = activeKey
+                    defer { Self.wipe(&copy) }
+                    return Self.equal(copy, context.recoveredKey)
+                }
+                guard active.vaultID == vaultID,
+                      active.store == store,
+                      keyMatches
+                else { throw AtlasVaultPairingTransactionError.stale }
+            } else {
+                try await authorizeSensitiveMutation()
+                guard try await environment.activate(
                     vaultID,
-                    context.recoveredKey,
-                    true
-                  )
-            else { throw AtlasVaultPairingTransactionError.unavailable }
+                    context.recoveredKey
+                ) else {
+                    throw AtlasVaultPairingTransactionError.unavailable
+                }
+            }
+            guard try await environment.validateProjection(
+                store,
+                vaultID,
+                context.recoveredKey,
+                true
+            ) else { throw AtlasVaultPairingTransactionError.unavailable }
             transaction = try await advance(
                 transaction,
                 to: .runtimeActivated,
