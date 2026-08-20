@@ -2024,6 +2024,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         }
         let storeHash = Self.sha256(try AtlasVaultLocalStoreIO.encode(store))
         let keyHash = Self.sha256(context.recoveredKey)
+        var installedStore = store
 
         if !Self.isAtLeast(transaction, .storeCreated) {
             if transaction.storeSHA256 == nil {
@@ -2066,9 +2067,30 @@ public actor AtlasVaultTrustedPairingCoordinator:
                   let readBack = try await environment.loadStore(
                     vaultID,
                     context.recoveredKey
-                  ),
-                  readBack == store
+                  )
             else { throw AtlasVaultPairingTransactionError.stale }
+            installedStore = readBack
+            if readBack != store {
+                guard Self.isAtLeast(transaction, .selectionCommitted),
+                      Self.sameInstalledStoreIdentity(readBack, store),
+                      let active = try await environment.activeVault(),
+                      active.vaultID == vaultID,
+                      active.store == readBack
+                else { throw AtlasVaultPairingTransactionError.stale }
+                let keyMatches = active.withKeyMaterial { activeKey in
+                    var copy = activeKey
+                    defer { Self.wipe(&copy) }
+                    return Self.equal(copy, context.recoveredKey)
+                }
+                guard keyMatches,
+                      try await environment.validateProjection(
+                        readBack,
+                        vaultID,
+                        context.recoveredKey,
+                        true
+                      )
+                else { throw AtlasVaultPairingTransactionError.stale }
+            }
         }
 
         if !Self.isAtLeast(transaction, .keyCreated) {
@@ -2137,10 +2159,14 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     return Self.equal(copy, context.recoveredKey)
                 }
                 guard active.vaultID == vaultID,
-                      active.store == store,
+                      active.store == installedStore,
+                      Self.sameInstalledStoreIdentity(active.store, store),
                       keyMatches
                 else { throw AtlasVaultPairingTransactionError.stale }
             } else {
+                guard installedStore == store else {
+                    throw AtlasVaultPairingTransactionError.stale
+                }
                 try await authorizeSensitiveMutation()
                 guard try await environment.activate(
                     vaultID,
@@ -2150,7 +2176,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 }
             }
             guard try await environment.validateProjection(
-                store,
+                installedStore,
                 vaultID,
                 context.recoveredKey,
                 true
@@ -3091,6 +3117,17 @@ public actor AtlasVaultTrustedPairingCoordinator:
         guard let current = stages.firstIndex(of: transaction.stage),
               let expected = stages.firstIndex(of: stage) else { return false }
         return current >= expected
+    }
+
+    private static func sameInstalledStoreIdentity(
+        _ current: AtlasVaultLocalStoreEnvelope,
+        _ imported: AtlasVaultLocalStoreEnvelope
+    ) -> Bool {
+        current.format == imported.format
+            && current.version == imported.version
+            && current.storeID == imported.storeID
+            && current.createdAt == imported.createdAt
+            && current.vaultMetadata == imported.vaultMetadata
     }
 
     private static func sha256(_ data: Data) -> String {
