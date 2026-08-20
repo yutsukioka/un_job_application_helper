@@ -2,6 +2,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:atlas/atlas.dart';
+import 'package:atlas/atlas_vault.dart'
+    show
+        AtlasVaultPairingRole,
+        AtlasVaultPairingStage,
+        AtlasVaultTrustedPairingContext,
+        AtlasVaultTrustedPairingCoordinating,
+        AtlasVaultTrustedPairingDisposition,
+        AtlasVaultTrustedPairingPresentationOwner,
+        AtlasVaultTrustedPairingResult;
 import 'package:atlas/atlas_vault_android.dart';
 import 'package:atlas/features/app_shell/atlas_app.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +20,18 @@ final _cacheFixtureSavedAt = DateTime.utc(2026, 7, 2, 12);
 final _cacheFixtureNow = DateTime.utc(2026, 7, 3, 12);
 
 void main() {
+  test('controller production source owns one explicit pairing context', () {
+    final source = File(
+      'lib/features/app_shell/atlas_app.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('AtlasVaultTrustedPairingContext'));
+    expect(source, contains('attachTrustedPairingContext'));
+    expect(source, contains('trustedPairingContext'));
+    expect(source, contains('stopAndDrain'));
+    expect(source, isNot(contains('automaticallyCreatePairing')));
+  });
+
   test(
     'conditional saved-search deletion sends the exact reviewed snapshot',
     () async {
@@ -2048,6 +2069,86 @@ void main() {
     },
   );
 
+  test(
+    'hidden pending pairing blocks authority change before deactivation',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _RecordingTransport()),
+        privateStatePersistence: privatePersistence,
+      );
+      final coordinator = _ControllerPairingCoordinator();
+      final owner = AtlasVaultTrustedPairingPresentationOwner(
+        coordinator: coordinator,
+      );
+      addTearDown(() async {
+        await owner.stopAndDrain();
+        owner.dispose();
+        controller.dispose();
+      });
+      controller.attachTrustedPairingContext(
+        AtlasVaultTrustedPairingContext(owner: owner),
+      );
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+      await owner.inspect();
+      expect(owner.pendingTransaction, isTrue);
+      owner.hide();
+
+      await controller.saveAndReload(replacementAuthority);
+
+      expect(controller.baseURL, originalAuthority);
+      expect(privatePersistence.isActive, isTrue);
+      expect(privatePersistence.calls, isNot(contains('deactivate')));
+    },
+  );
+
+  test(
+    'durable pairing journal blocks authority change before first inspection',
+    () async {
+      final originalAuthority = Uri.parse('http://atlas.test:8765');
+      final replacementAuthority = Uri.parse('http://atlas.next:8765');
+      final privatePersistence = _FakePrivateStatePersistence();
+      final controller = AtlasAppController(
+        initialBaseURL: originalAuthority,
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: _RecordingTransport()),
+        privateStatePersistence: privatePersistence,
+      );
+      final coordinator = _ControllerPairingCoordinator();
+      final owner = AtlasVaultTrustedPairingPresentationOwner(
+        coordinator: coordinator,
+      );
+      addTearDown(() async {
+        await owner.stopAndDrain();
+        owner.dispose();
+        controller.dispose();
+      });
+      controller.attachTrustedPairingContext(
+        AtlasVaultTrustedPairingContext(owner: owner),
+      );
+      expect(owner.pendingTransaction, isFalse);
+      expect(
+        await controller.activateExistingAtlasVault('vault-alpha'),
+        AtlasVaultActivationResult.activated,
+      );
+
+      await controller.saveAndReload(replacementAuthority);
+
+      expect(coordinator.inspectCalls, 1);
+      expect(owner.pendingTransaction, isTrue);
+      expect(controller.baseURL, originalAuthority);
+      expect(privatePersistence.isActive, isTrue);
+      expect(privatePersistence.calls, isNot(contains('deactivate')));
+    },
+  );
+
   test('explicit deactivation clears private controller state', () async {
     final privatePersistence = _FakePrivateStatePersistence(
       activationSnapshot: AtlasVaultPrivateStateSnapshot(
@@ -3201,6 +3302,64 @@ void main() {
       migrationAssembly,
       contains('AtlasWindowsDesktopCacheMigrationSource'),
     );
+
+    final androidAdmissionStart = source.indexOf(
+      'final class _AtlasAndroidTrustedPairingAdmission',
+    );
+    final androidAdmissionEnd = source.indexOf(
+      'Future<AtlasVaultPairingCleanInstallDisposition>',
+      androidAdmissionStart,
+    );
+    expect(androidAdmissionStart, isNonNegative);
+    expect(androidAdmissionEnd, greaterThan(androidAdmissionStart));
+    final androidAdmission = source.substring(
+      androidAdmissionStart,
+      androidAdmissionEnd,
+    );
+    expect(
+      androidAdmission,
+      contains('AtlasVaultRecoveryImportTransactionAdmission'),
+    );
+    expect(androidAdmission, contains('runRecoveryImportTransaction<T>'));
+    expect(androidAdmission, contains('_rejectCompetingTransactions('));
+    expect(androidAdmission, contains('allowMigration: true'));
+    expect(androidAdmission, contains('allowRecoveryImport: true'));
+    expect(androidAdmission, contains('allowPairing: true'));
+
+    final windowsAdmissionStart = source.indexOf(
+      'final class _AtlasWindowsTrustedPairingAdmission',
+    );
+    final windowsAdmissionEnd = source.indexOf(
+      'final class _AtlasAndroidTrustedPairingAdmission',
+      windowsAdmissionStart,
+    );
+    expect(windowsAdmissionStart, isNonNegative);
+    expect(windowsAdmissionEnd, greaterThan(windowsAdmissionStart));
+    final windowsAdmission = source.substring(
+      windowsAdmissionStart,
+      windowsAdmissionEnd,
+    );
+    expect(windowsAdmission, contains('_rejectPendingPairing('));
+    expect(windowsAdmission, contains('runMigrationTransaction<T>'));
+    expect(windowsAdmission, contains('runRecoveryImportTransaction<T>'));
+
+    final androidAssemblyStart = source.indexOf(
+      'final keyStore = AtlasAndroidVaultSecureKeyStore();',
+    );
+    final androidAssemblyEnd = source.indexOf(
+      'final pairingOwner = _attachAndroidTrustedPairing(',
+      androidAssemblyStart,
+    );
+    expect(androidAssemblyStart, isNonNegative);
+    expect(androidAssemblyEnd, greaterThan(androidAssemblyStart));
+    final androidAssembly = source.substring(
+      androidAssemblyStart,
+      androidAssemblyEnd,
+    );
+    expect(
+      androidAssembly,
+      contains('importTransactionAdmission: authorityAdmission'),
+    );
     expect(
       migrationAssembly,
       contains('AtlasVaultPlaintextMigrationPresentationOwner('),
@@ -3240,6 +3399,79 @@ void main() {
     expect(sideEffectFreeAssembly, isNot(contains('.beginRecoverySetup(')));
     expect(sideEffectFreeAssembly, isNot(contains('.savePreparedExport(')));
   });
+}
+
+final class _ControllerPairingCoordinator
+    implements AtlasVaultTrustedPairingCoordinating {
+  int inspectCalls = 0;
+
+  @override
+  void cancelActiveOperation() {}
+
+  AtlasVaultTrustedPairingResult _pending() =>
+      const AtlasVaultTrustedPairingResult(
+        disposition: AtlasVaultTrustedPairingDisposition.deliveryReady,
+        role: AtlasVaultPairingRole.inviter,
+        stage: AtlasVaultPairingStage.deliveryCreated,
+        pendingTransaction: true,
+      );
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> inspect() async {
+    inspectCalls += 1;
+    return _pending();
+  }
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> createDeviceIdentity() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> createPairingOffer() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> savePairingOffer() async => _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> importPairingOffer() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> savePairingAcceptance() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> importPairingAcceptance() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> confirmCodesMatch() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> saveKeyDelivery() async => _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> importKeyDelivery() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> savePairingAcknowledgement() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> importPairingAcknowledgement() async =>
+      _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> resumePairing() async => _pending();
+
+  @override
+  Future<AtlasVaultTrustedPairingResult> discardPairing() async => _pending();
+
+  @override
+  Future<void> stop() async {}
 }
 
 final class _ControllerMigrationCoordinator

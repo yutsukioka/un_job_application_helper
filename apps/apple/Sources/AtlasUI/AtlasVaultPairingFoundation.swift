@@ -475,6 +475,19 @@ public protocol AtlasVaultPairingReplayGuard: Sendable {
 }
 
 public enum AtlasVaultPairingFoundation {
+    public static func deviceFingerprint(_ deviceID: String) -> String? {
+        guard deviceID.range(
+            of: #"^avd1-[0-9a-f]{64}$"#,
+            options: .regularExpression
+        ) != nil else { return nil }
+        let digest = deviceID.dropFirst(5).prefix(16)
+        return stride(from: 0, to: digest.count, by: 4).map {
+            let start = digest.index(digest.startIndex, offsetBy: $0)
+            let end = digest.index(start, offsetBy: 4)
+            return String(digest[start..<end]).uppercased()
+        }.joined(separator: "-")
+    }
+
     public static func createOffer(
         inviter: AtlasVaultDeviceIdentity,
         offerID: String,

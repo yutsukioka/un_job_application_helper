@@ -8,6 +8,56 @@ final class AtlasVaultProductionCompositionHarnessTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_QUERY_DO_NOT_LOG"
     private static let fakeURL = URL(string: "https://example.invalid")!
 
+    func testCompositionSharesOneExplicitPairingContext() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+
+        for required in [
+            "pairingContext",
+            "AtlasVaultTrustedPairingCoordinator",
+            "AtlasVaultTrustedPairingPresentationOwner",
+            "pairingOwner.clearSensitiveInput",
+            "pairingOwner.stopAndDrain",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+    }
+
+    func testPairingSharesPendingTransactionAuthorityAndEveryJournalGate()
+        throws
+    {
+        let source = try Self.source(
+            named: "AtlasVaultProductionCompositionHarness.swift"
+        )
+        let transactionStore = try XCTUnwrap(
+            source.range(of: "let pairingTransactionStore =")
+        )
+        let selectionGate = try XCTUnwrap(
+            source.range(of: "let hostVaultSelector =")
+        )
+
+        XCTAssertLessThan(
+            transactionStore.lowerBound,
+            selectionGate.lowerBound
+        )
+        for required in [
+            "pairingTransactionStore.load() != nil",
+            "transactionAdmission:",
+            "pendingTransactionAuthority.perform(operation)",
+            "authorizeSensitiveMutation:",
+            "Task.checkCancellation()",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertGreaterThanOrEqual(
+            source.components(
+                separatedBy: "pairingTransactionStore.load() != nil"
+            ).count - 1,
+            3
+        )
+    }
+
     func testProductionCompositionBuildsOneSavedSearchPrivateAuthority()
         throws
     {

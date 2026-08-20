@@ -189,6 +189,305 @@ final class AtlasAndroidEncryptedDocumentTransport
   String toString() => 'AtlasAndroidEncryptedDocumentTransport(<redacted>)';
 }
 
+final class AtlasAndroidTrustedDeviceRegistryStore
+    implements AtlasVaultTrustedDeviceRegistryStore {
+  AtlasAndroidTrustedDeviceRegistryStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultTrustedDeviceRegistry?> read() async {
+    final bytes = await _readAndroidPairingBytes(
+      _channel,
+      'readTrustedDeviceRegistry',
+      atlasVaultMaximumPairingStateByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return await decodeAndVerifyAtlasVaultTrustedDeviceRegistry(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultTrustedDeviceRegistry registry) async {
+    await verifyAtlasVaultTrustedDeviceRegistry(registry);
+    await _writeAndroidPairingBytes(
+      _channel,
+      'createTrustedDeviceRegistry',
+      registry.canonicalBytes(),
+      argumentName: 'state_bytes',
+      maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+    );
+  }
+
+  @override
+  Future<void> replace(
+    AtlasVaultTrustedDeviceRegistry registry, {
+    required String expectedSha256,
+  }) async {
+    await verifyAtlasVaultTrustedDeviceRegistry(registry);
+    await _writeAndroidPairingBytes(
+      _channel,
+      'replaceTrustedDeviceRegistry',
+      registry.canonicalBytes(),
+      argumentName: 'state_bytes',
+      expectedSha256: expectedSha256,
+      maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+    );
+  }
+
+  @override
+  String toString() => 'AtlasAndroidTrustedDeviceRegistryStore(<redacted>)';
+}
+
+final class AtlasAndroidPairingReplayStore
+    implements AtlasVaultPairingReplayStateStore {
+  AtlasAndroidPairingReplayStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingReplayStore?> read() async {
+    final bytes = await _readAndroidPairingBytes(
+      _channel,
+      'readPairingReplayStore',
+      atlasVaultMaximumPairingStateByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return AtlasVaultPairingReplayStore.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingReplayStore replayStore) =>
+      _writeAndroidPairingBytes(
+        _channel,
+        'createPairingReplayStore',
+        replayStore.canonicalBytes(),
+        argumentName: 'state_bytes',
+        maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+      );
+
+  @override
+  Future<void> replace(
+    AtlasVaultPairingReplayStore replayStore, {
+    required String expectedSha256,
+  }) => _writeAndroidPairingBytes(
+    _channel,
+    'replacePairingReplayStore',
+    replayStore.canonicalBytes(),
+    argumentName: 'state_bytes',
+    expectedSha256: expectedSha256,
+    maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+  );
+
+  @override
+  String toString() => 'AtlasAndroidPairingReplayStore(<redacted>)';
+}
+
+final class AtlasAndroidPairingTransactionStore
+    implements AtlasVaultPairingTransactionStore {
+  AtlasAndroidPairingTransactionStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingTransaction?> read() async {
+    final bytes = await _readAndroidPairingBytes(
+      _channel,
+      'readPairingTransaction',
+      atlasVaultMaximumPairingTransactionByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return AtlasVaultPairingTransaction.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingTransaction transaction) =>
+      _writeAndroidPairingBytes(
+        _channel,
+        'createPairingTransaction',
+        transaction.canonicalBytes(),
+        argumentName: 'transaction_bytes',
+      );
+
+  @override
+  Future<void> replace(
+    AtlasVaultPairingTransaction transaction, {
+    required String expectedSha256,
+  }) => _writeAndroidPairingBytes(
+    _channel,
+    'replacePairingTransaction',
+    transaction.canonicalBytes(),
+    argumentName: 'transaction_bytes',
+    expectedSha256: expectedSha256,
+  );
+
+  @override
+  Future<void> delete({required String expectedSha256}) async {
+    _validateAndroidPairingSha256(expectedSha256);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'deletePairingTransaction',
+        <String, Object?>{'expected_sha256': expectedSha256},
+      );
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidPairingTransactionStore(<redacted>)';
+}
+
+final class AtlasAndroidPairingArtifactStageStore
+    implements AtlasVaultPairingArtifactStageStore {
+  AtlasAndroidPairingArtifactStageStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingArtifact?> read(
+    AtlasVaultPairingArtifactKind kind,
+  ) async {
+    Uint8List? bytes;
+    try {
+      final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+        _channel,
+        'readStagedPairingArtifact',
+        <String, Object?>{'kind': kind.encoded},
+      );
+      if (value == null) return null;
+      bytes = copyAtlasVaultAndroidBytesInternal(value);
+      _validateAndroidPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
+      if (artifact.kind != kind) {
+        throw const AtlasVaultPairingStorageException();
+      }
+      return artifact;
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      if (bytes != null) wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingArtifact artifact) =>
+      _writeAndroidPairingBytes(
+        _channel,
+        'createStagedPairingArtifact',
+        artifact.canonicalBytes(),
+        argumentName: 'artifact_bytes',
+        extraArguments: <String, Object?>{'kind': artifact.kind.encoded},
+        maximumByteCount: atlasVaultMaximumPairingArtifactByteCount,
+      );
+
+  @override
+  Future<void> delete(
+    AtlasVaultPairingArtifactKind kind, {
+    required String expectedSha256,
+  }) async {
+    _validateAndroidPairingSha256(expectedSha256);
+    try {
+      await invokeAtlasVaultAndroidMethodInternal<void>(
+        _channel,
+        'deleteStagedPairingArtifact',
+        <String, Object?>{
+          'kind': kind.encoded,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidPairingArtifactStageStore(<redacted>)';
+}
+
+final class AtlasAndroidPairingArtifactTransport
+    implements AtlasVaultPairingArtifactTransport {
+  AtlasAndroidPairingArtifactTransport({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingArtifact?> pick() async {
+    Uint8List? bytes;
+    try {
+      final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+        _channel,
+        'pickPairingArtifact',
+        null,
+      );
+      if (value == null) return null;
+      bytes = copyAtlasVaultAndroidBytesInternal(value);
+      _validateAndroidPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      return AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      if (bytes != null) wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  Future<bool> save(AtlasVaultPairingArtifact artifact) async {
+    final bytes = artifact.canonicalBytes();
+    try {
+      _validateAndroidPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+        _channel,
+        'savePairingArtifact',
+        <String, Object?>{'artifact_bytes': bytes},
+      );
+      if (value is! bool) {
+        throw const AtlasVaultPairingStorageException();
+      }
+      return value;
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      wipeAtlasVaultAndroidBytesInternal(bytes);
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidPairingArtifactTransport(<redacted>)';
+}
+
 final class AtlasVaultAndroidCapabilities {
   const AtlasVaultAndroidCapabilities._({
     required this.apiLevel,
@@ -734,6 +1033,73 @@ final class AtlasAndroidSelectedVaultStore
 void _validateSha256(String value) {
   if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
     throw const AtlasVaultAndroidStorageException();
+  }
+}
+
+Future<Uint8List?> _readAndroidPairingBytes(
+  MethodChannel channel,
+  String method,
+  int maximumByteCount,
+) async {
+  Uint8List? bytes;
+  try {
+    final value = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+      channel,
+      method,
+      null,
+    );
+    if (value == null) return null;
+    bytes = copyAtlasVaultAndroidBytesInternal(value);
+    _validateAndroidPairingByteCount(bytes, maximumByteCount);
+    return Uint8List.fromList(bytes);
+  } catch (_) {
+    throw const AtlasVaultPairingStorageException();
+  } finally {
+    if (bytes != null) wipeAtlasVaultAndroidBytesInternal(bytes);
+  }
+}
+
+Future<void> _writeAndroidPairingBytes(
+  MethodChannel channel,
+  String method,
+  Uint8List source, {
+  required String argumentName,
+  String? expectedSha256,
+  Map<String, Object?> extraArguments = const <String, Object?>{},
+  int maximumByteCount = atlasVaultMaximumPairingTransactionByteCount,
+}) async {
+  final bytes = Uint8List.fromList(source);
+  try {
+    _validateAndroidPairingByteCount(bytes, maximumByteCount);
+    if (expectedSha256 != null) {
+      _validateAndroidPairingSha256(expectedSha256);
+    }
+    await invokeAtlasVaultAndroidMethodInternal<void>(
+      channel,
+      method,
+      <String, Object?>{
+        ...extraArguments,
+        argumentName: bytes,
+        'expected_sha256': ?expectedSha256,
+      },
+    );
+  } catch (_) {
+    throw const AtlasVaultPairingStorageException();
+  } finally {
+    wipeAtlasVaultAndroidBytesInternal(bytes);
+    wipeAtlasVaultAndroidBytesInternal(source);
+  }
+}
+
+void _validateAndroidPairingByteCount(Uint8List bytes, int maximum) {
+  if (bytes.isEmpty || bytes.length > maximum) {
+    throw const AtlasVaultPairingStorageException();
+  }
+}
+
+void _validateAndroidPairingSha256(String value) {
+  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+    throw const AtlasVaultPairingStorageException();
   }
 }
 

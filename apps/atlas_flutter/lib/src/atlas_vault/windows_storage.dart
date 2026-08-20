@@ -439,6 +439,305 @@ final class AtlasWindowsEncryptedDocumentTransport
   String toString() => 'AtlasWindowsEncryptedDocumentTransport(<redacted>)';
 }
 
+final class AtlasWindowsTrustedDeviceRegistryStore
+    implements AtlasVaultTrustedDeviceRegistryStore {
+  AtlasWindowsTrustedDeviceRegistryStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultTrustedDeviceRegistry?> read() async {
+    final bytes = await _readWindowsPairingBytes(
+      _channel,
+      'readTrustedDeviceRegistry',
+      atlasVaultMaximumPairingStateByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return await decodeAndVerifyAtlasVaultTrustedDeviceRegistry(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultTrustedDeviceRegistry registry) async {
+    await verifyAtlasVaultTrustedDeviceRegistry(registry);
+    await _writeWindowsPairingBytes(
+      _channel,
+      'createTrustedDeviceRegistry',
+      registry.canonicalBytes(),
+      argumentName: 'state_bytes',
+      maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+    );
+  }
+
+  @override
+  Future<void> replace(
+    AtlasVaultTrustedDeviceRegistry registry, {
+    required String expectedSha256,
+  }) async {
+    await verifyAtlasVaultTrustedDeviceRegistry(registry);
+    await _writeWindowsPairingBytes(
+      _channel,
+      'replaceTrustedDeviceRegistry',
+      registry.canonicalBytes(),
+      argumentName: 'state_bytes',
+      expectedSha256: expectedSha256,
+      maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+    );
+  }
+
+  @override
+  String toString() => 'AtlasWindowsTrustedDeviceRegistryStore(<redacted>)';
+}
+
+final class AtlasWindowsPairingReplayStore
+    implements AtlasVaultPairingReplayStateStore {
+  AtlasWindowsPairingReplayStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingReplayStore?> read() async {
+    final bytes = await _readWindowsPairingBytes(
+      _channel,
+      'readPairingReplayStore',
+      atlasVaultMaximumPairingStateByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return AtlasVaultPairingReplayStore.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingReplayStore replayStore) =>
+      _writeWindowsPairingBytes(
+        _channel,
+        'createPairingReplayStore',
+        replayStore.canonicalBytes(),
+        argumentName: 'state_bytes',
+        maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+      );
+
+  @override
+  Future<void> replace(
+    AtlasVaultPairingReplayStore replayStore, {
+    required String expectedSha256,
+  }) => _writeWindowsPairingBytes(
+    _channel,
+    'replacePairingReplayStore',
+    replayStore.canonicalBytes(),
+    argumentName: 'state_bytes',
+    expectedSha256: expectedSha256,
+    maximumByteCount: atlasVaultMaximumPairingStateByteCount,
+  );
+
+  @override
+  String toString() => 'AtlasWindowsPairingReplayStore(<redacted>)';
+}
+
+final class AtlasWindowsPairingTransactionStore
+    implements AtlasVaultPairingTransactionStore {
+  AtlasWindowsPairingTransactionStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingTransaction?> read() async {
+    final bytes = await _readWindowsPairingBytes(
+      _channel,
+      'readPairingTransaction',
+      atlasVaultMaximumPairingTransactionByteCount,
+    );
+    if (bytes == null) return null;
+    try {
+      return AtlasVaultPairingTransaction.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingTransaction transaction) =>
+      _writeWindowsPairingBytes(
+        _channel,
+        'createPairingTransaction',
+        transaction.canonicalBytes(),
+        argumentName: 'transaction_bytes',
+      );
+
+  @override
+  Future<void> replace(
+    AtlasVaultPairingTransaction transaction, {
+    required String expectedSha256,
+  }) => _writeWindowsPairingBytes(
+    _channel,
+    'replacePairingTransaction',
+    transaction.canonicalBytes(),
+    argumentName: 'transaction_bytes',
+    expectedSha256: expectedSha256,
+  );
+
+  @override
+  Future<void> delete({required String expectedSha256}) async {
+    _validateWindowsPairingSha256(expectedSha256);
+    try {
+      await _invoke<void>(
+        _channel,
+        'deletePairingTransaction',
+        <String, Object?>{'expected_sha256': expectedSha256},
+      );
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsPairingTransactionStore(<redacted>)';
+}
+
+final class AtlasWindowsPairingArtifactStageStore
+    implements AtlasVaultPairingArtifactStageStore {
+  AtlasWindowsPairingArtifactStageStore({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingArtifact?> read(
+    AtlasVaultPairingArtifactKind kind,
+  ) async {
+    Uint8List? bytes;
+    try {
+      final value = await _invoke<Object?>(
+        _channel,
+        'readStagedPairingArtifact',
+        <String, Object?>{'kind': kind.encoded},
+      );
+      if (value == null) return null;
+      bytes = _copyBytes(value);
+      _validateWindowsPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      final artifact = AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
+      if (artifact.kind != kind) {
+        throw const AtlasVaultPairingStorageException();
+      }
+      return artifact;
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      if (bytes != null) _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<void> create(AtlasVaultPairingArtifact artifact) =>
+      _writeWindowsPairingBytes(
+        _channel,
+        'createStagedPairingArtifact',
+        artifact.canonicalBytes(),
+        argumentName: 'artifact_bytes',
+        extraArguments: <String, Object?>{'kind': artifact.kind.encoded},
+        maximumByteCount: atlasVaultMaximumPairingArtifactByteCount,
+      );
+
+  @override
+  Future<void> delete(
+    AtlasVaultPairingArtifactKind kind, {
+    required String expectedSha256,
+  }) async {
+    _validateWindowsPairingSha256(expectedSha256);
+    try {
+      await _invoke<void>(
+        _channel,
+        'deleteStagedPairingArtifact',
+        <String, Object?>{
+          'kind': kind.encoded,
+          'expected_sha256': expectedSha256,
+        },
+      );
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsPairingArtifactStageStore(<redacted>)';
+}
+
+final class AtlasWindowsPairingArtifactTransport
+    implements AtlasVaultPairingArtifactTransport {
+  AtlasWindowsPairingArtifactTransport({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  @override
+  Future<AtlasVaultPairingArtifact?> pick() async {
+    Uint8List? bytes;
+    try {
+      final value = await _invoke<Object?>(
+        _channel,
+        'pickPairingArtifact',
+        null,
+      );
+      if (value == null) return null;
+      bytes = _copyBytes(value);
+      _validateWindowsPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      return AtlasVaultPairingArtifact.fromCanonicalBytes(bytes);
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      if (bytes != null) _wipe(bytes);
+    }
+  }
+
+  @override
+  Future<bool> save(AtlasVaultPairingArtifact artifact) async {
+    final bytes = artifact.canonicalBytes();
+    try {
+      _validateWindowsPairingByteCount(
+        bytes,
+        atlasVaultMaximumPairingArtifactByteCount,
+      );
+      final value = await _invoke<Object?>(
+        _channel,
+        'savePairingArtifact',
+        <String, Object?>{'artifact_bytes': bytes},
+      );
+      if (value is! bool) {
+        throw const AtlasVaultPairingStorageException();
+      }
+      return value;
+    } catch (_) {
+      throw const AtlasVaultPairingStorageException();
+    } finally {
+      _wipe(bytes);
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsPairingArtifactTransport(<redacted>)';
+}
+
 final class AtlasWindowsProtectedMigrationJournalStore
     implements AtlasVaultProtectedMigrationJournalStore {
   AtlasWindowsProtectedMigrationJournalStore({MethodChannel? channel})
@@ -728,6 +1027,65 @@ void _validateVaultId(String value) {
 void _validateSha256(String value) {
   if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
     throw const AtlasVaultWindowsStorageException();
+  }
+}
+
+Future<Uint8List?> _readWindowsPairingBytes(
+  MethodChannel channel,
+  String method,
+  int maximumByteCount,
+) async {
+  Uint8List? bytes;
+  try {
+    final value = await _invoke<Object?>(channel, method, null);
+    if (value == null) return null;
+    bytes = _copyBytes(value);
+    _validateWindowsPairingByteCount(bytes, maximumByteCount);
+    return Uint8List.fromList(bytes);
+  } catch (_) {
+    throw const AtlasVaultPairingStorageException();
+  } finally {
+    if (bytes != null) _wipe(bytes);
+  }
+}
+
+Future<void> _writeWindowsPairingBytes(
+  MethodChannel channel,
+  String method,
+  Uint8List source, {
+  required String argumentName,
+  String? expectedSha256,
+  Map<String, Object?> extraArguments = const <String, Object?>{},
+  int maximumByteCount = atlasVaultMaximumPairingTransactionByteCount,
+}) async {
+  final bytes = Uint8List.fromList(source);
+  try {
+    _validateWindowsPairingByteCount(bytes, maximumByteCount);
+    if (expectedSha256 != null) {
+      _validateWindowsPairingSha256(expectedSha256);
+    }
+    await _invoke<void>(channel, method, <String, Object?>{
+      ...extraArguments,
+      argumentName: bytes,
+      'expected_sha256': ?expectedSha256,
+    });
+  } catch (_) {
+    throw const AtlasVaultPairingStorageException();
+  } finally {
+    _wipe(bytes);
+    _wipe(source);
+  }
+}
+
+void _validateWindowsPairingByteCount(Uint8List bytes, int maximum) {
+  if (bytes.isEmpty || bytes.length > maximum) {
+    throw const AtlasVaultPairingStorageException();
+  }
+}
+
+void _validateWindowsPairingSha256(String value) {
+  if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+    throw const AtlasVaultPairingStorageException();
   }
 }
 

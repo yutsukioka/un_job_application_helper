@@ -28,6 +28,20 @@ export 'src/atlas_vault/interoperability_view.dart'
         AtlasVaultInteroperabilityPresentationStatus;
 export 'src/atlas_vault/models.dart'
     show AtlasVaultEncryptedRecord, AtlasVaultLocalStore;
+export 'src/atlas_vault/pairing_transaction.dart'
+    show
+        AtlasVaultPairingCleanInstallDisposition,
+        AtlasVaultPairingTransaction,
+        AtlasVaultPairingTransactionException,
+        AtlasVaultPairingTransactionStore,
+        AtlasVaultTrustedPairingCoordinator,
+        AtlasVaultTrustedPairingTransactionAdmission;
+export 'src/atlas_vault/pairing_view.dart'
+    show
+        AtlasVaultTrustedPairingContext,
+        AtlasVaultTrustedPairingPanel,
+        AtlasVaultTrustedPairingPresentationOwner,
+        AtlasVaultTrustedPairingPresentationStatus;
 export 'src/atlas_vault/plaintext_migration.dart'
     show
         AtlasLocalCacheMigrationCleanupSource,
@@ -68,8 +82,13 @@ export 'src/atlas_vault/windows_storage.dart'
         AtlasVaultWindowsStorageException,
         AtlasWindowsDeviceIdentitySecretStore,
         AtlasWindowsEncryptedDocumentTransport,
+        AtlasWindowsPairingArtifactStageStore,
+        AtlasWindowsPairingArtifactTransport,
+        AtlasWindowsPairingReplayStore,
+        AtlasWindowsPairingTransactionStore,
         AtlasWindowsProtectedMigrationJournalStore,
         AtlasWindowsProtectedRecoveryImportJournalStore,
         AtlasWindowsSelectedVaultStore,
+        AtlasWindowsTrustedDeviceRegistryStore,
         AtlasWindowsVaultLocalStoreIO,
         AtlasWindowsVaultSecureKeyStore;

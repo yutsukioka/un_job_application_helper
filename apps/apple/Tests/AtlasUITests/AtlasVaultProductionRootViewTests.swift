@@ -7,6 +7,23 @@ import XCTest
 final class AtlasVaultProductionRootViewTests: XCTestCase {
     private static let fakeQuery = "FAKE_PHASE_2D57_ROOT_QUERY_DO_NOT_LOG"
 
+    func testRootPresentsOneExplicitTrustedPairingPanel() throws {
+        let source = try Self.source(
+            named: "AtlasVaultProductionRootView.swift"
+        )
+
+        for required in [
+            "pairingContext",
+            "AtlasVaultPairingView",
+            "Pair Trusted Device",
+            "AtlasVaultPairingPresentationClaim",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(source.contains(".task { await pairing"))
+        XCTAssertFalse(source.contains(".onAppear { pairing"))
+    }
+
     func testUnlockedRootUsesOptionalSavedSearchContext() throws {
         let source = try Self.source(
             named: "AtlasVaultProductionRootView.swift"

@@ -390,6 +390,15 @@ final class AtlasVaultPairingSession {
   String toString() => 'AtlasVaultPairingSession(<redacted>)';
 }
 
+String atlasVaultPairingDeviceFingerprint(String deviceId) {
+  if (!RegExp(r'^avd1-[0-9a-f]{64}$').hasMatch(deviceId)) {
+    throw const AtlasVaultPairingException();
+  }
+  final prefix = deviceId.substring(5, 21).toUpperCase();
+  return '${prefix.substring(0, 4)}-${prefix.substring(4, 8)}-'
+      '${prefix.substring(8, 12)}-${prefix.substring(12, 16)}';
+}
+
 enum AtlasVaultPairingReplayOutcome { accepted, alreadyConsumed }
 
 abstract interface class AtlasVaultPairingReplayGuard {

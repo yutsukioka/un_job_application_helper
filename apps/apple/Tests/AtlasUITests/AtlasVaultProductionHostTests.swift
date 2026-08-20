@@ -20,6 +20,39 @@ final class AtlasVaultProductionHostTests: XCTestCase {
         "00000000-0000-4000-8000-000000000256"
     private static let fakeQuery = "FAKE_PHASE_2D56_QUERY_DO_NOT_LOG"
 
+    func testHostRetainsAndDrainsOneTrustedPairingAuthority() throws {
+        let source = try source(named: "AtlasVaultProductionHost.swift")
+
+        for required in [
+            "AtlasVaultTrustedPairingAuthority",
+            "attachTrustedPairingAuthority",
+            "clearSensitiveInput",
+            "stopAndDrain",
+        ] {
+            XCTAssertTrue(source.contains(required), required)
+        }
+        XCTAssertFalse(source.contains("createPairingOffer()"))
+    }
+
+    func testHostClearsPairingInputOnLifecycleLossAndDrainsOnStop()
+        async throws
+    {
+        let graph = try makeGraph()
+        let authority = HostTrustedPairingAuthorityFake()
+        let attached = await graph.host.attachTrustedPairingAuthority(
+            authority
+        )
+        XCTAssertTrue(attached)
+
+        _ = await graph.host.handleLifecycleEvent(.didEnterBackground)
+        let clearCount = await authority.clearCount()
+        XCTAssertEqual(clearCount, 1)
+
+        _ = await graph.host.stop()
+        let stopCount = await authority.stopCount()
+        XCTAssertEqual(stopCount, 1)
+    }
+
     func testHostOwnsPrivateSessionAndMutationBoundaries() throws {
         let source = try source(named: "AtlasVaultProductionHost.swift")
 
@@ -7138,6 +7171,24 @@ private func expectNotEqual<Value: Equatable>(
     } catch {
         XCTFail("Unexpected error: \(error)", file: file, line: line)
     }
+}
+
+private actor HostTrustedPairingAuthorityFake:
+    AtlasVaultTrustedPairingAuthority
+{
+    private var clears = 0
+    private var stops = 0
+
+    func clearSensitiveInput() {
+        clears += 1
+    }
+
+    func stopAndDrain() {
+        stops += 1
+    }
+
+    func clearCount() -> Int { clears }
+    func stopCount() -> Int { stops }
 }
 
 private func expectTrue(

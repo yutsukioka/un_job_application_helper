@@ -377,3 +377,112 @@ scope expansion, or any implementation of trust/linking/key delivery before a
 separate review. Different valid signed envelopes may have different transcript
 hashes; treating that expected difference as equivalent to a mismatch for the
 same bytes is incorrect.
+
+## 67. Phase 2F-2 Local Onboarding Boundary
+
+Phase 2F-2 authorizes explicit file-mediated pairing, durable local replay
+consumption, authenticated encrypted vault-key delivery, clean-install
+installation, and bilateral local trust records. It does not authorize a
+backend, network transport, synchronized records, revocation, or rotation.
+
+## 68. Stolen Pairing Artifact
+
+**Classification: mitigated for confidentiality and trust; denial remains.**
+Offer and acceptance artifacts are signed and transcript-bound. Delivery is
+encrypted to the invitee ephemeral X25519 key and binds both device IDs,
+request, bootstrap, vault, epoch, expiry, and delivery ID. A thief can delete,
+delay, copy, or replay files, but cannot decrypt the vault key without the
+protected ephemeral private key. Durable replay state rejects consumed logical
+objects. File possession alone never commits trust.
+
+## 69. Authentication-String Mismatch
+
+**Classification: fail closed.** Both users must explicitly confirm the same
+six-byte SAS rendered as `XXXX-XXXX-XXXX`. Delivery and installation remain
+blocked until the role-specific confirmation. The UI warns users to compare on
+both recognized devices rather than through the artifact channel.
+
+## 70. Transaction Interruption
+
+**Classification: mitigated locally.** Platform-protected transaction state,
+hash-bound staged artifacts, monotonic stages, create-only resources, and
+read-back verification support resume. Before selected-vault creation, reset
+deletes only exact staged resources. After selection, reset is unavailable and
+the transaction is resume-only. Transaction clearing is last.
+
+## 71. Registry Equivocation
+
+**Classification: partially mitigated locally; synchronization deferred.** A
+device-local registry is strict, revisioned, create-only, descriptor-verified,
+and conflict-safe. No server or peer can replace a committed logical peer
+silently. Registries are not synchronized, so cross-device list convergence,
+server equivocation detection, and monotonic rollback protection remain open.
+
+## 72. Delivery-Key And Ephemeral-Key Lifetime
+
+**Classification: mitigated best-effort.** Delivery uses fresh ephemeral
+X25519, transcript-salted HKDF-SHA256, and AES-256-GCM. The delivery key,
+shared secret, and raw vault key are process-local and wiped where mutable.
+The invitee ephemeral private key may persist only inside protected transaction
+state until installation or permitted cleanup.
+
+## 73. Bilateral Trust Asymmetry
+
+**Classification: explicitly ordered.** The invitee commits inviter trust only
+after store/key/selection installation, runtime activation, and bootstrap
+verification. The inviter commits invitee trust only after verifying and
+durably consuming the signed installation acknowledgement. An interrupted
+exchange can therefore be incomplete but cannot silently claim bilateral
+completion.
+
+## 74. Remaining Multi-Device Risks
+
+Phase 2F-2 still has no ongoing ciphertext exchange, synchronized registry,
+malicious-server rollback state, remote removal, compromise recovery, or vault
+key rotation. A previously paired stolen device remains trusted until a later
+revocation and epoch-rotation phase. The local onboarding milestone must not be
+described as full multi-device readiness.
+
+## 75. Pairing Transaction Race Hardening
+
+**Classification: mitigated for this local onboarding boundary.** Imported
+artifacts and generated delivery or acknowledgement artifacts are hash-bound in
+protected transaction state before create-only staging. Store and protected-key
+digests are journaled before platform creation. Resume adopts only an absent
+intended resource or an exact authenticated/read-back match. The inviter
+verifies acknowledgement signature and delivery-bound invitee identity before
+replay or trust mutation. Android and Windows use their established
+cross-process private-authority admission; Apple pairing, creation, and recovery
+import share one pending-transaction authority and pairing mutations fail
+closed after lifecycle loss or cancellation.
+
+Flutter invalidates a scoped operation generation before presentation teardown
+or lifecycle hiding and checks it immediately before every later sensitive
+mutation. Hidden pending transactions continue to block authority changes, and
+the controller performs that check before deactivating an active pairing vault.
+Invitee resume completes the journaled `sas_confirmed` interruption point only
+through exact replay idempotence. Apple rejects newly consumed entries at or
+after expiry and imports artifacts through a no-follow regular-file descriptor
+with a bounded incremental read rather than an unbounded convenience load.
+
+## 76. Cross-Runtime Text Domain
+
+**Classification: mitigated for signed pairing bootstrap content.** Python,
+Dart, and Swift require every bootstrap JSON string and object key to be
+nonempty printable ASCII before canonical signing, hashing, or delivery. This
+deliberately excludes Unicode normalization and surrogate interpretation from
+the Phase 2F-2 cryptographic domain. Swift applies the recursive check during
+direct bootstrap construction as well as decoding. Future protocol versions
+may broaden the text domain only with explicit scalar-level canonicalization
+vectors.
+
+## 77. Production Readiness Follow-Up
+
+**Classification: release blocking for production multi-device use.** Issue
+#101 tracks three controls outside this phase's fixed 53-file scope: a monotonic
+local deadline after artifact presentation, aggregate byte/resource bounds for
+protected pairing state, and explicit step-up authorization immediately before
+an inviter releases encrypted vault-key material. Phase 2F-2 may establish the
+reviewed local onboarding primitive, but production multi-device readiness must
+not be claimed until those controls receive their own implementation and
+verification gate.
