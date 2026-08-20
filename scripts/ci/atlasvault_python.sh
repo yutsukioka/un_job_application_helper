@@ -117,6 +117,30 @@ required_swift_isolation = (
 )
 if any(marker not in swift_script for marker in required_swift_isolation):
     raise SystemExit("Swift cancellation tests must run in isolated processes.")
+python_script = Path("scripts/ci/atlasvault_python.sh").read_text(encoding="utf-8")
+flutter_script = Path("scripts/ci/atlasvault_flutter.sh").read_text(encoding="utf-8")
+workflow = Path(
+    ".github/workflows/atlasvault-cross-platform-security.yml"
+).read_text(encoding="utf-8")
+required_python_guard = (
+    "import " + "ast",
+    "ast." + "ImportFrom",
+    "blocked_import_" + "roots",
+    "Validated Python AST " + "no-network policy.",
+)
+required_flutter_guard = (
+    "_mask_dart_" + "non_code",
+    "_init_state_" + "bodies",
+    "multiline_init_state_" + "samples",
+    "Validated Dart lifecycle-body " + "automatic-operation policy.",
+)
+if any(marker not in python_script for marker in required_python_guard):
+    raise SystemExit("Python no-network policy must use structured AST checks.")
+if any(marker not in flutter_script for marker in required_flutter_guard):
+    raise SystemExit("Dart automatic-operation policy must inspect lifecycle bodies.")
+setup_python = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+if workflow.count(setup_python) != 2:
+    raise SystemExit("Python must be explicitly provisioned for both structured guards.")
 print("Validated standard-tool-only AtlasVault source guards.")
 PY
 
