@@ -21,8 +21,16 @@ fi
 cd "$APPLE_ROOT"
 
 swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing)Tests'
-swift test --scratch-path "$TEMP_ROOT/full" --filter 'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
-swift test --scratch-path "$TEMP_ROOT/full" --skip 'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
+isolated_tests=(
+  'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
+  'AtlasVaultUnlockRequestCoordinatorTests.testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer'
+)
+for test in "${isolated_tests[@]}"; do
+  swift test --scratch-path "$TEMP_ROOT/full" --filter "$test"
+done
+swift test --scratch-path "$TEMP_ROOT/full" \
+  --skip "${isolated_tests[0]}" \
+  --skip "${isolated_tests[1]}"
 
 cd "$FLUTTER_ROOT"
 flutter pub get

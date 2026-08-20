@@ -106,6 +106,17 @@ for path in scripts:
             matches.append(f"{path}:{line_number}")
 if matches:
     raise SystemExit("AtlasVault CI scripts use undeclared ripgrep commands.")
+swift_script = Path("scripts/ci/atlasvault_swift.sh").read_text(encoding="utf-8")
+required_swift_isolation = (
+    "AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns",
+    "AtlasVaultUnlockRequestCoordinatorTests.testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer",
+    'for test in "${isolated_tests[@]}"',
+    '--filter "$test"',
+    '--skip "${isolated_tests[0]}"',
+    '--skip "${isolated_tests[1]}"',
+)
+if any(marker not in swift_script for marker in required_swift_isolation):
+    raise SystemExit("Swift cancellation tests must run in isolated processes.")
 print("Validated standard-tool-only AtlasVault source guards.")
 PY
 
