@@ -109,7 +109,7 @@ if matches:
 print("Validated standard-tool-only AtlasVault source guards.")
 PY
 
-if rg -n 'requests\.|urllib\.|httpx\.|aiohttp\.|socket\.' packages/vaultsync/vaultsync/device_identity.py packages/vaultsync/vaultsync/pairing.py packages/vaultsync/vaultsync/key_delivery.py packages/vaultsync/vaultsync/pairing_artifacts.py packages/vaultsync/vaultsync/trusted_devices.py; then
+if grep -En -- 'requests\.|urllib\.|httpx\.|aiohttp\.|socket\.' packages/vaultsync/vaultsync/device_identity.py packages/vaultsync/vaultsync/pairing.py packages/vaultsync/vaultsync/key_delivery.py packages/vaultsync/vaultsync/pairing_artifacts.py packages/vaultsync/vaultsync/trusted_devices.py; then
   printf 'Network access is not permitted in AtlasVault pairing primitives.\n' >&2
   exit 1
 fi

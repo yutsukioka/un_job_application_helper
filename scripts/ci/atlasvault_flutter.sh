@@ -37,7 +37,7 @@ fi
 flutter test "${full_tests[@]}"
 flutter build apk --debug
 
-if rg -n 'initState.*pair|automatically.*pair|initState.*import|initState.*export' lib/src/atlas_vault lib/features/app_shell/atlas_app.dart; then
+if grep -ERn -- 'initState.*pair|automatically.*pair|initState.*import|initState.*export' lib/src/atlas_vault lib/features/app_shell/atlas_app.dart; then
   printf 'Automatic AtlasVault pairing/import/export is not permitted.\n' >&2
   exit 1
 fi
