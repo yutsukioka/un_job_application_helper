@@ -144,10 +144,64 @@ if workflow.count(setup_python) != 2:
 print("Validated standard-tool-only AtlasVault source guards.")
 PY
 
-if grep -En -- 'requests\.|urllib\.|httpx\.|aiohttp\.|socket\.' packages/vaultsync/vaultsync/device_identity.py packages/vaultsync/vaultsync/pairing.py packages/vaultsync/vaultsync/key_delivery.py packages/vaultsync/vaultsync/pairing_artifacts.py packages/vaultsync/vaultsync/trusted_devices.py; then
-  printf 'Network access is not permitted in AtlasVault pairing primitives.\n' >&2
-  exit 1
-fi
+python - <<'PY'
+import ast
+from pathlib import Path
+
+blocked_import_roots = frozenset(
+    {"aiohttp", "httpx", "requests", "socket", "urllib"}
+)
+targets = (
+    Path("packages/vaultsync/vaultsync/device_identity.py"),
+    Path("packages/vaultsync/vaultsync/pairing.py"),
+    Path("packages/vaultsync/vaultsync/key_delivery.py"),
+    Path("packages/vaultsync/vaultsync/pairing_artifacts.py"),
+    Path("packages/vaultsync/vaultsync/trusted_devices.py"),
+)
+
+
+def _blocked_imports(source: str) -> bool:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name.partition(".")[0] in blocked_import_roots
+                for alias in node.names
+            ):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.partition(".")[0] in blocked_import_roots:
+                return True
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "__import__"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.partition(".")[0] in blocked_import_roots
+        ):
+            return True
+    return False
+
+
+aliased_import_samples = (
+    "import httpx as client",
+    "from requests import get",
+    "from socket import socket as connect",
+    "import urllib.request as network",
+    "__import__('aiohttp')",
+)
+if not all(_blocked_imports(sample) for sample in aliased_import_samples):
+    raise SystemExit("Python AST no-network self-test failed.")
+if _blocked_imports("import json\njson.loads('{}')"):
+    raise SystemExit("Python AST no-network self-test failed.")
+for path in targets:
+    if _blocked_imports(path.read_text(encoding="utf-8")):
+        raise SystemExit("Network imports are not permitted in pairing primitives.")
+print("Validated Python AST no-network policy.")
+PY
 
 forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
 if [[ -n "$forbidden" ]]; then
