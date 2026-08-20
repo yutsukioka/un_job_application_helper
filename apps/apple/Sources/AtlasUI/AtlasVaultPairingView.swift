@@ -77,6 +77,7 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
     @Published public private(set) var pendingTransaction = false
     @Published public private(set) var pendingSave:
         AtlasVaultPairingPendingSave?
+    @Published public private(set) var isBusy = false
 
     private let coordinator: any AtlasVaultTrustedPairingCoordinating
     private var presentationClaim: AtlasVaultPairingPresentationClaim?
@@ -87,8 +88,6 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
     public init(coordinator: any AtlasVaultTrustedPairingCoordinating) {
         self.coordinator = coordinator
     }
-
-    public var isBusy: Bool { operationTask != nil }
 
     public func present() {
         guard !terminal, status == .hidden else { return }
@@ -208,6 +207,7 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         operationTask?.cancel()
         await retained?.value
         operationTask = nil
+        isBusy = false
     }
 
     public func stopAndDrain() async {
@@ -218,6 +218,7 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         operationTask?.cancel()
         await retained?.value
         operationTask = nil
+        isBusy = false
         await coordinator.stop()
         clearPublicDetails()
         status = .hidden
@@ -271,13 +272,15 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         _ operation: @escaping @MainActor @Sendable () async throws -> Value,
         publish: @escaping @MainActor @Sendable (Value) -> Void
     ) {
-        guard !terminal, operationTask == nil else { return }
+        guard !terminal, operationTask == nil, !isBusy else { return }
+        isBusy = true
         let operationGeneration = generation
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
                 if self.isCurrent(operationGeneration) {
                     self.operationTask = nil
+                    self.isBusy = false
                 }
             }
             do {

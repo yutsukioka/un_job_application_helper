@@ -61,6 +61,13 @@ be adopted after interruption only after signature verification and complete
 transaction binding. The invitee stages and reads back its signed
 acknowledgement before committing inviter trust.
 
+Before a delivery save transport is invoked, the protected transaction advances
+to `delivery_export_started`. This is a resume-only boundary because the
+external file may become available before the app can journal completion.
+Cancellation, process exit, or failure to advance to `delivery_saved` does not
+re-enable destructive discard. A retry reuses the exact hash-bound staged
+delivery.
+
 The platform transports enforce per-artifact bounds. Aggregate protected-state
 bounds, a monotonic local deadline after presentation, and inviter step-up
 authorization are tracked as production-readiness blockers in issue #101.

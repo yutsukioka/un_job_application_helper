@@ -32,6 +32,7 @@ public enum AtlasVaultPairingStage: String, Codable, Sendable {
     case sasConfirmed = "sas_confirmed"
     case offerConsumed = "offer_consumed"
     case deliveryCreated = "delivery_created"
+    case deliveryExportStarted = "delivery_export_started"
     case deliverySaved = "delivery_saved"
     case deliveryImported = "delivery_imported"
     case storeCreated = "store_created"
@@ -532,7 +533,8 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         case .inviter:
             return [
                 .offerCreated, .offerSaved, .acceptanceImported, .sasConfirmed,
-                .deliveryCreated, .deliverySaved, .acknowledgementImported,
+                .deliveryCreated, .deliveryExportStarted, .deliverySaved,
+                .acknowledgementImported,
                 .acknowledgementConsumed, .trustCommitted,
             ]
         case .invitee:
@@ -1368,15 +1370,29 @@ public actor AtlasVaultTrustedPairingCoordinator:
         _ kind: AtlasVaultPairingArtifactKind
     ) async throws -> AtlasVaultPairingArtifact {
         guard !stopped, !operationInProgress,
-              let transaction = try await environment.loadTransaction()
+              var transaction = try await environment.loadTransaction()
         else {
             throw AtlasVaultPairingTransactionError.unavailable
+        }
+        operationInProgress = true
+        defer { operationInProgress = false }
+        if kind == .delivery {
+            guard transaction.role == .inviter,
+                  transaction.stage == .deliveryCreated
+                    || transaction.stage == .deliveryExportStarted
+            else { throw AtlasVaultPairingTransactionError.stale }
         }
         let artifact = try await requireArtifact(
             kind,
             transaction: transaction
         )
         try requireCurrentDeliveryForSave(kind, artifact: artifact)
+        if kind == .delivery, transaction.stage == .deliveryCreated {
+            transaction = try await advance(
+                transaction,
+                to: .deliveryExportStarted
+            )
+        }
         return artifact
     }
 
@@ -1405,7 +1421,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             case .delivery:
                 expected = (
                     .inviter,
-                    .deliveryCreated,
+                    .deliveryExportStarted,
                     .deliverySaved,
                     .deliverySaved
                 )
@@ -1879,7 +1895,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                   transaction.stage != .acknowledgementCreated,
                   transaction.stage != .acknowledgementSaved,
                   !(transaction.role == .inviter
-                    && Self.isAtLeast(transaction, .deliverySaved))
+                    && Self.isAtLeast(transaction, .deliveryExportStarted))
             else {
                 return self.fixed(.recoveryRequired, pending: true)
             }
@@ -2912,6 +2928,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         case .acceptanceImported: disposition = .codesReady
         case .sasConfirmed, .offerConsumed: disposition = .codesConfirmed
         case .deliveryCreated: disposition = .deliveryReady
+        case .deliveryExportStarted: disposition = .deliveryReady
         case .deliverySaved: disposition = .deliverySaved
         case .deliveryImported, .storeCreated, .keyCreated,
              .selectionCommitted, .runtimeActivated,
@@ -2926,7 +2943,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
            transaction.transcriptSHA256 != nil,
            transaction.acceptanceSHA256 != nil,
            [.acceptanceSaved, .acceptanceImported, .sasConfirmed,
-            .offerConsumed, .deliveryCreated, .deliverySaved]
+            .offerConsumed, .deliveryCreated, .deliveryExportStarted,
+            .deliverySaved]
             .contains(transaction.stage) {
             return try await resultWithSAS(
                 disposition,
@@ -3042,7 +3060,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
         let stages: [AtlasVaultPairingStage] = transaction.role == .inviter
             ? [
                 .offerCreated, .offerSaved, .acceptanceImported,
-                .sasConfirmed, .deliveryCreated, .deliverySaved,
+                .sasConfirmed, .deliveryCreated, .deliveryExportStarted,
+                .deliverySaved,
                 .acknowledgementImported, .acknowledgementConsumed,
                 .trustCommitted,
             ]

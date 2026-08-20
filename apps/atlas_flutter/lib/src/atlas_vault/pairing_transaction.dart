@@ -57,6 +57,7 @@ enum AtlasVaultPairingStage {
   sasConfirmed('sas_confirmed'),
   offerConsumed('offer_consumed'),
   deliveryCreated('delivery_created'),
+  deliveryExportStarted('delivery_export_started'),
   deliverySaved('delivery_saved'),
   deliveryImported('delivery_imported'),
   storeCreated('store_created'),
@@ -80,6 +81,7 @@ const _inviterStages = <AtlasVaultPairingStage>[
   AtlasVaultPairingStage.acceptanceImported,
   AtlasVaultPairingStage.sasConfirmed,
   AtlasVaultPairingStage.deliveryCreated,
+  AtlasVaultPairingStage.deliveryExportStarted,
   AtlasVaultPairingStage.deliverySaved,
   AtlasVaultPairingStage.acknowledgementImported,
   AtlasVaultPairingStage.acknowledgementConsumed,
@@ -1234,6 +1236,7 @@ final class AtlasVaultTrustedPairingCoordinator
     () => _saveArtifact(
       expectedRole: AtlasVaultPairingRole.inviter,
       expectedStage: AtlasVaultPairingStage.deliveryCreated,
+      sideEffectIntentStage: AtlasVaultPairingStage.deliveryExportStarted,
       kind: AtlasVaultPairingArtifactKind.delivery,
       savedStage: AtlasVaultPairingStage.deliverySaved,
       disposition: AtlasVaultTrustedPairingDisposition.deliverySaved,
@@ -1467,7 +1470,10 @@ final class AtlasVaultTrustedPairingCoordinator
         }
         final inviterPastBoundary =
             transaction.role == AtlasVaultPairingRole.inviter &&
-            _stageAtLeast(transaction, AtlasVaultPairingStage.deliverySaved);
+            _stageAtLeast(
+              transaction,
+              AtlasVaultPairingStage.deliveryExportStarted,
+            );
         final inviteePastBoundary =
             transaction.role == AtlasVaultPairingRole.invitee &&
             (transaction.selectionCommitted ||
@@ -1763,8 +1769,16 @@ final class AtlasVaultTrustedPairingCoordinator
         transaction,
         AtlasVaultPairingStage.runtimeActivated,
       )) {
-        _authorizeSensitiveMutation();
-        if (!await _activateInstalledVault(vaultId)) {
+        if (!_runtime.isActiveVault(vaultId)) {
+          if (_runtime.isActive) {
+            throw const AtlasVaultPairingTransactionException();
+          }
+          _authorizeSensitiveMutation();
+          if (!await _activateInstalledVault(vaultId)) {
+            throw const AtlasVaultPairingTransactionException();
+          }
+        }
+        if (!_runtime.isActiveVault(vaultId)) {
           throw const AtlasVaultPairingTransactionException();
         }
         final snapshot = await _runtime.read();
@@ -2419,18 +2433,34 @@ final class AtlasVaultTrustedPairingCoordinator
   Future<AtlasVaultTrustedPairingResult> _saveArtifact({
     required AtlasVaultPairingRole expectedRole,
     required AtlasVaultPairingStage expectedStage,
+    AtlasVaultPairingStage? sideEffectIntentStage,
     required AtlasVaultPairingArtifactKind kind,
     required AtlasVaultPairingStage savedStage,
     required AtlasVaultTrustedPairingDisposition disposition,
   }) async {
     AtlasVaultDeviceIdentity? identity;
+    AtlasVaultPairingTransaction? transaction;
     try {
-      final transaction = await _requireStage(expectedRole, expectedStage);
+      transaction = await _transactionStore.read();
+      if (transaction == null ||
+          transaction.role != expectedRole ||
+          (transaction.stage != expectedStage &&
+              transaction.stage != sideEffectIntentStage)) {
+        throw const AtlasVaultPairingTransactionException();
+      }
       final artifact = await _requireStaged(kind, transaction);
       _requireCurrentDeliveryForSave(kind, artifact);
+      if (sideEffectIntentStage != null && transaction.stage == expectedStage) {
+        final prior = transaction;
+        transaction = await _advance(prior, sideEffectIntentStage);
+        prior.destroy();
+      }
       _authorizeSensitiveMutation();
       if (!await _artifactTransport.save(artifact)) {
-        return _fixed(AtlasVaultTrustedPairingDisposition.cancelled);
+        return _fixed(
+          AtlasVaultTrustedPairingDisposition.cancelled,
+          pending: true,
+        );
       }
       _requireCurrentDeliveryForSave(kind, artifact);
       final updated = await _advance(transaction, savedStage);
@@ -2443,6 +2473,7 @@ final class AtlasVaultTrustedPairingCoordinator
       );
     } finally {
       identity?.destroy();
+      transaction?.destroy();
     }
   }
 
@@ -2482,6 +2513,8 @@ final class AtlasVaultTrustedPairingCoordinator
         AtlasVaultPairingStage.offerConsumed =>
           AtlasVaultTrustedPairingDisposition.codesConfirmed,
         AtlasVaultPairingStage.deliveryCreated =>
+          AtlasVaultTrustedPairingDisposition.deliveryReady,
+        AtlasVaultPairingStage.deliveryExportStarted =>
           AtlasVaultTrustedPairingDisposition.deliveryReady,
         AtlasVaultPairingStage.deliverySaved =>
           AtlasVaultTrustedPairingDisposition.deliverySaved,

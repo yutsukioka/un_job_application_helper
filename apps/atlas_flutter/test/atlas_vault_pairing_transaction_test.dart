@@ -393,7 +393,7 @@ void main() {
     );
     expect(
       journey.inviterTransactions.value?.stage,
-      AtlasVaultPairingStage.deliveryCreated,
+      AtlasVaultPairingStage.deliveryExportStarted,
     );
   });
 
@@ -896,38 +896,35 @@ void main() {
     expect(journey.inviterTransactions.value, isNull);
   });
 
-  test(
-    'delivery export is resume-only before its save is journaled',
-    () async {
-      final journey = await _PairingJourney.create(
-        vector,
-        inviterTransactionReplaceFailureStage:
-            AtlasVaultPairingStage.deliverySaved,
-        inviterTransactionReplaceFailures: 1,
-      );
-      addTearDown(journey.stop);
-      await _exchangeAcceptance(journey);
-      await journey.inviter.confirmCodesMatch();
-      await journey.invitee.confirmCodesMatch();
+  test('delivery export is resume-only before its save is journaled', () async {
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterTransactionReplaceFailureStage:
+          AtlasVaultPairingStage.deliverySaved,
+      inviterTransactionReplaceFailures: 1,
+    );
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    await journey.inviter.confirmCodesMatch();
+    await journey.invitee.confirmCodesMatch();
 
-      final interrupted = await journey.inviter.saveKeyDelivery();
-      final discard = await journey.inviter.discardPairing();
+    final interrupted = await journey.inviter.saveKeyDelivery();
+    final discard = await journey.inviter.discardPairing();
 
-      expect(
-        interrupted.disposition,
-        AtlasVaultTrustedPairingDisposition.recoveryRequired,
-      );
-      expect(
-        discard.disposition,
-        AtlasVaultTrustedPairingDisposition.recoveryRequired,
-      );
-      expect(journey.inviterTransactions.value, isNotNull);
-      expect(
-        (await journey.inviter.resumePairing()).disposition,
-        AtlasVaultTrustedPairingDisposition.deliveryReady,
-      );
-    },
-  );
+    expect(
+      interrupted.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      discard.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviterTransactions.value, isNotNull);
+    expect(
+      (await journey.inviter.resumePairing()).disposition,
+      AtlasVaultTrustedPairingDisposition.deliveryReady,
+    );
+  });
 
   test(
     'invitee resumes replay consumption after SAS journal advance',

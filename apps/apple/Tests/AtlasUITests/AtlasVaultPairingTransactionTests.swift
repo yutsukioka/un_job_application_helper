@@ -242,7 +242,7 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         let transaction = await journey.inviterState.loadTransaction()
 
         XCTAssertEqual(result.disposition, .recoveryRequired)
-        XCTAssertEqual(transaction?.stage, .deliveryCreated)
+        XCTAssertEqual(transaction?.stage, .deliveryExportStarted)
     }
 
     func testDeliveryExportIntentBlocksDiscardWhenSaveAdvanceFails()

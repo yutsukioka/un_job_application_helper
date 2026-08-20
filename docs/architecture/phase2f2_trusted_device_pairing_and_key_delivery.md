@@ -120,6 +120,19 @@ the signed key-request issuance time rather than reapplying wall-clock expiry.
 This preserves the expiry gate for new artifacts while allowing an already
 admitted, hash-bound installation to finish after interruption.
 
+Delivery export records `delivery_export_started` before invoking platform
+document transport. That stage is resume-only because an external artifact may
+already exist even when the subsequent `delivery_saved` CAS fails. Both
+coordinators retry the same staged delivery and prohibit destructive discard
+from the intent stage onward.
+
+Invitee recovery treats an already-active matching vault runtime as the
+idempotent result of an interrupted activation, then revalidates the imported
+projection before advancing the journal. An active different vault still fails
+closed. On Apple, the presentation owner publishes its busy transition before
+starting an operation, so SwiftUI disables interactive sheet dismissal before
+pairing side effects can proceed.
+
 An inviter verifies the signed acknowledgement and binds its invitee identity
 to the authenticated delivery and journaled peer before replay consumption or
 trust mutation. Android and Windows pairing operations run through their
