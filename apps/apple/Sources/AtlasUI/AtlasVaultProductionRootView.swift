@@ -237,6 +237,7 @@ private struct AtlasVaultPairingEnabledRoot<Content: View>: View {
                 )
             ) {
                 AtlasVaultPairingView(owner: owner)
+                    .interactiveDismissDisabled(owner.isBusy)
             }
             .onChange(of: owner.status) { _, status in
                 if status == .hidden {

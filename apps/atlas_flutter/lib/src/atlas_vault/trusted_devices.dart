@@ -582,11 +582,12 @@ AtlasVaultReplayConsumeResult consumeAtlasVaultPairingReplay(
     }
     final entries = <AtlasVaultPairingReplayEntry>[
       ...store.entries.where((value) => now.isBefore(_time(value.expiresAt))),
-      entry,
-    ]..sort(_compareReplay);
-    if (entries.length > _maximumReplayEntries) {
-      entries.removeRange(0, entries.length - _maximumReplayEntries);
+    ];
+    if (entries.length >= _maximumReplayEntries) {
+      throw const AtlasVaultTrustedDeviceStateException();
     }
+    entries.add(entry);
+    entries.sort(_compareReplay);
     final nextRevision = requireAtlasVaultCanonicalUuid(
       revision,
       field: 'revision',

@@ -586,13 +586,12 @@ public enum AtlasVaultPairingReplayFoundation {
                 else { return false }
                 return expiry > now
             }
+            guard entries.count < AtlasVaultTrustedDeviceValidation.maximumReplayEntries
+            else {
+                throw AtlasVaultTrustedDeviceStateError.invalidState
+            }
             entries.append(entry)
             entries.sort(by: AtlasVaultPairingReplayStore.lessThan)
-            if entries.count > AtlasVaultTrustedDeviceValidation.maximumReplayEntries {
-                entries.removeFirst(
-                    entries.count - AtlasVaultTrustedDeviceValidation.maximumReplayEntries
-                )
-            }
             let next = try AtlasVaultPairingReplayStore(
                 localDeviceID: store.localDeviceID,
                 revision: revision,

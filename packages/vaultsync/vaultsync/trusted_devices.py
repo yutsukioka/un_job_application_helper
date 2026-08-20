@@ -554,9 +554,9 @@ def consume_pairing_replay(
         retained: Sequence[PairingReplayEntry] = tuple(
             value for value in store.entries if _time(value.expires_at) > now
         )
+        if len(retained) >= MAXIMUM_REPLAY_ENTRIES:
+            raise _invalid_state()
         values = sorted((*retained, entry), key=_replay_order)
-        if len(values) > MAXIMUM_REPLAY_ENTRIES:
-            values = values[-MAXIMUM_REPLAY_ENTRIES:]
         next_revision = _uuid(revision)
         if next_revision in {store.revision, store.parent_revision}:
             raise _invalid_state()

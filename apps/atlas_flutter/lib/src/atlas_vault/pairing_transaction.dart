@@ -798,58 +798,60 @@ final class AtlasVaultTrustedPairingCoordinator
       });
 
   @override
-  Future<AtlasVaultTrustedPairingResult> createPairingOffer() => _run(() async {
-    AtlasVaultDeviceIdentity? identity;
-    try {
-      if (await _transactionStore.read() != null) {
-        return _fixed(
-          AtlasVaultTrustedPairingDisposition.recoveryRequired,
-          pending: true,
-        );
+  Future<AtlasVaultTrustedPairingResult> createPairingOffer() => _run(
+    () => _transactionAdmission.runTrustedPairingTransaction(() async {
+      AtlasVaultDeviceIdentity? identity;
+      try {
+        if (await _transactionStore.read() != null) {
+          return _fixed(
+            AtlasVaultTrustedPairingDisposition.recoveryRequired,
+            pending: true,
+          );
+        }
+        identity = await _requireIdentity();
+        return await _runtime.withInteroperabilitySession((session) async {
+          final issued = _now().toUtc();
+          final issuedAt = _utc(issued);
+          final expiresAt = _utc(issued.add(const Duration(minutes: 10)));
+          final signed = await createAtlasVaultPairingOffer(
+            inviter: identity!,
+            offerId: _uuidProvider(),
+            nonce: _randomBytes(32),
+            issuedAt: issuedAt,
+            expiresAt: expiresAt,
+          );
+          final artifact = _artifact(
+            AtlasVaultPairingArtifactKind.offer,
+            <String, Object?>{'signed_offer': signed.toJson()},
+          );
+          final transaction = await _newTransaction(
+            role: AtlasVaultPairingRole.inviter,
+            stage: AtlasVaultPairingStage.offerCreated,
+            localDeviceId: identity.deviceId,
+            createdAt: issuedAt,
+            offerSha256: await atlasVaultSha256Hex(artifact.canonicalBytes()),
+            vaultId: session.vaultId,
+            keyEpoch: _initialVaultKeyEpoch,
+            stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
+          );
+          _authorizeSensitiveMutation();
+          await _transactionStore.create(transaction);
+          await _createStaged(artifact);
+          await _requireTransaction(transaction);
+          return _result(
+            AtlasVaultTrustedPairingDisposition.offerReady,
+            transaction,
+            local: identity,
+            expiresAt: expiresAt,
+          );
+        });
+      } catch (_) {
+        return _fixed(AtlasVaultTrustedPairingDisposition.unavailable);
+      } finally {
+        identity?.destroy();
       }
-      identity = await _requireIdentity();
-      return await _runtime.withInteroperabilitySession((session) async {
-        final issued = _now().toUtc();
-        final issuedAt = _utc(issued);
-        final expiresAt = _utc(issued.add(const Duration(minutes: 10)));
-        final signed = await createAtlasVaultPairingOffer(
-          inviter: identity!,
-          offerId: _uuidProvider(),
-          nonce: _randomBytes(32),
-          issuedAt: issuedAt,
-          expiresAt: expiresAt,
-        );
-        final artifact = _artifact(
-          AtlasVaultPairingArtifactKind.offer,
-          <String, Object?>{'signed_offer': signed.toJson()},
-        );
-        final transaction = await _newTransaction(
-          role: AtlasVaultPairingRole.inviter,
-          stage: AtlasVaultPairingStage.offerCreated,
-          localDeviceId: identity.deviceId,
-          createdAt: issuedAt,
-          offerSha256: await atlasVaultSha256Hex(artifact.canonicalBytes()),
-          vaultId: session.vaultId,
-          keyEpoch: _initialVaultKeyEpoch,
-          stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
-        );
-        _authorizeSensitiveMutation();
-        await _transactionStore.create(transaction);
-        await _createStaged(artifact);
-        await _requireTransaction(transaction);
-        return _result(
-          AtlasVaultTrustedPairingDisposition.offerReady,
-          transaction,
-          local: identity,
-          expiresAt: expiresAt,
-        );
-      });
-    } catch (_) {
-      return _fixed(AtlasVaultTrustedPairingDisposition.unavailable);
-    } finally {
-      identity?.destroy();
-    }
-  });
+    }),
+  );
 
   @override
   Future<AtlasVaultTrustedPairingResult> savePairingOffer() => _run(
@@ -1187,23 +1189,24 @@ final class AtlasVaultTrustedPairingCoordinator
               'inviter_proof': base64Encode(proofs.inviter),
             },
           );
+          final intent =
+              await _advance(confirmed, confirmed.stage, <String, Object?>{
+                'delivery_sha256': await atlasVaultSha256Hex(
+                  deliveryArtifact.canonicalBytes(),
+                ),
+                'bootstrap_sha256': await atlasVaultSha256Hex(
+                  bootstrap.canonicalBytes(),
+                ),
+                'vault_id': vaultSession.vaultId,
+                'staged_artifacts': await _mergedStagedJson(
+                  confirmed,
+                  deliveryArtifact,
+                ),
+              });
           await _createStaged(deliveryArtifact);
           final created = await _advance(
-            confirmed,
+            intent,
             AtlasVaultPairingStage.deliveryCreated,
-            <String, Object?>{
-              'delivery_sha256': await atlasVaultSha256Hex(
-                deliveryArtifact.canonicalBytes(),
-              ),
-              'bootstrap_sha256': await atlasVaultSha256Hex(
-                bootstrap.canonicalBytes(),
-              ),
-              'vault_id': vaultSession.vaultId,
-              'staged_artifacts': await _mergedStagedJson(
-                confirmed,
-                deliveryArtifact,
-              ),
-            },
           );
           return _result(
             AtlasVaultTrustedPairingDisposition.deliveryReady,

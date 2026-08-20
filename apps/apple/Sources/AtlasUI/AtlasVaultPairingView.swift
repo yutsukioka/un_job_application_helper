@@ -182,11 +182,20 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         run { await self.coordinator.discardPairing() }
     }
 
-    public func completePendingSave(committed: Bool) {
+    public func completePendingSave(at url: URL?) {
         guard let pendingSave else { return }
         self.pendingSave = nil
         run {
-            await self.coordinator.pairingArtifactSaveFinished(
+            let committed: Bool
+            if let url {
+                committed = await Self.savedPairingArtifactMatches(
+                    pendingSave.artifact,
+                    at: url
+                )
+            } else {
+                committed = false
+            }
+            return await self.coordinator.pairingArtifactSaveFinished(
                 pendingSave.kind,
                 committed: committed
             )
@@ -378,6 +387,21 @@ public final class AtlasVaultTrustedPairingPresentationOwner:
         }.value
     }
 
+    nonisolated static func savedPairingArtifactMatches(
+        _ expected: AtlasVaultPairingArtifact,
+        at url: URL
+    ) async -> Bool {
+        do {
+            let restored = try await readArtifact(from: url)
+            return AtlasVaultDeviceIdentityValidation.constantTimeEqual(
+                try expected.canonicalData(),
+                try restored.canonicalData()
+            )
+        } catch {
+            return false
+        }
+    }
+
     nonisolated static func readBoundedArtifactData(
         maximumByteCount: Int,
         read: (Int) throws -> Data?
@@ -481,9 +505,7 @@ public struct AtlasVaultPairingView: View {
             contentType: pairingType,
             defaultFilename: "AtlasVault-Pairing.atlaspair"
         ) { result in
-            owner.completePendingSave(
-                committed: (try? result.get()) != nil
-            )
+            owner.completePendingSave(at: try? result.get())
         }
         .onChange(of: owner.pendingSave?.id) { _, identifier in
             exporterPresented = identifier != nil
