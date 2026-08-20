@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 @testable import AtlasUI
@@ -134,6 +135,27 @@ final class AtlasVaultPairingViewTests: XCTestCase {
 
         XCTAssertTrue(observedCancellation)
         XCTAssertFalse(owner.isBusy)
+    }
+
+    func testPairingOwnerPublishesBusyBeforeOperationSideEffects() async {
+        let coordinator = PairingViewCancellationCoordinator()
+        let owner = AtlasVaultTrustedPairingPresentationOwner(
+            coordinator: coordinator
+        )
+        var publicationCount = 0
+        let observation = owner.objectWillChange.sink {
+            publicationCount += 1
+        }
+
+        owner.createPairingOffer()
+        await coordinator.waitUntilStarted()
+
+        XCTAssertTrue(owner.isBusy)
+        XCTAssertGreaterThan(publicationCount, 0)
+
+        await coordinator.release()
+        await owner.stopAndDrain()
+        withExtendedLifetime(observation) {}
     }
 
     private static func source(named name: String) throws -> String {

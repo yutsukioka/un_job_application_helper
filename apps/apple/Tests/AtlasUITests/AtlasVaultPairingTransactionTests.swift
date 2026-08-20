@@ -245,6 +245,27 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertEqual(transaction?.stage, .deliveryCreated)
     }
 
+    func testDeliveryExportIntentBlocksDiscardWhenSaveAdvanceFails()
+        async throws
+    {
+        let journey = try makeJourney(inviterReplaceFailure: .deliverySaved)
+        try await exchangeAcceptance(journey)
+        _ = await journey.inviter.confirmCodesMatch()
+        _ = await journey.invitee.confirmCodesMatch()
+        _ = try await journey.inviter.artifactToSave(.delivery)
+
+        let interrupted = await journey.inviter.pairingArtifactSaveFinished(
+            .delivery,
+            committed: true
+        )
+        let discard = await journey.inviter.discardPairing()
+        let transaction = await journey.inviterState.loadTransaction()
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(discard.disposition, .recoveryRequired)
+        XCTAssertNotNil(transaction)
+    }
+
     func testPairingUsesVaultEpochInsteadOfIdentityEpoch() async throws {
         let journey = try makeJourney(inviterIdentityKeyEpoch: 7)
 

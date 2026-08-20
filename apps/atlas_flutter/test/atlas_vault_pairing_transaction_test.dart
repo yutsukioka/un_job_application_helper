@@ -897,6 +897,39 @@ void main() {
   });
 
   test(
+    'delivery export is resume-only before its save is journaled',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviterTransactionReplaceFailureStage:
+            AtlasVaultPairingStage.deliverySaved,
+        inviterTransactionReplaceFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+      await journey.inviter.confirmCodesMatch();
+      await journey.invitee.confirmCodesMatch();
+
+      final interrupted = await journey.inviter.saveKeyDelivery();
+      final discard = await journey.inviter.discardPairing();
+
+      expect(
+        interrupted.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        discard.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(journey.inviterTransactions.value, isNotNull);
+      expect(
+        (await journey.inviter.resumePairing()).disposition,
+        AtlasVaultTrustedPairingDisposition.deliveryReady,
+      );
+    },
+  );
+
+  test(
     'invitee resumes replay consumption after SAS journal advance',
     () async {
       final journey = await _PairingJourney.create(
@@ -992,6 +1025,44 @@ void main() {
     expect(journey.inviteeKeys.values, contains(journey.vaultId));
     expect(journey.inviteeTransactions.value, isNotNull);
   });
+
+  test(
+    'matching active runtime resumes after activation journal failure',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviteeTransactionReplaceFailureStage:
+            AtlasVaultPairingStage.runtimeActivated,
+        inviteeTransactionReplaceFailures: 1,
+      );
+      addTearDown(journey.stop);
+      await _exchangeDelivery(journey);
+
+      final interrupted = await journey.invitee.importKeyDelivery();
+
+      expect(
+        interrupted.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviteeTransactions.value?.stage,
+        AtlasVaultPairingStage.selectionCommitted,
+      );
+      expect(
+        journey.inviteeEvents.where((event) => event == 'runtime.activate'),
+        hasLength(1),
+      );
+
+      expect(
+        (await journey.invitee.resumePairing()).disposition,
+        AtlasVaultTrustedPairingDisposition.acknowledgementReady,
+      );
+      expect(
+        journey.inviteeEvents.where((event) => event == 'runtime.activate'),
+        hasLength(1),
+      );
+    },
+  );
 
   test('invitee trust retry uses the journaled installation time', () async {
     final journey = await _PairingJourney.create(
