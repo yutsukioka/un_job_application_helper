@@ -416,6 +416,41 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
+    func testAppleActivationRecoveryReopensMutatedStoreAfterRuntimeLocks()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviteeReplaceFailure: .runtimeActivated,
+            inviteeRejectsRepeatedActivation: true
+        )
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        let interruptedTransaction = await journey.inviteeState.loadTransaction()
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(
+            interruptedTransaction?.stage,
+            .selectionCommitted
+        )
+        try await journey.inviteeState.rewriteActiveStoreAfterPrivateMutation(
+            updatedAt: "2026-08-15T12:01:00Z"
+        )
+        await journey.inviteeState.lockRuntime()
+
+        let resumed = await journey.invitee.resumePairing()
+        let snapshot = await journey.inviteeState.snapshot()
+
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+        XCTAssertEqual(
+            snapshot.stores[journey.vaultID]?.updatedAt,
+            "2026-08-15T12:01:00Z"
+        )
+        XCTAssertEqual(
+            snapshot.events.filter { $0 == "runtime.activate" }.count,
+            2
+        )
+    }
+
     func testAppleTrustRetryUsesStableInstallationTime() async throws {
         let journey = try makeJourney(
             inviteeReplaceFailure: .trustCommitted
@@ -598,6 +633,42 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertNil(persistedAcceptance)
     }
 
+    func testInviteeRegistryAdmissionRejectsOfferBeforePersistence()
+        async throws
+    {
+        for admission in ["full", "already-trusted"] {
+            let journey = try makeJourney()
+            let inviterIdentity = await journey.inviterState.loadIdentity()
+            let inviteeIdentity = await journey.inviteeState.loadIdentity()
+            try await journey.inviteeState.createRegistry(
+                try trustedRegistry(
+                    localDeviceID: inviteeIdentity.deviceID,
+                    vaultID: journey.vaultID,
+                    peerCount: admission == "full" ? 64 : 0,
+                    identities: admission == "already-trusted"
+                        ? [inviterIdentity]
+                        : []
+                )
+            )
+            let offerReady = await journey.inviter.createPairingOffer()
+            XCTAssertEqual(offerReady.disposition, .offerReady, admission)
+            let offer = try await journey.inviter.artifactToSave(.offer)
+            let offerSaved = await journey.inviter.pairingArtifactSaveFinished(
+                .offer,
+                committed: true
+            )
+            XCTAssertEqual(offerSaved.disposition, .offerSaved, admission)
+
+            let result = await journey.invitee.importPairingOffer(offer)
+            let transaction = await journey.inviteeState.loadTransaction()
+            let acceptance = await journey.inviteeState.loadArtifact(.acceptance)
+
+            XCTAssertEqual(result.disposition, .recoveryRequired, admission)
+            XCTAssertNil(transaction, admission)
+            XCTAssertNil(acceptance, admission)
+        }
+    }
+
     func testStoreAndKeyCreateIntentSurvivesJournalAdvanceFailure()
         async throws
     {
@@ -641,6 +712,61 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
                 snapshot.events.filter { $0 == "\(label).create" }.count,
                 1,
                 label
+            )
+        }
+    }
+
+    func testPreSelectionDiscardResumesAfterArtifactCleanupInterruption()
+        async throws
+    {
+        for failedStage in [
+            AtlasVaultPairingStage.storeCreated,
+            AtlasVaultPairingStage.keyCreated,
+        ] {
+            let journey = try makeJourney(
+                inviteeReplaceFailure: failedStage,
+                inviteeDeleteFailures: 1
+            )
+            let delivery = try await prepareDelivery(journey)
+            let interruptedInstall = await journey.invitee.importKeyDelivery(
+                delivery
+            )
+            XCTAssertEqual(
+                interruptedInstall.disposition,
+                .recoveryRequired,
+                failedStage.rawValue
+            )
+
+            let interruptedDiscard = await journey.invitee.discardPairing()
+            XCTAssertEqual(
+                interruptedDiscard.disposition,
+                .recoveryRequired,
+                failedStage.rawValue
+            )
+            let pending = await journey.inviteeState.loadTransaction()
+            let removedDelivery = await journey.inviteeState.loadArtifact(
+                .delivery
+            )
+            XCTAssertNotNil(
+                pending,
+                failedStage.rawValue
+            )
+            XCTAssertNil(
+                removedDelivery,
+                failedStage.rawValue
+            )
+
+            let resumed = await journey.invitee.discardPairing()
+            let cleared = await journey.inviteeState.loadTransaction()
+
+            XCTAssertEqual(
+                resumed.disposition,
+                .identityReady,
+                failedStage.rawValue
+            )
+            XCTAssertNil(
+                cleared,
+                failedStage.rawValue
             )
         }
     }
@@ -1387,6 +1513,11 @@ private actor PairingCoordinatorState {
         return true
     }
     func isActive() -> Bool { active }
+
+    func lockRuntime() {
+        active = false
+        events.append("runtime.lock")
+    }
 
     func rewriteActiveStoreAfterPrivateMutation(updatedAt: String) throws {
         guard active,
