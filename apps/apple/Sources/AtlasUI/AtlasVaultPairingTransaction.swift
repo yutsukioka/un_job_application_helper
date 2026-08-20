@@ -395,6 +395,8 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         keyEpoch: Int? = nil,
         ephemeralKeyMaterial: Data? = nil,
         clearEphemeralKeyMaterial: Bool = false,
+        clearStoreSHA256: Bool = false,
+        clearVaultKeySHA256: Bool = false,
         storeSHA256: String? = nil,
         vaultKeySHA256: String? = nil,
         selectionCommitted: Bool? = nil,
@@ -404,7 +406,9 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         guard
             let currentIndex = stages.firstIndex(of: stage),
             let nextIndex = stages.firstIndex(of: nextStage),
-            nextIndex >= currentIndex
+            nextIndex >= currentIndex,
+            !(clearStoreSHA256 && storeSHA256 != nil),
+            !(clearVaultKeySHA256 && vaultKeySHA256 != nil)
         else {
             throw AtlasVaultPairingTransactionError.invalidTransaction
         }
@@ -446,12 +450,20 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
         )
         Self.setIfPresent(vaultID, key: "vault_id", in: &value)
         Self.setIfPresent(keyEpoch, key: "key_epoch", in: &value)
-        Self.setIfPresent(storeSHA256, key: "store_sha256", in: &value)
-        Self.setIfPresent(
-            vaultKeySHA256,
-            key: "vault_key_sha256",
-            in: &value
-        )
+        if clearStoreSHA256 {
+            value["store_sha256"] = NSNull()
+        } else {
+            Self.setIfPresent(storeSHA256, key: "store_sha256", in: &value)
+        }
+        if clearVaultKeySHA256 {
+            value["vault_key_sha256"] = NSNull()
+        } else {
+            Self.setIfPresent(
+                vaultKeySHA256,
+                key: "vault_key_sha256",
+                in: &value
+            )
+        }
         if clearEphemeralKeyMaterial {
             value["ephemeral_private_key"] = NSNull()
         } else if let ephemeralKeyMaterial {
@@ -1482,6 +1494,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
             guard offer.inviter.descriptor.deviceID != identity.deviceID else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
+            try await self.requireRegistryAdmission(
+                localDeviceID: identity.deviceID,
+                peerDeviceID: offer.inviter.descriptor.deviceID
+            )
             let acceptance = try AtlasVaultPairingFoundation.createAcceptance(
                 invitee: identity,
                 signedOffer: signedOffer,
@@ -1600,7 +1616,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
             guard Self.equal(proofs.invitee, payload.inviteeProof) else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
-            try await self.requireInviterRegistryAdmission(
+            try await self.requireRegistryAdmission(
                 localDeviceID: identity.deviceID,
                 peerDeviceID: inviteeID
             )
@@ -1887,7 +1903,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
 
     public func discardPairing() async -> AtlasVaultTrustedPairingResult {
         await run {
-            guard let transaction = try await self.environment.loadTransaction(),
+            guard var transaction = try await self.environment.loadTransaction(),
                   !transaction.selectionCommitted,
                   transaction.stage != .selectionCommitted,
                   transaction.stage != .runtimeActivated,
@@ -1948,6 +1964,13 @@ public actor AtlasVaultTrustedPairingCoordinator:
                         throw AtlasVaultPairingTransactionError.unavailable
                     }
                 }
+                transaction = try await self.advance(
+                    transaction,
+                    to: transaction.stage,
+                    clearEphemeralKeyMaterial: true,
+                    clearStoreSHA256: true,
+                    clearVaultKeySHA256: true
+                )
             }
             try await self.clearTransaction(transaction)
             return self.fixed(.identityReady)
@@ -2072,24 +2095,32 @@ public actor AtlasVaultTrustedPairingCoordinator:
             installedStore = readBack
             if readBack != store {
                 guard Self.isAtLeast(transaction, .selectionCommitted),
-                      Self.sameInstalledStoreIdentity(readBack, store),
-                      let active = try await environment.activeVault(),
-                      active.vaultID == vaultID,
-                      active.store == readBack
+                      Self.sameInstalledStoreIdentity(readBack, store)
                 else { throw AtlasVaultPairingTransactionError.stale }
-                let keyMatches = active.withKeyMaterial { activeKey in
-                    var copy = activeKey
-                    defer { Self.wipe(&copy) }
-                    return Self.equal(copy, context.recoveredKey)
-                }
-                guard keyMatches,
-                      try await environment.validateProjection(
+                if let active = try await environment.activeVault() {
+                    let keyMatches = active.withKeyMaterial { activeKey in
+                        var copy = activeKey
+                        defer { Self.wipe(&copy) }
+                        return Self.equal(copy, context.recoveredKey)
+                    }
+                    guard active.vaultID == vaultID,
+                          active.store == readBack,
+                          keyMatches,
+                          try await environment.validateProjection(
+                            readBack,
+                            vaultID,
+                            context.recoveredKey,
+                            true
+                          )
+                    else { throw AtlasVaultPairingTransactionError.stale }
+                } else {
+                    guard try await environment.validateProjection(
                         readBack,
                         vaultID,
                         context.recoveredKey,
-                        true
-                      )
-                else { throw AtlasVaultPairingTransactionError.stale }
+                        false
+                    ) else { throw AtlasVaultPairingTransactionError.stale }
+                }
             }
         }
 
@@ -2164,7 +2195,14 @@ public actor AtlasVaultTrustedPairingCoordinator:
                       keyMatches
                 else { throw AtlasVaultPairingTransactionError.stale }
             } else {
-                guard installedStore == store else {
+                guard Self.sameInstalledStoreIdentity(installedStore, store),
+                      try await environment.validateProjection(
+                        installedStore,
+                        vaultID,
+                        context.recoveredKey,
+                        false
+                      )
+                else {
                     throw AtlasVaultPairingTransactionError.stale
                 }
                 try await authorizeSensitiveMutation()
@@ -2633,6 +2671,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
         vaultID: String? = nil,
         keyEpoch: Int? = nil,
         clearEphemeralKeyMaterial: Bool = false,
+        clearStoreSHA256: Bool = false,
+        clearVaultKeySHA256: Bool = false,
         storeSHA256: String? = nil,
         vaultKeySHA256: String? = nil,
         selectionCommitted: Bool? = nil,
@@ -2652,6 +2692,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
             vaultID: vaultID,
             keyEpoch: keyEpoch,
             clearEphemeralKeyMaterial: clearEphemeralKeyMaterial,
+            clearStoreSHA256: clearStoreSHA256,
+            clearVaultKeySHA256: clearVaultKeySHA256,
             storeSHA256: storeSHA256,
             vaultKeySHA256: vaultKeySHA256,
             selectionCommitted: selectionCommitted,
@@ -2883,7 +2925,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         try await environment.createRegistry(result.registry)
     }
 
-    private func requireInviterRegistryAdmission(
+    private func requireRegistryAdmission(
         localDeviceID: String,
         peerDeviceID: String
     ) async throws {
