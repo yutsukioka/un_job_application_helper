@@ -342,6 +342,43 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
+    func testAppleActivationJournalFailureResumesWithoutReactivation()
+        async throws
+    {
+        let journey = try makeJourney(
+            inviteeReplaceFailure: .runtimeActivated,
+            inviteeRejectsRepeatedActivation: true
+        )
+        let delivery = try await prepareDelivery(journey)
+
+        let interrupted = await journey.invitee.importKeyDelivery(delivery)
+        let interruptedTransaction = await journey.inviteeState
+            .loadTransaction()
+        let interruptedSnapshot = await journey.inviteeState.snapshot()
+        let runtimeIsActive = await journey.inviteeState.isActive()
+
+        XCTAssertEqual(interrupted.disposition, .recoveryRequired)
+        XCTAssertEqual(interruptedTransaction?.stage, .selectionCommitted)
+        XCTAssertTrue(runtimeIsActive)
+        XCTAssertEqual(
+            interruptedSnapshot.events.filter {
+                $0 == "runtime.activate"
+            }.count,
+            1
+        )
+
+        let resumed = await journey.invitee.resumePairing()
+        let resumedSnapshot = await journey.inviteeState.snapshot()
+
+        XCTAssertEqual(resumed.disposition, .acknowledgementReady)
+        XCTAssertEqual(
+            resumedSnapshot.events.filter {
+                $0 == "runtime.activate"
+            }.count,
+            1
+        )
+    }
+
     func testAppleTrustRetryUsesStableInstallationTime() async throws {
         let journey = try makeJourney(
             inviteeReplaceFailure: .trustCommitted
@@ -852,7 +889,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         inviterDeleteFailures: Int = 0,
         inviteeArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviteeReplaceFailure: AtlasVaultPairingStage? = nil,
-        inviteeDeleteFailures: Int = 0
+        inviteeDeleteFailures: Int = 0,
+        inviteeRejectsRepeatedActivation: Bool = false
     ) throws -> PairingJourneyHarness {
         let timestamp = "2026-08-15T12:00:00Z"
         let inviterIdentity = try AtlasVaultDeviceIdentity.generate(
@@ -897,7 +935,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
             failArtifactCreateCount: inviteeArtifactFailure == nil ? 0 : 1,
             failTransactionReplaceStage: inviteeReplaceFailure,
             failTransactionReplaceCount: inviteeReplaceFailure == nil ? 0 : 1,
-            failTransactionDeleteCount: inviteeDeleteFailures
+            failTransactionDeleteCount: inviteeDeleteFailures,
+            rejectActivationWhenActive: inviteeRejectsRepeatedActivation
         )
         let identifiers = PairingIdentifierSequence()
         let random = PairingRandomSequence()
@@ -1110,6 +1149,7 @@ private actor PairingCoordinatorState {
     private let failTransactionReplaceStage: AtlasVaultPairingStage?
     private var failTransactionReplaceCount: Int
     private var failTransactionDeleteCount: Int
+    private let rejectActivationWhenActive: Bool
 
     init(
         identity: AtlasVaultDeviceIdentity,
@@ -1119,7 +1159,8 @@ private actor PairingCoordinatorState {
         failArtifactCreateCount: Int = 0,
         failTransactionReplaceStage: AtlasVaultPairingStage? = nil,
         failTransactionReplaceCount: Int = 0,
-        failTransactionDeleteCount: Int = 0
+        failTransactionDeleteCount: Int = 0,
+        rejectActivationWhenActive: Bool = false
     ) {
         self.identity = identity
         inviterActiveVault = activeVault
@@ -1130,11 +1171,22 @@ private actor PairingCoordinatorState {
         self.failTransactionReplaceStage = failTransactionReplaceStage
         self.failTransactionReplaceCount = failTransactionReplaceCount
         self.failTransactionDeleteCount = failTransactionDeleteCount
+        self.rejectActivationWhenActive = rejectActivationWhenActive
     }
 
     func loadIdentity() -> AtlasVaultDeviceIdentity { identity }
     func activeVault() -> AtlasVaultPairingActiveVault? {
-        inviterActiveVault
+        if let inviterActiveVault { return inviterActiveVault }
+        guard active,
+              let selectedVault,
+              let store = stores[selectedVault],
+              let key = keys[selectedVault]
+        else { return nil }
+        return try? AtlasVaultPairingActiveVault(
+            vaultID: selectedVault,
+            store: store,
+            keyMaterial: key
+        )
     }
     func cleanInstall() -> AtlasVaultPairingCleanInstallDisposition {
         selectedVault == nil ? cleanInstallDisposition : .existingVault
@@ -1288,6 +1340,7 @@ private actor PairingCoordinatorState {
     }
     func activate(_ vaultID: String, key: Data) -> Bool {
         guard
+            !(active && rejectActivationWhenActive),
             selectedVault == vaultID,
             stores[vaultID] != nil,
             keys[vaultID] == key
