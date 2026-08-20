@@ -1337,6 +1337,8 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 expiresAt: expires
             )
             let artifact = try AtlasVaultPairingArtifact.offer(offer)
+            // Device-identity rotation is independent of the initial vault key.
+            let initialVaultKeyEpoch = 1
             let transaction = try AtlasVaultPairingTransaction.create(
                 transactionID: self.environment.uuid(),
                 revision: self.environment.uuid(),
@@ -1346,7 +1348,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 localDeviceID: identity.deviceID,
                 offerSHA256: artifact.sha256Hex(),
                 vaultID: active.vaultID,
-                keyEpoch: identity.descriptor.keyEpoch,
+                keyEpoch: initialVaultKeyEpoch,
                 stagedArtifacts: try self.metadata(for: [artifact])
             )
             try await self.authorizeSensitiveMutation()
@@ -1370,7 +1372,12 @@ public actor AtlasVaultTrustedPairingCoordinator:
         else {
             throw AtlasVaultPairingTransactionError.unavailable
         }
-        return try await requireArtifact(kind, transaction: transaction)
+        let artifact = try await requireArtifact(
+            kind,
+            transaction: transaction
+        )
+        try requireCurrentDeliveryForSave(kind, artifact: artifact)
+        return artifact
     }
 
     public func pairingArtifactSaveFinished(
@@ -1414,10 +1421,11 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 expected.0,
                 expected.1
             )
-            _ = try await self.requireArtifact(
+            let artifact = try await self.requireArtifact(
                 kind,
                 transaction: transaction
             )
+            try self.requireCurrentDeliveryForSave(kind, artifact: artifact)
             let updated = try await self.advance(
                 transaction,
                 to: expected.2
@@ -2734,6 +2742,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
     ) async throws {
         let now = environment.timestamp()
         if let current = try await environment.loadReplay() {
+            guard current.localDeviceID == localDeviceID else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
             let result = try AtlasVaultPairingReplayFoundation.consume(
                 entry,
                 in: current,
@@ -2778,6 +2789,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
     ) async throws {
         let now = environment.timestamp()
         if let current = try await environment.loadRegistry() {
+            guard current.localDeviceID == localDeviceID else {
+                throw AtlasVaultPairingTransactionError.invalidTransaction
+            }
             let result = try AtlasVaultTrustedDeviceRegistryFoundation.commit(
                 peer,
                 to: current,
@@ -2980,6 +2994,21 @@ public actor AtlasVaultTrustedPairingCoordinator:
         case .existingVault: fixed(.existingVault)
         case .unavailable: fixed(.unavailable)
         case .recoveryRequired: fixed(.recoveryRequired)
+        }
+    }
+
+    private func requireCurrentDeliveryForSave(
+        _ kind: AtlasVaultPairingArtifactKind,
+        artifact: AtlasVaultPairingArtifact
+    ) throws {
+        guard kind == .delivery else { return }
+        let expiresAt = try artifact.deliveryPayload()
+            .signedDelivery.delivery.expiresAt
+        guard
+            try AtlasVaultPairingValidation.date(environment.timestamp())
+                < AtlasVaultPairingValidation.date(expiresAt)
+        else {
+            throw AtlasVaultPairingTransactionError.invalidTransaction
         }
     }
 

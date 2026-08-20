@@ -531,6 +531,7 @@ public struct AtlasVaultPairingView: View {
                 beginImport(.acceptance)
             }
             Button("Codes Match") { owner.confirmCodesMatch() }
+                .disabled(owner.sas == nil)
             Button("Save Key Delivery") { owner.saveKeyDelivery() }
             Button("Import Key Delivery") { beginImport(.delivery) }
             Button("Save Pairing Acknowledgement") {

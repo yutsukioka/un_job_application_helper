@@ -23,6 +23,8 @@ const atlasVaultMaximumPairingStateByteCount = 2 * 1024 * 1024;
 const atlasVaultMaximumPairingTransactionByteCount = 64 * 1024;
 const atlasVaultMaximumPairingArtifactByteCount = 128 * 1024 * 1024;
 const _maximumTrustedPairingPeers = 64;
+// Device-identity rotation is independent of the initial vault key.
+const _initialVaultKeyEpoch = 1;
 
 final class AtlasVaultPairingTransactionException implements Exception {
   const AtlasVaultPairingTransactionException();
@@ -828,7 +830,7 @@ final class AtlasVaultTrustedPairingCoordinator
           createdAt: issuedAt,
           offerSha256: await atlasVaultSha256Hex(artifact.canonicalBytes()),
           vaultId: session.vaultId,
-          keyEpoch: identity.descriptor.keyEpoch,
+          keyEpoch: _initialVaultKeyEpoch,
           stagedArtifacts: <AtlasVaultPairingArtifact>[artifact],
         );
         _authorizeSensitiveMutation();
@@ -1168,7 +1170,7 @@ final class AtlasVaultTrustedPairingCoordinator
             inviterEphemeralPrivateKey: inviterEphemeral,
             nonce: _randomBytes(12),
             deliveryId: _uuidProvider(),
-            keyEpoch: confirmed.keyEpoch ?? 1,
+            keyEpoch: confirmed.keyEpoch ?? _initialVaultKeyEpoch,
             expiresAt: keyRequest.request.expiresAt,
           );
           final sessionKey = await _sessionKeyFor(confirmed, identity);
@@ -2422,10 +2424,12 @@ final class AtlasVaultTrustedPairingCoordinator
     try {
       final transaction = await _requireStage(expectedRole, expectedStage);
       final artifact = await _requireStaged(kind, transaction);
+      _requireCurrentDeliveryForSave(kind, artifact);
       _authorizeSensitiveMutation();
       if (!await _artifactTransport.save(artifact)) {
         return _fixed(AtlasVaultTrustedPairingDisposition.cancelled);
       }
+      _requireCurrentDeliveryForSave(kind, artifact);
       final updated = await _advance(transaction, savedStage);
       identity = await _loadIdentity();
       return _result(disposition, updated, local: identity);
@@ -2436,6 +2440,19 @@ final class AtlasVaultTrustedPairingCoordinator
       );
     } finally {
       identity?.destroy();
+    }
+  }
+
+  void _requireCurrentDeliveryForSave(
+    AtlasVaultPairingArtifactKind kind,
+    AtlasVaultPairingArtifact artifact,
+  ) {
+    if (kind != AtlasVaultPairingArtifactKind.delivery) {
+      return;
+    }
+    final expiresAt = _delivery(artifact).delivery.expiresAt;
+    if (!_now().toUtc().isBefore(_time(expiresAt))) {
+      throw const AtlasVaultPairingTransactionException();
     }
   }
 

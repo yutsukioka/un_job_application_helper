@@ -1896,13 +1896,21 @@ class AtlasAppController extends ChangeNotifier
     if (_requiredNormalizedBaseURL(baseURL) == operation.sourceAuthority) {
       return;
     }
+    final pairingOwner = _trustedPairingContext?.owner;
     if (_privateActivationInProgress ||
         _recoveryImportAdmissionInProgress ||
         _recoveryImportBlocksLegacyPrivateAuthority ||
         (_plaintextMigrationContext?.owner.blocksLegacyPrivateAuthority ??
             false) ||
-        (_trustedPairingContext?.owner.blocksLegacyPrivateAuthority ?? false)) {
+        (pairingOwner?.blocksLegacyPrivateAuthority ?? false)) {
       throw const AtlasVaultPrivateStateException();
+    }
+    if (pairingOwner != null) {
+      final pairingPending = await pairingOwner.refreshPrivateAuthorityState();
+      _requireCurrentConnectionOperation(operation, client);
+      if (pairingPending) {
+        throw const AtlasVaultPrivateStateException();
+      }
     }
     final deactivation = _privateDeactivationOperation;
     if (deactivation != null) {

@@ -567,6 +567,14 @@ internal class AtlasVaultAndroidStorage(
             it.write(bytes)
             it.flush()
         }
+        val restored = readEncryptedDocument(uri)
+        try {
+            if (!MessageDigest.isEqual(bytes, restored)) {
+                throw StorageFailure()
+            }
+        } finally {
+            restored.fill(0)
+        }
     }
 
     private fun beginPickPairingArtifact(result: MethodChannel.Result) {

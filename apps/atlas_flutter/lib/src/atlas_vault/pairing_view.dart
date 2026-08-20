@@ -68,6 +68,36 @@ final class AtlasVaultTrustedPairingPresentationOwner extends ChangeNotifier {
 
   Future<void> inspect() => _run(_coordinator.inspect);
 
+  Future<bool> refreshPrivateAuthorityState() async {
+    if (_disposed || _operation != null) {
+      throw const AtlasVaultPairingTransactionException();
+    }
+    final generation = _generation;
+    AtlasVaultTrustedPairingResult? inspected;
+    late final Future<void> retained;
+    retained = () async {
+      final result = await _coordinator.inspect();
+      if (!_isCurrent(generation)) {
+        throw const AtlasVaultPairingTransactionException();
+      }
+      inspected = result;
+      _publish(result);
+    }();
+    _operation = retained;
+    notifyListeners();
+    try {
+      await retained;
+      return inspected!.pendingTransaction;
+    } finally {
+      if (identical(_operation, retained)) {
+        _operation = null;
+        if (_isCurrent(generation)) {
+          notifyListeners();
+        }
+      }
+    }
+  }
+
   Future<void> createDeviceIdentity() =>
       _run(_coordinator.createDeviceIdentity);
 
