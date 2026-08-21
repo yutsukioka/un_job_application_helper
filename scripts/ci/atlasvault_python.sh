@@ -128,12 +128,17 @@ required_python_guard = (
     "import " + "ast",
     "ast." + "ImportFrom",
     "blocked_import_" + "roots",
+    "standard_library_network_" + "samples",
+    "from http.client import " + "HTTPSConnection",
     "Validated Python AST " + "no-network policy.",
 )
 required_flutter_guard = (
     "_mask_dart_" + "non_code",
+    "_mask_dart_" + "string",
     "_init_state_" + "bodies",
     "multiline_init_state_" + "samples",
+    "interpolation_init_state_" + "samples",
+    "${startPairing" + "()}",
     "operation_" + "reference",
     "tear_off_init_state_" + "samples",
     "Future.microtask(" + "startPairing);",
@@ -143,9 +148,19 @@ if any(marker not in python_script for marker in required_python_guard):
     raise SystemExit("Python no-network policy must use structured AST checks.")
 if any(marker not in flutter_script for marker in required_flutter_guard):
     raise SystemExit("Dart automatic-operation policy must inspect lifecycle bodies.")
+required_swift_runtime_ring = (
+    "ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR",
+    "testWritesPublicFreshSwiftSignatureArtifactWhenRequested",
+    "test_python_verifies_public_swift_runtime_signature_artifact",
+    "Dart verifies the public Swift runtime signature artifact",
+)
+if any(marker not in swift_script for marker in required_swift_runtime_ring):
+    raise SystemExit("Swift runtime signatures require Python and Dart verification.")
 setup_python = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
-if workflow.count(setup_python) != 2:
-    raise SystemExit("Python must be explicitly provisioned for both structured guards.")
+if workflow.count(setup_python) != 3:
+    raise SystemExit("Python must be explicitly provisioned for all structured checks.")
+if 'python -m pip install -e "packages/vaultsync[dev]"' not in workflow:
+    raise SystemExit("Swift runtime signature verification requires VaultSync.")
 swift_job = workflow.split("\n  swift:", 1)[1].split("\n  windows:", 1)[0]
 swift_checkout = swift_job.split("- name: Check out source", 1)[1].split(
     "\n      - name:", 1
