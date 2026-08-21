@@ -128,6 +128,11 @@ required_python_guard = (
     "import " + "ast",
     "ast." + "ImportFrom",
     "blocked_import_" + "roots",
+    "importlib_module_" + "aliases",
+    "import_module_" + "aliases",
+    "dynamic_import_" + "samples",
+    "from importlib import import_" + "module",
+    "loader.import_" + "module",
     "standard_library_network_" + "samples",
     "from http.client import " + "HTTPSConnection",
     "Validated Python AST " + "no-network policy.",
@@ -142,6 +147,10 @@ required_flutter_guard = (
     "operation_" + "reference",
     "tear_off_init_state_" + "samples",
     "Future.microtask(" + "startPairing);",
+    "_operation_" + "aliases",
+    "assigned_tear_off_init_state_" + "samples",
+    "final callback = start" + "Pairing;",
+    "Future.microtask(" + "callback);",
     "Validated Dart lifecycle-body " + "automatic-operation policy.",
 )
 if any(marker not in python_script for marker in required_python_guard):
@@ -156,6 +165,24 @@ required_swift_runtime_ring = (
 )
 if any(marker not in swift_script for marker in required_swift_runtime_ring):
     raise SystemExit("Swift runtime signatures require Python and Dart verification.")
+required_swift_interop_ring = (
+    "ATLAS_INTEROP_" + "ARTIFACT_DIR",
+    "testAppleProductionCoordinatorWritesExact" + "FlutterArtifact",
+    "direct Apple artifact imports when exchange mode is " + "enabled",
+    "confirmed setup preserves records and saves exact Flutter vector " + "bytes",
+    "testFlutterOriginExportImportsThroughProduction" + "Coordinator",
+)
+if any(marker not in swift_script for marker in required_swift_interop_ring):
+    raise SystemExit("Swift encrypted exports require direct Dart exchange.")
+interop_positions = [
+    swift_script.index(marker) for marker in required_swift_interop_ring
+]
+if interop_positions != sorted(interop_positions):
+    raise SystemExit("Direct encrypted export exchange must run in producer order.")
+if re.search(r"!\s+-name\s+['\"]search_golden_test\.dart['\"]", flutter_script):
+    raise SystemExit("Linux must execute the search pixel golden cases.")
+if "flutter test test/tab_golden_test.dart test/search_golden_test.dart" in swift_script:
+    raise SystemExit("macOS must not substitute for Linux search pixel goldens.")
 setup_python = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
 if workflow.count(setup_python) != 3:
     raise SystemExit("Python must be explicitly provisioned for all structured checks.")
