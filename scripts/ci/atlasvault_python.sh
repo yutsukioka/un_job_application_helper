@@ -132,6 +132,9 @@ required_flutter_guard = (
     "_mask_dart_" + "non_code",
     "_init_state_" + "bodies",
     "multiline_init_state_" + "samples",
+    "operation_" + "reference",
+    "tear_off_init_state_" + "samples",
+    "Future.microtask(" + "startPairing);",
     "Validated Dart lifecycle-body " + "automatic-operation policy.",
 )
 if any(marker not in python_script for marker in required_python_guard):
@@ -141,6 +144,12 @@ if any(marker not in flutter_script for marker in required_flutter_guard):
 setup_python = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
 if workflow.count(setup_python) != 2:
     raise SystemExit("Python must be explicitly provisioned for both structured guards.")
+swift_job = workflow.split("\n  swift:", 1)[1].split("\n  windows:", 1)[0]
+swift_checkout = swift_job.split("- name: Check out source", 1)[1].split(
+    "\n      - name:", 1
+)[0]
+if "fetch-depth: 0" not in swift_checkout:
+    raise SystemExit("Swift history-sensitive tests require a full checkout.")
 print("Validated standard-tool-only AtlasVault source guards.")
 PY
 
