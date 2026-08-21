@@ -139,17 +139,19 @@ def _init_state_bodies(source: str) -> tuple[str, ...]:
     return tuple(bodies)
 
 
-operation_call = re.compile(
+operation_reference = re.compile(
     r"(?<![A-Za-z0-9_$])"
-    r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*\()"
+    r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|[,)]))"
     r"(?=[A-Za-z0-9_$]*(?:pair|import|export))"
-    r"[A-Za-z_$][A-Za-z0-9_$]*\s*\(",
+    r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|(?=[,)]))",
     re.IGNORECASE,
 )
 
 
 def _has_automatic_operation(source: str) -> bool:
-    return any(operation_call.search(body) for body in _init_state_bodies(source))
+    return any(
+        operation_reference.search(body) for body in _init_state_bodies(source)
+    )
 
 
 multiline_init_state_samples = (
@@ -183,6 +185,7 @@ multiline_init_state_samples = (
         """void initState() {
   // startPairing(invitation);
   final label = 'exportVault()';
+  _ownedPairingOwner = assembly.pairingOwner;
   super.initState();
 }""",
         False,
@@ -193,6 +196,21 @@ if any(
     for source, expected in multiline_init_state_samples
 ):
     raise SystemExit("Dart lifecycle-body source-guard self-test failed.")
+
+tear_off_init_state_samples = (
+    """void initState() {
+  Future.microtask(startPairing);
+}""",
+    """void initState() {
+  scheduleMicrotask(
+    controller.importEncryptedBackup,
+  );
+}""",
+)
+if not all(
+    _has_automatic_operation(source) for source in tear_off_init_state_samples
+):
+    raise SystemExit("Dart lifecycle-body tear-off self-test failed.")
 
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),

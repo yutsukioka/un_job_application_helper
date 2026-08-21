@@ -42,16 +42,18 @@ The workflow has four independent jobs:
   analysis, focused AtlasVault tests, every host-independent Flutter test, and
   an Android Debug build. Python 3.12 is provisioned explicitly for a
   brace-aware Dart lifecycle-body source guard, which checks multiline
-  `initState` bodies for automatic pairing, import, or export calls while
-  ignoring comments and string literals. The two host-sensitive golden files
-  run on macOS, where their established host gates retain pixel or semantic
-  coverage.
+  `initState` bodies for automatic pairing, import, or export calls and
+  scheduled operation tear-offs while ignoring comments and string literals.
+  The two host-sensitive golden files run on macOS, where their established
+  host gates retain pixel or semantic coverage.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
   suite, the host-supported Flutter goldens, and generic Simulator builds for
   AtlasApple and AtlasIOSHost. Two cancellation/lifecycle tests run in isolated
   Swift test processes before the rest of the suite to remove unrelated runner
   scheduling from their cancellation assertions. The full-suite invocation
-  skips only those already-executed tests; no test is omitted.
+  skips only those already-executed tests; no test is omitted. The Swift job
+  uses a full-history checkout so Git-backed scope tests do not take their
+  shallow-repository skip paths.
 - Windows runs formatting, analysis, focused and full Flutter tests, Windows
   Debug and Release builds, native DPAPI/document source guards, and repository
   artifact checks. Test files run serially to avoid Windows directory-handle
