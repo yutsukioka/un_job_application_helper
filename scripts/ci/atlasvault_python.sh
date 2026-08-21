@@ -250,6 +250,11 @@ def _blocked_imports(source: str) -> bool:
             for alias in node.names:
                 if alias.name == "importlib":
                     importlib_module_aliases.add(alias.asname or alias.name)
+                elif (
+                    alias.name.startswith("importlib.")
+                    and alias.asname is None
+                ):
+                    importlib_module_aliases.add("importlib")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module.partition(".")[0] in blocked_import_roots:

@@ -33,8 +33,8 @@ flutter test test/atlas_vault_pairing_test.dart \
   --plain-name 'Dart verifies the public Swift runtime signature artifact'
 unset ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR
 
-INTEROP_ARTIFACT_DIR="$TEMP_ROOT/encrypted-interoperability"
-mkdir -p "$INTEROP_ARTIFACT_DIR"
+ATLAS_INTEROP_ARTIFACT_DIR="$TEMP_ROOT/encrypted-interoperability"
+mkdir -p "$ATLAS_INTEROP_ARTIFACT_DIR"
 export ATLAS_INTEROP_ARTIFACT_DIR
 
 cd "$APPLE_ROOT"

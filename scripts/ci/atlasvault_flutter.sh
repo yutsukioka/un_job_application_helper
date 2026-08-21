@@ -217,9 +217,9 @@ def _init_state_bodies(source: str) -> tuple[str, ...]:
 
 operation_reference = re.compile(
     r"(?<![A-Za-z0-9_$])"
-    r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|[,)]))"
+    r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|[,)]))"
     r"(?=[A-Za-z0-9_$]*(?:pair|import|export))"
-    r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|(?=[,)]))",
+    r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|(?=[,)]))",
     re.IGNORECASE,
 )
 operation_identifier = re.compile(r"(?:pair|import|export)", re.IGNORECASE)
@@ -352,6 +352,9 @@ tear_off_init_state_samples = (
 }""",
     """void initState() {
   controller.startPairing.call();
+}""",
+    """void initState() {
+  controller.importEncryptedBackup?.call();
 }""",
 )
 if not all(
