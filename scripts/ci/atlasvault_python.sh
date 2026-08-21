@@ -110,10 +110,12 @@ swift_script = Path("scripts/ci/atlasvault_swift.sh").read_text(encoding="utf-8"
 required_swift_isolation = (
     "AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns",
     "AtlasVaultUnlockRequestCoordinatorTests.testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer",
+    "AtlasVaultUnlockRequestCoordinatorTests.testCancellationBeforeDispatchClearsBufferAndInvokesNothing",
     'for test in "${isolated_tests[@]}"',
     '--filter "$test"',
     '--skip "${isolated_tests[0]}"',
     '--skip "${isolated_tests[1]}"',
+    '--skip "${isolated_tests[2]}"',
 )
 if any(marker not in swift_script for marker in required_swift_isolation):
     raise SystemExit("Swift cancellation tests must run in isolated processes.")
