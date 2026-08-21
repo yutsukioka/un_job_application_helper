@@ -24,13 +24,15 @@ swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVault(DeviceIdenti
 isolated_tests=(
   'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
   'AtlasVaultUnlockRequestCoordinatorTests.testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer'
+  'AtlasVaultUnlockRequestCoordinatorTests.testCancellationBeforeDispatchClearsBufferAndInvokesNothing'
 )
 for test in "${isolated_tests[@]}"; do
   swift test --scratch-path "$TEMP_ROOT/full" --filter "$test"
 done
 swift test --scratch-path "$TEMP_ROOT/full" \
   --skip "${isolated_tests[0]}" \
-  --skip "${isolated_tests[1]}"
+  --skip "${isolated_tests[1]}" \
+  --skip "${isolated_tests[2]}"
 
 cd "$FLUTTER_ROOT"
 flutter pub get

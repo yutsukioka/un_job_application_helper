@@ -48,7 +48,7 @@ The workflow has four independent jobs:
   host gates retain pixel or semantic coverage.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
   suite, the host-supported Flutter goldens, and generic Simulator builds for
-  AtlasApple and AtlasIOSHost. Two cancellation/lifecycle tests run in isolated
+  AtlasApple and AtlasIOSHost. Three cancellation/lifecycle tests run in isolated
   Swift test processes before the rest of the suite to remove unrelated runner
   scheduling from their cancellation assertions. The full-suite invocation
   skips only those already-executed tests; no test is omitted. The Swift job
