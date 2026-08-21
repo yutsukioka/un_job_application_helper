@@ -37,17 +37,18 @@ The workflow has four independent jobs:
   vector validation, source guards, and repository artifact checks. Its
   no-network guard parses pairing primitives with Python's AST, including
   aliased, `from ... import ...`, third-party client, and standard-library
-  client forms such as `http.client`, instead of relying on textual
-  module-name matching.
+  client forms such as `http.client`. It also rejects direct `__import__`
+  calls and `importlib.import_module` calls reached through module, import, or
+  local aliases instead of relying on textual module-name matching.
 - Flutter runs the reviewed Flutter 3.44.4 toolchain on Ubuntu, formatting,
   analysis, focused AtlasVault tests, every host-independent Flutter test, and
   an Android Debug build. Python 3.12 is provisioned explicitly for a
   brace-aware Dart lifecycle-body source guard, which checks multiline
   `initState` bodies for automatic pairing, import, or export calls and
-  scheduled operation tear-offs while ignoring comments and literal string
-  segments but preserving executable Dart string interpolations. The two
-  host-sensitive golden files run on macOS, where their established host gates
-  retain pixel or semantic coverage.
+  scheduled operation tear-offs, including tear-offs first assigned to local
+  aliases, while ignoring comments and literal string segments but preserving
+  executable Dart string interpolations. Linux executes the supported search
+  pixel goldens and their semantic cases; the tab golden remains on macOS.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
   suite, the host-supported Flutter goldens, and generic Simulator builds for
   AtlasApple and AtlasIOSHost. Three cancellation/lifecycle tests run in isolated
@@ -58,6 +59,9 @@ The workflow has four independent jobs:
   shallow-repository skip paths. A fresh public-only CryptoKit signed
   transcript is written under runner-temporary storage and verified directly
   by the production Python and Dart pairing implementations before cleanup.
+  A second runner-temporary ring then passes an Apple production encrypted
+  export into Dart and a Dart production encrypted export back into Swift,
+  preserving canonical bytes without uploading either fake artifact.
 - Windows runs formatting, analysis, focused and full Flutter tests, Windows
   Debug and Release builds, native DPAPI/document source guards, and repository
   artifact checks. Test files run serially to avoid Windows directory-handle

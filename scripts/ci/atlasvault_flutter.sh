@@ -26,7 +26,6 @@ flutter test "${focused[@]}"
 
 mapfile -t full_tests < <(
   find test -type f -name '*_test.dart' \
-    ! -name 'search_golden_test.dart' \
     ! -name 'tab_golden_test.dart' \
     -print | sort
 )
@@ -223,12 +222,54 @@ operation_reference = re.compile(
     r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|(?=[,)]))",
     re.IGNORECASE,
 )
+operation_identifier = re.compile(r"(?:pair|import|export)", re.IGNORECASE)
+operation_alias_assignment = re.compile(
+    r"(?<![A-Za-z0-9_$])"
+    r"(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*;"
+)
+
+
+def _operation_aliases(body: str) -> frozenset[str]:
+    assignments = tuple(
+        (match.group("alias"), match.group("target"))
+        for match in operation_alias_assignment.finditer(body)
+    )
+    aliases = set()
+    changed = True
+    while changed:
+        changed = False
+        for alias, target in assignments:
+            if (
+                operation_identifier.search(target) is None
+                and target not in aliases
+            ):
+                continue
+            if alias not in aliases:
+                aliases.add(alias)
+                changed = True
+    return frozenset(aliases)
+
+
+def _alias_is_executed(body: str, alias: str) -> bool:
+    usage = re.compile(
+        rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
+        r"(?:\(|\.\s*call\s*\(|(?=[,)]))"
+    )
+    return usage.search(body) is not None
 
 
 def _has_automatic_operation(source: str) -> bool:
-    return any(
-        operation_reference.search(body) for body in _init_state_bodies(source)
-    )
+    for body in _init_state_bodies(source):
+        if operation_reference.search(body):
+            return True
+        if any(
+            _alias_is_executed(body, alias)
+            for alias in _operation_aliases(body)
+        ):
+            return True
+    return False
 
 
 multiline_init_state_samples = (
@@ -314,6 +355,43 @@ if not all(
     _has_automatic_operation(source) for source in tear_off_init_state_samples
 ):
     raise SystemExit("Dart lifecycle-body tear-off self-test failed.")
+
+assigned_tear_off_init_state_samples = (
+    (
+        """void initState() {
+  final callback = startPairing;
+  Future.microtask(callback);
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final first = controller.importEncryptedBackup;
+  final callback = first;
+  scheduleMicrotask(callback);
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final callback = controller.exportEncryptedBackup;
+  callback.call();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final owner = assembly.pairingOwner;
+  _ownedPairingOwner = owner;
+}""",
+        False,
+    ),
+)
+if any(
+    _has_automatic_operation(source) is not expected
+    for source, expected in assigned_tear_off_init_state_samples
+):
+    raise SystemExit("Dart assigned tear-off self-test failed.")
 
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),

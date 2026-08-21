@@ -236,6 +236,8 @@ targets = (
 
 def _blocked_imports(source: str) -> bool:
     tree = ast.parse(source)
+    importlib_module_aliases = set()
+    import_module_aliases = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(
@@ -243,19 +245,77 @@ def _blocked_imports(source: str) -> bool:
                 for alias in node.names
             ):
                 return True
+            for alias in node.names:
+                if alias.name == "importlib":
+                    importlib_module_aliases.add(alias.asname or alias.name)
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module.partition(".")[0] in blocked_import_roots:
                 return True
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "__import__"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and node.args[0].value.partition(".")[0] in blocked_import_roots
-        ):
+            if module == "importlib":
+                for alias in node.names:
+                    if alias.name == "import_module":
+                        import_module_aliases.add(
+                            alias.asname or alias.name
+                        )
+
+    def _is_import_module_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in import_module_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "import_module"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in importlib_module_aliases
+        )
+
+    def _is_importlib_module_reference(node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Name)
+            and node.id in importlib_module_aliases
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                value = node.value
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                value = node.value
+                targets = (node.target,)
+            elif isinstance(node, ast.NamedExpr):
+                value = node.value
+                targets = (node.target,)
+            else:
+                continue
+            aliases_importlib = _is_importlib_module_reference(value)
+            aliases_import_module = _is_import_module_reference(value)
+            if not aliases_importlib and not aliases_import_module:
+                continue
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if (
+                    aliases_importlib
+                    and target.id not in importlib_module_aliases
+                ):
+                    importlib_module_aliases.add(target.id)
+                    changed = True
+                if (
+                    aliases_import_module
+                    and target.id not in import_module_aliases
+                ):
+                    import_module_aliases.add(target.id)
+                    changed = True
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+            return True
+        if _is_import_module_reference(node.func):
             return True
     return False
 
@@ -280,8 +340,26 @@ if not all(
     _blocked_imports(sample) for sample in standard_library_network_samples
 ):
     raise SystemExit("Python AST no-network self-test failed.")
+dynamic_import_samples = (
+    "from importlib import import_module\nimport_module('http.client')",
+    "from importlib import import_module as load\nload('requests')",
+    "import importlib as loader\nloader.import_module('http.client')",
+    (
+        "import importlib\nloader = importlib\n"
+        "loader.import_module('requests')"
+    ),
+    (
+        "from importlib import import_module\n"
+        "loader = import_module\nloader('requests')"
+    ),
+    "__import__(module_name)",
+)
+if not all(_blocked_imports(sample) for sample in dynamic_import_samples):
+    raise SystemExit("Python AST dynamic-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")
+if _blocked_imports("import importlib\nimportlib.invalidate_caches()"):
+    raise SystemExit("Python AST dynamic-import self-test failed.")
 for path in targets:
     if _blocked_imports(path.read_text(encoding="utf-8")):
         raise SystemExit("Network imports are not permitted in pairing primitives.")

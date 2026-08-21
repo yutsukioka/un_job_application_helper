@@ -33,7 +33,24 @@ flutter test test/atlas_vault_pairing_test.dart \
   --plain-name 'Dart verifies the public Swift runtime signature artifact'
 unset ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR
 
+INTEROP_ARTIFACT_DIR="$TEMP_ROOT/encrypted-interoperability"
+mkdir -p "$INTEROP_ARTIFACT_DIR"
+export ATLAS_INTEROP_ARTIFACT_DIR
+
 cd "$APPLE_ROOT"
+swift test --scratch-path "$TEMP_ROOT/focused" \
+  --filter 'AtlasIOSFlutterEncryptedInteroperabilityTests.testAppleProductionCoordinatorWritesExactFlutterArtifact'
+
+cd "$FLUTTER_ROOT"
+flutter test test/atlas_vault_interoperability_test.dart \
+  --plain-name 'direct Apple artifact imports when exchange mode is enabled'
+flutter test test/atlas_vault_interoperability_test.dart \
+  --plain-name 'confirmed setup preserves records and saves exact Flutter vector bytes'
+
+cd "$APPLE_ROOT"
+swift test --scratch-path "$TEMP_ROOT/focused" \
+  --filter 'AtlasIOSFlutterEncryptedInteroperabilityTests.testFlutterOriginExportImportsThroughProductionCoordinator'
+unset ATLAS_INTEROP_ARTIFACT_DIR
 
 isolated_tests=(
   'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
@@ -49,7 +66,7 @@ swift test --scratch-path "$TEMP_ROOT/full" \
   --skip "${isolated_tests[2]}"
 
 cd "$FLUTTER_ROOT"
-flutter test test/tab_golden_test.dart test/search_golden_test.dart
+flutter test test/tab_golden_test.dart
 
 cd "$APPLE_ROOT"
 
