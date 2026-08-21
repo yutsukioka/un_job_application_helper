@@ -108,6 +108,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python for runtime signature verification
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install VaultSync runtime verifier
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "packages/vaultsync[dev]"
+
       - name: Set up Flutter for host-supported golden tests
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:

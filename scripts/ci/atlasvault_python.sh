@@ -175,7 +175,28 @@ import ast
 from pathlib import Path
 
 blocked_import_roots = frozenset(
-    {"aiohttp", "httpx", "requests", "socket", "urllib"}
+    {
+        "aiohttp",
+        "ftplib",
+        "grpc",
+        "http",
+        "httpcore",
+        "httpx",
+        "imaplib",
+        "nntplib",
+        "poplib",
+        "requests",
+        "smtplib",
+        "socket",
+        "socketserver",
+        "ssl",
+        "telnetlib",
+        "urllib",
+        "urllib3",
+        "websocket",
+        "websockets",
+        "xmlrpc",
+    }
 )
 targets = (
     Path("packages/vaultsync/vaultsync/device_identity.py"),
@@ -220,6 +241,17 @@ aliased_import_samples = (
     "__import__('aiohttp')",
 )
 if not all(_blocked_imports(sample) for sample in aliased_import_samples):
+    raise SystemExit("Python AST no-network self-test failed.")
+standard_library_network_samples = (
+    "import http.client",
+    "from http.client import HTTPSConnection",
+    "import ftplib as ftp",
+    "from xmlrpc.client import ServerProxy",
+    "import smtplib",
+)
+if not all(
+    _blocked_imports(sample) for sample in standard_library_network_samples
+):
     raise SystemExit("Python AST no-network self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")

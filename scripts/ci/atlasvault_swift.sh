@@ -21,6 +21,20 @@ fi
 cd "$APPLE_ROOT"
 
 swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing)Tests'
+
+RUNTIME_VECTOR_DIR="$TEMP_ROOT/device-identity-runtime"
+export ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR="$RUNTIME_VECTOR_DIR"
+swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVaultPairingFoundationTests.testWritesPublicFreshSwiftSignatureArtifactWhenRequested'
+python -m pytest "$REPO_ROOT/packages/vaultsync/tests/test_pairing_vectors.py" \
+  -k test_python_verifies_public_swift_runtime_signature_artifact
+cd "$FLUTTER_ROOT"
+flutter pub get
+flutter test test/atlas_vault_pairing_test.dart \
+  --plain-name 'Dart verifies the public Swift runtime signature artifact'
+unset ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR
+
+cd "$APPLE_ROOT"
+
 isolated_tests=(
   'AtlasVaultProductionHostTests.testWillTerminateCancelsRetainedSavedSearchNetworkBeforeLifecycleHandlerReturns'
   'AtlasVaultUnlockRequestCoordinatorTests.testCoordinatorCancellationBeforeOperationStartClearsClaimedBuffer'
@@ -35,7 +49,6 @@ swift test --scratch-path "$TEMP_ROOT/full" \
   --skip "${isolated_tests[2]}"
 
 cd "$FLUTTER_ROOT"
-flutter pub get
 flutter test test/tab_golden_test.dart test/search_golden_test.dart
 
 cd "$APPLE_ROOT"

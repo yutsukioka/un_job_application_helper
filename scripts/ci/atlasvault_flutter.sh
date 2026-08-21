@@ -45,20 +45,43 @@ from pathlib import Path
 def _mask_dart_non_code(source: str) -> str:
     masked = list(source)
     length = len(source)
-    index = 0
 
     def blank(start: int, end: int) -> None:
         for offset in range(start, end):
             if masked[offset] != "\n":
                 masked[offset] = " "
 
-    while index < length:
+    def string_at(index: int) -> tuple[bool, int, str] | None:
+        quote_index = index
+        raw = False
+        if (
+            source[index] in "rR"
+            and index + 1 < length
+            and source[index + 1] in "'\""
+            and (
+                index == 0
+                or not (
+                    source[index - 1].isalnum()
+                    or source[index - 1] in "_$"
+                )
+            )
+        ):
+            raw = True
+            quote_index += 1
+        if source[quote_index] not in "'\"":
+            return None
+        quote = source[quote_index]
+        delimiter = (
+            quote * 3 if source.startswith(quote * 3, quote_index) else quote
+        )
+        return raw, quote_index, delimiter
+
+    def mask_comment(index: int) -> int | None:
         if source.startswith("//", index):
             end = source.find("\n", index + 2)
             end = length if end < 0 else end
             blank(index, end)
-            index = end
-            continue
+            return end
         if source.startswith("/*", index):
             start = index
             index += 2
@@ -73,39 +96,93 @@ def _mask_dart_non_code(source: str) -> str:
                 else:
                     index += 1
             blank(start, index)
-            continue
+            return index
+        return None
 
-        quote_index = index
-        if (
-            source[index] in "rR"
-            and index + 1 < length
-            and source[index + 1] in "'\""
-            and (
-                index == 0
-                or not (
-                    source[index - 1].isalnum()
-                    or source[index - 1] in "_$"
-                )
-            )
-        ):
-            quote_index += 1
-        if source[quote_index] not in "'\"":
-            index += 1
-            continue
-
-        quote = source[quote_index]
-        delimiter = quote * 3 if source.startswith(quote * 3, quote_index) else quote
-        start = index
+    def _mask_dart_string(
+        start: int,
+        *,
+        raw: bool,
+        quote_index: int,
+        delimiter: str,
+    ) -> int:
+        blank(start, quote_index + len(delimiter))
         index = quote_index + len(delimiter)
         while index < length:
             if source.startswith(delimiter, index):
+                blank(index, index + len(delimiter))
                 index += len(delimiter)
-                break
-            if len(delimiter) == 1 and source[index] == "\\":
-                index = min(index + 2, length)
-            else:
-                index += 1
-        blank(start, index)
+                return index
+            if not raw and source[index] == "\\":
+                end = min(index + 2, length)
+                blank(index, end)
+                index = end
+                continue
+            if not raw and source.startswith("${", index):
+                blank(index, index + 1)
+                index = scan_interpolation(index + 2)
+                continue
+            if (
+                not raw
+                and source[index] == "$"
+                and index + 1 < length
+                and (source[index + 1].isalpha() or source[index + 1] == "_")
+            ):
+                end = index + 2
+                while end < length and (
+                    source[end].isalnum() or source[end] in "_$"
+                ):
+                    end += 1
+                blank(index, end)
+                index = end
+                continue
+            blank(index, index + 1)
+            index += 1
+        return index
+
+    def scan_interpolation(index: int) -> int:
+        depth = 1
+        while index < length:
+            comment_end = mask_comment(index)
+            if comment_end is not None:
+                index = comment_end
+                continue
+            string = string_at(index)
+            if string is not None:
+                raw, quote_index, delimiter = string
+                index = _mask_dart_string(
+                    index,
+                    raw=raw,
+                    quote_index=quote_index,
+                    delimiter=delimiter,
+                )
+                continue
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+        return index
+
+    index = 0
+    while index < length:
+        comment_end = mask_comment(index)
+        if comment_end is not None:
+            index = comment_end
+            continue
+        string = string_at(index)
+        if string is not None:
+            raw, quote_index, delimiter = string
+            index = _mask_dart_string(
+                index,
+                raw=raw,
+                quote_index=quote_index,
+                delimiter=delimiter,
+            )
+            continue
+        index += 1
 
     return "".join(masked)
 
@@ -196,6 +273,32 @@ if any(
     for source, expected in multiline_init_state_samples
 ):
     raise SystemExit("Dart lifecycle-body source-guard self-test failed.")
+
+interpolation_init_state_samples = (
+    (
+        """void initState() {
+  final message = '${startPairing()}';
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final message = "${controller.importEncryptedBackup()}";
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final message = r'${startPairing()}';
+}""",
+        False,
+    ),
+)
+if any(
+    _has_automatic_operation(source) is not expected
+    for source, expected in interpolation_init_state_samples
+):
+    raise SystemExit("Dart interpolation source-guard self-test failed.")
 
 tear_off_init_state_samples = (
     """void initState() {

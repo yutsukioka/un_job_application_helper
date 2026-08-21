@@ -36,16 +36,18 @@ The workflow has four independent jobs:
   vectors, the full VaultSync suite, secure-local-API admission tests, JSON
   vector validation, source guards, and repository artifact checks. Its
   no-network guard parses pairing primitives with Python's AST, including
-  aliased and `from ... import ...` forms, instead of relying on textual
+  aliased, `from ... import ...`, third-party client, and standard-library
+  client forms such as `http.client`, instead of relying on textual
   module-name matching.
 - Flutter runs the reviewed Flutter 3.44.4 toolchain on Ubuntu, formatting,
   analysis, focused AtlasVault tests, every host-independent Flutter test, and
   an Android Debug build. Python 3.12 is provisioned explicitly for a
   brace-aware Dart lifecycle-body source guard, which checks multiline
   `initState` bodies for automatic pairing, import, or export calls and
-  scheduled operation tear-offs while ignoring comments and string literals.
-  The two host-sensitive golden files run on macOS, where their established
-  host gates retain pixel or semantic coverage.
+  scheduled operation tear-offs while ignoring comments and literal string
+  segments but preserving executable Dart string interpolations. The two
+  host-sensitive golden files run on macOS, where their established host gates
+  retain pixel or semantic coverage.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
   suite, the host-supported Flutter goldens, and generic Simulator builds for
   AtlasApple and AtlasIOSHost. Three cancellation/lifecycle tests run in isolated
@@ -53,7 +55,9 @@ The workflow has four independent jobs:
   scheduling from their cancellation assertions. The full-suite invocation
   skips only those already-executed tests; no test is omitted. The Swift job
   uses a full-history checkout so Git-backed scope tests do not take their
-  shallow-repository skip paths.
+  shallow-repository skip paths. A fresh public-only CryptoKit signed
+  transcript is written under runner-temporary storage and verified directly
+  by the production Python and Dart pairing implementations before cleanup.
 - Windows runs formatting, analysis, focused and full Flutter tests, Windows
   Debug and Release builds, native DPAPI/document source guards, and repository
   artifact checks. Test files run serially to avoid Windows directory-handle
