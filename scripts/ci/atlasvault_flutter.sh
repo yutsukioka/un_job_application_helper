@@ -350,6 +350,9 @@ tear_off_init_state_samples = (
     controller.importEncryptedBackup,
   );
 }""",
+    """void initState() {
+  controller.startPairing.call();
+}""",
 )
 if not all(
     _has_automatic_operation(source) for source in tear_off_init_state_samples

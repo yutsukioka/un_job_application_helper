@@ -133,6 +133,7 @@ required_python_guard = (
     "dynamic_import_" + "samples",
     "from importlib import import_" + "module",
     "loader.import_" + "module",
+    "import importlib." + "util",
     "standard_library_network_" + "samples",
     "from http.client import " + "HTTPSConnection",
     "Validated Python AST " + "no-network policy.",
@@ -151,6 +152,7 @@ required_flutter_guard = (
     "assigned_tear_off_init_state_" + "samples",
     "final callback = start" + "Pairing;",
     "Future.microtask(" + "callback);",
+    "controller.start" + "Pairing.call()",
     "Validated Dart lifecycle-body " + "automatic-operation policy.",
 )
 if any(marker not in python_script for marker in required_python_guard):
@@ -166,7 +168,7 @@ required_swift_runtime_ring = (
 if any(marker not in swift_script for marker in required_swift_runtime_ring):
     raise SystemExit("Swift runtime signatures require Python and Dart verification.")
 required_swift_interop_ring = (
-    "ATLAS_INTEROP_" + "ARTIFACT_DIR",
+    'ATLAS_INTEROP_' + 'ARTIFACT_DIR="$TEMP_ROOT/encrypted-interoperability"',
     "testAppleProductionCoordinatorWritesExact" + "FlutterArtifact",
     "direct Apple artifact imports when exchange mode is " + "enabled",
     "confirmed setup preserves records and saves exact Flutter vector " + "bytes",
@@ -344,6 +346,7 @@ dynamic_import_samples = (
     "from importlib import import_module\nimport_module('http.client')",
     "from importlib import import_module as load\nload('requests')",
     "import importlib as loader\nloader.import_module('http.client')",
+    "import importlib.util\nimportlib.import_module('requests')",
     (
         "import importlib\nloader = importlib\n"
         "loader.import_module('requests')"
