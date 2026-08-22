@@ -189,7 +189,7 @@ def _mask_dart_non_code(source: str) -> str:
 def _init_state_bodies(source: str) -> tuple[str, ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?initState\s*\(\s*\)\s*(?P<body>\{|=>)"
+        r"\b(?:void\s+)?initState\s*\(\s*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):

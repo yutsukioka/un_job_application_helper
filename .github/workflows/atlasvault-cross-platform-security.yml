@@ -13,6 +13,10 @@ on:
       - "tests/test_job_api_private_access.py"
       - "docs/security/**"
       - "docs/architecture/atlasvault_cross_platform_security_ci.md"
+      - "**/*.atlasvault"
+      - "**/*.atlaspair"
+      - "**/*identity*secret*"
+      - "**/*ephemeral*private*"
   push:
     branches:
       - master
@@ -27,6 +31,10 @@ on:
       - "tests/test_job_api_private_access.py"
       - "docs/security/**"
       - "docs/architecture/atlasvault_cross_platform_security_ci.md"
+      - "**/*.atlasvault"
+      - "**/*.atlaspair"
+      - "**/*identity*secret*"
+      - "**/*ephemeral*private*"
   workflow_dispatch:
 
 permissions:
