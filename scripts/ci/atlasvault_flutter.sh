@@ -296,6 +296,12 @@ multiline_init_state_samples = (
         True,
     ),
     (
+        """void initState() async {
+  await controller.createDeviceIdentity();
+}""",
+        True,
+    ),
+    (
         """void initState() {
   if (mounted) {
     exportEncryptedBackup(
@@ -400,8 +406,43 @@ assigned_tear_off_init_state_samples = (
     ),
     (
         """void initState() {
+  final callback = controller?.startPairing;
+  callback?.call();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final callback = controller!.importEncryptedBackup;
+  callback();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final callback = controller?.createDeviceIdentity;
+  callback?.call();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final first = controller!.createDeviceIdentity;
+  final second = first;
+  Future.microtask(second);
+}""",
+        True,
+    ),
+    (
+        """void initState() {
   final owner = assembly.pairingOwner;
   _ownedPairingOwner = owner;
+}""",
+        False,
+    ),
+    (
+        """void initState() {
+  _ownedDeviceIdentityOwner = assembly.deviceIdentityOwner;
 }""",
         False,
     ),
