@@ -18,6 +18,24 @@ done
 
 cd "$REPO_ROOT"
 
+python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/atlasvault-cross-platform-security.yml"
+).read_text(encoding="utf-8")
+required_trigger_patterns = (
+    "**/*.atlasvault",
+    "**/*.atlaspair",
+    "**/*identity*secret*",
+    "**/*ephemeral*private*",
+)
+missing = [pattern for pattern in required_trigger_patterns if pattern not in workflow]
+if missing:
+    raise SystemExit("AtlasVault forbidden-artifact trigger coverage is incomplete.")
+print("Validated AtlasVault forbidden-artifact trigger coverage.")
+PY
+
 focused_tests=(
   packages/vaultsync/tests/test_device_identity_vectors.py
   packages/vaultsync/tests/test_pairing_vectors.py

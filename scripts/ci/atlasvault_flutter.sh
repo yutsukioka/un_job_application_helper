@@ -290,6 +290,12 @@ multiline_init_state_samples = (
         True,
     ),
     (
+        """void initState() async {
+  await startPairing(invitation);
+}""",
+        True,
+    ),
+    (
         """void initState() {
   if (mounted) {
     exportEncryptedBackup(
