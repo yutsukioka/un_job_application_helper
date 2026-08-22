@@ -459,6 +459,20 @@ assigned_tear_off_init_state_samples = (
     ),
     (
         """void initState() {
+  final callback = controller?.createDeviceIdentity ?? fallback;
+  callback();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final callback = fallback ?? controller.startPairing;
+  Future.microtask(callback);
+}""",
+        True,
+    ),
+    (
+        """void initState() {
   final owner = assembly.pairingOwner;
   _ownedPairingOwner = owner;
 }""",

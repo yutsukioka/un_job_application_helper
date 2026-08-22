@@ -547,6 +547,16 @@ for path, expected_count in artifact_scans.items():
         raise SystemExit(
             f"{path} does not case-insensitively scan generated AtlasPair artifacts."
         )
+for path in artifact_scans:
+    source = path.read_text(encoding="utf-8")
+    if "-iname '*identity*secret*'" not in source:
+        raise SystemExit(
+            f"{path} does not scan generated identity-secret artifacts."
+        )
+    if "-iname '*ephemeral*private*'" not in source:
+        raise SystemExit(
+            f"{path} does not scan generated ephemeral-private artifacts."
+        )
 print("Validated case-insensitive generated-artifact scans.")
 PY
 
