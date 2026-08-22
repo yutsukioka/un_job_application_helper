@@ -201,6 +201,15 @@ for marker in (
 ):
     if marker not in holder_function:
         raise SystemExit("Windows recovery holder ownership must use the signal PID.")
+for marker in (
+    "function Get-AtlasRecoveryHolderProcessTree",
+    "[System.Collections.Generic.List[PSCustomObject]]::new()",
+    "Sort-Object -Property Depth -Descending",
+    "foreach ($Descendant in @($ProcessTree.Descendants",
+    "Stop-Process -Id $Descendant.Id -Force",
+):
+    if marker not in workflow:
+        raise SystemExit("Windows recovery must terminate the complete holder process tree.")
 print("Validated Windows recovery process-boundary orchestration policy.")
 PY
 
@@ -475,6 +484,7 @@ dynamic_import_samples = (
         "loader = import_module\nloader('requests')"
     ),
     "__import__(module_name)",
+    "from builtins import __import__ as load\nload('requests')",
 )
 if not all(_blocked_imports(sample) for sample in dynamic_import_samples):
     raise SystemExit("Python AST dynamic-import self-test failed.")
@@ -486,6 +496,28 @@ for path in targets:
     if _blocked_imports(path.read_text(encoding="utf-8")):
         raise SystemExit("Network imports are not permitted in pairing primitives.")
 print("Validated Python AST no-network policy.")
+PY
+
+python - <<'PY'
+from pathlib import Path
+
+artifact_scans = {
+    Path("scripts/ci/atlasvault_python.sh"): 1,
+    Path("scripts/ci/atlasvault_flutter.sh"): 1,
+    Path("scripts/ci/atlasvault_swift.sh"): 1,
+    Path(".github/workflows/atlasvault-platform-integration.yml"): 2,
+}
+for path, expected_count in artifact_scans.items():
+    source = path.read_text(encoding="utf-8")
+    if source.count("-iname '*.atlasvault'") < expected_count:
+        raise SystemExit(
+            f"{path} does not case-insensitively scan generated AtlasVault artifacts."
+        )
+    if source.count("-iname '*.atlaspair'") < expected_count:
+        raise SystemExit(
+            f"{path} does not case-insensitively scan generated AtlasPair artifacts."
+        )
+print("Validated case-insensitive generated-artifact scans.")
 PY
 
 forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"

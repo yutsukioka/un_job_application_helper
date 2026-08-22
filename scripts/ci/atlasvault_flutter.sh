@@ -437,6 +437,20 @@ assigned_tear_off_init_state_samples = (
     ),
     (
         """void initState() {
+  final callback = enabled ? controller.startPairing : noop;
+  callback();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  final callback = enabled ? noop : controller.importEncryptedBackup;
+  Future.microtask(callback);
+}""",
+        True,
+    ),
+    (
+        """void initState() {
   final owner = assembly.pairingOwner;
   _ownedPairingOwner = owner;
 }""",
