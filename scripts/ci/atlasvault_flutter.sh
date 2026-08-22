@@ -387,6 +387,13 @@ assigned_tear_off_init_state_samples = (
     ),
     (
         """void initState() {
+  final callback = controller.importEncryptedBackup;
+  callback?.call();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
   final owner = assembly.pairingOwner;
   _ownedPairingOwner = owner;
 }""",
