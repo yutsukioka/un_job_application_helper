@@ -164,7 +164,7 @@ for stage in ("prepare", "verify"):
         raise SystemExit("Windows migration prepare/verify stages are not distinct.")
 for marker in (
     "WaitForExit(120000)",
-    "Stop-Process -Id $Holder.Process.Id -Force",
+    "Stop-Process -Id $Waiter.Process.Id -Force",
     "finally {",
     "Remove-Item -LiteralPath $MigrationCoordinationRoot",
     "Remove-Item -LiteralPath $InteropCoordinationRoot",
@@ -178,18 +178,16 @@ if '%errorlevel% >' in workflow:
     raise SystemExit("Windows recovery waiters must not capture a pre-command exit code.")
 if "RunnerProcessId" in workflow or "Get-AtlasRecoverySignalProcessId" in workflow:
     raise SystemExit("Windows crash-holder signals do not carry a runner process ID.")
-tree_start = workflow.index("function Get-AtlasRecoveryHolderProcessTree")
-tree_end = workflow.index("function Stop-AtlasRecoveryHolder", tree_start)
+tree_start = workflow.index("function Get-AtlasRecoveryProcessTree")
+tree_end = workflow.index("function Stop-AtlasRecoveryProcessTree", tree_start)
 tree_function = workflow[tree_start:tree_end]
 for marker in (
     "Get-CimInstance -ClassName Win32_Process",
     "ParentProcessId",
-    "$Holder.Process.Id",
-    '$Process.ProcessName -eq "atlas"',
-    "$Process.Path -eq $Holder.RunnerPath",
+    "$RootProcessId",
 ):
     if marker not in tree_function:
-        raise SystemExit("Windows recovery must identify the holder runner through its process tree.")
+        raise SystemExit("Windows recovery must walk an owned process tree.")
 holder_start = workflow.index("function Stop-AtlasRecoveryHolder")
 holder_end = workflow.index("$MigrationRecoveryTest", holder_start)
 holder_function = workflow[holder_start:holder_end]
@@ -198,15 +196,18 @@ if "Get-Process -Name atlas" in holder_function:
 for marker in (
     "$ProcessTree = Get-AtlasRecoveryHolderProcessTree $Holder",
     "$TestRunner = Get-Process -Id $ProcessTree.Runner.Id",
+    "Stop-AtlasRecoveryProcessTree $Holder",
 ):
     if marker not in holder_function:
         raise SystemExit("Windows recovery holder ownership must use its process tree.")
 for marker in (
-    "function Get-AtlasRecoveryHolderProcessTree",
+    "function Get-AtlasRecoveryProcessTree",
+    "function Stop-AtlasRecoveryProcessTree",
     "[System.Collections.Generic.List[PSCustomObject]]::new()",
     "Sort-Object -Property Depth -Descending",
-    "foreach ($Descendant in @($ProcessTree.Descendants",
+    "Get-AtlasRecoveryProcessTree ([int]$Waiter.Process.Id)",
     "Stop-Process -Id $Descendant.Id -Force",
+    "WaitForExit($RemainingMilliseconds)",
 ):
     if marker not in workflow:
         raise SystemExit("Windows recovery must terminate the complete holder process tree.")

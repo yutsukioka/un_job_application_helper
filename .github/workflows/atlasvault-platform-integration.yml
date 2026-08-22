@@ -275,10 +275,64 @@ jobs:
               }
             }
 
+            function Get-AtlasRecoveryProcessTree {
+              param([int] $RootProcessId)
+              $Pending = [System.Collections.Queue]::new()
+              $Seen = [System.Collections.Generic.HashSet[int]]::new()
+              $Descendants = [System.Collections.Generic.List[PSCustomObject]]::new()
+              $Pending.Enqueue([PSCustomObject]@{
+                Id = $RootProcessId
+                Depth = 0
+              })
+              while ($Pending.Count -gt 0) {
+                $Current = $Pending.Dequeue()
+                if (-not $Seen.Add([int]$Current.Id)) {
+                  continue
+                }
+                $Children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Current.Id)" -ErrorAction Stop
+                foreach ($Child in @($Children)) {
+                  $Process = Get-Process -Id $Child.ProcessId -ErrorAction SilentlyContinue
+                  if ($null -eq $Process) {
+                    continue
+                  }
+                  $Descendant = [PSCustomObject]@{
+                    Id = [int]$Child.ProcessId
+                    Depth = ([int]$Current.Depth) + 1
+                  }
+                  $Descendants.Add($Descendant)
+                  $Pending.Enqueue($Descendant)
+                }
+              }
+              return @($Descendants)
+            }
+
+            function Stop-AtlasRecoveryProcessTree {
+              param([PSCustomObject] $Waiter)
+              $Descendants = @(Get-AtlasRecoveryProcessTree ([int]$Waiter.Process.Id))
+              foreach ($Descendant in @($Descendants | Sort-Object -Property Depth -Descending)) {
+                Stop-Process -Id $Descendant.Id -Force -ErrorAction SilentlyContinue
+              }
+              Stop-Process -Id $Waiter.Process.Id -Force -ErrorAction SilentlyContinue
+              $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+              foreach ($ProcessId in @($Descendants.Id) + @([int]$Waiter.Process.Id)) {
+                $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+                if ($null -eq $Process) {
+                  continue
+                }
+                $RemainingMilliseconds = [Math]::Max(
+                  1,
+                  [int]($Deadline - [DateTime]::UtcNow).TotalMilliseconds
+                )
+                if (-not $Process.WaitForExit($RemainingMilliseconds)) {
+                  throw "$($Waiter.Name) retained process $ProcessId after deliberate termination."
+                }
+              }
+            }
+
             function Wait-AtlasRecoveryWaiter {
               param([PSCustomObject] $Waiter)
               if (-not $Waiter.Process.WaitForExit(120000)) {
-                Stop-Process -Id $Waiter.Process.Id -Force -ErrorAction SilentlyContinue
+                Stop-AtlasRecoveryProcessTree $Waiter
                 Write-AtlasRecoveryLogs $Waiter
                 throw "$($Waiter.Name) exceeded the 120-second recovery-stage timeout."
               }
@@ -325,34 +379,12 @@ jobs:
 
             function Get-AtlasRecoveryHolderProcessTree {
               param([PSCustomObject] $Holder)
-              $Pending = [System.Collections.Queue]::new()
-              $Seen = [System.Collections.Generic.HashSet[int]]::new()
-              $Descendants = [System.Collections.Generic.List[PSCustomObject]]::new()
+              $Descendants = @(Get-AtlasRecoveryProcessTree ([int]$Holder.Process.Id))
               $Runner = $null
-              $Pending.Enqueue([PSCustomObject]@{
-                Id = [int]$Holder.Process.Id
-                Depth = 0
-              })
-              while ($Pending.Count -gt 0) {
-                $Current = $Pending.Dequeue()
-                if (-not $Seen.Add([int]$Current.Id)) {
-                  continue
-                }
-                $Children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Current.Id)" -ErrorAction Stop
-                foreach ($Child in @($Children)) {
-                  $Process = Get-Process -Id $Child.ProcessId -ErrorAction SilentlyContinue
-                  if ($null -eq $Process) {
-                    continue
-                  }
-                  $Descendant = [PSCustomObject]@{
-                    Id = [int]$Child.ProcessId
-                    Depth = ([int]$Current.Depth) + 1
-                  }
-                  $Descendants.Add($Descendant)
-                  if ($Process.ProcessName -eq "atlas" -and $Process.Path -eq $Holder.RunnerPath) {
-                    $Runner = $Descendant
-                  }
-                  $Pending.Enqueue($Descendant)
+              foreach ($Descendant in $Descendants) {
+                $Process = Get-Process -Id $Descendant.Id -ErrorAction SilentlyContinue
+                if ($null -ne $Process -and $Process.ProcessName -eq "atlas" -and $Process.Path -eq $Holder.RunnerPath) {
+                  $Runner = $Descendant
                 }
               }
               if ($null -eq $Runner) {
@@ -371,13 +403,7 @@ jobs:
               if ($TestRunner.ProcessName -ne "atlas" -or $TestRunner.Path -ne $Holder.RunnerPath) {
                 throw "$($Holder.Name) did not retain the expected test-owned Atlas runner."
               }
-              foreach ($Descendant in @($ProcessTree.Descendants | Sort-Object -Property Depth -Descending)) {
-                Stop-Process -Id $Descendant.Id -Force -ErrorAction SilentlyContinue
-              }
-              Stop-Process -Id $Holder.Process.Id -Force -ErrorAction SilentlyContinue
-              if (-not $Holder.Process.WaitForExit(60000)) {
-                throw "$($Holder.Name) did not exit after deliberate termination."
-              }
+              Stop-AtlasRecoveryProcessTree $Holder
               Write-AtlasRecoveryLogs $Holder
             }
 
