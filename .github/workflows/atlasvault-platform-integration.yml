@@ -238,10 +238,8 @@ jobs:
               try {
                 Set-Item -Path "Env:$StageVariable" -Value $Stage
                 Set-Item -Path "Env:$VaultVariable" -Value $VaultId
-                $FlutterInvocation = '"{0}" test "{1}" -d windows' -f $FlutterExecutable, $Test
-                $Process = Start-Process -FilePath $env:ComSpec -ArgumentList @(
-                  "/d", "/s", "/c", $FlutterInvocation
-                ) -PassThru -NoNewWindow -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+                $FlutterInvocation = '/d /s /c ""{0}" test "{1}" -d windows"' -f $FlutterExecutable, $Test
+                $Process = Start-Process -FilePath $env:ComSpec -ArgumentList $FlutterInvocation -PassThru -NoNewWindow -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
               }
               finally {
                 if ($null -eq $PriorStage) {
