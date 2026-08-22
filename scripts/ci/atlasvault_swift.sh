@@ -74,7 +74,7 @@ xcodebuild -scheme AtlasApple -destination 'generic/platform=iOS Simulator' -der
 
 xcodebuild -project AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost -destination 'generic/platform=iOS Simulator' -derivedDataPath "$TEMP_ROOT/AtlasIOSHost" CODE_SIGNING_ALLOWED=NO build
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1

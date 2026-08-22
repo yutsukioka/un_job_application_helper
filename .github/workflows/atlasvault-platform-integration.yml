@@ -152,7 +152,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          forbidden="$(find . -path ./.git -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
 
   windows:
@@ -323,36 +323,58 @@ jobs:
               }
             }
 
-            function Get-AtlasRecoveryHolderRunner {
+            function Get-AtlasRecoveryHolderProcessTree {
               param([PSCustomObject] $Holder)
-              $Pending = [System.Collections.Generic.Queue[int]]::new()
+              $Pending = [System.Collections.Queue]::new()
               $Seen = [System.Collections.Generic.HashSet[int]]::new()
-              $Pending.Enqueue([int]$Holder.Process.Id)
+              $Descendants = [System.Collections.Generic.List[PSCustomObject]]::new()
+              $Runner = $null
+              $Pending.Enqueue([PSCustomObject]@{
+                Id = [int]$Holder.Process.Id
+                Depth = 0
+              })
               while ($Pending.Count -gt 0) {
-                $ParentProcessId = $Pending.Dequeue()
-                if (-not $Seen.Add($ParentProcessId)) {
+                $Current = $Pending.Dequeue()
+                if (-not $Seen.Add([int]$Current.Id)) {
                   continue
                 }
-                $Children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $ParentProcessId" -ErrorAction Stop
+                $Children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Current.Id)" -ErrorAction Stop
                 foreach ($Child in @($Children)) {
                   $Process = Get-Process -Id $Child.ProcessId -ErrorAction SilentlyContinue
                   if ($null -eq $Process) {
                     continue
                   }
-                  if ($Process.ProcessName -eq "atlas" -and $Process.Path -eq $Holder.RunnerPath) {
-                    return $Process
+                  $Descendant = [PSCustomObject]@{
+                    Id = [int]$Child.ProcessId
+                    Depth = ([int]$Current.Depth) + 1
                   }
-                  $Pending.Enqueue([int]$Child.ProcessId)
+                  $Descendants.Add($Descendant)
+                  if ($Process.ProcessName -eq "atlas" -and $Process.Path -eq $Holder.RunnerPath) {
+                    $Runner = $Descendant
+                  }
+                  $Pending.Enqueue($Descendant)
                 }
               }
-              throw "No test-owned Atlas runner descended from $($Holder.Name)."
+              if ($null -eq $Runner) {
+                throw "No test-owned Atlas runner descended from $($Holder.Name)."
+              }
+              return [PSCustomObject]@{
+                Runner = $Runner
+                Descendants = @($Descendants)
+              }
             }
 
             function Stop-AtlasRecoveryHolder {
               param([PSCustomObject] $Holder)
-              $TestRunner = Get-AtlasRecoveryHolderRunner $Holder
+              $ProcessTree = Get-AtlasRecoveryHolderProcessTree $Holder
+              $TestRunner = Get-Process -Id $ProcessTree.Runner.Id -ErrorAction Stop
+              if ($TestRunner.ProcessName -ne "atlas" -or $TestRunner.Path -ne $Holder.RunnerPath) {
+                throw "$($Holder.Name) did not retain the expected test-owned Atlas runner."
+              }
+              foreach ($Descendant in @($ProcessTree.Descendants | Sort-Object -Property Depth -Descending)) {
+                Stop-Process -Id $Descendant.Id -Force -ErrorAction SilentlyContinue
+              }
               Stop-Process -Id $Holder.Process.Id -Force -ErrorAction SilentlyContinue
-              Stop-Process -Id $TestRunner.Id -Force
               if (-not $Holder.Process.WaitForExit(60000)) {
                 throw "$($Holder.Name) did not exit after deliberate termination."
               }
@@ -525,5 +547,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          forbidden="$(find . -path ./.git -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }

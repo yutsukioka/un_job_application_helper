@@ -178,9 +178,9 @@ if '%errorlevel% >' in workflow:
     raise SystemExit("Windows recovery waiters must not capture a pre-command exit code.")
 if "RunnerProcessId" in workflow or "Get-AtlasRecoverySignalProcessId" in workflow:
     raise SystemExit("Windows crash-holder signals do not carry a runner process ID.")
-runner_start = workflow.index("function Get-AtlasRecoveryHolderRunner")
-runner_end = workflow.index("function Stop-AtlasRecoveryHolder", runner_start)
-runner_function = workflow[runner_start:runner_end]
+tree_start = workflow.index("function Get-AtlasRecoveryHolderProcessTree")
+tree_end = workflow.index("function Stop-AtlasRecoveryHolder", tree_start)
+tree_function = workflow[tree_start:tree_end]
 for marker in (
     "Get-CimInstance -ClassName Win32_Process",
     "ParentProcessId",
@@ -188,7 +188,7 @@ for marker in (
     '$Process.ProcessName -eq "atlas"',
     "$Process.Path -eq $Holder.RunnerPath",
 ):
-    if marker not in runner_function:
+    if marker not in tree_function:
         raise SystemExit("Windows recovery must identify the holder runner through its process tree.")
 holder_start = workflow.index("function Stop-AtlasRecoveryHolder")
 holder_end = workflow.index("$MigrationRecoveryTest", holder_start)
@@ -196,11 +196,11 @@ holder_function = workflow[holder_start:holder_end]
 if "Get-Process -Name atlas" in holder_function:
     raise SystemExit("Windows recovery must not terminate every Atlas runner at one path.")
 for marker in (
-    "$TestRunner = Get-AtlasRecoveryHolderRunner $Holder",
-    "Stop-Process -Id $TestRunner.Id -Force",
+    "$ProcessTree = Get-AtlasRecoveryHolderProcessTree $Holder",
+    "$TestRunner = Get-Process -Id $ProcessTree.Runner.Id",
 ):
     if marker not in holder_function:
-        raise SystemExit("Windows recovery holder ownership must use the signal PID.")
+        raise SystemExit("Windows recovery holder ownership must use its process tree.")
 for marker in (
     "function Get-AtlasRecoveryHolderProcessTree",
     "[System.Collections.Generic.List[PSCustomObject]]::new()",
@@ -361,6 +361,8 @@ targets = (
 
 def _blocked_imports(source: str) -> bool:
     tree = ast.parse(source)
+    builtins_module_aliases = set()
+    builtin_import_aliases = set()
     importlib_module_aliases = set()
     import_module_aliases = set()
     for node in ast.walk(tree):
@@ -371,7 +373,9 @@ def _blocked_imports(source: str) -> bool:
             ):
                 return True
             for alias in node.names:
-                if alias.name == "importlib":
+                if alias.name == "builtins":
+                    builtins_module_aliases.add(alias.asname or alias.name)
+                elif alias.name == "importlib":
                     importlib_module_aliases.add(alias.asname or alias.name)
                 elif (
                     alias.name.startswith("importlib.")
@@ -382,7 +386,11 @@ def _blocked_imports(source: str) -> bool:
             module = node.module or ""
             if module.partition(".")[0] in blocked_import_roots:
                 return True
-            if module == "importlib":
+            if module == "builtins":
+                for alias in node.names:
+                    if alias.name == "__import__":
+                        builtin_import_aliases.add(alias.asname or alias.name)
+            elif module == "importlib":
                 for alias in node.names:
                     if alias.name == "import_module":
                         import_module_aliases.add(
@@ -405,6 +413,16 @@ def _blocked_imports(source: str) -> bool:
             and node.id in importlib_module_aliases
         )
 
+    def _is_builtin_import_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id == "__import__" or node.id in builtin_import_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "__import__"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in builtins_module_aliases
+        )
+
     changed = True
     while changed:
         changed = False
@@ -422,7 +440,12 @@ def _blocked_imports(source: str) -> bool:
                 continue
             aliases_importlib = _is_importlib_module_reference(value)
             aliases_import_module = _is_import_module_reference(value)
-            if not aliases_importlib and not aliases_import_module:
+            aliases_builtin_import = _is_builtin_import_reference(value)
+            if (
+                not aliases_importlib
+                and not aliases_import_module
+                and not aliases_builtin_import
+            ):
                 continue
             for target in targets:
                 if not isinstance(target, ast.Name):
@@ -439,13 +462,20 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     import_module_aliases.add(target.id)
                     changed = True
+                if (
+                    aliases_builtin_import
+                    and target.id not in builtin_import_aliases
+                ):
+                    builtin_import_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if isinstance(node.func, ast.Name) and node.func.id == "__import__":
-            return True
-        if _is_import_module_reference(node.func):
+        if (
+            _is_builtin_import_reference(node.func)
+            or _is_import_module_reference(node.func)
+        ):
             return True
     return False
 
@@ -520,7 +550,7 @@ for path, expected_count in artifact_scans.items():
 print("Validated case-insensitive generated-artifact scans.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1

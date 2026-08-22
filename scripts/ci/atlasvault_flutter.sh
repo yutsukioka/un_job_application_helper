@@ -228,15 +228,23 @@ operation_identifier = re.compile(
 operation_alias_assignment = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    r"(?P<value>[^;]+)\s*;"
+)
+operation_tear_off_target = re.compile(
+    r"(?<![A-Za-z0-9_$])"
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
-    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*;"
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"(?=\s*(?:[,:;)]|\Z))"
 )
 
 
 def _operation_aliases(body: str) -> frozenset[str]:
     assignments = tuple(
-        (match.group("alias"), match.group("target"))
+        (match.group("alias"), target_match.group("target"))
         for match in operation_alias_assignment.finditer(body)
+        for target_match in operation_tear_off_target.finditer(
+            match.group("value")
+        )
     )
     aliases = set()
     changed = True
@@ -480,7 +488,7 @@ if any(
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -name '*.atlasvault' -o -name '*.atlaspair' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1
