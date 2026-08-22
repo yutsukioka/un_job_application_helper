@@ -2,39 +2,9 @@ name: AtlasVault Cross-Platform Security
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "scripts/ci/atlasvault_*"
-      - "packages/vaultsync/**"
-      - "contracts/sync/**"
-      - "apps/atlas_flutter/**"
-      - "apps/apple/**"
-      - "services/job-api/**"
-      - "tests/test_job_api_private_access.py"
-      - "docs/security/**"
-      - "docs/architecture/atlasvault_cross_platform_security_ci.md"
-      - "**/*.atlasvault"
-      - "**/*.atlaspair"
-      - "**/*identity*secret*"
-      - "**/*ephemeral*private*"
   push:
     branches:
       - master
-    paths:
-      - ".github/workflows/**"
-      - "scripts/ci/atlasvault_*"
-      - "packages/vaultsync/**"
-      - "contracts/sync/**"
-      - "apps/atlas_flutter/**"
-      - "apps/apple/**"
-      - "services/job-api/**"
-      - "tests/test_job_api_private_access.py"
-      - "docs/security/**"
-      - "docs/architecture/atlasvault_cross_platform_security_ci.md"
-      - "**/*.atlasvault"
-      - "**/*.atlaspair"
-      - "**/*identity*secret*"
-      - "**/*ephemeral*private*"
   workflow_dispatch:
 
 permissions:
@@ -48,8 +18,40 @@ env:
   FLUTTER_VERSION: "3.44.4"
 
 jobs:
+  admission:
+    name: AtlasVault artifact admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Reject forbidden artifact filenames
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          forbidden = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or ".git" in path.parts:
+                  continue
+              name = path.name.casefold()
+              if (
+                  name.endswith((".atlasvault", ".atlaspair"))
+                  or ("identity" in name and "secret" in name)
+                  or ("ephemeral" in name and "private" in name)
+              ):
+                  forbidden.append(path.as_posix())
+          if forbidden:
+              raise SystemExit(
+                  "Forbidden AtlasVault artifact filenames:\n" + "\n".join(forbidden)
+              )
+          print("AtlasVault artifact admission passed.")
+          PY
+
   python:
     name: Python / VaultSync
+    needs: admission
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -78,6 +80,7 @@ jobs:
 
   flutter:
     name: Flutter / AtlasVault and Android Debug
+    needs: admission
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -108,6 +111,7 @@ jobs:
 
   swift:
     name: Swift / AtlasVault and Apple Simulator Builds
+    needs: admission
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -138,6 +142,7 @@ jobs:
 
   windows:
     name: Windows / AtlasVault Debug and Release
+    needs: admission
     runs-on: windows-latest
     timeout-minutes: 90
     steps:

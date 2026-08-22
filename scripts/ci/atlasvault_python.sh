@@ -28,8 +28,8 @@ if "pull_request:\n    paths:" in workflow:
     raise SystemExit("AtlasVault admission must run for every pull request.")
 required_admission_markers = (
     "admission:",
-    "find . -path './.git' -prune -o -type f -print",
-    "casefold()",
+    "Path(\".\").rglob(\"*\")",
+    "path.name.casefold()",
     "needs: admission",
 )
 missing = [marker for marker in required_admission_markers if marker not in workflow]
