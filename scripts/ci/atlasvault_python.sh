@@ -171,6 +171,26 @@ for marker in (
 ):
     if marker not in workflow:
         raise SystemExit("Windows recovery process-boundary cleanup is incomplete.")
+
+if ' /v:on /s /c ' not in workflow or '!errorlevel! >' not in workflow:
+    raise SystemExit("Windows recovery waiters must record the post-command exit code.")
+if '%errorlevel% >' in workflow:
+    raise SystemExit("Windows recovery waiters must not capture a pre-command exit code.")
+for holder in ("$MigrationCrashHolder", "$InteropCrashHolder"):
+    if f"{holder}.RunnerProcessId = [int](Wait-AtlasRecoverySignal" not in workflow:
+        raise SystemExit("Windows crash holders must bind the signal PID before termination.")
+holder_start = workflow.index("function Stop-AtlasRecoveryHolder")
+holder_end = workflow.index("$MigrationRecoveryTest", holder_start)
+holder_function = workflow[holder_start:holder_end]
+if "Get-Process -Name atlas" in holder_function:
+    raise SystemExit("Windows recovery must not terminate every Atlas runner at one path.")
+for marker in (
+    "Get-Process -Id $Holder.RunnerProcessId",
+    '$TestRunner.ProcessName -ne "atlas"',
+    "$TestRunner.Path -ne $Holder.RunnerPath",
+):
+    if marker not in holder_function:
+        raise SystemExit("Windows recovery holder ownership must use the signal PID.")
 print("Validated Windows recovery process-boundary orchestration policy.")
 PY
 
