@@ -176,20 +176,28 @@ if ' /v:on /s /c ' not in workflow or '!errorlevel! >' not in workflow:
     raise SystemExit("Windows recovery waiters must record the post-command exit code.")
 if '%errorlevel% >' in workflow:
     raise SystemExit("Windows recovery waiters must not capture a pre-command exit code.")
-for holder in ("$MigrationCrashHolder", "$InteropCrashHolder"):
-    if f"{holder}.RunnerProcessId = Get-AtlasRecoverySignalProcessId" not in workflow:
-        raise SystemExit("Windows crash holders must bind the signal PID before termination.")
+if "RunnerProcessId" in workflow or "Get-AtlasRecoverySignalProcessId" in workflow:
+    raise SystemExit("Windows crash-holder signals do not carry a runner process ID.")
+runner_start = workflow.index("function Get-AtlasRecoveryHolderRunner")
+runner_end = workflow.index("function Stop-AtlasRecoveryHolder", runner_start)
+runner_function = workflow[runner_start:runner_end]
+for marker in (
+    "Get-CimInstance Win32_Process",
+    "ParentProcessId",
+    "$Holder.Process.Id",
+    '$Process.ProcessName -eq "atlas"',
+    "$Process.Path -eq $Holder.RunnerPath",
+):
+    if marker not in runner_function:
+        raise SystemExit("Windows recovery must identify the holder runner through its process tree.")
 holder_start = workflow.index("function Stop-AtlasRecoveryHolder")
 holder_end = workflow.index("$MigrationRecoveryTest", holder_start)
 holder_function = workflow[holder_start:holder_end]
 if "Get-Process -Name atlas" in holder_function:
     raise SystemExit("Windows recovery must not terminate every Atlas runner at one path.")
-if "function Get-AtlasRecoverySignalProcessId" not in workflow:
-    raise SystemExit("Windows recovery must validate crash-holder signal ownership.")
 for marker in (
-    "Get-Process -Id $Holder.RunnerProcessId",
-    '$TestRunner.ProcessName -ne "atlas"',
-    "$TestRunner.Path -ne $Holder.RunnerPath",
+    "$TestRunner = Get-AtlasRecoveryHolderRunner $Holder",
+    "Stop-Process -Id $TestRunner.Id -Force",
 ):
     if marker not in holder_function:
         raise SystemExit("Windows recovery holder ownership must use the signal PID.")
