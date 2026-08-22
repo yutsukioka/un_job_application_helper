@@ -504,6 +504,19 @@ assigned_tear_off_init_state_samples = (
 }""",
         True,
     ),
+    (
+        """void initState() {
+  final callbacks = [controller.startPairing];
+  callbacks.first();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
+  registerOwner(assembly.pairingOwner);
+}""",
+        False,
+    ),
 )
 if any(
     _has_automatic_operation(source) is not expected
