@@ -217,14 +217,36 @@ def _init_state_bodies(source: str) -> tuple[str, ...]:
 
 operation_reference = re.compile(
     r"(?<![A-Za-z0-9_$])"
-    r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|[,):]))"
-    r"(?=[A-Za-z0-9_$]*(?:pair|import|export|create(?:device|primary)identity|generateatlasvaultdeviceidentity))"
-    r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|(?=[,:)]))",
-    re.IGNORECASE,
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*"
+    r"(?:\(|\??\.\s*call\s*\(|(?=[,:)]))",
 )
-operation_identifier = re.compile(
-    r"(?:pair|import|export|create(?:device|primary)identity|generateatlasvaultdeviceidentity)",
-    re.IGNORECASE,
+operation_identifiers = frozenset(
+    {
+        "startpairing",
+        "createdeviceidentity",
+        "createprimaryidentity",
+        "generateatlasvaultdeviceidentity",
+        "createpairingoffer",
+        "savepairingoffer",
+        "importpairingoffer",
+        "savepairingacceptance",
+        "importpairingacceptance",
+        "confirmcodesmatch",
+        "savekeydelivery",
+        "importkeydelivery",
+        "savepairingacknowledgement",
+        "importpairingacknowledgement",
+        "resumepairing",
+        "discardpairing",
+        "importencryptedbackup",
+        "exportencryptedbackup",
+        "confirmrecoverysetup",
+        "prepareexistingrecoveryexport",
+        "savepreparedexport",
+        "preparerecoveryimport",
+        "confirmrecoveryimport",
+        "discardpendingimport",
+    }
 )
 operation_alias_assignment = re.compile(
     r"(?<![A-Za-z0-9_$])"
@@ -235,8 +257,12 @@ operation_tear_off_target = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?=\s*(?:[,:;)]|\?\?|\Z))"
+    r"(?=\s*(?:[,:;\])]|\?\?|\Z))"
 )
+
+
+def _is_sensitive_operation(identifier: str) -> bool:
+    return identifier.casefold() in operation_identifiers
 
 
 def _operation_aliases(body: str) -> frozenset[str]:
@@ -253,7 +279,7 @@ def _operation_aliases(body: str) -> frozenset[str]:
         changed = False
         for alias, target in assignments:
             if (
-                operation_identifier.search(target) is None
+                not _is_sensitive_operation(target)
                 and target not in aliases
             ):
                 continue
@@ -266,6 +292,7 @@ def _operation_aliases(body: str) -> frozenset[str]:
 def _alias_is_executed(body: str, alias: str) -> bool:
     usage = re.compile(
         rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
+        r"(?:\[\s*\d+\s*\]|\.\s*(?:first|last|single))?\s*"
         r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))"
     )
     return usage.search(body) is not None
@@ -273,7 +300,10 @@ def _alias_is_executed(body: str, alias: str) -> bool:
 
 def _has_automatic_operation(source: str) -> bool:
     for body in _init_state_bodies(source):
-        if operation_reference.search(body):
+        if any(
+            _is_sensitive_operation(match.group("target"))
+            for match in operation_reference.finditer(body)
+        ):
             return True
         if any(
             _alias_is_executed(body, alias)
