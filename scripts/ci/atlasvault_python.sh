@@ -272,7 +272,7 @@ required_python_guard = (
 required_flutter_guard = (
     "_mask_dart_" + "non_code",
     "_mask_dart_" + "string",
-    "_init_state_" + "bodies",
+    "_automatic_lifecycle_" + "bodies",
     "multiline_init_state_" + "samples",
     "interpolation_init_state_" + "samples",
     "${startPairing" + "()}",
@@ -557,18 +557,18 @@ for path, expected_count in artifact_scans.items():
         )
 for path in artifact_scans:
     source = path.read_text(encoding="utf-8")
-    if "-iname '*identity*secret*'" not in source:
+    if "-iname '*identity*secret*'" not in source or "-iname '*secret*identity*'" not in source:
         raise SystemExit(
             f"{path} does not scan generated identity-secret artifacts."
         )
-    if "-iname '*ephemeral*private*'" not in source:
+    if "-iname '*ephemeral*private*'" not in source or "-iname '*private*ephemeral*'" not in source:
         raise SystemExit(
             f"{path} does not scan generated ephemeral-private artifacts."
         )
 print("Validated case-insensitive generated-artifact scans.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*secret*identity*' -o -iname '*ephemeral*private*' -o -iname '*private*ephemeral*' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1

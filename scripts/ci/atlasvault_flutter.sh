@@ -189,10 +189,10 @@ def _mask_dart_non_code(source: str) -> str:
     return "".join(masked)
 
 
-def _init_state_bodies(source: str) -> tuple[str, ...]:
+def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?initState\s*\(\s*\)\s*(?:async\s*)?(?P<body>\{|=>)"
+        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):
@@ -302,7 +302,7 @@ def _alias_is_executed(body: str, alias: str) -> bool:
 
 
 def _has_automatic_operation(source: str) -> bool:
-    for body in _init_state_bodies(source):
+    for body in _automatic_lifecycle_bodies(source):
         if any(
             _is_sensitive_operation(match.group("target"))
             for match in operation_reference.finditer(body)
@@ -557,6 +557,9 @@ if any(
 ):
     raise SystemExit("Dart assigned tear-off self-test failed.")
 
+if not _has_automatic_operation("void didChangeDependencies() { controller.startPairing(); }"):
+    raise SystemExit("Dart automatic-lifecycle self-test failed.")
+
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),
 )
@@ -568,7 +571,7 @@ if any(
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*secret*identity*' -o -iname '*ephemeral*private*' -o -iname '*private*ephemeral*' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1

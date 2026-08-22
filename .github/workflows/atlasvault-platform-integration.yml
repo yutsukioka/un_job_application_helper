@@ -152,7 +152,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*secret*identity*' -o -iname '*ephemeral*private*' -o -iname '*private*ephemeral*' \) -print)"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
 
   windows:
@@ -473,6 +473,11 @@ jobs:
               Invoke-AtlasRecoveryStage "interop-cleanup-after" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
             }
             finally {
+              foreach ($Waiter in @($MigrationAdmissionWaiter, $MigrationFinalizationWaiter, $MigrationCrashVerify, $InteropAdmissionWaiter, $InteropSelectionWaiter, $InteropCrashVerify)) {
+                if ($null -ne $Waiter -and -not $Waiter.Process.HasExited) {
+                  Stop-AtlasRecoveryProcessTree $Waiter
+                }
+              }
               foreach ($Holder in @($MigrationCrashHolder, $InteropCrashHolder)) {
                 if ($null -ne $Holder -and -not $Holder.Process.HasExited) {
                   Stop-AtlasRecoveryHolder $Holder
@@ -540,7 +545,7 @@ jobs:
               $_.FullName -notmatch '[\\/]\.git[\\/]' -and
               ($_.Extension -eq ".atlasvault" -or
                $_.Extension -eq ".atlaspair" -or
-               $_.Name -match "(?i)identity.*secret|ephemeral.*private")
+               $_.Name -match "(?i)identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral")
             }
           if ($Forbidden) { throw "Forbidden AtlasVault repository artifact found." }
 
@@ -573,5 +578,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
+          forbidden="$(find . -path ./.git -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*secret*identity*' -o -iname '*ephemeral*private*' -o -iname '*private*ephemeral*' \) -print)"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }

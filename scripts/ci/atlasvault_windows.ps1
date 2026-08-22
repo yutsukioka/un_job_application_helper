@@ -68,7 +68,7 @@ $Forbidden = Get-ChildItem -LiteralPath $RepoRoot -Recurse -File |
         $_.FullName -notmatch '[\\/]\.git[\\/]' -and
         ($_.Extension -eq ".atlasvault" -or
          $_.Extension -eq ".atlaspair" -or
-         $_.Name -match "(?i)identity.*secret|ephemeral.*private")
+         $_.Name -match "(?i)identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral")
     }
 if ($Forbidden) {
     throw "Forbidden AtlasVault artifact found in the repository."
