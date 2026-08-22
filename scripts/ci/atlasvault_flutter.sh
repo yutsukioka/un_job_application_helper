@@ -234,7 +234,7 @@ operation_tear_off_target = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?=\s*(?:[,:;)]|\Z))"
+    r"(?=\s*(?:[,:;)]|\?\?|\Z))"
 )
 
 
@@ -502,7 +502,7 @@ if any(
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' \) -print)"
+forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*ephemeral*private*' \) -print)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1
