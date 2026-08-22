@@ -207,13 +207,196 @@ jobs:
 
             $Tests = @(
               "integration_test\atlas_vault_windows_plaintext_migration_integration_test.dart",
-              "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart",
-              "integration_test\atlas_vault_windows_interoperability_integration_test.dart",
-              "integration_test\atlas_vault_windows_interoperability_recovery_test.dart"
+              "integration_test\atlas_vault_windows_interoperability_integration_test.dart"
             )
             foreach ($Test in $Tests) {
               flutter test $Test -d windows
               if ($LASTEXITCODE -ne 0) { throw "$Test failed" }
+            }
+
+            $RecoveryLogRoot = Join-Path $env:RUNNER_TEMP "atlas-windows-recovery-processes"
+            New-Item -ItemType Directory -Path $RecoveryLogRoot -Force | Out-Null
+            $FlutterExecutable = (Get-Command flutter -CommandType Application).Source
+
+            function Start-AtlasRecoveryWaiter {
+              param(
+                [string] $Name,
+                [string] $Test,
+                [string] $StageVariable,
+                [string] $VaultVariable,
+                [string] $Stage,
+                [string] $VaultId
+              )
+              $PriorStage = [Environment]::GetEnvironmentVariable($StageVariable, "Process")
+              $PriorVault = [Environment]::GetEnvironmentVariable($VaultVariable, "Process")
+              $Stdout = Join-Path $RecoveryLogRoot "$Name.stdout.log"
+              $Stderr = Join-Path $RecoveryLogRoot "$Name.stderr.log"
+              Remove-Item -LiteralPath $Stdout, $Stderr -Force -ErrorAction SilentlyContinue
+              try {
+                Set-Item -Path "Env:$StageVariable" -Value $Stage
+                Set-Item -Path "Env:$VaultVariable" -Value $VaultId
+                $Process = Start-Process -FilePath $FlutterExecutable -ArgumentList @(
+                  "test", $Test, "-d", "windows"
+                ) -PassThru -NoNewWindow -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+              }
+              finally {
+                if ($null -eq $PriorStage) {
+                  Remove-Item -Path "Env:$StageVariable" -ErrorAction SilentlyContinue
+                }
+                else {
+                  Set-Item -Path "Env:$StageVariable" -Value $PriorStage
+                }
+                if ($null -eq $PriorVault) {
+                  Remove-Item -Path "Env:$VaultVariable" -ErrorAction SilentlyContinue
+                }
+                else {
+                  Set-Item -Path "Env:$VaultVariable" -Value $PriorVault
+                }
+              }
+              return [PSCustomObject]@{
+                Name = $Name
+                Process = $Process
+                Stdout = $Stdout
+                Stderr = $Stderr
+              }
+            }
+
+            function Write-AtlasRecoveryLogs {
+              param([PSCustomObject] $Waiter)
+              foreach ($Path in @($Waiter.Stdout, $Waiter.Stderr)) {
+                if (Test-Path -LiteralPath $Path) {
+                  Get-Content -LiteralPath $Path -Raw | Write-Host
+                }
+              }
+            }
+
+            function Wait-AtlasRecoveryWaiter {
+              param([PSCustomObject] $Waiter)
+              if (-not $Waiter.Process.WaitForExit(120000)) {
+                Stop-Process -Id $Waiter.Process.Id -Force -ErrorAction SilentlyContinue
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) exceeded the 120-second recovery-stage timeout."
+              }
+              if ($Waiter.Process.ExitCode -ne 0) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) failed with exit code $($Waiter.Process.ExitCode)."
+              }
+            }
+
+            function Invoke-AtlasRecoveryStage {
+              param(
+                [string] $Name,
+                [string] $Test,
+                [string] $StageVariable,
+                [string] $VaultVariable,
+                [string] $Stage,
+                [string] $VaultId
+              )
+              $Waiter = Start-AtlasRecoveryWaiter $Name $Test $StageVariable $VaultVariable $Stage $VaultId
+              Wait-AtlasRecoveryWaiter $Waiter
+            }
+
+            function Wait-AtlasRecoverySignal {
+              param([string] $Root, [string] $Signal)
+              $SignalPath = Join-Path $Root "$Signal.ready"
+              $Deadline = [DateTime]::UtcNow.AddSeconds(120)
+              while (-not (Test-Path -LiteralPath $SignalPath)) {
+                if ([DateTime]::UtcNow -ge $Deadline) {
+                  throw "Timed out waiting for recovery signal $Signal."
+                }
+                Start-Sleep -Milliseconds 200
+              }
+            }
+
+            function Stop-AtlasRecoveryHolder {
+              param([PSCustomObject] $Holder)
+              if (-not $Holder.Process.HasExited) {
+                Stop-Process -Id $Holder.Process.Id -Force
+                & taskkill.exe /PID $Holder.Process.Id /T /F | Out-Null
+                if ($LASTEXITCODE -notin @(0, 128)) {
+                  throw "Failed to terminate $($Holder.Name)."
+                }
+              }
+              if (-not $Holder.Process.WaitForExit(60000)) {
+                throw "$($Holder.Name) did not exit after deliberate termination."
+              }
+              Write-AtlasRecoveryLogs $Holder
+            }
+
+            $MigrationRecoveryTest = "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart"
+            $MigrationStageVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE"
+            $MigrationVaultVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID"
+            $MigrationVaultId = "c1000000-0000-4000-8000-000000000003"
+            $MigrationCoordinationRoot = Join-Path ([IO.Path]::GetTempPath()) (
+              "atlas_windows_migration_coordination_" + ($MigrationVaultId -replace "-", "")
+            )
+
+            $InteropRecoveryTest = "integration_test\atlas_vault_windows_interoperability_recovery_test.dart"
+            $InteropStageVariable = "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_STAGE"
+            $InteropVaultVariable = "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_VAULT_ID"
+            $InteropVaultId = "windows_recovery_import_cross_process_ci"
+            $InteropCoordinationRoot = Join-Path ([IO.Path]::GetTempPath()) (
+              "atlas_windows_import_cross_process_" + $InteropVaultId
+            )
+            $MigrationCrashHolder = $null
+            $InteropCrashHolder = $null
+
+            try {
+              Invoke-AtlasRecoveryStage "migration-cleanup-before" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-prepare" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "prepare" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-verify" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "verify" $MigrationVaultId
+
+              $MigrationAdmissionWaiter = Start-AtlasRecoveryWaiter "migration-admission-waiter" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-waiter" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "legacy-ready"
+              Invoke-AtlasRecoveryStage "migration-admission-prepare" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-prepare" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-admission-rollback" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-rollback" $MigrationVaultId
+              Wait-AtlasRecoveryWaiter $MigrationAdmissionWaiter
+
+              Invoke-AtlasRecoveryStage "migration-cleanup-before-finalization" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              $MigrationFinalizationWaiter = Start-AtlasRecoveryWaiter "migration-finalization-waiter" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "finalization-waiter" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "finalization-waiter-ready"
+              Invoke-AtlasRecoveryStage "migration-finalization-run" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "finalization-run" $MigrationVaultId
+              Wait-AtlasRecoveryWaiter $MigrationFinalizationWaiter
+
+              Invoke-AtlasRecoveryStage "migration-cleanup-before-crash" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              $MigrationCrashHolder = Start-AtlasRecoveryWaiter "migration-crash-holder" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-holder" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "crash-lock-held"
+              $MigrationCrashVerify = Start-AtlasRecoveryWaiter "migration-crash-verify" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-verify" $MigrationVaultId
+              Stop-AtlasRecoveryHolder $MigrationCrashHolder
+              Wait-AtlasRecoveryWaiter $MigrationCrashVerify
+              Invoke-AtlasRecoveryStage "migration-cleanup-after" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropAdmissionWaiter = Start-AtlasRecoveryWaiter "interop-admission-waiter" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-waiter" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "legacy-ready"
+              Invoke-AtlasRecoveryStage "interop-admission-prepare" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-prepare" $InteropVaultId
+              Invoke-AtlasRecoveryStage "interop-admission-reset" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-reset" $InteropVaultId
+              Wait-AtlasRecoveryWaiter $InteropAdmissionWaiter
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before-selection" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropSelectionWaiter = Start-AtlasRecoveryWaiter "interop-selection-waiter" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "selection-waiter" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "selection-waiter-ready"
+              Invoke-AtlasRecoveryStage "interop-selection-run" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "selection-run" $InteropVaultId
+              Wait-AtlasRecoveryWaiter $InteropSelectionWaiter
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before-crash" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropCrashHolder = Start-AtlasRecoveryWaiter "interop-crash-holder" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-holder" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-lock-held"
+              $InteropCrashVerify = Start-AtlasRecoveryWaiter "interop-crash-verify" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-verify" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-waiter-ready"
+              Stop-AtlasRecoveryHolder $InteropCrashHolder
+              Wait-AtlasRecoveryWaiter $InteropCrashVerify
+              Invoke-AtlasRecoveryStage "interop-cleanup-after" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+            }
+            finally {
+              foreach ($Holder in @($MigrationCrashHolder, $InteropCrashHolder)) {
+                if ($null -ne $Holder -and -not $Holder.Process.HasExited) {
+                  Stop-AtlasRecoveryHolder $Holder
+                }
+              }
+              Remove-Item -LiteralPath $MigrationCoordinationRoot -Recurse -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $InteropCoordinationRoot -Recurse -Force -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $RecoveryLogRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
             flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
             if ($LASTEXITCODE -ne 0) { throw "Windows identity prepare failed" }

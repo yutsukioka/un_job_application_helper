@@ -21,10 +21,17 @@ this document. No eighth path is permitted.
 
 ## Pull-Request Workflow
 
-`atlasvault-cross-platform-security.yml` runs on relevant pull requests,
-relevant pushes to `master`, and explicit manual dispatch. Concurrency is
-grouped by workflow and ref, with stale work cancelled. Workflow permissions
-are limited to `contents: read`.
+`atlasvault-cross-platform-security.yml` runs on every pull request, every
+push to `master`, and explicit manual dispatch. Concurrency is grouped by
+workflow and ref, with stale work cancelled. Workflow permissions are limited
+to `contents: read`.
+
+Its admission job runs before every expensive platform job. It scans the
+proposed tree with case-folded filenames, skips `.git`, and rejects
+`.atlasvault`, `.atlaspair`, identity-secret, and ephemeral-private artifacts
+regardless of their directory or filename casing. It prints filenames only and
+does not require a repository secret. The platform jobs all require successful
+admission, so path filtering cannot bypass this artifact boundary.
 
 GitHub reports `master` as the repository default branch and every security
 phase in this milestone targets it. Older repository text describing `master`
@@ -44,10 +51,12 @@ The workflow has four independent jobs:
   analysis, focused AtlasVault tests, every host-independent Flutter test, and
   an Android Debug build. Python 3.12 is provisioned explicitly for a
   brace-aware Dart lifecycle-body source guard, which checks multiline
-  `initState` bodies for automatic pairing, import, or export calls and
-  scheduled operation tear-offs, including tear-offs first assigned to local
-  aliases, while ignoring comments and literal string segments but preserving
-  executable Dart string interpolations. Linux executes the supported search
+  `initState` bodies for automatic pairing, import, export, and explicit
+  device-identity creation calls and scheduled operation tear-offs, including
+  aliases reached through plain, nullable, and null-asserted receiver chains.
+  It ignores comments and literal string segments while preserving executable
+  Dart string interpolations and permits harmless owner/property references.
+  Linux executes the supported search
   pixel goldens and their semantic cases; the tab golden remains on macOS.
 - Swift runs focused identity/pairing/interoperability tests, the full Swift
   suite, the host-supported Flutter goldens, and generic Simulator builds for
@@ -91,8 +100,17 @@ architecture, interactive desktop dialogs, or the separately archived
 Parallels fresh-process evidence.
 
 Windows storage and private-state persistence tests receive explicit stable
-fake vault IDs and run prepare before verify. The Apple integration filter also
-includes the encrypted recovery-export/import interoperability class.
+fake vault IDs and run prepare before verify. Windows migration recovery uses
+the same stable ID across separate `prepare` and `verify` Flutter processes,
+then separately coordinates admission rollback, finalization exclusion, and
+crash-lock release through test-owned ready signals. Windows recovery-import
+uses a separate stable ID and distinct processes for admission prepare/reset,
+selection commitment, and crash-lock release. Waiters have bounded exit and
+signal timeouts, capture stdout/stderr, and are awaited; crash holders are
+deliberately terminated before their verifier proceeds. Cleanup stages and a
+`finally` block remove only the deterministic test coordination roots and
+runner-temporary logs. The Apple integration filter also includes the encrypted
+recovery-export/import interoperability class.
 
 The Apple job runs simulator-compatible Swift identity, pairing, key-delivery,
 interoperability, registry, replay, and transaction tests. It explicitly runs
@@ -155,6 +173,9 @@ Package verification requires:
 - successful local platform scripts where the host supports them;
 - successful GitHub jobs on the exact PR head;
 - isolated Android and Windows pairing persistence/journey scenarios;
+- Windows migration and recovery-import process-boundary stage orchestration,
+  including prepare/verify, admitted legacy waiters, selection/finalization,
+  deliberate holder termination, verification, and cleanup;
 - non-skipping Apple, Android, and Windows canonical artifact-ring checks;
 - no repository AtlasVault artifact;
 - exactly seven changed files;
