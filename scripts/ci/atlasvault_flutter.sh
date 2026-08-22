@@ -24,7 +24,10 @@ if (( ${#focused[@]} == 0 )); then
 fi
 flutter test "${focused[@]}"
 
-mapfile -t full_tests < <(
+full_tests=()
+while IFS= read -r test_path; do
+  full_tests+=("$test_path")
+done < <(
   find test -type f -name '*_test.dart' \
     ! -name 'tab_golden_test.dart' \
     -print | sort
