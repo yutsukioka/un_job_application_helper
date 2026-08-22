@@ -210,6 +210,13 @@ for marker in (
 ):
     if marker not in workflow:
         raise SystemExit("Windows recovery must terminate the complete holder process tree.")
+waiter_start = workflow.index("function Wait-AtlasRecoveryWaiter")
+waiter_end = workflow.index("function Invoke-AtlasRecoveryStage", waiter_start)
+waiter_function = workflow[waiter_start:waiter_end]
+if "Stop-AtlasRecoveryProcessTree $Waiter" not in waiter_function:
+    raise SystemExit(
+        "Windows recovery timeouts must terminate the complete waiter process tree."
+    )
 print("Validated Windows recovery process-boundary orchestration policy.")
 PY
 

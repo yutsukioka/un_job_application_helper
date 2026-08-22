@@ -466,6 +466,13 @@ assigned_tear_off_init_state_samples = (
     ),
     (
         """void initState() {
+  final callback = custody.createPrimaryIdentity;
+  callback();
+}""",
+        True,
+    ),
+    (
+        """void initState() {
   final callback = fallback ?? controller.startPairing;
   Future.microtask(callback);
 }""",
@@ -483,6 +490,12 @@ assigned_tear_off_init_state_samples = (
   _ownedDeviceIdentityOwner = assembly.deviceIdentityOwner;
 }""",
         False,
+    ),
+    (
+        """void initState() {
+  (enabled ? controller.startPairing : noop)();
+}""",
+        True,
     ),
 )
 if any(
