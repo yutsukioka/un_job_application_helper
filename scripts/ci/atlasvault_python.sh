@@ -182,7 +182,7 @@ runner_start = workflow.index("function Get-AtlasRecoveryHolderRunner")
 runner_end = workflow.index("function Stop-AtlasRecoveryHolder", runner_start)
 runner_function = workflow[runner_start:runner_end]
 for marker in (
-    "Get-CimInstance Win32_Process",
+    "Get-CimInstance -ClassName Win32_Process",
     "ParentProcessId",
     "$Holder.Process.Id",
     '$Process.ProcessName -eq "atlas"',
