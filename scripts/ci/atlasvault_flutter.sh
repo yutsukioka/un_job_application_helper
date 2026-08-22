@@ -192,7 +192,7 @@ def _mask_dart_non_code(source: str) -> str:
 def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
+        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):
@@ -559,6 +559,8 @@ if any(
 
 if not _has_automatic_operation("void didChangeDependencies() { controller.startPairing(); }"):
     raise SystemExit("Dart automatic-lifecycle self-test failed.")
+if not _has_automatic_operation("void didChangeAppLifecycleState(state) { controller.startPairing(); }"):
+    raise SystemExit("Dart observer-lifecycle self-test failed.")
 
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),

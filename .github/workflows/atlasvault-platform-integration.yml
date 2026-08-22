@@ -424,6 +424,12 @@ jobs:
             )
             $MigrationCrashHolder = $null
             $InteropCrashHolder = $null
+            $MigrationAdmissionWaiter = $null
+            $MigrationFinalizationWaiter = $null
+            $MigrationCrashVerify = $null
+            $InteropAdmissionWaiter = $null
+            $InteropSelectionWaiter = $null
+            $InteropCrashVerify = $null
 
             try {
               Invoke-AtlasRecoveryStage "migration-cleanup-before" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId

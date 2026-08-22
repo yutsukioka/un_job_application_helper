@@ -358,13 +358,7 @@ blocked_import_roots = frozenset(
         "xmlrpc",
     }
 )
-targets = (
-    Path("packages/vaultsync/vaultsync/device_identity.py"),
-    Path("packages/vaultsync/vaultsync/pairing.py"),
-    Path("packages/vaultsync/vaultsync/key_delivery.py"),
-    Path("packages/vaultsync/vaultsync/pairing_artifacts.py"),
-    Path("packages/vaultsync/vaultsync/trusted_devices.py"),
-)
+targets = tuple(sorted(Path("packages/vaultsync/vaultsync").glob("*.py")))
 
 
 def _blocked_imports(source: str) -> bool:
