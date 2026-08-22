@@ -25,7 +25,7 @@ swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVault(DeviceIdenti
 RUNTIME_VECTOR_DIR="$TEMP_ROOT/device-identity-runtime"
 export ATLAS_DEVICE_IDENTITY_RUNTIME_VECTOR_DIR="$RUNTIME_VECTOR_DIR"
 swift test --scratch-path "$TEMP_ROOT/focused" --filter 'AtlasVaultPairingFoundationTests.testWritesPublicFreshSwiftSignatureArtifactWhenRequested'
-python -m pytest "$REPO_ROOT/packages/vaultsync/tests/test_pairing_vectors.py" \
+python3 -m pytest "$REPO_ROOT/packages/vaultsync/tests/test_pairing_vectors.py" \
   -k test_python_verifies_public_swift_runtime_signature_artifact
 cd "$FLUTTER_ROOT"
 flutter pub get
