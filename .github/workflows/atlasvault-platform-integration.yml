@@ -216,7 +216,10 @@ jobs:
 
             $RecoveryLogRoot = Join-Path $env:RUNNER_TEMP "atlas-windows-recovery-processes"
             New-Item -ItemType Directory -Path $RecoveryLogRoot -Force | Out-Null
-            $FlutterExecutable = (Get-Command flutter -CommandType Application).Source
+            $FlutterExecutable = (
+              Get-Command flutter -CommandType Application |
+                Select-Object -First 1
+            ).Source
 
             function Start-AtlasRecoveryWaiter {
               param(
