@@ -218,15 +218,17 @@ def _init_state_bodies(source: str) -> tuple[str, ...]:
 operation_reference = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?=[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|[,)]))"
-    r"(?=[A-Za-z0-9_$]*(?:pair|import|export))"
+    r"(?=[A-Za-z0-9_$]*(?:pair|import|export|createdeviceidentity))"
     r"[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\(|\??\.\s*call\s*\(|(?=[,)]))",
     re.IGNORECASE,
 )
-operation_identifier = re.compile(r"(?:pair|import|export)", re.IGNORECASE)
+operation_identifier = re.compile(
+    r"(?:pair|import|export|createdeviceidentity)", re.IGNORECASE
+)
 operation_alias_assignment = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*;"
 )
 
