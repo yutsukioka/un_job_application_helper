@@ -129,6 +129,52 @@ print("Validated isolated pairing persistence and canonical artifact-ring policy
 PY
 
 python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/atlasvault-platform-integration.yml"
+).read_text(encoding="utf-8")
+required = (
+    "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE",
+    "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID",
+    "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_STAGE",
+    "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_VAULT_ID",
+    "Invoke-AtlasRecoveryStage",
+    "Start-AtlasRecoveryWaiter",
+    "Wait-AtlasRecoveryWaiter",
+    "Wait-AtlasRecoverySignal",
+    "Stop-AtlasRecoveryHolder",
+    "admission-waiter",
+    "admission-prepare",
+    "admission-rollback",
+    "finalization-waiter",
+    "finalization-run",
+    "selection-waiter",
+    "selection-run",
+    "crash-holder",
+    "crash-verify",
+    "cleanup",
+)
+missing = [marker for marker in required if marker not in workflow]
+if missing:
+    raise SystemExit("Windows recovery process-boundary policy is incomplete.")
+
+for stage in ("prepare", "verify"):
+    if workflow.count(f'"{stage}"') < 2:
+        raise SystemExit("Windows migration prepare/verify stages are not distinct.")
+for marker in (
+    "WaitForExit(120000)",
+    "Stop-Process -Id $Holder.Process.Id -Force",
+    "finally {",
+    "Remove-Item -LiteralPath $MigrationCoordinationRoot",
+    "Remove-Item -LiteralPath $InteropCoordinationRoot",
+):
+    if marker not in workflow:
+        raise SystemExit("Windows recovery process-boundary cleanup is incomplete.")
+print("Validated Windows recovery process-boundary orchestration policy.")
+PY
+
+python - <<'PY'
 import re
 from pathlib import Path
 
