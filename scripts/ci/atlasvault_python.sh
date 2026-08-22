@@ -24,15 +24,35 @@ from pathlib import Path
 workflow = Path(
     ".github/workflows/atlasvault-cross-platform-security.yml"
 ).read_text(encoding="utf-8")
-required_trigger_patterns = (
-    "**/*.atlasvault",
-    "**/*.atlaspair",
-    "**/*identity*secret*",
-    "**/*ephemeral*private*",
+if "pull_request:\n    paths:" in workflow:
+    raise SystemExit("AtlasVault admission must run for every pull request.")
+required_admission_markers = (
+    "admission:",
+    "find . -path './.git' -prune -o -type f -print",
+    "casefold()",
+    "needs: admission",
 )
-missing = [pattern for pattern in required_trigger_patterns if pattern not in workflow]
+missing = [marker for marker in required_admission_markers if marker not in workflow]
 if missing:
     raise SystemExit("AtlasVault forbidden-artifact trigger coverage is incomplete.")
+for forbidden in (
+    "ROOT.ATLASVAULT",
+    "root.AtlasPair",
+    "private/IdentitySecret.json",
+    "private/IDENTITY-SECRET.bin",
+    "private/EphemeralPrivate.json",
+    "nested/EPHEMERAL_private.dat",
+):
+    normalized = forbidden.casefold()
+    if not (
+        normalized.endswith((".atlasvault", ".atlaspair"))
+        or ("identity" in normalized and "secret" in normalized)
+        or ("ephemeral" in normalized and "private" in normalized)
+    ):
+        raise SystemExit("AtlasVault forbidden-artifact policy self-test failed.")
+ordinary = "docs/ordinary-note.md".casefold()
+if any(term in ordinary for term in ("identity", "secret", "ephemeral", "private")):
+    raise SystemExit("AtlasVault ordinary-file policy self-test failed.")
 print("Validated AtlasVault forbidden-artifact trigger coverage.")
 PY
 
