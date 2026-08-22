@@ -280,6 +280,7 @@ jobs:
                 Write-AtlasRecoveryLogs $Waiter
                 throw "$($Waiter.Name) exceeded the 120-second recovery-stage timeout."
               }
+              $Waiter.Process.Refresh()
               if ($Waiter.Process.ExitCode -ne 0) {
                 Write-AtlasRecoveryLogs $Waiter
                 throw "$($Waiter.Name) failed with exit code $($Waiter.Process.ExitCode)."
