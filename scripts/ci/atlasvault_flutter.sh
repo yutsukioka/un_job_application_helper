@@ -255,7 +255,7 @@ def _operation_aliases(body: str) -> frozenset[str]:
 def _alias_is_executed(body: str, alias: str) -> bool:
     usage = re.compile(
         rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
-        r"(?:\(|\.\s*call\s*\(|(?=[,)]))"
+        r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))"
     )
     return usage.search(body) is not None
 
