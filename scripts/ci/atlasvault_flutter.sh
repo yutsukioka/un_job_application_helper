@@ -192,7 +192,7 @@ def _mask_dart_non_code(source: str) -> str:
 def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
+        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):
@@ -295,7 +295,7 @@ def _operation_aliases(body: str) -> frozenset[str]:
 def _alias_is_executed(body: str, alias: str) -> bool:
     usage = re.compile(
         rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
-        r"(?:\[\s*\d+\s*\]|\.\s*(?:first|last|single))?\s*"
+        r"(?:\[[^\]]+\]|\.\s*(?:first|last|single))?\s*"
         r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))"
     )
     return usage.search(body) is not None

@@ -63,6 +63,19 @@ focused_tests=(
   packages/vaultsync/tests/test_pairing_artifact_vectors.py
   packages/vaultsync/tests/test_trusted_device_vectors.py
 )
+python - <<'PY'
+import ast
+from pathlib import Path
+
+blocked = {"aiohttp", "asyncio", "ftplib", "grpc", "http", "httpcore", "httpx", "imaplib", "nntplib", "poplib", "requests", "smtplib", "socket", "socketserver", "ssl", "telnetlib", "urllib", "urllib3", "websocket", "websockets", "xmlrpc"}
+for path in Path("packages/vaultsync/vaultsync").glob("*.py"):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import) and any(alias.name.partition(".")[0] in blocked for alias in node.names):
+            raise SystemExit("VaultSync no-network preflight failed.")
+        if isinstance(node, ast.ImportFrom) and (node.module or "").partition(".")[0] in blocked:
+            raise SystemExit("VaultSync no-network preflight failed.")
+print("Validated VaultSync no-network preflight.")
+PY
 python -m pytest "${focused_tests[@]}"
 
 python -m pytest packages/vaultsync/tests
@@ -337,6 +350,7 @@ from pathlib import Path
 blocked_import_roots = frozenset(
     {
         "aiohttp",
+        "asyncio",
         "ftplib",
         "grpc",
         "http",
