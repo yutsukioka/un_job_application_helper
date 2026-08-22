@@ -234,12 +234,13 @@ jobs:
               $PriorVault = [Environment]::GetEnvironmentVariable($VaultVariable, "Process")
               $Stdout = Join-Path $RecoveryLogRoot "$Name.stdout.log"
               $Stderr = Join-Path $RecoveryLogRoot "$Name.stderr.log"
-              Remove-Item -LiteralPath $Stdout, $Stderr -Force -ErrorAction SilentlyContinue
+              $ExitCodeFile = Join-Path $RecoveryLogRoot "$Name.exit-code"
+              Remove-Item -LiteralPath $Stdout, $Stderr, $ExitCodeFile -Force -ErrorAction SilentlyContinue
               try {
                 Set-Item -Path "Env:$StageVariable" -Value $Stage
                 Set-Item -Path "Env:$VaultVariable" -Value $VaultId
-                $FlutterInvocation = '/d /s /c ""{0}" test "{1}" -d windows"' -f $FlutterExecutable, $Test
-                $Process = Start-Process -FilePath $env:ComSpec -ArgumentList $FlutterInvocation -PassThru -NoNewWindow -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+                $FlutterInvocation = '/d /s /c ""{0}" test "{1}" -d windows 1>"{2}" 2>"{3}" & echo %errorlevel% > "{4}""' -f $FlutterExecutable, $Test, $Stdout, $Stderr, $ExitCodeFile
+                $Process = Start-Process -FilePath $env:ComSpec -ArgumentList $FlutterInvocation -PassThru -NoNewWindow
               }
               finally {
                 if ($null -eq $PriorStage) {
@@ -260,6 +261,7 @@ jobs:
                 Process = $Process
                 Stdout = $Stdout
                 Stderr = $Stderr
+                ExitCodeFile = $ExitCodeFile
               }
             }
 
@@ -279,10 +281,19 @@ jobs:
                 Write-AtlasRecoveryLogs $Waiter
                 throw "$($Waiter.Name) exceeded the 120-second recovery-stage timeout."
               }
-              $Waiter.Process.Refresh()
-              if ($Waiter.Process.ExitCode -ne 0) {
+              if (-not (Test-Path -LiteralPath $Waiter.ExitCodeFile)) {
                 Write-AtlasRecoveryLogs $Waiter
-                throw "$($Waiter.Name) failed with exit code $($Waiter.Process.ExitCode)."
+                throw "$($Waiter.Name) did not write an exit code."
+              }
+              $ExitCodeText = (Get-Content -LiteralPath $Waiter.ExitCodeFile -Raw).Trim()
+              $ExitCode = 0
+              if (-not [int]::TryParse($ExitCodeText, [ref] $ExitCode)) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) wrote an invalid exit code."
+              }
+              if ($ExitCode -ne 0) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) failed with exit code $ExitCode."
               }
             }
 
