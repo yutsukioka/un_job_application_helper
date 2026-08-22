@@ -262,6 +262,7 @@ jobs:
                 Stdout = $Stdout
                 Stderr = $Stderr
                 ExitCodeFile = $ExitCodeFile
+                RunnerPath = [IO.Path]::GetFullPath((Join-Path (Get-Location) "build\\windows\\x64\\runner\\Debug\\atlas.exe"))
               }
             }
 
@@ -324,12 +325,16 @@ jobs:
 
             function Stop-AtlasRecoveryHolder {
               param([PSCustomObject] $Holder)
-              if (-not $Holder.Process.HasExited) {
-                Stop-Process -Id $Holder.Process.Id -Force
-                & taskkill.exe /PID $Holder.Process.Id /T /F | Out-Null
-                if ($LASTEXITCODE -notin @(0, 128)) {
-                  throw "Failed to terminate $($Holder.Name)."
-                }
+              $TestRunners = @(
+                Get-Process -Name atlas -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Path -eq $Holder.RunnerPath }
+              )
+              if ($TestRunners.Count -eq 0) {
+                throw "No test-owned Atlas runner is available to terminate for $($Holder.Name)."
+              }
+              Stop-Process -Id $Holder.Process.Id -Force -ErrorAction SilentlyContinue
+              foreach ($TestRunner in $TestRunners) {
+                Stop-Process -Id $TestRunner.Id -Force
               }
               if (-not $Holder.Process.WaitForExit(60000)) {
                 throw "$($Holder.Name) did not exit after deliberate termination."
