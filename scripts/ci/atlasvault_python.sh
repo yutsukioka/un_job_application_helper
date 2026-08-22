@@ -177,13 +177,15 @@ if ' /v:on /s /c ' not in workflow or '!errorlevel! >' not in workflow:
 if '%errorlevel% >' in workflow:
     raise SystemExit("Windows recovery waiters must not capture a pre-command exit code.")
 for holder in ("$MigrationCrashHolder", "$InteropCrashHolder"):
-    if f"{holder}.RunnerProcessId = [int](Wait-AtlasRecoverySignal" not in workflow:
+    if f"{holder}.RunnerProcessId = Get-AtlasRecoverySignalProcessId" not in workflow:
         raise SystemExit("Windows crash holders must bind the signal PID before termination.")
 holder_start = workflow.index("function Stop-AtlasRecoveryHolder")
 holder_end = workflow.index("$MigrationRecoveryTest", holder_start)
 holder_function = workflow[holder_start:holder_end]
 if "Get-Process -Name atlas" in holder_function:
     raise SystemExit("Windows recovery must not terminate every Atlas runner at one path.")
+if "function Get-AtlasRecoverySignalProcessId" not in workflow:
+    raise SystemExit("Windows recovery must validate crash-holder signal ownership.")
 for marker in (
     "Get-Process -Id $Holder.RunnerProcessId",
     '$TestRunner.ProcessName -ne "atlas"',

@@ -239,7 +239,7 @@ jobs:
               try {
                 Set-Item -Path "Env:$StageVariable" -Value $Stage
                 Set-Item -Path "Env:$VaultVariable" -Value $VaultId
-                $FlutterInvocation = '/d /s /c ""{0}" test "{1}" -d windows 1>"{2}" 2>"{3}" & echo %errorlevel% > "{4}""' -f $FlutterExecutable, $Test, $Stdout, $Stderr, $ExitCodeFile
+                $FlutterInvocation = '/d /v:on /s /c ""{0}" test "{1}" -d windows 1>"{2}" 2>"{3}" & echo !errorlevel! > "{4}""' -f $FlutterExecutable, $Test, $Stdout, $Stderr, $ExitCodeFile
                 $Process = Start-Process -FilePath $env:ComSpec -ArgumentList $FlutterInvocation -PassThru -NoNewWindow
               }
               finally {
@@ -263,6 +263,7 @@ jobs:
                 Stderr = $Stderr
                 ExitCodeFile = $ExitCodeFile
                 RunnerPath = [IO.Path]::GetFullPath((Join-Path (Get-Location) "build\\windows\\x64\\runner\\Debug\\atlas.exe"))
+                RunnerProcessId = $null
               }
             }
 
@@ -323,19 +324,36 @@ jobs:
               }
             }
 
+            function Get-AtlasRecoverySignalProcessId {
+              param(
+                [string] $Root,
+                [string] $Signal,
+                [string] $ExpectedRunnerPath
+              )
+              $SignalPath = Join-Path $Root "$Signal.ready"
+              $ProcessIdText = (Get-Content -LiteralPath $SignalPath -Raw).Trim()
+              $ProcessId = 0
+              if (-not [int]::TryParse($ProcessIdText, [ref] $ProcessId)) {
+                throw "Recovery signal $Signal did not contain a process ID."
+              }
+              $Process = Get-Process -Id $ProcessId -ErrorAction Stop
+              if ($Process.ProcessName -ne "atlas" -or $Process.Path -ne $ExpectedRunnerPath) {
+                throw "Recovery signal $Signal did not identify the test-owned Atlas runner."
+              }
+              return $ProcessId
+            }
+
             function Stop-AtlasRecoveryHolder {
               param([PSCustomObject] $Holder)
-              $TestRunners = @(
-                Get-Process -Name atlas -ErrorAction SilentlyContinue |
-                  Where-Object { $_.Path -eq $Holder.RunnerPath }
-              )
-              if ($TestRunners.Count -eq 0) {
-                throw "No test-owned Atlas runner is available to terminate for $($Holder.Name)."
+              if ($null -eq $Holder.RunnerProcessId) {
+                throw "No crash-holder runner PID was recorded for $($Holder.Name)."
+              }
+              $TestRunner = Get-Process -Id $Holder.RunnerProcessId -ErrorAction Stop
+              if ($TestRunner.ProcessName -ne "atlas" -or $TestRunner.Path -ne $Holder.RunnerPath) {
+                throw "Crash-holder PID did not identify the test-owned Atlas runner for $($Holder.Name)."
               }
               Stop-Process -Id $Holder.Process.Id -Force -ErrorAction SilentlyContinue
-              foreach ($TestRunner in $TestRunners) {
-                Stop-Process -Id $TestRunner.Id -Force
-              }
+              Stop-Process -Id $TestRunner.Id -Force
               if (-not $Holder.Process.WaitForExit(60000)) {
                 throw "$($Holder.Name) did not exit after deliberate termination."
               }
@@ -380,6 +398,7 @@ jobs:
               Invoke-AtlasRecoveryStage "migration-cleanup-before-crash" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
               $MigrationCrashHolder = Start-AtlasRecoveryWaiter "migration-crash-holder" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-holder" $MigrationVaultId
               Wait-AtlasRecoverySignal $MigrationCoordinationRoot "crash-lock-held"
+              $MigrationCrashHolder.RunnerProcessId = Get-AtlasRecoverySignalProcessId $MigrationCoordinationRoot "crash-lock-held" $MigrationCrashHolder.RunnerPath
               $MigrationCrashVerify = Start-AtlasRecoveryWaiter "migration-crash-verify" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-verify" $MigrationVaultId
               Stop-AtlasRecoveryHolder $MigrationCrashHolder
               Wait-AtlasRecoveryWaiter $MigrationCrashVerify
@@ -401,6 +420,7 @@ jobs:
               Invoke-AtlasRecoveryStage "interop-cleanup-before-crash" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
               $InteropCrashHolder = Start-AtlasRecoveryWaiter "interop-crash-holder" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-holder" $InteropVaultId
               Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-lock-held"
+              $InteropCrashHolder.RunnerProcessId = Get-AtlasRecoverySignalProcessId $InteropCoordinationRoot "crash-lock-held" $InteropCrashHolder.RunnerPath
               $InteropCrashVerify = Start-AtlasRecoveryWaiter "interop-crash-verify" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-verify" $InteropVaultId
               Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-waiter-ready"
               Stop-AtlasRecoveryHolder $InteropCrashHolder
