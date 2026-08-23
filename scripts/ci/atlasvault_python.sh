@@ -356,6 +356,7 @@ PY
 
 python - <<'PY'
 import ast
+import tempfile
 from pathlib import Path
 
 blocked_import_roots = frozenset(
@@ -384,7 +385,11 @@ blocked_import_roots = frozenset(
         "xmlrpc",
     }
 )
-targets = tuple(sorted(Path("packages/vaultsync/vaultsync").glob("*.py")))
+def _vaultsync_targets(root: Path) -> tuple[Path, ...]:
+    return tuple(sorted(root.glob("*.py")))
+
+
+targets = _vaultsync_targets(Path("packages/vaultsync/vaultsync"))
 
 
 def _blocked_imports(source: str) -> bool:
@@ -563,6 +568,13 @@ if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")
 if _blocked_imports("import importlib\nimportlib.invalidate_caches()"):
     raise SystemExit("Python AST dynamic-import self-test failed.")
+with tempfile.TemporaryDirectory() as temporary_directory:
+    temporary_root = Path(temporary_directory)
+    nested_module = temporary_root / "transports" / "http.py"
+    nested_module.parent.mkdir()
+    nested_module.write_text("import requests\n", encoding="utf-8")
+    if nested_module not in _vaultsync_targets(temporary_root):
+        raise SystemExit("Python AST no-network preflight must scan subpackages.")
 for path in targets:
     if _blocked_imports(path.read_text(encoding="utf-8")):
         raise SystemExit("Network imports are not permitted in pairing primitives.")

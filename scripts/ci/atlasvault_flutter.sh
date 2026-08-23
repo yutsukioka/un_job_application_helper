@@ -1377,6 +1377,17 @@ void initState() {
     raise SystemExit("Dart scheduled-wrapper lifecycle self-test failed.")
 
 if not _has_automatic_operation(
+    """void _run() => (() {
+  noop();
+  controller.startPairing();
+})();
+void initState() {
+  _run();
+}"""
+):
+    raise SystemExit("Dart arrow-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
     """class PairingWidget extends StatefulWidget {
   PairingState createState() {
     controller.startPairing();
@@ -1391,6 +1402,32 @@ class PairingState extends State<PairingWidget> {
 }"""
 ):
     raise SystemExit("Dart construction lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class BaseState<T> extends State<T> {}
+class PairingState extends BaseState<PairingWidget> {
+  PairingState() {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart indirect-State construction self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  PairingState()
+      : callbacks = <String, VoidCallback>{'pair': noop} {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart typed-collection initializer self-test failed.")
+
+for teardown_hook in ("activate", "deactivate", "dispose"):
+    if not _has_automatic_operation(
+        f"void {teardown_hook}() {{ controller.startPairing(); }}"
+    ):
+        raise SystemExit("Dart teardown lifecycle self-test failed.")
 
 named_state_constructor_samples = (
     (
@@ -1475,6 +1512,30 @@ state_field_initializer_samples = (
     (
         """class PairingState extends State<PairingWidget> {
   final callback = () => controller.startPairing();
+}""",
+        False,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final token = (() => controller.startPairing()).call();
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final token = (() => controller.startPairing())?.call();
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final token = Function.apply(() => controller.startPairing(), const []);
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final callbacks = [() => controller.startPairing(), (() => noop())()];
 }""",
         False,
     ),
