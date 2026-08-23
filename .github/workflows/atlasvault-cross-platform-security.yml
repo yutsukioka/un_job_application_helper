@@ -31,16 +31,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          def forbidden_artifact_path(path: Path) -> bool:
+              path_text = "/".join(part.casefold() for part in path.parts)
+              return (
+                  path.name.casefold().endswith((".atlasvault", ".atlaspair"))
+                  or ("identity" in path_text and "secret" in path_text)
+                  or ("ephemeral" in path_text and "private" in path_text)
+              )
+
           forbidden = []
           for path in Path(".").rglob("*"):
               if not path.is_file() or ".git" in path.parts:
                   continue
-              name = path.name.casefold()
-              if (
-                  name.endswith((".atlasvault", ".atlaspair"))
-                  or ("identity" in name and "secret" in name)
-                  or ("ephemeral" in name and "private" in name)
-              ):
+              if forbidden_artifact_path(path):
                   forbidden.append(path.as_posix())
           if forbidden:
               raise SystemExit(
@@ -50,16 +53,7 @@ jobs:
               Path("private/IdentitySecret/bundle.json"),
               Path("scratch/EphemeralPrivate/data.bin"),
           )
-          if any(
-              not (
-                  (name := sample.name.casefold()).endswith(
-                      (".atlasvault", ".atlaspair")
-                  )
-                  or ("identity" in name and "secret" in name)
-                  or ("ephemeral" in name and "private" in name)
-              )
-              for sample in admission_samples
-          ):
+          if not all(forbidden_artifact_path(sample) for sample in admission_samples):
               raise SystemExit("AtlasVault artifact admission path self-test failed.")
           print("AtlasVault artifact admission passed.")
           PY

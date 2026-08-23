@@ -398,6 +398,8 @@ def _blocked_imports(source: str) -> bool:
     builtin_import_aliases = set()
     importlib_module_aliases = set()
     import_module_aliases = set()
+    os_module_aliases = set()
+    os_process_aliases = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(
@@ -410,6 +412,8 @@ def _blocked_imports(source: str) -> bool:
                     builtins_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "importlib":
                     importlib_module_aliases.add(alias.asname or alias.name)
+                elif alias.name == "os":
+                    os_module_aliases.add(alias.asname or alias.name)
                 elif (
                     alias.name.startswith("importlib.")
                     and alias.asname is None
@@ -429,6 +433,21 @@ def _blocked_imports(source: str) -> bool:
                         import_module_aliases.add(
                             alias.asname or alias.name
                         )
+            elif module == "os":
+                for alias in node.names:
+                    if alias.name in {
+                        "system",
+                        "popen",
+                        "execv",
+                        "execve",
+                        "execvp",
+                        "execvpe",
+                        "spawnv",
+                        "spawnve",
+                        "spawnvp",
+                        "spawnvpe",
+                    }:
+                        os_process_aliases.add(alias.asname or alias.name)
 
     def _is_import_module_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
@@ -505,6 +524,28 @@ def _blocked_imports(source: str) -> bool:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in os_process_aliases
+        ) or (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in os_module_aliases
+            and node.func.attr
+            in {
+                "system",
+                "popen",
+                "execv",
+                "execve",
+                "execvp",
+                "execvpe",
+                "spawnv",
+                "spawnve",
+                "spawnvp",
+                "spawnvpe",
+            }
+        ):
+            return True
         if (
             _is_builtin_import_reference(node.func)
             or _is_import_module_reference(node.func)

@@ -173,6 +173,14 @@ use a balanced expression terminator, so nested IIFEs are scanned in full.
 `Function.apply` of a sensitive tear-off or sensitive alias is also a direct
 build-time invocation.
 
+Lifecycle names are treated as automatic only inside a State subclass, widget
+subclass, or WidgetsBindingObserver subclass. Ordinary controller or service
+methods named build or dispose remain explicit work. Private wrapper discovery
+is keyed by owning class, so a same-named helper method cannot replace a State
+wrapper. State member parsing skips ordinary methods before inspecting fields;
+constructor parsing also recognizes expression-bodied callback initializers as
+passive until a callback is actually invoked.
+
 ## No-Network Preflight
 
 The complete AST-based VaultSync no-network policy executes before the first
@@ -188,6 +196,11 @@ the blocked standard-library and third-party networking clients. Deterministic
 samples include direct and aliased dynamic imports plus `asyncio` connection
 and server forms plus process-launch imports; harmless JSON and importlib cache
 operations remain allowed.
+
+The process-launch policy also rejects os process-launch APIs. Artifact
+admission case-folds the complete relative path, rejecting transport extensions
+and identity-secret or ephemeral-private names in directory components as well
+as final filenames.
 
 ## Windows Recovery Cleanup Modes
 

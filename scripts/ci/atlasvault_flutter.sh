@@ -189,45 +189,144 @@ def _mask_dart_non_code(source: str) -> str:
     return "".join(masked)
 
 
+class_declaration = re.compile(
+    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?"
+    r"(?P<heritage>[^{}]*)\{"
+)
+lifecycle_declaration = re.compile(
+    r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+    r"(?P<method>initState|didChangeDependencies|didUpdateWidget|"
+    r"didChangeAppLifecycleState|activate|deactivate|dispose|createState|build)"
+    r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
+)
+state_lifecycle_methods = frozenset(
+    {
+        "initState",
+        "didChangeDependencies",
+        "didUpdateWidget",
+        "didChangeAppLifecycleState",
+        "activate",
+        "deactivate",
+        "dispose",
+        "build",
+    }
+)
+widget_lifecycle_methods = frozenset({"build", "createState"})
+observer_lifecycle_methods = frozenset({"didChangeAppLifecycleState"})
+
+
+def _class_records(masked: str) -> tuple[tuple[str, str, str], ...]:
+    records = []
+    for match in class_declaration.finditer(masked):
+        body_start = match.end() - 1
+        body_end = _matching_delimiter_end(masked, body_start)
+        if body_end is None:
+            raise SystemExit("Unable to parse an AtlasVault Dart class.")
+        records.append(
+            (
+                match.group("name"),
+                match.group("heritage"),
+                masked[body_start + 1 : body_end - 1],
+            )
+        )
+    return tuple(records)
+
+
+def _at_class_member_depth(source: str, end: int) -> bool:
+    return (
+        sum(1 for character in source[:end] if character == "{")
+        == sum(1 for character in source[:end] if character == "}")
+    )
+
+
+def _flutter_lifecycle_class_methods(
+    masked_sources: tuple[str, ...],
+) -> dict[str, frozenset[str]]:
+    records = tuple(
+        record for source in masked_sources for record in _class_records(source)
+    )
+    state_names = {"State"}
+    widget_names = {"StatefulWidget", "StatelessWidget", "Widget"}
+    observer_names = {"WidgetsBindingObserver"}
+    changed = True
+    while changed:
+        changed = False
+        for name, heritage, _ in records:
+            base_match = re.search(
+                r"\bextends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)",
+                heritage,
+            )
+            base = base_match.group("base") if base_match else None
+            if base in state_names and name not in state_names:
+                state_names.add(name)
+                changed = True
+            if base in widget_names and name not in widget_names:
+                widget_names.add(name)
+                changed = True
+            if (
+                (base in observer_names or "WidgetsBindingObserver" in heritage)
+                and name not in observer_names
+            ):
+                observer_names.add(name)
+                changed = True
+
+    methods = {}
+    for name, _, _ in records:
+        allowed = set()
+        if name in state_names:
+            allowed.update(state_lifecycle_methods)
+        if name in widget_names:
+            allowed.update(widget_lifecycle_methods)
+        if name in observer_names:
+            allowed.update(observer_lifecycle_methods)
+        if allowed:
+            methods[name] = frozenset(allowed)
+    return methods
+
+
 def _automatic_lifecycle_bodies(
     source: str,
     state_class_names: frozenset[str] | None = None,
-) -> tuple[tuple[str, str], ...]:
+    lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
+) -> tuple[tuple[str, str, str], ...]:
     masked = _mask_dart_non_code(source)
-    declaration = re.compile(
-        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|activate|deactivate|dispose|createState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
-    )
+    if lifecycle_class_methods is None:
+        lifecycle_class_methods = _flutter_lifecycle_class_methods((masked,))
     bodies = []
-    for match in declaration.finditer(masked):
-        start = match.start("body")
-        if match.group("body") == "=>":
-            end = _expression_end(masked, match.end("body"))
-            if end < 0:
+    for owner, _, class_body in _class_records(masked):
+        allowed = lifecycle_class_methods.get(owner, frozenset())
+        if not allowed:
+            continue
+        for match in lifecycle_declaration.finditer(class_body):
+            if (
+                match.group("method") not in allowed
+                or not _at_class_member_depth(class_body, match.start())
+            ):
+                continue
+            start = match.start("body")
+            if match.group("body") == "=>":
+                end = _expression_end(class_body, match.end("body"))
+                if end < 0:
+                    raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
+                bodies.append(
+                    (
+                        owner,
+                        match.group("method"),
+                        class_body[match.end("body") : end],
+                    )
+                )
+                continue
+
+            end = _matching_delimiter_end(class_body, start)
+            if end is None:
                 raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
             bodies.append(
                 (
-                    match.group(0).split("(", 1)[0].split()[-1],
-                    masked[match.end("body") : end],
+                    owner,
+                    match.group("method"),
+                    class_body[start + 1 : end - 1],
                 )
             )
-            continue
-
-        depth = 0
-        for end in range(start, len(masked)):
-            if masked[end] == "{":
-                depth += 1
-            elif masked[end] == "}":
-                depth -= 1
-                if depth == 0:
-                    bodies.append(
-                        (
-                            match.group(0).split("(", 1)[0].split()[-1],
-                            masked[start + 1 : end],
-                        )
-                    )
-                    break
-        else:
-            raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
     return tuple(bodies + _state_construction_bodies(masked, state_class_names))
 
 
@@ -267,6 +366,10 @@ def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | N
     parenthesis_depth = 0
     bracket_depth = 0
     brace_depth = 0
+    callback_initializer = re.compile(
+        r"(?:^|,)\s*(?:this\.)?[A-Za-z_$][A-Za-z0-9_$]*\s*="
+        r"\s*\([^()]*\)\s*(?:async\s*)?$"
+    )
     for index in range(initializer_start, len(source)):
         character = source[index]
         if character == "(":
@@ -291,11 +394,7 @@ def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | N
             if previous >= initializer_start and source[previous] in "=,:( [>":
                 brace_depth += 1
                 continue
-            if re.search(
-                r"(?:^|,)\s*(?:this\.)?[A-Za-z_$][A-Za-z0-9_$]*\s*="
-                r"\s*\([^()]*\)\s*(?:async\s*)?$",
-                source[initializer_start:index],
-            ):
+            if callback_initializer.search(source[initializer_start:index]):
                 brace_depth += 1
                 continue
             return source[initializer_start:index], index
@@ -305,6 +404,8 @@ def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | N
         if parenthesis_depth or bracket_depth or brace_depth:
             continue
         if source.startswith("=>", index):
+            if callback_initializer.search(source[initializer_start:index]):
+                continue
             return source[initializer_start:index], index
         if character == ";":
             return source[initializer_start:index], None
@@ -434,7 +535,7 @@ def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
 def _state_construction_bodies(
     masked: str,
     state_class_names: frozenset[str] | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, str]]:
     """Return automatically executed State construction and field expressions."""
     state_classes = tuple(state_class_declaration.finditer(masked))
     if state_class_names is None:
@@ -467,7 +568,7 @@ def _state_construction_bodies(
             initializers, body_start = _constructor_parts(class_body, parameter_end)
             constructor_parts = []
             if initializers.strip():
-                constructor_parts.append(initializers)
+                constructor_parts.append(_mask_field_closure_literals(initializers))
             if body_start is not None:
                 if class_body.startswith("=>", body_start):
                     end = _expression_end(class_body, body_start + 2)
@@ -480,11 +581,28 @@ def _state_construction_bodies(
                         raise SystemExit("Unable to parse an AtlasVault State constructor.")
                     constructor_parts.append(class_body[body_start + 1 : end - 1])
             if constructor_parts:
-                bodies.append(("state_constructor", ";\n".join(constructor_parts)))
+                bodies.append(
+                    (
+                        class_match.group("name"),
+                        "state_constructor",
+                        ";\n".join(constructor_parts),
+                    )
+                )
 
         statement_start = 0
         depth = 0
-        for index, character in enumerate(class_body):
+        index = 0
+        while index < len(class_body):
+            character = class_body[index]
+            if character == "{" and depth == 0:
+                prefix = class_body[statement_start:index]
+                if _member_block_is_method(prefix, class_match.group("name")):
+                    member_end = _matching_delimiter_end(class_body, index)
+                    if member_end is None:
+                        raise SystemExit("Unable to parse an AtlasVault State member.")
+                    statement_start = member_end
+                    index = member_end
+                    continue
             if character in "([{":
                 depth += 1
             elif character in ")]}":
@@ -492,7 +610,10 @@ def _state_construction_bodies(
             elif character == ";" and depth == 0:
                 statement = class_body[statement_start:index]
                 statement_start = index + 1
-                if "=" not in statement:
+                if "=" not in statement or _member_expression_is_method(
+                    statement, class_match.group("name")
+                ):
+                    index += 1
                     continue
                 field_expression = statement.split("=", 1)[1]
                 invoked_closure_bodies = _immediately_invoked_closure_bodies(
@@ -500,7 +621,7 @@ def _state_construction_bodies(
                 )
                 if invoked_closure_bodies:
                     bodies.extend(
-                        ("state_field", closure_body)
+                        (class_match.group("name"), "state_field", closure_body)
                         for closure_body in invoked_closure_bodies
                     )
                 if "=>" in field_expression or re.search(
@@ -508,13 +629,44 @@ def _state_construction_bodies(
                 ):
                     bodies.append(
                         (
+                            class_match.group("name"),
                             "state_field",
                             _mask_field_closure_literals(field_expression),
                         )
                     )
                     continue
-                bodies.append(("state_field", field_expression))
+                bodies.append(
+                    (class_match.group("name"), "state_field", field_expression)
+                )
+            index += 1
     return bodies
+
+
+def _member_block_is_method(prefix: str, class_name: str) -> bool:
+    stripped = prefix.strip()
+    constructor = re.search(
+        rf"(?m)(?:^|\n)\s*(?:(?:const|factory)\s+)?"
+        rf"{re.escape(class_name)}(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?\s*\(",
+        stripped,
+    )
+    return constructor is not None or (
+        "=" not in stripped
+        and re.search(r"\)\s*(?:async\*?\s*)?$", stripped) is not None
+    )
+
+
+def _member_expression_is_method(statement: str, class_name: str) -> bool:
+    stripped = statement.strip()
+    return (
+        _member_block_is_method(stripped, class_name)
+        or re.match(
+            r"(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+            r"[A-Za-z_$][A-Za-z0-9_$]*\s*\([^)]*\)\s*"
+            r"(?:async\*?\s*)?=>",
+            stripped,
+        )
+        is not None
+    )
 
 
 operation_reference = re.compile(
@@ -594,93 +746,82 @@ def _operation_invocations(source: str) -> tuple[re.Match[str], ...]:
     )
 
 
-def _local_method_bodies(source: str) -> dict[str, str]:
+def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"(?P<name>_[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
     )
-    methods = {}
-    for match in declaration.finditer(masked):
-        parameter_start = match.end() - 1
-        depth = 0
-        for parameter_end in range(parameter_start, len(masked)):
-            if masked[parameter_end] == "(":
-                depth += 1
-            elif masked[parameter_end] == ")":
-                depth -= 1
-                if depth == 0:
-                    parameter_end += 1
-                    break
-        else:
-            raise SystemExit("Unable to parse an AtlasVault local method signature.")
-
-        body_start = parameter_end
-        while body_start < len(masked) and masked[body_start].isspace():
-            body_start += 1
-        if masked.startswith("async*", body_start):
-            body_start += len("async*")
-        elif masked.startswith("async", body_start):
-            body_start += len("async")
-        while body_start < len(masked) and masked[body_start].isspace():
-            body_start += 1
-        if masked.startswith("=>", body_start):
-            end = _expression_end(masked, body_start + 2)
-            if end < 0:
-                raise SystemExit("Unable to parse an AtlasVault local method.")
-            methods[match.group("name").casefold()] = masked[
-                body_start + 2 : end
-            ]
-            continue
-        if body_start >= len(masked) or masked[body_start] != "{":
-            continue
-
-        depth = 0
-        for end in range(body_start, len(masked)):
-            if masked[end] == "{":
-                depth += 1
-            elif masked[end] == "}":
-                depth -= 1
-                if depth == 0:
-                    methods[match.group("name").casefold()] = masked[
-                        body_start + 1 : end
-                    ]
-                    break
-        else:
-            raise SystemExit("Unable to parse an AtlasVault local method.")
-    return methods
-
-
-def _sensitive_local_wrappers(source: str) -> frozenset[str]:
-    methods = _local_method_bodies(source)
-    wrappers = set()
-    changed = True
-    while changed:
-        changed = False
-        for name, body in methods.items():
-            if name in wrappers:
+    methods_by_owner = {}
+    for owner, _, class_body in _class_records(masked):
+        methods = {}
+        for match in declaration.finditer(class_body):
+            if not _at_class_member_depth(class_body, match.start()):
                 continue
-            execution_body = _mask_deferred_build_closures(body)
-            known_wrappers = frozenset(wrappers)
-            aliases = _operation_aliases(execution_body, known_wrappers)
-            if any(
-                _is_sensitive_operation(reference.group("target"), known_wrappers)
-                for reference in _operation_invocations(execution_body)
-            ) or any(
-                re.search(
-                    rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
-                    execution_body,
-                )
-                for wrapper in wrappers
-            ) or _build_scheduler_invokes_sensitive_operation(
-                execution_body, aliases, known_wrappers
-            ) or any(
-                _alias_is_executed(execution_body, alias, build=True)
-                for alias in aliases
-            ):
-                wrappers.add(name)
-                changed = True
-    return frozenset(wrappers)
+            parameter_start = match.end() - 1
+            parameter_end = _matching_delimiter_end(class_body, parameter_start)
+            if parameter_end is None:
+                raise SystemExit("Unable to parse an AtlasVault local method signature.")
+
+            body_start = _skip_dart_whitespace(class_body, parameter_end)
+            if class_body.startswith("async*", body_start):
+                body_start += len("async*")
+            elif class_body.startswith("async", body_start):
+                body_start += len("async")
+            body_start = _skip_dart_whitespace(class_body, body_start)
+            if class_body.startswith("=>", body_start):
+                end = _expression_end(class_body, body_start + 2)
+                if end < 0:
+                    raise SystemExit("Unable to parse an AtlasVault local method.")
+                methods[match.group("name").casefold()] = class_body[
+                    body_start + 2 : end
+                ]
+                continue
+            if body_start >= len(class_body) or class_body[body_start] != "{":
+                continue
+
+            end = _matching_delimiter_end(class_body, body_start)
+            if end is None:
+                raise SystemExit("Unable to parse an AtlasVault local method.")
+            methods[match.group("name").casefold()] = class_body[
+                body_start + 1 : end - 1
+            ]
+        methods_by_owner[owner] = methods
+    return methods_by_owner
+
+
+def _sensitive_local_wrappers(source: str) -> dict[str, frozenset[str]]:
+    wrappers_by_owner = {}
+    for owner, methods in _local_method_bodies(source).items():
+        wrappers = set()
+        changed = True
+        while changed:
+            changed = False
+            for name, body in methods.items():
+                if name in wrappers:
+                    continue
+                execution_body = _mask_deferred_build_closures(body)
+                known_wrappers = frozenset(wrappers)
+                aliases = _operation_aliases(execution_body, known_wrappers)
+                if any(
+                    _is_sensitive_operation(reference.group("target"), known_wrappers)
+                    for reference in _operation_invocations(execution_body)
+                ) or any(
+                    re.search(
+                        rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
+                        execution_body,
+                    )
+                    for wrapper in wrappers
+                ) or _build_scheduler_invokes_sensitive_operation(
+                    execution_body, aliases, known_wrappers
+                ) or any(
+                    _alias_is_executed(execution_body, alias, build=True)
+                    for alias in aliases
+                ):
+                    wrappers.add(name)
+                    changed = True
+        wrappers_by_owner[owner] = frozenset(wrappers)
+    return wrappers_by_owner
 
 
 def _operation_aliases(
@@ -855,9 +996,13 @@ def _function_apply_invokes_sensitive_operation(
 def _has_automatic_operation(
     source: str,
     state_class_names: frozenset[str] | None = None,
+    lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
 ) -> bool:
-    local_wrappers = _sensitive_local_wrappers(source)
-    for method, body in _automatic_lifecycle_bodies(source, state_class_names):
+    local_wrappers_by_owner = _sensitive_local_wrappers(source)
+    for owner, method, body in _automatic_lifecycle_bodies(
+        source, state_class_names, lifecycle_class_methods
+    ):
+        local_wrappers = local_wrappers_by_owner.get(owner, frozenset())
         build = method == "build"
         execution_body = _mask_deferred_build_closures(body) if build else body
         aliases = _operation_aliases(execution_body, local_wrappers)
@@ -892,11 +1037,22 @@ def _has_automatic_operation(
 
 
 def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
-    state_class_names = _state_class_names(
-        tuple(_mask_dart_non_code(source) for source in sources)
-    )
+    masked_sources = tuple(_mask_dart_non_code(source) for source in sources)
+    state_class_names = _state_class_names(masked_sources)
+    lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
     return any(
-        _has_automatic_operation(source, state_class_names) for source in sources
+        _has_automatic_operation(
+            source, state_class_names, lifecycle_class_methods
+        )
+        for source in sources
+    )
+
+
+def _state_fixture(source: str) -> str:
+    return (
+        "class PolicyState extends State<PolicyWidget> {\n"
+        + source
+        + "\n}"
     )
 
 
@@ -950,7 +1106,7 @@ multiline_init_state_samples = (
     ),
 )
 if any(
-    _has_automatic_operation(source) is not expected
+    _has_automatic_operation(_state_fixture(source)) is not expected
     for source, expected in multiline_init_state_samples
 ):
     raise SystemExit("Dart lifecycle-body source-guard self-test failed.")
@@ -976,7 +1132,7 @@ interpolation_init_state_samples = (
     ),
 )
 if any(
-    _has_automatic_operation(source) is not expected
+    _has_automatic_operation(_state_fixture(source)) is not expected
     for source, expected in interpolation_init_state_samples
 ):
     raise SystemExit("Dart interpolation source-guard self-test failed.")
@@ -998,7 +1154,8 @@ tear_off_init_state_samples = (
 }""",
 )
 if not all(
-    _has_automatic_operation(source) for source in tear_off_init_state_samples
+    _has_automatic_operation(_state_fixture(source))
+    for source in tear_off_init_state_samples
 ):
     raise SystemExit("Dart lifecycle-body tear-off self-test failed.")
 
@@ -1136,14 +1293,20 @@ assigned_tear_off_init_state_samples = (
     ),
 )
 if any(
-    _has_automatic_operation(source) is not expected
+    _has_automatic_operation(_state_fixture(source)) is not expected
     for source, expected in assigned_tear_off_init_state_samples
 ):
     raise SystemExit("Dart assigned tear-off self-test failed.")
 
-if not _has_automatic_operation("void didChangeDependencies() { controller.startPairing(); }"):
+if not _has_automatic_operation(
+    _state_fixture("void didChangeDependencies() { controller.startPairing(); }")
+):
     raise SystemExit("Dart automatic-lifecycle self-test failed.")
-if not _has_automatic_operation("void didChangeAppLifecycleState(state) { controller.startPairing(); }"):
+if not _has_automatic_operation(
+    _state_fixture(
+        "void didChangeAppLifecycleState(state) { controller.startPairing(); }"
+    )
+):
     raise SystemExit("Dart observer-lifecycle self-test failed.")
 
 build_execution_samples = (
@@ -1442,7 +1605,7 @@ build_execution_samples = (
     ),
 )
 for source, expected in build_execution_samples:
-    actual = _has_automatic_operation(source)
+    actual = _has_automatic_operation(_state_fixture(source))
     if actual is not expected:
         raise SystemExit(
             "Dart build execution-policy self-test failed: "
@@ -1450,17 +1613,19 @@ for source, expected in build_execution_samples:
         )
 
 if not _has_automatic_operation(
-    """void _confirmRecoverySetup() {
+    _state_fixture(
+        """void _confirmRecoverySetup() {
   widget.owner.confirmRecoverySetup();
 }
 void initState() {
   _confirmRecoverySetup();
 }"""
+    )
 ):
     raise SystemExit("Dart local-wrapper lifecycle self-test failed.")
 
 if not _has_automatic_operation(
-    "void initState() { widget.owner.beginRecoverySetup(); }"
+    _state_fixture("void initState() { widget.owner.beginRecoverySetup(); }")
 ):
     raise SystemExit("Dart recovery-setup lifecycle self-test failed.")
 
@@ -1472,39 +1637,45 @@ for migration_operation in (
     "activateEncryptedPrivateState",
 ):
     if not _has_automatic_operation(
-        f"void initState() {{ owner.{migration_operation}(); }}"
+        _state_fixture(f"void initState() {{ owner.{migration_operation}(); }}")
     ):
         raise SystemExit("Dart migration lifecycle self-test failed.")
 
 if not _has_automatic_operation(
-    """Future<void> _run<T>(Future<T> Function() operation) async {
+    _state_fixture(
+        """Future<void> _run<T>(Future<T> Function() operation) async {
   controller.startPairing();
 }
 void initState() {
   _run(noop);
 }"""
+    )
 ):
     raise SystemExit("Dart generic-wrapper lifecycle self-test failed.")
 
 if not _has_automatic_operation(
-    """void _run() {
+    _state_fixture(
+        """void _run() {
   final callback = controller.startPairing;
   Future.microtask(callback);
 }
 void initState() {
   _run();
 }"""
+    )
 ):
     raise SystemExit("Dart scheduled-wrapper lifecycle self-test failed.")
 
 if not _has_automatic_operation(
-    """void _run() => (() {
+    _state_fixture(
+        """void _run() => (() {
   noop();
   controller.startPairing();
 })();
 void initState() {
   _run();
 }"""
+    )
 ):
     raise SystemExit("Dart arrow-wrapper lifecycle self-test failed.")
 
@@ -1567,7 +1738,9 @@ if not _has_automatic_operation(
 
 for teardown_hook in ("activate", "deactivate", "dispose"):
     if not _has_automatic_operation(
-        f"void {teardown_hook}() {{ controller.startPairing(); }}"
+        _state_fixture(
+            f"void {teardown_hook}() {{ controller.startPairing(); }}"
+        )
     ):
         raise SystemExit("Dart teardown lifecycle self-test failed.")
 
@@ -1742,12 +1915,14 @@ class Helper {
     raise SystemExit("Dart owner-scoped wrapper self-test failed.")
 
 if _has_automatic_operation(
-    """Widget _statusContent() {
+    _state_fixture(
+        """Widget _statusContent() {
   return ActionButton(onPressed: owner.prepareEncryptedMigration);
 }
 Widget build(context) {
   return _statusContent();
 }"""
+    )
 ):
     raise SystemExit("Dart passive-wrapper lifecycle self-test failed.")
 
@@ -1756,8 +1931,13 @@ target_sources = tuple(path.read_text(encoding="utf-8") for path in targets)
 target_state_class_names = _state_class_names(
     tuple(_mask_dart_non_code(source) for source in target_sources)
 )
+target_lifecycle_class_methods = _flutter_lifecycle_class_methods(
+    tuple(_mask_dart_non_code(source) for source in target_sources)
+)
 for path, source in zip(targets, target_sources, strict=True):
-    if _has_automatic_operation(source, target_state_class_names):
+    if _has_automatic_operation(
+        source, target_state_class_names, target_lifecycle_class_methods
+    ):
         raise SystemExit(
             f"Automatic AtlasVault pairing/import/export is not permitted: {path}."
         )
