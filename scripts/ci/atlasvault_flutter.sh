@@ -205,7 +205,8 @@ lifecycle_declaration = re.compile(
     r"didChangeAccessibilityFeatures|didChangeAppLifecycleState|didChangeLocales|"
     r"didChangeMetrics|didChangePlatformBrightness|didChangeTextScaleFactor|"
     r"didHaveMemoryPressure|didPushRoute|didPopRoute|didRequestAppExit|"
-    r"didChangeViewFocus|activate|deactivate|dispose|createState|build)"
+    r"didChangeViewFocus|didPushRouteInformation|activate|deactivate|dispose|"
+    r"createState|build)"
     r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
 )
 state_lifecycle_methods = frozenset(
@@ -234,6 +235,7 @@ observer_lifecycle_methods = frozenset(
         "didPopRoute",
         "didRequestAppExit",
         "didChangeViewFocus",
+        "didPushRouteInformation",
     }
 )
 
@@ -3033,6 +3035,7 @@ for observer_callback in (
     "didPopRoute",
     "didRequestAppExit",
     "didChangeViewFocus",
+    "didPushRouteInformation",
 ):
     if not _has_automatic_operation(
         f"""class PairingObserver with WidgetsBindingObserver {{
@@ -3057,6 +3060,29 @@ for widget_construction_source in (
 ):
     if not _has_automatic_operation(widget_construction_source):
         raise SystemExit("Dart Widget construction self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingFields on StatelessWidget {
+  final token = controller.startPairing();
+}
+class PairingWidget extends StatelessWidget with PairingFields {
+  Widget build(context) => panel;
+}"""
+):
+    raise SystemExit("Dart Widget-mixin construction self-test failed.")
+
+if not _production_target_scan(
+    (
+        """class BaseWidget extends StatelessWidget {}""",
+        """import 'base.dart';
+class PairingWidget extends BaseWidget {
+  final token = controller.startPairing();
+  Widget build(context) => panel;
+}""",
+    ),
+    source_paths=(Path("lib/base.dart"), Path("lib/pairing.dart")),
+):
+    raise SystemExit("Dart imported Widget ancestry self-test failed.")
 
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {

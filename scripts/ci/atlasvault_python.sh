@@ -715,6 +715,7 @@ asyncio_network_samples = (
 if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
     raise SystemExit("Python AST asyncio network self-test failed.")
 process_launch_samples = (
+    "import os.path\nos.system('python -c \"import socket\"')",
     "import subprocess\nsubprocess.run(['python', '-c', 'import socket'])",
     "from subprocess import run\nrun(['python', '-c', 'import requests'])",
     "import os\nos.system('python -c \"import socket\"')",
@@ -757,6 +758,13 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)"""
 ):
     raise SystemExit("Python AST file-location loader self-test failed.")
+if not _blocked_imports(
+    """import importlib.util as util
+spec = util.find_spec('socket')
+module = util.module_from_spec(spec)
+spec.loader.exec_module(module)"""
+):
+    raise SystemExit("Python AST dotted-importlib alias self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
