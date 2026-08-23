@@ -820,6 +820,14 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  return ActionButton(
+    onPressed: () => runAfterAudit(audit(), owner.startPairing()),
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
   if (enabled) {
     controller.startPairing();
   }
@@ -943,6 +951,14 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  (controller.startPairing)();
+  (controller.createDeviceIdentity).call();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   final callbacks = {'pair': controller.startPairing};
   callbacks['pair']();
   return panel;
@@ -1010,6 +1026,33 @@ void initState() {
 }"""
 ):
     raise SystemExit("Dart generic-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """void _run() {
+  final callback = controller.startPairing;
+  Future.microtask(callback);
+}
+void initState() {
+  _run();
+}"""
+):
+    raise SystemExit("Dart scheduled-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingWidget extends StatefulWidget {
+  PairingState createState() {
+    controller.startPairing();
+    return PairingState();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  PairingState() {
+    controller.createDeviceIdentity();
+  }
+  final prepared = controller.importEncryptedBackup();
+}"""
+):
+    raise SystemExit("Dart construction lifecycle self-test failed.")
 
 if _has_automatic_operation(
     """Widget _statusContent() {

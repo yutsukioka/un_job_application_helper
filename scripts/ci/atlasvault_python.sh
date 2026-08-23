@@ -552,6 +552,12 @@ asyncio_network_samples = (
 )
 if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
     raise SystemExit("Python AST asyncio network self-test failed.")
+process_launch_samples = (
+    "import subprocess\nsubprocess.run(['python', '-c', 'import socket'])",
+    "from subprocess import run\nrun(['python', '-c', 'import requests'])",
+)
+if not all(_blocked_imports(sample) for sample in process_launch_samples):
+    raise SystemExit("Python AST process-launch self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")
 if _blocked_imports("import importlib\nimportlib.invalidate_caches()"):
