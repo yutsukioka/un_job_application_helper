@@ -2854,6 +2854,23 @@ class PairingState extends State<PairingWidget> {
 ):
     raise SystemExit("Dart top-level wrapper lifecycle self-test failed.")
 
+if not _production_target_scan(
+    (
+        """extension PairingStateActions on PairingState {
+  void runPairing() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    runPairing();
+  }
+}""",
+    ),
+    source_paths=(Path("lib/pairing.dart"),),
+):
+    raise SystemExit("Dart extension-wrapper lifecycle self-test failed.")
+
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   final token = switch (enabled) {
