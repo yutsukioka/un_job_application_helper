@@ -562,6 +562,94 @@ if not _has_automatic_operation("void didChangeDependencies() { controller.start
 if not _has_automatic_operation("void didChangeAppLifecycleState(state) { controller.startPairing(); }"):
     raise SystemExit("Dart observer-lifecycle self-test failed.")
 
+build_execution_samples = (
+    (
+        """Widget build(context) {
+  return ActionButton(action: owner.createDeviceIdentity);
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(onPressed: () => owner.createDeviceIdentity());
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  final callback = owner.startPairing;
+  return ActionButton(onPressed: callback);
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return Panel(owner: assembly.pairingOwner);
+}""",
+        False,
+    ),
+    ("Widget build(context) { controller.startPairing(); return panel; }", True),
+    ("Widget build(context) { controller.startPairing.call(); return panel; }", True),
+    (
+        """Widget build(context) {
+  final callback = controller.startPairing;
+  callback();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  Future.microtask(controller.startPairing);
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  scheduleMicrotask(() => controller.startPairing());
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  (() => controller.startPairing())();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  final callbacks = {'pair': controller.startPairing};
+  callbacks['pair']();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  final callbacks = {controller.createDeviceIdentity};
+  callbacks.first();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  final callbacks = [controller.startPairing];
+  callbacks[index]();
+  return panel;
+}""",
+        True,
+    ),
+)
+if any(
+    _has_automatic_operation(source) is not expected
+    for source, expected in build_execution_samples
+):
+    raise SystemExit("Dart build execution-policy self-test failed.")
+
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),
 )
