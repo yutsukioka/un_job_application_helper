@@ -173,6 +173,13 @@ use a balanced expression terminator, so nested IIFEs are scanned in full.
 `Function.apply` of a sensitive tear-off or sensitive alias is also a direct
 build-time invocation.
 
+The application `main` entrypoint is also an automatic root. Execution-body
+collection uses reachable library metadata for mixins applied by State or Widget
+classes, so imported mixin lifecycle methods and eager fields are not omitted.
+Receiver-owned helper methods are resolved by both class and member name when a
+tracked helper is synchronously constructed and invoked; same-named methods on
+other classes remain isolated.
+
 Lifecycle names are treated as automatic only inside a State subclass, widget
 subclass, or WidgetsBindingObserver subclass. Ordinary controller or service
 methods named build or dispose remain explicit work. Private wrapper discovery
@@ -284,7 +291,8 @@ only for known deferred widget consumers. It derives Widget ancestry from the
 reachable library metadata before scanning eager construction fields. Direct
 public AtlasVault pairing primitives remain sensitive operations. The Python
 preflight treats `importlib.__import__` aliases, both tracked importlib spec
-factories, and `multiprocessing` networking routes as dynamic network imports.
+factories, direct `importlib.machinery` source/extension loader execution, and
+`multiprocessing` networking routes as dynamic network imports.
 
 ## Runner Safety
 

@@ -390,8 +390,9 @@ def _automatic_lifecycle_bodies(
     state_class_names: frozenset[str] | None = None,
     lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
     widget_class_names: frozenset[str] | None = None,
+    metadata_source: str | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
-    masked = _mask_dart_non_code(source)
+    masked = _mask_dart_non_code(metadata_source or source)
     if lifecycle_class_methods is None:
         lifecycle_class_methods = _flutter_lifecycle_class_methods((masked,))
     bodies = []
@@ -1239,6 +1240,27 @@ def _inherited_local_wrappers(
     return frozenset(name for name, sensitive in visible.items() if sensitive)
 
 
+def _receiver_owned_wrapper_invoked(
+    body: str,
+    wrappers_by_owner: dict[str, frozenset[str]],
+) -> bool:
+    invocation = re.compile(
+        r"(?<![A-Za-z0-9_$])(?:new\s+)?"
+        r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)\s*\.\s*"
+        r"(?P<method>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*"
+        r"(?:\(|\??\.\s*call\s*\()"
+    )
+    for match in invocation.finditer(body):
+        wrappers = wrappers_by_owner.get(match.group("owner"), frozenset())
+        if (
+            match.group("method").casefold() in wrappers
+            or match.group("owner").casefold() in wrappers
+        ):
+            return True
+    return False
+
+
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide allowlisted user-event callback bodies from build-time execution scans."""
     masked = list(body)
@@ -1442,12 +1464,19 @@ def _has_automatic_operation(
     )
     class_bases = _class_bases(wrapper_source)
     widget_class_names = _widget_class_names((wrapper_source,))
-    for owner, method, body in _automatic_lifecycle_bodies(
-        source,
-        state_class_names,
-        lifecycle_class_methods,
-        widget_class_names,
-    ):
+    automatic_bodies = list(
+        _automatic_lifecycle_bodies(
+            source,
+            state_class_names,
+            lifecycle_class_methods,
+            widget_class_names,
+            wrapper_source,
+        )
+    )
+    for name, body in _top_level_method_bodies(source).items():
+        if name == "main":
+            automatic_bodies.append(("__atlasvault_main__", "main", body))
+    for owner, method, body in automatic_bodies:
         local_wrappers = _inherited_local_wrappers(
             owner, local_wrappers_by_owner, methods_by_owner, class_bases
         ) | top_level_wrappers
@@ -1482,6 +1511,10 @@ def _has_automatic_operation(
         if any(
             _alias_is_executed(execution_body, alias, build=build)
             for alias in aliases
+        ):
+            return True
+        if _receiver_owned_wrapper_invoked(
+            execution_body, local_wrappers_by_owner
         ):
             return True
     return False
@@ -3224,7 +3257,10 @@ if _production_target_scan(target_sources, source_paths=targets):
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
-forbidden="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \( -iname '*.atlasvault' -o -iname '*.atlaspair' -o -iname '*identity*secret*' -o -iname '*secret*identity*' -o -iname '*ephemeral*private*' -o -iname '*private*ephemeral*' \) -print)"
+forbidden="$(
+  { find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f -print |
+      LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity[^[:alnum:]]*secret|secret[^[:alnum:]]*identity|ephemeral[^[:alnum:]]*private|private[^[:alnum:]]*ephemeral'; } || true
+)"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2
   exit 1
