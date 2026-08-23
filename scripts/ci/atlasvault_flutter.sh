@@ -2572,6 +2572,93 @@ class UiOwner extends ui.SharedName {}""",
 ):
     raise SystemExit("Dart imported-prefix lifecycle ownership self-test failed.")
 
+if not _production_target_scan(
+    (
+        """class BaseState<T> extends State<T> {}""",
+        """import 'package:atlas/base.dart';
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(Path("lib/base.dart"), Path("lib/pairing.dart")),
+):
+    raise SystemExit("Dart package-import State ancestry self-test failed.")
+
+if not _production_target_scan(
+    (
+        """class BaseState<T> extends State<T> {}""",
+        """export 'base.dart';""",
+        """import 'barrel.dart';
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(
+        Path("lib/base.dart"),
+        Path("lib/barrel.dart"),
+        Path("lib/pairing.dart"),
+    ),
+):
+    raise SystemExit("Dart re-export State ancestry self-test failed.")
+
+if not _production_target_scan(
+    (
+        """class BaseState<T> extends State<T> {}""",
+        """class BaseState {}""",
+        """import 'state.dart' show BaseState;
+import 'other.dart' hide BaseState;
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(
+        Path("lib/state.dart"),
+        Path("lib/other.dart"),
+        Path("lib/pairing.dart"),
+    ),
+):
+    raise SystemExit("Dart import-combinator State ancestry self-test failed.")
+
+if not _production_target_scan(
+    (
+        """class PlatformState<T> {}""",
+        """class PlatformState<T> extends State<T> {}""",
+        """import 'stub.dart' if (dart.library.io) 'io.dart';
+class PairingState extends PlatformState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(
+        Path("lib/stub.dart"),
+        Path("lib/io.dart"),
+        Path("lib/pairing.dart"),
+    ),
+):
+    raise SystemExit("Dart conditional-import namespace self-test failed.")
+
+if not _production_target_scan(
+    (
+        """void runPairing() {
+  controller.startPairing();
+}""",
+        """class PairingState extends State<PairingWidget> {
+  void initState() {
+    runPairing();
+  }
+}""",
+    ),
+    source_paths=(Path("lib/pairing.dart"), Path("lib/view.dart")),
+):
+    raise SystemExit("Dart top-level wrapper lifecycle self-test failed.")
+
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   final token = switch (enabled) {
