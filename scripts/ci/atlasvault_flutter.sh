@@ -305,6 +305,18 @@ def _at_class_member_depth(source: str, end: int) -> bool:
     )
 
 
+def _brace_depths(source: str) -> tuple[int, ...]:
+    depth = 0
+    depths = []
+    for character in source:
+        depths.append(depth)
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(0, depth - 1)
+    return tuple(depths)
+
+
 def _flutter_lifecycle_class_methods(
     masked_sources: tuple[str, ...],
 ) -> dict[str, frozenset[str]]:
@@ -1012,9 +1024,10 @@ def _top_level_method_bodies(source: str) -> dict[str, str]:
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
     )
+    depths = _brace_depths(masked)
     methods = {}
     for match in declaration.finditer(masked):
-        if not _at_class_member_depth(masked, match.start()):
+        if depths[match.start()] != 0:
             continue
         parameter_end = _matching_delimiter_end(masked, match.end() - 1)
         if parameter_end is None:
@@ -1491,11 +1504,14 @@ def _sources_have_automatic_operation(
             return name
         return f"__atlas_meta_{library_order[library]}_{name}"
 
-    def visible_definitions(binding, seen: frozenset[str] = frozenset()):
+    public_definition_cache = {}
+    public_definition_stack = set()
+
+    def visible_definitions(binding):
         _, targets, shown, hidden = binding
         definitions = {}
         for target in targets:
-            for name, defining_libraries in public_definitions(target, seen).items():
+            for name, defining_libraries in public_definitions(target).items():
                 if (shown is not None and name not in shown) or name in hidden:
                     continue
                 definitions.setdefault(name, [])
@@ -1507,20 +1523,23 @@ def _sources_have_automatic_operation(
             for name, defining_libraries in definitions.items()
         }
 
-    def public_definitions(library: str, seen: frozenset[str] = frozenset()):
-        if library in seen:
+    def public_definitions(library: str):
+        if library in public_definition_cache:
+            return public_definition_cache[library]
+        if library in public_definition_stack:
             return {}
+        public_definition_stack.add(library)
         definitions = {
             name: (library,) for name in declared_names[library]
         }
         for binding in exports_by_library[library]:
-            for name, defining_libraries in visible_definitions(
-                binding, seen | {library}
-            ).items():
+            for name, defining_libraries in visible_definitions(binding).items():
                 definitions.setdefault(name, ())
                 definitions[name] = tuple(
                     dict.fromkeys((*definitions[name], *defining_libraries))
                 )
+        public_definition_stack.remove(library)
+        public_definition_cache[library] = definitions
         return definitions
 
     def metadata_libraries(library: str) -> tuple[str, ...]:
