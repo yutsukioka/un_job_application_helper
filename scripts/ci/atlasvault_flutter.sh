@@ -945,7 +945,8 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
                 end = _expression_end(class_body, body_start + 2)
                 if end < 0:
                     raise SystemExit("Unable to parse an AtlasVault local method.")
-                methods[match.group("name").casefold()] = class_body[
+                name = match.group("name").casefold()
+                methods[name] = methods.get(name, "") + "\n" + class_body[
                     body_start + 2 : end
                 ]
                 continue
@@ -955,7 +956,8 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
             end = _matching_delimiter_end(class_body, body_start)
             if end is None:
                 raise SystemExit("Unable to parse an AtlasVault local method.")
-            methods[match.group("name").casefold()] = class_body[
+            name = match.group("name").casefold()
+            methods[name] = methods.get(name, "") + "\n" + class_body[
                 body_start + 1 : end - 1
             ]
         methods_by_owner[owner] = methods
@@ -965,38 +967,79 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
 def _sensitive_local_wrappers(source: str) -> dict[str, frozenset[str]]:
     wrappers_by_owner = {}
     for owner, methods in _local_method_bodies(source).items():
-        wrappers = set()
-        changed = True
-        while changed:
-            changed = False
-            for name, body in methods.items():
-                if name in wrappers:
-                    continue
-                execution_body = _mask_deferred_build_closures(body)
-                known_wrappers = frozenset(wrappers)
-                aliases = _operation_aliases(execution_body, known_wrappers)
-                if any(
-                    _is_sensitive_operation(reference.group("target"), known_wrappers)
-                    for reference in _operation_invocations(execution_body)
-                ) or any(
-                    _is_sensitive_operation(target, known_wrappers)
-                    for target in _typed_operation_invocation_targets(execution_body)
-                ) or any(
-                    re.search(
-                        rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
-                        execution_body,
-                    )
-                    for wrapper in wrappers
-                ) or _build_scheduler_invokes_sensitive_operation(
-                    execution_body, aliases, known_wrappers
-                ) or any(
-                    _alias_is_executed(execution_body, alias, build=True)
-                    for alias in aliases
-                ):
-                    wrappers.add(name)
-                    changed = True
-        wrappers_by_owner[owner] = frozenset(wrappers)
+        wrappers_by_owner[owner] = _sensitive_wrapper_names(methods)
     return wrappers_by_owner
+
+
+def _sensitive_wrapper_names(methods: dict[str, str]) -> frozenset[str]:
+    wrappers = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, body in methods.items():
+            if name in wrappers:
+                continue
+            execution_body = _mask_deferred_build_closures(body)
+            known_wrappers = frozenset(wrappers)
+            aliases = _operation_aliases(execution_body, known_wrappers)
+            if any(
+                _is_sensitive_operation(reference.group("target"), known_wrappers)
+                for reference in _operation_invocations(execution_body)
+            ) or any(
+                _is_sensitive_operation(target, known_wrappers)
+                for target in _typed_operation_invocation_targets(execution_body)
+            ) or any(
+                re.search(
+                    rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
+                    execution_body,
+                )
+                for wrapper in wrappers
+            ) or _build_scheduler_invokes_sensitive_operation(
+                execution_body, aliases, known_wrappers
+            ) or any(
+                _alias_is_executed(execution_body, alias, build=True)
+                for alias in aliases
+            ):
+                wrappers.add(name)
+                changed = True
+    return frozenset(wrappers)
+
+
+def _top_level_method_bodies(source: str) -> dict[str, str]:
+    """Return only package-library functions, never class members."""
+    masked = _mask_dart_non_code(source)
+    declaration = re.compile(
+        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+        r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
+    )
+    methods = {}
+    for match in declaration.finditer(masked):
+        if not _at_class_member_depth(masked, match.start()):
+            continue
+        parameter_end = _matching_delimiter_end(masked, match.end() - 1)
+        if parameter_end is None:
+            raise SystemExit("Unable to parse an AtlasVault top-level signature.")
+        body_start = _skip_dart_whitespace(masked, parameter_end)
+        if masked.startswith("async*", body_start):
+            body_start += len("async*")
+        elif masked.startswith("async", body_start):
+            body_start += len("async")
+        body_start = _skip_dart_whitespace(masked, body_start)
+        if masked.startswith("=>", body_start):
+            end = _expression_end(masked, body_start + 2)
+            if end < 0:
+                raise SystemExit("Unable to parse an AtlasVault top-level function.")
+            body = masked[body_start + 2 : end]
+        elif body_start < len(masked) and masked[body_start] == "{":
+            end = _matching_delimiter_end(masked, body_start)
+            if end is None:
+                raise SystemExit("Unable to parse an AtlasVault top-level function.")
+            body = masked[body_start + 1 : end - 1]
+        else:
+            continue
+        name = match.group("name").casefold()
+        methods[name] = methods.get(name, "") + "\n" + body
+    return methods
 
 
 def _operation_aliases(
@@ -1262,13 +1305,16 @@ def _has_automatic_operation(
     wrapper_source = metadata_source or source
     methods_by_owner = _local_method_bodies(wrapper_source)
     local_wrappers_by_owner = _sensitive_local_wrappers(wrapper_source)
+    top_level_wrappers = _sensitive_wrapper_names(
+        _top_level_method_bodies(wrapper_source)
+    )
     class_bases = _class_bases(wrapper_source)
     for owner, method, body in _automatic_lifecycle_bodies(
         source, state_class_names, lifecycle_class_methods
     ):
         local_wrappers = _inherited_local_wrappers(
             owner, local_wrappers_by_owner, methods_by_owner, class_bases
-        )
+        ) | top_level_wrappers
         build = method == "build"
         execution_body = _mask_deferred_build_closures(body) if build else body
         aliases = _operation_aliases(execution_body, local_wrappers)
@@ -1320,12 +1366,12 @@ def _sources_have_automatic_operation(
     part_of_uri_directive = re.compile(
         r"(?m)^\s*part\s+of\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)\s*;"
     )
-    import_declaration = re.compile(
-        r"(?m)^\s*import\s+(?P<declaration>[^;]+);"
+    directive_declaration = re.compile(
+        r"(?m)^\s*(?P<kind>import|export)\s+(?P<declaration>[^;]+);"
     )
     import_uri = re.compile(r"(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)")
     import_prefix = re.compile(
-        r"\bas\s+(?P<prefix>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*$"
+        r"\bas\s+(?P<prefix>_?[A-Za-z_$][A-Za-z0-9_$]*)\b"
     )
     source_metadata = []
     path_groups = {}
@@ -1365,28 +1411,78 @@ def _sources_have_automatic_operation(
             )
         )
 
+    package_paths = {}
+    for path, group in path_groups.items():
+        library_root = path.parent
+        while library_root.name != "lib" and library_root != library_root.parent:
+            library_root = library_root.parent
+        if library_root.name != "lib":
+            continue
+        relative = path.relative_to(library_root).as_posix()
+        package_paths.setdefault(relative, set()).add(group)
+
+    def resolve_uri(path: Path, uri: str) -> str | None:
+        if uri.startswith("package:"):
+            _, separator, relative = uri.partition("/")
+            if not separator:
+                return None
+            candidates = package_paths.get(relative, frozenset())
+            return next(iter(candidates)) if len(candidates) == 1 else None
+        if ":" in uri:
+            return None
+        return path_groups.get((path.parent / uri).resolve())
+
+    def combinator_names(declaration: str, kind: str) -> frozenset[str] | None:
+        match = re.search(
+            rf"\b{kind}\s+(?P<names>[A-Za-z_$][A-Za-z0-9_$]*(?:\s*,\s*"
+            r"[A-Za-z_$][A-Za-z0-9_$]*)*)"
+            r"(?=\s+\b(?:show|hide|as)\b|\s*$)",
+            declaration,
+        )
+        if match is None:
+            return None
+        return frozenset(
+            name.strip() for name in match.group("names").split(",")
+        )
+
+    # A binding keeps conditional URI targets in a single namespace.  This is
+    # essential: the platform alternatives are not simultaneously imported by
+    # a Dart runtime, but static policy must conservatively analyze each one.
     imports_by_library = {}
+    exports_by_library = {}
     for library, library_sources in libraries.items():
         imports = []
+        exports = []
         for source, path in library_sources:
             if path is None:
                 continue
-            for match in import_declaration.finditer(source):
+            for match in directive_declaration.finditer(source):
                 declaration = match.group("declaration")
                 prefix_match = import_prefix.search(declaration)
-                prefix = prefix_match.group("prefix") if prefix_match else None
-                for uri_match in import_uri.finditer(declaration):
-                    uri = uri_match.group("uri")
-                    if ":" in uri:
-                        continue
-                    imported_library = path_groups.get(
-                        (path.parent / uri).resolve()
-                    )
-                    if imported_library in libraries:
-                        candidate = (prefix, imported_library)
-                        if candidate not in imports:
-                            imports.append(candidate)
+                prefix = (
+                    prefix_match.group("prefix")
+                    if match.group("kind") == "import" and prefix_match
+                    else None
+                )
+                targets = tuple(
+                    imported_library
+                    for uri_match in import_uri.finditer(declaration)
+                    if (imported_library := resolve_uri(path, uri_match.group("uri")))
+                    in libraries
+                )
+                if not targets:
+                    continue
+                binding = (
+                    prefix,
+                    tuple(dict.fromkeys(targets)),
+                    combinator_names(declaration, "show"),
+                    combinator_names(declaration, "hide") or frozenset(),
+                )
+                bindings = imports if match.group("kind") == "import" else exports
+                if binding not in bindings:
+                    bindings.append(binding)
         imports_by_library[library] = tuple(imports)
+        exports_by_library[library] = tuple(exports)
 
     library_order = {library: index for index, library in enumerate(libraries)}
 
@@ -1394,6 +1490,38 @@ def _sources_have_automatic_operation(
         if library == root:
             return name
         return f"__atlas_meta_{library_order[library]}_{name}"
+
+    def visible_definitions(binding, seen: frozenset[str] = frozenset()):
+        _, targets, shown, hidden = binding
+        definitions = {}
+        for target in targets:
+            for name, defining_libraries in public_definitions(target, seen).items():
+                if (shown is not None and name not in shown) or name in hidden:
+                    continue
+                definitions.setdefault(name, [])
+                for defining_library in defining_libraries:
+                    if defining_library not in definitions[name]:
+                        definitions[name].append(defining_library)
+        return {
+            name: tuple(defining_libraries)
+            for name, defining_libraries in definitions.items()
+        }
+
+    def public_definitions(library: str, seen: frozenset[str] = frozenset()):
+        if library in seen:
+            return {}
+        definitions = {
+            name: (library,) for name in declared_names[library]
+        }
+        for binding in exports_by_library[library]:
+            for name, defining_libraries in visible_definitions(
+                binding, seen | {library}
+            ).items():
+                definitions.setdefault(name, ())
+                definitions[name] = tuple(
+                    dict.fromkeys((*definitions[name], *defining_libraries))
+                )
+        return definitions
 
     def metadata_libraries(library: str) -> tuple[str, ...]:
         discovered = []
@@ -1405,53 +1533,101 @@ def _sources_have_automatic_operation(
                 continue
             seen.add(current)
             discovered.append(current)
-            for _, imported_library in imports_by_library[current]:
-                if imported_library not in seen:
-                    pending.append(imported_library)
+            for binding in (*imports_by_library[current], *exports_by_library[current]):
+                for imported_library in binding[1]:
+                    if imported_library not in seen:
+                        pending.append(imported_library)
         return tuple(discovered)
 
-    def metadata_source_for(library: str, root: str) -> str:
+    def alternative_aliases(root: str) -> dict[tuple[str, str], str]:
+        aliases = {}
+        for index, binding in enumerate(imports_by_library[root]):
+            if len(binding[1]) < 2:
+                continue
+            alternatives = []
+            for target in binding[1]:
+                alternatives.append(
+                    visible_definitions(
+                        (binding[0], (target,), binding[2], binding[3])
+                    )
+                )
+            for name in set.intersection(*(set(item) for item in alternatives)):
+                defining_libraries = tuple(
+                    dict.fromkeys(
+                        defining_library
+                        for definitions in alternatives
+                        for defining_library in definitions[name]
+                    )
+                )
+                if len(defining_libraries) < 2:
+                    continue
+                alias = f"__atlas_alt_{library_order[root]}_{index}_{name}"
+                for defining_library in defining_libraries:
+                    aliases[(defining_library, name)] = alias
+        return aliases
+
+    def metadata_source_for(
+        library: str, root: str, aliases: dict[tuple[str, str], str]
+    ) -> str:
         masked = _mask_dart_non_code("\n".join(
             source for source, _ in libraries[library]
         ))
         imported_by_prefix = {}
         unprefixed_names = {}
-        for prefix, imported_library in imports_by_library[library]:
+        for binding in imports_by_library[library]:
+            prefix, _, _, _ = binding
+            definitions = visible_definitions(binding)
             if prefix is not None:
-                imported_by_prefix.setdefault(prefix, []).append(imported_library)
-                continue
-            for name in declared_names[imported_library]:
-                unprefixed_names.setdefault(name, []).append(imported_library)
-
-        for prefix, imported_libraries in imported_by_prefix.items():
-            for imported_library in imported_libraries:
-                for name in declared_names[imported_library]:
-                    masked = re.sub(
-                        rf"(?<![A-Za-z0-9_$]){re.escape(prefix)}\s*\.\s*"
-                        rf"{re.escape(name)}(?![A-Za-z0-9_$])",
-                        metadata_name(imported_library, name, root),
-                        masked,
+                for name, defining_libraries in definitions.items():
+                    imported_by_prefix.setdefault((prefix, name), []).extend(
+                        defining_libraries
                     )
+                continue
+            for name, defining_libraries in definitions.items():
+                unprefixed_names.setdefault(name, []).extend(defining_libraries)
+
+        def renamed(defining_library: str, name: str) -> str:
+            return aliases.get(
+                (defining_library, name),
+                metadata_name(defining_library, name, root),
+            )
+
+        for (prefix, name), imported_libraries in imported_by_prefix.items():
+            replacements = {
+                renamed(imported_library, name) for imported_library in imported_libraries
+            }
+            if len(replacements) != 1:
+                continue
+            masked = re.sub(
+                rf"(?<![A-Za-z0-9_$]){re.escape(prefix)}\s*\.\s*"
+                rf"{re.escape(name)}(?![A-Za-z0-9_$])",
+                replacements.pop(),
+                masked,
+            )
         for name, imported_libraries in unprefixed_names.items():
-            if name in declared_names[library] or len(imported_libraries) != 1:
+            replacements = {
+                renamed(imported_library, name) for imported_library in imported_libraries
+            }
+            if name in declared_names[library] or len(replacements) != 1:
                 continue
             masked = re.sub(
                 rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
-                metadata_name(imported_libraries[0], name, root),
+                replacements.pop(),
                 masked,
             )
         for name in declared_names[library]:
             masked = re.sub(
                 rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
-                metadata_name(library, name, root),
+                renamed(library, name),
                 masked,
             )
         return masked
 
     for library, library_sources in libraries.items():
         combined = "\n".join(source for source, _ in library_sources)
+        aliases = alternative_aliases(library)
         metadata_source = "\n".join(
-            metadata_source_for(metadata_library, library)
+            metadata_source_for(metadata_library, library, aliases)
             for metadata_library in metadata_libraries(library)
         )
         state_class_names = _state_class_names((metadata_source,))
@@ -2648,14 +2824,14 @@ if not _production_target_scan(
     (
         """void runPairing() {
   controller.startPairing();
-}""",
-        """class PairingState extends State<PairingWidget> {
+}
+class PairingState extends State<PairingWidget> {
   void initState() {
     runPairing();
   }
 }""",
     ),
-    source_paths=(Path("lib/pairing.dart"), Path("lib/view.dart")),
+    source_paths=(Path("lib/pairing.dart"),),
 ):
     raise SystemExit("Dart top-level wrapper lifecycle self-test failed.")
 

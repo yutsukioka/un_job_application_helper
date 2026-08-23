@@ -197,8 +197,9 @@ samples include direct and aliased dynamic imports plus `asyncio` connection
 and server forms plus process-launch imports; harmless JSON and importlib cache
 operations remain allowed.
 
-The process-launch policy also rejects os process-launch APIs. Artifact
-admission case-folds the complete relative path, rejecting transport extensions
+The process-launch policy also rejects every standard `os.exec*`, spawn, and
+POSIX process-launch API, including imported and locally assigned aliases.
+Artifact admission case-folds the complete relative path, rejecting transport extensions
 and identity-secret or ephemeral-private names in directory components as well
 as final filenames.
 
@@ -265,16 +266,20 @@ switch-expression arms from stored bare-parameter closures, excludes lazy
 static fields, and evaluates eager fields contributed by State mixins. The
 Python policy also follows aliases of a tracked loader's `exec_module` method.
 
-Library-aware Dart metadata follows every relative import target, including
-conditional targets, for State ancestry and inherited wrapper resolution while
-keeping each library's executable scan isolated. It gives imported class and
-mixin declarations stable library-qualified identities, so prefix imports
-cannot collide with same-named classes from another library. It recognizes
-State mixin-application aliases, preserves callbacks consumed synchronously by
-eager collection expressions, and masks user-event closures only for known
-deferred widget consumers. Direct public AtlasVault pairing primitives remain
-sensitive operations. The Python preflight treats `importlib.__import__`
-aliases and `multiprocessing` networking routes as dynamic network imports.
+Library-aware Dart metadata resolves repository-local relative and `package:`
+imports, re-exports, and `show`/`hide` combinators for State ancestry and
+inherited wrapper resolution while keeping each library's executable scan
+isolated. Conditional targets remain one conservative import namespace: shared
+public names receive one synthetic policy identity instead of becoming a false
+ambiguity. Imported class and mixin declarations otherwise receive stable
+library-qualified identities, so prefix imports cannot collide with same-named
+classes from another library. The scan also follows top-level package-library
+wrapper functions and recognizes public State mixin-application aliases. It
+preserves callbacks consumed synchronously by eager collection expressions and
+masks user-event closures only for known deferred widget consumers. Direct
+public AtlasVault pairing primitives remain sensitive operations. The Python
+preflight treats `importlib.__import__` aliases and `multiprocessing` networking
+routes as dynamic network imports.
 
 ## Runner Safety
 
