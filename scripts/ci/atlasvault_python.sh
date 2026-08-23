@@ -233,6 +233,7 @@ for marker in (
     "Stop-AtlasRecoveryProcessTree $Waiter",
     "Stop-AtlasRecoveryHolderForCleanup $Holder",
     "foreach ($CleanupPath",
+    "if (Test-Path -LiteralPath $CleanupPath)",
     "if ($CleanupErrors.Count -gt 0)",
 ):
     if marker not in finally_block:
