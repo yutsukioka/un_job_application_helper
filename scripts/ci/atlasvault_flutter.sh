@@ -389,6 +389,7 @@ def _automatic_lifecycle_bodies(
     source: str,
     state_class_names: frozenset[str] | None = None,
     lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
+    widget_class_names: frozenset[str] | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     masked = _mask_dart_non_code(source)
     if lifecycle_class_methods is None:
@@ -428,7 +429,12 @@ def _automatic_lifecycle_bodies(
                     class_body[start + 1 : end - 1],
                 )
             )
-    return tuple(bodies + _state_construction_bodies(masked, state_class_names))
+    return tuple(
+        bodies
+        + _state_construction_bodies(
+            masked, state_class_names, widget_class_names
+        )
+    )
 
 
 def _matching_delimiter_end(source: str, start: int) -> int | None:
@@ -709,18 +715,20 @@ def _widget_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
 def _state_construction_bodies(
     masked: str,
     state_class_names: frozenset[str] | None = None,
+    widget_class_names: frozenset[str] | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return automatically executed State and Widget construction expressions."""
     state_classes = tuple(class_declaration.finditer(masked))
     if state_class_names is None:
         state_class_names = _state_class_names((masked,))
-    widget_class_names = _widget_class_names((masked,))
+    if widget_class_names is None:
+        widget_class_names = _widget_class_names((masked,))
     state_mixin_names = set()
     mixin_records = {
         name: heritage for name, heritage, _ in _mixin_records(masked)
     }
     for name, heritage, _ in _class_records(masked):
-        if name in state_class_names:
+        if name in state_class_names or name in widget_class_names:
             state_mixin_names.update(_heritage_mixin_names(heritage))
     changed = True
     while changed:
@@ -1433,8 +1441,12 @@ def _has_automatic_operation(
         _top_level_method_bodies(wrapper_source)
     )
     class_bases = _class_bases(wrapper_source)
+    widget_class_names = _widget_class_names((wrapper_source,))
     for owner, method, body in _automatic_lifecycle_bodies(
-        source, state_class_names, lifecycle_class_methods
+        source,
+        state_class_names,
+        lifecycle_class_methods,
+        widget_class_names,
     ):
         local_wrappers = _inherited_local_wrappers(
             owner, local_wrappers_by_owner, methods_by_owner, class_bases

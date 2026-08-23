@@ -447,11 +447,10 @@ def _blocked_imports(source: str) -> bool:
                     importlib_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "os":
                     os_module_aliases.add(alias.asname or alias.name)
-                elif (
-                    alias.name.startswith("importlib.")
-                    and alias.asname is None
-                ):
-                    importlib_module_aliases.add("importlib")
+                elif alias.name.startswith("importlib."):
+                    importlib_module_aliases.add(alias.asname or "importlib")
+                elif alias.name.startswith("os.") and alias.asname is None:
+                    os_module_aliases.add("os")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if node.level == 0 and module.partition(".")[0] in blocked_import_roots:

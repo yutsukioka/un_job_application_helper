@@ -251,16 +251,18 @@ base classes, State inheritance, and State-applied mixins. It preserves wrapper
 ownership and inherited wrapper visibility, recognizes block and arrow getters,
 explicit generic calls, and null-asserted collection callbacks, and still
 distinguishes deferred allowlisted user handlers from automatically executed
-lifecycle work. WidgetsBindingObserver callbacks and eager Widget construction
-paths are treated as automatic execution.
+lifecycle work. The complete supported WidgetsBindingObserver callback set and
+eager Widget construction paths, including Widget-applied mixin fields, are
+treated as automatic execution.
 
 The parser scopes Flutter ownership to each Dart library, while combining
 explicit `library` and `part of` sources to preserve State ancestry and wrapper
 metadata across one library. It skips bounded type parameters before resolving
 the actual superclass, includes public instance wrappers, and excludes lazy
 State field initializers from construction-time analysis. The Python preflight
-also propagates assigned `os` launch aliases and rejects execution through an
-`importlib` loader derived from a dynamic module specification.
+also propagates assigned and dotted `os` launch aliases and rejects execution
+through an `importlib` loader derived from a dynamic module specification,
+including explicit dotted-import aliases.
 
 The production Flutter scan uses the same library-aware aggregation as the
 policy fixtures, including URI-form `part of` declarations. It distinguishes
@@ -278,10 +280,11 @@ otherwise receive stable library-qualified identities, so prefix imports cannot
 collide with same-named executable wrappers from another library. The scan also
 recognizes public State mixin-application aliases, preserves callbacks consumed
 synchronously by eager collection expressions, and masks user-event closures
-only for known deferred widget consumers. Direct public AtlasVault pairing
-primitives remain sensitive operations. The Python preflight treats
-`importlib.__import__` aliases, both tracked importlib spec factories, and
-`multiprocessing` networking routes as dynamic network imports.
+only for known deferred widget consumers. It derives Widget ancestry from the
+reachable library metadata before scanning eager construction fields. Direct
+public AtlasVault pairing primitives remain sensitive operations. The Python
+preflight treats `importlib.__import__` aliases, both tracked importlib spec
+factories, and `multiprocessing` networking routes as dynamic network imports.
 
 ## Runner Safety
 
