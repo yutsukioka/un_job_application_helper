@@ -189,7 +189,7 @@ def _mask_dart_non_code(source: str) -> str:
     return "".join(masked)
 
 
-def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
+def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
         r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
@@ -200,8 +200,13 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
         if match.group("body") == "=>":
             end = masked.find(";", match.end("body"))
             if end < 0:
-                raise SystemExit("Unable to parse an AtlasVault initState body.")
-            bodies.append(masked[match.end("body") : end])
+                raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
+            bodies.append(
+                (
+                    match.group(0).split("(", 1)[0].split()[-1],
+                    masked[match.end("body") : end],
+                )
+            )
             continue
 
         depth = 0
@@ -211,10 +216,15 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[str, ...]:
             elif masked[end] == "}":
                 depth -= 1
                 if depth == 0:
-                    bodies.append(masked[start + 1 : end])
+                    bodies.append(
+                        (
+                            match.group(0).split("(", 1)[0].split()[-1],
+                            masked[start + 1 : end],
+                        )
+                    )
                     break
         else:
-            raise SystemExit("Unable to parse an AtlasVault initState body.")
+            raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
     return tuple(bodies)
 
 
@@ -260,7 +270,7 @@ operation_tear_off_target = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?=\s*(?:[,:;\])]|\?\?|\Z))"
+    r"(?=\s*(?:[,:;\]\}]|\?\?|\Z))"
 )
 
 
@@ -292,25 +302,97 @@ def _operation_aliases(body: str) -> frozenset[str]:
     return frozenset(aliases)
 
 
-def _alias_is_executed(body: str, alias: str) -> bool:
+def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
+    invocation = r"(?:\(|\??\.\s*call\s*\()"
+    if not build:
+        invocation = r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))"
     usage = re.compile(
         rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
         r"(?:\[[^\]]+\]|\.\s*(?:first|last|single))?\s*"
-        r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))"
+        + invocation
     )
     return usage.search(body) is not None
 
 
-def _has_automatic_operation(source: str) -> bool:
-    for body in _automatic_lifecycle_bodies(source):
+def _mask_deferred_build_closures(body: str) -> str:
+    """Hide ordinary callback bodies; schedulers and IIFEs use the original body."""
+    masked = list(body)
+    closure = re.compile(
+        r"(?:\([^()]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
+        r"(?P<expression>[^,;]+)"
+    )
+    for match in closure.finditer(body):
+        for index in range(match.start("expression"), match.end("expression")):
+            masked[index] = " "
+    return "".join(masked)
+
+
+def _build_scheduler_invokes_sensitive_operation(
+    body: str,
+    aliases: frozenset[str],
+) -> bool:
+    scheduler = re.compile(
+        r"(?:Future\.(?:microtask|sync)|scheduleMicrotask|Timer\.run|"
+        r"WidgetsBinding\.instance\.addPostFrameCallback)\s*"
+        r"\((?P<argument>[^;]+)\)",
+        re.DOTALL,
+    )
+    for match in scheduler.finditer(body):
+        argument = match.group("argument")
         if any(
-            _is_sensitive_operation(match.group("target"))
-            for match in operation_reference.finditer(body)
+            _is_sensitive_operation(reference.group("target"))
+            for reference in (
+                *operation_reference.finditer(argument),
+                *operation_tear_off_target.finditer(argument),
+            )
         ):
             return True
         if any(
-            _alias_is_executed(body, alias)
-            for alias in _operation_aliases(body)
+            re.search(rf"(?<![A-Za-z0-9_$]){re.escape(alias)}(?![A-Za-z0-9_$])", argument)
+            for alias in aliases
+        ):
+            return True
+    return False
+
+
+def _build_iife_invokes_sensitive_operation(body: str) -> bool:
+    iife = re.compile(
+        r"\(\s*\(\s*\)\s*=>\s*(?P<expression>[^;{}]+?)\s*\)\s*\(",
+        re.DOTALL,
+    )
+    return any(
+        _is_sensitive_operation(reference.group("target"))
+        for match in iife.finditer(body)
+        for reference in operation_reference.finditer(match.group("expression"))
+    )
+
+
+def _has_automatic_operation(source: str) -> bool:
+    for method, body in _automatic_lifecycle_bodies(source):
+        build = method == "build"
+        aliases = _operation_aliases(body)
+        direct = re.compile(
+            r"(?<![A-Za-z0-9_$])(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\(|\??\.\s*call\s*\()"
+        )
+        execution_body = _mask_deferred_build_closures(body) if build else body
+        references = (
+            direct.finditer(execution_body)
+            if build
+            else operation_reference.finditer(execution_body)
+        )
+        if any(
+            _is_sensitive_operation(match.group("target"))
+            for match in references
+        ):
+            return True
+        if build and (
+            _build_scheduler_invokes_sensitive_operation(body, aliases)
+            or _build_iife_invokes_sensitive_operation(body)
+        ):
+            return True
+        if any(
+            _alias_is_executed(execution_body, alias, build=build)
+            for alias in aliases
         ):
             return True
     return False
