@@ -1603,6 +1603,16 @@ build_execution_samples = (
 }""",
         True,
     ),
+    (
+        """Widget build(context) {
+  final callbacks = <String, void Function()>{
+    'pair': controller.startPairing,
+  };
+  callbacks[index]!();
+  return panel;
+}""",
+        True,
+    ),
 )
 for source, expected in build_execution_samples:
     actual = _has_automatic_operation(_state_fixture(source))
@@ -1655,6 +1665,18 @@ void initState() {
 
 if not _has_automatic_operation(
     _state_fixture(
+        """void _run<T>() {
+  controller.startPairing();
+}
+void initState() {
+  _run<void>();
+}"""
+    )
+):
+    raise SystemExit("Dart typed-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    _state_fixture(
         """void _run() {
   final callback = controller.startPairing;
   Future.microtask(callback);
@@ -1704,6 +1726,40 @@ class PairingState extends BaseState<PairingWidget> {
 }"""
 ):
     raise SystemExit("Dart indirect-State construction self-test failed.")
+
+if not _has_automatic_operation(
+    """class BaseState<T> extends State<T> {
+  void _run() {
+    controller.startPairing();
+  }
+}
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    _run();
+  }
+}"""
+):
+    raise SystemExit("Dart inherited-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingLifecycle<T extends StatefulWidget> on State<T> {
+  void initState() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget>
+    with PairingLifecycle<PairingWidget> {}"""
+):
+    raise SystemExit("Dart State-mixin lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends widgets.State<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart prefixed-State lifecycle self-test failed.")
 
 if not _sources_have_automatic_operation(
     (

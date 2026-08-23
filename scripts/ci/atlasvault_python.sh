@@ -604,9 +604,16 @@ process_launch_samples = (
     "from subprocess import run\nrun(['python', '-c', 'import requests'])",
     "import os\nos.system('python -c \"import socket\"')",
     "import os\nos.popen('python -c \"import requests\"')",
+    "import os\nos.spawnl(os.P_NOWAIT, 'python', 'python')",
+    "import os\nos.spawnlp(os.P_NOWAIT, 'python', 'python')",
+    "import os\nos.posix_spawn('/bin/echo', ['echo'], {})",
+    "from os import spawnl as launch\nlaunch(0, 'python', 'python')",
+    "from os import posix_spawn as launch\nlaunch('/bin/echo', ['echo'], {})",
 )
 if not all(_blocked_imports(sample) for sample in process_launch_samples):
     raise SystemExit("Python AST process-launch self-test failed.")
+if _blocked_imports("from .http import encode"):
+    raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")
 if _blocked_imports("import importlib\nimportlib.invalidate_caches()"):
