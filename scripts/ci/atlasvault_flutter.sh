@@ -192,7 +192,7 @@ def _mask_dart_non_code(source: str) -> str:
 def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|createState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
+        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|activate|deactivate|dispose|createState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):
@@ -285,7 +285,7 @@ def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | N
             previous = index - 1
             while previous >= initializer_start and source[previous].isspace():
                 previous -= 1
-            if previous >= initializer_start and source[previous] in "=,:( [":
+            if previous >= initializer_start and source[previous] in "=,:( [>":
                 brace_depth += 1
                 continue
             return source[initializer_start:index], index
@@ -314,7 +314,9 @@ def _expression_end(source: str, start: int) -> int:
     return -1
 
 
-def _is_immediately_invoked_closure(source: str) -> bool:
+def _immediately_invoked_closure_bodies(source: str) -> tuple[str, ...]:
+    """Return only closures proven to execute during their containing expression."""
+    bodies = []
     for opening in (index for index, character in enumerate(source) if character == "("):
         parameter_start = _skip_dart_whitespace(source, opening + 1)
         if parameter_start >= len(source) or source[parameter_start] != "(":
@@ -334,19 +336,66 @@ def _is_immediately_invoked_closure(source: str) -> bool:
         if closure_end is None:
             continue
         invocation_start = _skip_dart_whitespace(source, closure_end)
-        if invocation_start < len(source) and source[invocation_start] == "(":
-            return True
-    return False
+        if not (
+            invocation_start < len(source)
+            and (
+                source[invocation_start] == "("
+                or re.match(r"\??\.\s*call\s*\(", source[invocation_start:])
+            )
+        ):
+            continue
+        if source.startswith("=>", body_start):
+            bodies.append(source[body_start + 2 : closure_end - 1])
+        else:
+            block_end = _matching_delimiter_end(source, body_start)
+            if block_end is None:
+                continue
+            bodies.append(source[body_start + 1 : block_end - 1])
+
+    function_apply = re.compile(r"\bFunction\s*\.\s*apply\s*\(")
+    for match in function_apply.finditer(source):
+        parameter_start = _skip_dart_whitespace(source, match.end())
+        if parameter_start >= len(source) or source[parameter_start] != "(":
+            continue
+        parameter_end = _matching_delimiter_end(source, parameter_start)
+        if parameter_end is None:
+            continue
+        body_start = _skip_dart_whitespace(source, parameter_end)
+        if source.startswith("async", body_start):
+            body_start = _skip_dart_whitespace(source, body_start + len("async"))
+        if source.startswith("=>", body_start):
+            body_end = _arrow_expression_end(source, body_start + 2)
+            bodies.append(source[body_start + 2 : body_end])
+        elif body_start < len(source) and source[body_start] == "{":
+            body_end = _matching_delimiter_end(source, body_start)
+            if body_end is not None:
+                bodies.append(source[body_start + 1 : body_end - 1])
+    return tuple(bodies)
 
 
 def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
     """Return automatically executed State construction and field expressions."""
     state_class = re.compile(
-        r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s+"
-        r"extends\s+State(?:\s*<[^>{}]+>)?[^{}]*\{"
+        r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?\s+"
+        r"extends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*<[^{}]+>)?[^{}]*\{"
     )
+    state_classes = tuple(state_class.finditer(masked))
+    state_class_names = {"State"}
+    changed = True
+    while changed:
+        changed = False
+        for class_match in state_classes:
+            if (
+                class_match.group("base") in state_class_names
+                and class_match.group("name") not in state_class_names
+            ):
+                state_class_names.add(class_match.group("name"))
+                changed = True
     bodies = []
-    for class_match in state_class.finditer(masked):
+    for class_match in state_classes:
+        if class_match.group("name") not in state_class_names:
+            continue
         class_start = class_match.end() - 1
         depth = 0
         for class_end in range(class_start, len(masked)):
@@ -399,9 +448,17 @@ def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
                 if "=" not in statement:
                     continue
                 field_expression = statement.split("=", 1)[1]
-                if (
-                    ("=>" in field_expression or re.search(r"\)\s*(?:async\s*)?\{", field_expression))
-                    and not _is_immediately_invoked_closure(field_expression)
+                invoked_closure_bodies = _immediately_invoked_closure_bodies(
+                    field_expression
+                )
+                if invoked_closure_bodies:
+                    bodies.extend(
+                        ("state_field", closure_body)
+                        for closure_body in invoked_closure_bodies
+                    )
+                    continue
+                if "=>" in field_expression or re.search(
+                    r"\)\s*(?:async\s*)?\{", field_expression
                 ):
                     continue
                 bodies.append(("state_field", field_expression))
@@ -516,7 +573,7 @@ def _local_method_bodies(source: str) -> dict[str, str]:
         while body_start < len(masked) and masked[body_start].isspace():
             body_start += 1
         if masked.startswith("=>", body_start):
-            end = masked.find(";", body_start + 2)
+            end = _expression_end(masked, body_start + 2)
             if end < 0:
                 raise SystemExit("Unable to parse an AtlasVault local method.")
             methods[match.group("name").casefold()] = masked[

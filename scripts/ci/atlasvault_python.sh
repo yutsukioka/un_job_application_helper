@@ -386,7 +386,7 @@ blocked_import_roots = frozenset(
     }
 )
 def _vaultsync_targets(root: Path) -> tuple[Path, ...]:
-    return tuple(sorted(root.glob("*.py")))
+    return tuple(sorted(root.rglob("*.py")))
 
 
 targets = _vaultsync_targets(Path("packages/vaultsync/vaultsync"))

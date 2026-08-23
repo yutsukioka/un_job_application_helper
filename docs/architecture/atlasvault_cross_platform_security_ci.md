@@ -127,7 +127,8 @@ documents or weakening job isolation.
 
 The Dart source guard retains method identity while extracting automatically
 invoked widget hooks. `initState`, `didChangeDependencies`,
-`didUpdateWidget`, and `didChangeAppLifecycleState` use the strict policy:
+`didUpdateWidget`, `didChangeAppLifecycleState`, `activate`, `deactivate`, and
+`dispose` use the strict policy:
 sensitive calls, scheduled tear-offs, aliases, collections, and interpolated
 calls are prohibited because the hook itself is automatic.
 
@@ -160,20 +161,23 @@ nested delimiters so user-event expressions may contain calls with commas. The
 guard treats `createState`, executable State field initializers, and State
 constructors as automatic construction paths. State constructor parsing accepts
 optional named, private, and factory constructor segments, nested parameter
-signatures, initializer lists, block bodies, and arrow bodies with balanced
-delimiters. A State field closure is considered construction work only when it
-is immediately invoked; a stored callback remains passive. Arrow-bodied
-automatic hooks use a balanced expression terminator, so nested IIFEs are
-scanned in full. `Function.apply` of a sensitive tear-off or sensitive alias is
-also a direct build-time invocation.
+signatures, typed collection initializer literals, block bodies, and arrow
+bodies with balanced delimiters. It follows indirect subclasses of `State`.
+A State field closure is considered construction work only when that exact
+closure is immediately invoked through `()`, `.call()`, `?.call()`, or
+`Function.apply`; a stored callback remains passive even when another closure
+in the initializer is executed. Arrow-bodied automatic hooks and local
+wrappers use a balanced expression terminator, so nested IIFEs are scanned in
+full. `Function.apply` of a sensitive tear-off or sensitive alias is also a
+direct build-time invocation.
 
 ## No-Network Preflight
 
 The complete AST-based VaultSync no-network policy executes before the first
-VaultSync pytest command. It parses the complete top-level package module set
-without importing `vaultsync`, so module-scope code cannot run before policy
-admission. There is one canonical checker rather than a weaker early import
-scan and a later dynamic-import scan.
+VaultSync pytest command. It recursively parses the complete packaged module
+set without importing `vaultsync`, so module-scope code cannot run before
+policy admission. There is one canonical checker rather than a weaker early
+import scan and a later dynamic-import scan.
 
 The checker covers import/import-from roots, aliases, dotted `importlib`,
 `importlib.import_module`, aliased import-module functions, direct and aliased
