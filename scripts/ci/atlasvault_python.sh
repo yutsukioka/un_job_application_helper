@@ -764,6 +764,11 @@ module = util.module_from_spec(spec)
 spec.loader.exec_module(module)"""
 ):
     raise SystemExit("Python AST dotted-importlib alias self-test failed.")
+if not _blocked_imports(
+    """from importlib.machinery import SourceFileLoader
+SourceFileLoader('unsafe', '/tmp/unsafe.py').load_module()"""
+):
+    raise SystemExit("Python AST importlib-machinery loader self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
@@ -834,6 +839,10 @@ for path in artifact_scans:
     if "-iname '*ephemeral*private*'" not in source or "-iname '*private*ephemeral*'" not in source:
         raise SystemExit(
             f"{path} does not scan generated ephemeral-private artifacts."
+        )
+    if "grep -Ei" not in source:
+        raise SystemExit(
+            f"{path} does not scan full generated artifact paths."
         )
 print("Validated case-insensitive generated-artifact scans.")
 PY

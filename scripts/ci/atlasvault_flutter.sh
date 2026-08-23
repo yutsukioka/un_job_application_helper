@@ -3085,6 +3085,18 @@ class PairingWidget extends StatelessWidget with PairingFields {
 
 if not _production_target_scan(
     (
+        """mixin PairingFields on State<PairingWidget> {
+  final token = controller.startPairing();
+}""",
+        """import 'fields.dart';
+class PairingState extends State<PairingWidget> with PairingFields {}""",
+    ),
+    source_paths=(Path("lib/fields.dart"), Path("lib/pairing.dart")),
+):
+    raise SystemExit("Dart imported mixin execution self-test failed.")
+
+if not _production_target_scan(
+    (
         """class BaseWidget extends StatelessWidget {}""",
         """import 'base.dart';
 class PairingWidget extends BaseWidget {
@@ -3095,6 +3107,42 @@ class PairingWidget extends BaseWidget {
     source_paths=(Path("lib/base.dart"), Path("lib/pairing.dart")),
 ):
     raise SystemExit("Dart imported Widget ancestry self-test failed.")
+
+if not _production_target_scan(
+    (
+        """void main() {
+  controller.startPairing();
+}""",
+    ),
+    source_paths=(Path("lib/main.dart"),),
+):
+    raise SystemExit("Dart main entrypoint self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingHelper {
+  void run() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    PairingHelper().run();
+  }
+}"""
+):
+    raise SystemExit("Dart receiver-owned wrapper self-test failed.")
+
+if _has_automatic_operation(
+    """class SafeHelper {
+  void run() {}
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    SafeHelper().run();
+  }
+}"""
+):
+    raise SystemExit("Dart receiver-owned wrapper isolation self-test failed.")
 
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
