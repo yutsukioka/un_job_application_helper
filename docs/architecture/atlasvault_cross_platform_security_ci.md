@@ -248,9 +248,11 @@ name resembles a blocked standard-library networking package.
 
 The Flutter policy parser follows Flutter lifecycle ownership through qualified
 base classes, State inheritance, and State-applied mixins. It preserves wrapper
-ownership and inherited wrapper visibility, recognizes explicit generic calls
-and null-asserted collection callbacks, and still distinguishes deferred
-allowlisted user handlers from automatically executed lifecycle work.
+ownership and inherited wrapper visibility, recognizes block and arrow getters,
+explicit generic calls, and null-asserted collection callbacks, and still
+distinguishes deferred allowlisted user handlers from automatically executed
+lifecycle work. WidgetsBindingObserver callbacks and eager Widget construction
+paths are treated as automatic execution.
 
 The parser scopes Flutter ownership to each Dart library, while combining
 explicit `library` and `part of` sources to preserve State ancestry and wrapper
@@ -271,15 +273,15 @@ imports, re-exports, and `show`/`hide` combinators for State ancestry and
 inherited wrapper resolution while keeping each library's executable scan
 isolated. Conditional targets remain one conservative import namespace: shared
 public names receive one synthetic policy identity instead of becoming a false
-ambiguity. Imported class and mixin declarations otherwise receive stable
-library-qualified identities, so prefix imports cannot collide with same-named
-classes from another library. The scan also follows top-level package-library
-and extension wrapper functions and recognizes public State mixin-application aliases. It
-preserves callbacks consumed synchronously by eager collection expressions and
-masks user-event closures only for known deferred widget consumers. Direct
-public AtlasVault pairing primitives remain sensitive operations. The Python
-preflight treats `importlib.__import__` aliases and `multiprocessing` networking
-routes as dynamic network imports.
+ambiguity. Imported class, mixin, top-level, and extension declarations
+otherwise receive stable library-qualified identities, so prefix imports cannot
+collide with same-named executable wrappers from another library. The scan also
+recognizes public State mixin-application aliases, preserves callbacks consumed
+synchronously by eager collection expressions, and masks user-event closures
+only for known deferred widget consumers. Direct public AtlasVault pairing
+primitives remain sensitive operations. The Python preflight treats
+`importlib.__import__` aliases, both tracked importlib spec factories, and
+`multiprocessing` networking routes as dynamic network imports.
 
 ## Runner Safety
 

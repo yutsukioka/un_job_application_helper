@@ -425,6 +425,7 @@ def _blocked_imports(source: str) -> bool:
     import_module_aliases = set()
     importlib_loader_factory_aliases = {
         "find_spec": set(),
+        "spec_from_file_location": set(),
         "module_from_spec": set(),
     }
     importlib_spec_aliases = set()
@@ -585,8 +586,9 @@ def _blocked_imports(source: str) -> bool:
             aliases_os_process = _is_os_process_reference(value)
             aliases_importlib_spec = (
                 isinstance(value, ast.Call)
-                and _is_importlib_loader_factory_reference(
-                    value.func, "find_spec"
+                and any(
+                    _is_importlib_loader_factory_reference(value.func, factory)
+                    for factory in ("find_spec", "spec_from_file_location")
                 )
             )
             aliases_importlib_loader = _is_importlib_loader_reference(value)

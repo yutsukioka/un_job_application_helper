@@ -202,7 +202,10 @@ mixin_declaration = re.compile(
 lifecycle_declaration = re.compile(
     r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
     r"(?P<method>initState|didChangeDependencies|didUpdateWidget|"
-    r"didChangeAppLifecycleState|activate|deactivate|dispose|createState|build)"
+    r"didChangeAccessibilityFeatures|didChangeAppLifecycleState|didChangeLocales|"
+    r"didChangeMetrics|didChangePlatformBrightness|didChangeTextScaleFactor|"
+    r"didHaveMemoryPressure|didPushRoute|didPopRoute|didRequestAppExit|"
+    r"didChangeViewFocus|activate|deactivate|dispose|createState|build)"
     r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
 )
 state_lifecycle_methods = frozenset(
@@ -218,7 +221,21 @@ state_lifecycle_methods = frozenset(
     }
 )
 widget_lifecycle_methods = frozenset({"build", "createState"})
-observer_lifecycle_methods = frozenset({"didChangeAppLifecycleState"})
+observer_lifecycle_methods = frozenset(
+    {
+        "didChangeAccessibilityFeatures",
+        "didChangeAppLifecycleState",
+        "didChangeLocales",
+        "didChangeMetrics",
+        "didChangePlatformBrightness",
+        "didChangeTextScaleFactor",
+        "didHaveMemoryPressure",
+        "didPushRoute",
+        "didPopRoute",
+        "didRequestAppExit",
+        "didChangeViewFocus",
+    }
+)
 
 
 def _class_records(masked: str) -> tuple[tuple[str, str, str], ...]:
@@ -671,14 +688,31 @@ def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
     return frozenset(state_class_names)
 
 
+def _widget_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
+    widget_class_names = {"StatefulWidget", "StatelessWidget", "Widget"}
+    changed = True
+    while changed:
+        changed = False
+        for source in masked_sources:
+            for name, heritage, _ in _class_records(source):
+                if (
+                    _heritage_base_name(heritage) in widget_class_names
+                    and name not in widget_class_names
+                ):
+                    widget_class_names.add(name)
+                    changed = True
+    return frozenset(widget_class_names)
+
+
 def _state_construction_bodies(
     masked: str,
     state_class_names: frozenset[str] | None = None,
 ) -> list[tuple[str, str, str]]:
-    """Return automatically executed State construction and field expressions."""
+    """Return automatically executed State and Widget construction expressions."""
     state_classes = tuple(class_declaration.finditer(masked))
     if state_class_names is None:
         state_class_names = _state_class_names((masked,))
+    widget_class_names = _widget_class_names((masked,))
     state_mixin_names = set()
     mixin_records = {
         name: heritage for name, heritage, _ in _mixin_records(masked)
@@ -695,7 +729,12 @@ def _state_construction_bodies(
                     state_mixin_names.add(inherited)
                     changed = True
     state_declarations = (
-        tuple((match, True) for match in state_classes)
+        tuple(
+            (match, True)
+            for match in state_classes
+            if match.group("name") in state_class_names
+            or match.group("name") in widget_class_names
+        )
         + tuple(
             (match, False)
             for match in mixin_declaration.finditer(masked)
@@ -708,6 +747,7 @@ def _state_construction_bodies(
         if (
             owner not in state_class_names
             and owner not in state_mixin_names
+            and owner not in widget_class_names
         ):
             continue
         class_start = class_match.end() - 1
@@ -936,6 +976,10 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
     )
+    getter_declaration = re.compile(
+        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+        r"get\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*(?P<body>\{|=>)"
+    )
     methods_by_owner = {}
     for owner, _, class_body in _class_records(masked):
         methods = {}
@@ -972,6 +1016,22 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
             methods[name] = methods.get(name, "") + "\n" + class_body[
                 body_start + 1 : end - 1
             ]
+        for match in getter_declaration.finditer(class_body):
+            if not _at_class_member_depth(class_body, match.start()):
+                continue
+            body_start = match.start("body")
+            if match.group("body") == "=>":
+                end = _expression_end(class_body, match.end("body"))
+                if end < 0:
+                    raise SystemExit("Unable to parse an AtlasVault local getter.")
+                body = class_body[match.end("body") : end]
+            else:
+                end = _matching_delimiter_end(class_body, body_start)
+                if end is None:
+                    raise SystemExit("Unable to parse an AtlasVault local getter.")
+                body = class_body[body_start + 1 : end - 1]
+            name = match.group("name").casefold()
+            methods[name] = methods.get(name, "") + "\n" + body
         methods_by_owner[owner] = methods
     return methods_by_owner
 
@@ -1017,11 +1077,17 @@ def _sensitive_wrapper_names(methods: dict[str, str]) -> frozenset[str]:
     return frozenset(wrappers)
 
 
-def _package_executable_method_bodies(masked: str) -> dict[str, str]:
+def _package_executable_method_bodies(
+    masked: str, *, normalize_names: bool = True
+) -> dict[str, str]:
     """Return function declarations at the root of one package scope."""
     declaration = re.compile(
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
+    )
+    getter_declaration = re.compile(
+        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+        r"get\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*(?P<body>\{|=>)"
     )
     depths = _brace_depths(masked)
     methods = {}
@@ -1049,15 +1115,39 @@ def _package_executable_method_bodies(masked: str) -> dict[str, str]:
             body = masked[body_start + 1 : end - 1]
         else:
             continue
-        name = match.group("name").casefold()
+        name = match.group("name")
+        if normalize_names:
+            name = name.casefold()
+        methods[name] = methods.get(name, "") + "\n" + body
+    for match in getter_declaration.finditer(masked):
+        if depths[match.start()] != 0:
+            continue
+        body_start = match.start("body")
+        if match.group("body") == "=>":
+            end = _expression_end(masked, match.end("body"))
+            if end < 0:
+                raise SystemExit("Unable to parse an AtlasVault top-level getter.")
+            body = masked[match.end("body") : end]
+        else:
+            end = _matching_delimiter_end(masked, body_start)
+            if end is None:
+                raise SystemExit("Unable to parse an AtlasVault top-level getter.")
+            body = masked[body_start + 1 : end - 1]
+        name = match.group("name")
+        if normalize_names:
+            name = name.casefold()
         methods[name] = methods.get(name, "") + "\n" + body
     return methods
 
 
-def _top_level_method_bodies(source: str) -> dict[str, str]:
+def _top_level_method_bodies(
+    source: str, *, normalize_names: bool = True
+) -> dict[str, str]:
     """Return package functions and extension methods, never class members."""
     masked = _mask_dart_non_code(source)
-    methods = _package_executable_method_bodies(masked)
+    methods = _package_executable_method_bodies(
+        masked, normalize_names=normalize_names
+    )
     extension_declaration = re.compile(
         r"\bextension(?:\s+_?[A-Za-z_$][A-Za-z0-9_$]*)?"
         r"(?:\s*<[^{}\n]*>)?\s+on\b[^{}\n]*\{"
@@ -1067,7 +1157,7 @@ def _top_level_method_bodies(source: str) -> dict[str, str]:
         if body_end is None:
             raise SystemExit("Unable to parse an AtlasVault extension declaration.")
         extension_methods = _package_executable_method_bodies(
-            masked[match.end() : body_end - 1]
+            masked[match.end() : body_end - 1], normalize_names=normalize_names
         )
         for name, body in extension_methods.items():
             methods[name] = methods.get(name, "") + "\n" + body
@@ -1434,14 +1524,20 @@ def _sources_have_automatic_operation(
 
     declared_names = {}
     for library, library_sources in libraries.items():
-        declared_names[library] = frozenset(
+        names = {
             name
             for source, _ in library_sources
             for name, _, _ in (
                 *_class_records(_mask_dart_non_code(source)),
                 *_mixin_records(_mask_dart_non_code(source)),
             )
+        }
+        names.update(
+            name
+            for source, _ in library_sources
+            for name in _top_level_method_bodies(source, normalize_names=False)
         )
+        declared_names[library] = frozenset(names)
 
     package_paths = {}
     for path, group in path_groups.items():
@@ -1668,10 +1764,11 @@ def _sources_have_automatic_operation(
             metadata_source_for(metadata_library, library, aliases)
             for metadata_library in metadata_libraries(library)
         )
+        execution_source = metadata_source_for(library, library, aliases)
         state_class_names = _state_class_names((metadata_source,))
         lifecycle_class_methods = _flutter_lifecycle_class_methods((metadata_source,))
         if _has_automatic_operation(
-            combined,
+            execution_source,
             state_class_names,
             lifecycle_class_methods,
             metadata_source,
