@@ -1846,6 +1846,15 @@ class PairingState extends BaseState<PairingWidget> {
     raise SystemExit("Dart indirect-State construction self-test failed.")
 
 if not _has_automatic_operation(
+    """class BaseState<T extends StatefulWidget> extends State<T> {
+  void initState() {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart bounded-State type-parameter self-test failed.")
+
+if not _has_automatic_operation(
     """class BaseState<T> extends State<T> {
   void _run() {
     controller.startPairing();
@@ -1858,6 +1867,36 @@ class PairingState extends BaseState<PairingWidget> {
 }"""
 ):
     raise SystemExit("Dart inherited-wrapper lifecycle self-test failed.")
+
+if not _sources_have_automatic_operation(
+    (
+        """library pairing_policy;
+class BaseState<T> extends State<T> {
+  void _run() {
+    controller.startPairing();
+  }
+}""",
+        """part of pairing_policy;
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    _run();
+  }
+}""",
+    )
+):
+    raise SystemExit("Dart cross-file inherited-wrapper self-test failed.")
+
+if _sources_have_automatic_operation(
+    (
+        """class SharedName extends State<PolicyWidget> {}""",
+        """class SharedName {
+  void dispose() {
+    controller.startPairing();
+  }
+}""",
+    )
+):
+    raise SystemExit("Dart library-scoped lifecycle ownership self-test failed.")
 
 if not _has_automatic_operation(
     """mixin PairingLifecycle<T extends StatefulWidget> on State<T> {
@@ -2006,6 +2045,12 @@ state_field_initializer_samples = (
     ),
     (
         """class PairingState extends State<PairingWidget> {
+  final callback = value => controller.startPairing();
+}""",
+        False,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
   final token = (() => controller.startPairing()).call();
 }""",
         True,
@@ -2087,6 +2132,25 @@ class Helper {
 }"""
 ):
     raise SystemExit("Dart owner-scoped wrapper self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void runPairing() {
+    controller.startPairing();
+  }
+  void initState() {
+    runPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart public-wrapper lifecycle self-test failed.")
+
+if _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  late final token = controller.startPairing();
+}"""
+):
+    raise SystemExit("Dart lazy State-field initializer self-test failed.")
 
 if _has_automatic_operation(
     _state_fixture(

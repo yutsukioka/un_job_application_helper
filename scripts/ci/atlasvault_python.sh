@@ -606,9 +606,19 @@ process_launch_samples = (
     "import os\nos.posix_spawn('/bin/echo', ['echo'], {})",
     "from os import spawnl as launch\nlaunch(0, 'python', 'python')",
     "from os import posix_spawn as launch\nlaunch('/bin/echo', ['echo'], {})",
+    "import os\nlauncher = os\nlauncher.posix_spawn('/bin/echo', ['echo'], {})",
+    "import os\nlaunch = os.spawnl\nlaunch(0, 'python', 'python')",
 )
 if not all(_blocked_imports(sample) for sample in process_launch_samples):
     raise SystemExit("Python AST process-launch self-test failed.")
+importlib_loader_samples = (
+    """import importlib.util
+spec = importlib.util.find_spec('socket')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)""",
+)
+if not all(_blocked_imports(sample) for sample in importlib_loader_samples):
+    raise SystemExit("Python AST importlib-loader self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
