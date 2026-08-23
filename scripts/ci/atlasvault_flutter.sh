@@ -192,6 +192,10 @@ def _mask_dart_non_code(source: str) -> str:
 class_declaration = re.compile(
     r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?P<heritage>[^{}]*)\{"
 )
+class_alias_declaration = re.compile(
+    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+    r"(?P<heritage>[^;{}]+);"
+)
 mixin_declaration = re.compile(
     r"\bmixin\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?P<heritage>[^{}]*)\{"
 )
@@ -229,6 +233,14 @@ def _class_records(masked: str) -> tuple[tuple[str, str, str], ...]:
                 match.group("name"),
                 match.group("heritage"),
                 masked[body_start + 1 : body_end - 1],
+            )
+        )
+    for match in class_alias_declaration.finditer(masked):
+        records.append(
+            (
+                match.group("name"),
+                "extends " + match.group("heritage"),
+                "",
             )
         )
     return tuple(records)
@@ -573,6 +585,29 @@ def _mask_field_closure_literals(source: str) -> str:
             r"\bswitch\s*\([^{}]*\)\s*$", source[: braces[-1]]
         ) is not None
 
+    def is_synchronously_consumed_collection_callback(index: int) -> bool:
+        for opening in range(index - 1, -1, -1):
+            if source[opening] != "(":
+                continue
+            closing = _matching_delimiter_end(source, opening)
+            if closing is None or closing <= index:
+                continue
+            callee = source[:opening].rstrip()
+            method = re.search(
+                r"\.\s*(?P<name>map|where|expand|forEach|fold|reduce)\s*$",
+                callee,
+            )
+            if method is None:
+                continue
+            name = method.group("name")
+            if name in {"forEach", "fold", "reduce"}:
+                return True
+            suffix = source[closing:].lstrip()
+            return re.match(
+                r"\.\s*(?:toList|toSet|forEach|fold|reduce)\s*\(", suffix
+            ) is not None
+        return False
+
     for parameter_start in (
         index for index, character in enumerate(source) if character == "("
     ):
@@ -592,8 +627,9 @@ def _mask_field_closure_literals(source: str) -> str:
                 continue
         else:
             continue
-        for index in range(parameter_start, body_end):
-            masked[index] = " "
+        if not is_synchronously_consumed_collection_callback(parameter_start):
+            for index in range(parameter_start, body_end):
+                masked[index] = " "
     bare_parameter_arrow = re.compile(
         r"(?<![A-Za-z0-9_$])(?P<parameter>[A-Za-z_$][A-Za-z0-9_$]*)\s*=>"
     )
@@ -601,8 +637,9 @@ def _mask_field_closure_literals(source: str) -> str:
         if is_switch_arm(match.start("parameter")):
             continue
         body_end = _arrow_expression_end(source, match.end())
-        for index in range(match.start("parameter"), body_end):
-            masked[index] = " "
+        if not is_synchronously_consumed_collection_callback(match.start("parameter")):
+            for index in range(match.start("parameter"), body_end):
+                masked[index] = " "
     return "".join(masked)
 
 
@@ -807,6 +844,11 @@ operation_identifiers = frozenset(
         "createprimaryidentity",
         "generateatlasvaultdeviceidentity",
         "createpairingoffer",
+        "createatlasvaultpairingoffer",
+        "createatlasvaultpairingacceptance",
+        "createatlasvaultpairingkeyrequest",
+        "createatlasvaultpairingacknowledgement",
+        "createatlasvaultkeydelivery",
         "savepairingoffer",
         "importpairingoffer",
         "savepairingacceptance",
@@ -1025,6 +1067,63 @@ def _inherited_local_wrappers(
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide allowlisted user-event callback bodies from build-time execution scans."""
     masked = list(body)
+    deferred_callback_consumers = frozenset(
+        {
+            "ActionButton",
+            "Autocomplete",
+            "Checkbox",
+            "CheckboxListTile",
+            "ChoiceChip",
+            "Dismissible",
+            "DropdownButton",
+            "DropdownMenu",
+            "ElevatedButton",
+            "FilledButton",
+            "FilterChip",
+            "FloatingActionButton",
+            "GestureDetector",
+            "IconButton",
+            "InkResponse",
+            "InkWell",
+            "InputChip",
+            "NavigationBar",
+            "NavigationRail",
+            "OutlinedButton",
+            "Radio",
+            "RadioListTile",
+            "RangeSlider",
+            "SearchAnchor",
+            "SearchBar",
+            "Slider",
+            "Switch",
+            "SwitchListTile",
+            "TabBar",
+            "TextButton",
+            "TextField",
+            "TextFormField",
+        }
+    )
+
+    def is_deferred_callback_consumer(argument_start: int) -> bool:
+        openings = []
+        for index, character in enumerate(body[:argument_start]):
+            if character == "(":
+                openings.append(index)
+            elif character == ")" and openings:
+                openings.pop()
+        if not openings:
+            return False
+        prefix = body[: openings[-1]].rstrip()
+        match = re.search(
+            r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+            r"(?:\s*<[^()<>]*>)?\s*$",
+            prefix,
+        )
+        return (
+            match is not None
+            and match.group("name") in deferred_callback_consumers
+        )
+
     user_event = (
         r"(?:onPressed|onTap|onLongPress|onDoubleTap|onChanged|onSubmitted|"
         r"onFieldSubmitted|onDeleted|onDestinationSelected|onShowFilters|"
@@ -1039,11 +1138,13 @@ def _mask_deferred_build_closures(body: str) -> str:
         r"\([^()]*\)\s*(?:async\s*)?\{"
     )
     closures = [
-        (match.end(), False) for match in arrow_closure.finditer(body)
+        (match.start(), match.end(), False) for match in arrow_closure.finditer(body)
     ] + [
-        (match.end(), True) for match in block_closure.finditer(body)
+        (match.start(), match.end(), True) for match in block_closure.finditer(body)
     ]
-    for start, block in closures:
+    for argument_start, start, block in closures:
+        if not is_deferred_callback_consumer(argument_start):
+            continue
         if block:
             depth = 1
             end = start
@@ -1217,6 +1318,9 @@ def _sources_have_automatic_operation(
     part_of_uri_directive = re.compile(
         r"(?m)^\s*part\s+of\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)\s*;"
     )
+    import_directive = re.compile(
+        r"(?m)^\s*import\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)"
+    )
     source_metadata = []
     path_groups = {}
     for index, source in enumerate(sources):
@@ -1231,7 +1335,7 @@ def _sources_have_automatic_operation(
         if path is not None:
             path_groups[path] = group
 
-    libraries: dict[str, list[str]] = {}
+    libraries: dict[str, list[tuple[str, Path | None]]] = {}
     for source, path, group in source_metadata:
         part_of = part_of_directive.search(source)
         part_of_uri = part_of_uri_directive.search(source)
@@ -1242,13 +1346,40 @@ def _sources_have_automatic_operation(
             library = path_groups.get(owner_path, f"path:{owner_path}")
         else:
             library = group
-        libraries.setdefault(library, []).append(source)
+        libraries.setdefault(library, []).append((source, path))
 
-    for library_sources in libraries.values():
-        combined = "\n".join(library_sources)
-        masked_sources = (_mask_dart_non_code(combined),)
-        state_class_names = _state_class_names(masked_sources)
-        lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
+    def metadata_libraries(library: str) -> tuple[str, ...]:
+        discovered = []
+        pending = [library]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            discovered.append(current)
+            for source, path in libraries.get(current, []):
+                if path is None:
+                    continue
+                for match in import_directive.finditer(source):
+                    uri = match.group("uri")
+                    if ":" in uri:
+                        continue
+                    imported_path = (path.parent / uri).resolve()
+                    imported_library = path_groups.get(imported_path)
+                    if imported_library in libraries and imported_library not in seen:
+                        pending.append(imported_library)
+        return tuple(discovered)
+
+    for library, library_sources in libraries.items():
+        combined = "\n".join(source for source, _ in library_sources)
+        metadata_sources = tuple(
+            _mask_dart_non_code(source)
+            for metadata_library in metadata_libraries(library)
+            for source, _ in libraries[metadata_library]
+        )
+        state_class_names = _state_class_names(metadata_sources)
+        lifecycle_class_methods = _flutter_lifecycle_class_methods(metadata_sources)
         if _has_automatic_operation(
             combined, state_class_names, lifecycle_class_methods
         ):

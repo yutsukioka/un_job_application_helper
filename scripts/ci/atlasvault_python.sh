@@ -369,6 +369,7 @@ blocked_import_roots = frozenset(
         "httpcore",
         "httpx",
         "imaplib",
+        "multiprocessing",
         "nntplib",
         "poplib",
         "requests",
@@ -505,6 +506,13 @@ def _blocked_imports(source: str) -> bool:
             and node.value.id in builtins_module_aliases
         )
 
+    def _is_dynamic_import_reference(node: ast.expr) -> bool:
+        return _is_builtin_import_reference(node) or (
+            isinstance(node, ast.Attribute)
+            and node.attr == "__import__"
+            and _is_importlib_module_reference(node.value)
+        )
+
     def _is_os_module_reference(node: ast.expr) -> bool:
         return isinstance(node, ast.Name) and node.id in os_module_aliases
 
@@ -568,7 +576,7 @@ def _blocked_imports(source: str) -> bool:
                 continue
             aliases_importlib = _is_importlib_module_reference(value)
             aliases_import_module = _is_import_module_reference(value)
-            aliases_builtin_import = _is_builtin_import_reference(value)
+            aliases_builtin_import = _is_dynamic_import_reference(value)
             aliases_os_module = _is_os_module_reference(value)
             aliases_os_process = _is_os_process_reference(value)
             aliases_importlib_spec = (
@@ -646,7 +654,7 @@ def _blocked_imports(source: str) -> bool:
         if _is_importlib_loader_execution_reference(node.func):
             return True
         if (
-            _is_builtin_import_reference(node.func)
+            _is_dynamic_import_reference(node.func)
             or _is_import_module_reference(node.func)
         ):
             return True

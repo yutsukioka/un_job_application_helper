@@ -265,6 +265,14 @@ switch-expression arms from stored bare-parameter closures, excludes lazy
 static fields, and evaluates eager fields contributed by State mixins. The
 Python policy also follows aliases of a tracked loader's `exec_module` method.
 
+Library-aware Dart metadata follows relative imports for State ancestry while
+keeping each library's executable scan isolated. It recognizes State
+mixin-application aliases, preserves callbacks consumed synchronously by eager
+collection expressions, and masks user-event closures only for known deferred
+widget consumers. Direct public AtlasVault pairing primitives remain sensitive
+operations. The Python preflight treats `importlib.__import__` aliases and
+`multiprocessing` networking routes as dynamic network imports.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and
