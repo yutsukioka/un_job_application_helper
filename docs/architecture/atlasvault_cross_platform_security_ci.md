@@ -135,15 +135,18 @@ calls are prohibited because the hook itself is automatic.
 invoked aliases, selected-and-invoked list/map/set aliases, immediately invoked
 closures, and sensitive work passed to `Future.microtask`,
 `scheduleMicrotask`, `Future.sync`, `Future.delayed`, `Future`, `Timer.run`, or
-a post-frame callback. It accepts a sensitive tear-off or either expression- or
-block-bodied deferred closure when it is merely wired to a widget action, as
-well as harmless owner/property references. Parameterized and zero-argument
-immediately invoked closures remain execution. The guard traces local private
-wrapper methods that directly or transitively invoke a sensitive operation, and
-scans every Dart source under `lib`; it does not equate a comma or named widget
-argument with execution during `build`. Its self-tests exercise both accepted
-callback wiring and rejected build-time execution, including map/set closing
-delimiters and dynamic collection indices.
+a post-frame callback, including typed `Future<T>` forms. It accepts a
+sensitive tear-off or either expression- or block-bodied closure only when it
+is wired to a named user-event handler; framework builder closures and ordinary
+control-flow blocks remain build execution and are analyzed. Parameterized,
+zero-argument, expression-bodied, and block-bodied immediately invoked closures
+remain execution. The guard traces local private wrapper methods that directly
+or transitively invoke a sensitive operation, including generic methods with
+nested callback parameter types, and includes recovery-key setup in the
+sensitive operation set. It scans every Dart source under `lib`; it does not
+equate a comma or named widget argument with execution during `build`. Its
+self-tests exercise both accepted callback wiring and rejected build-time
+execution, including map/set closing delimiters and dynamic collection indices.
 
 ## No-Network Preflight
 

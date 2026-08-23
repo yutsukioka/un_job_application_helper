@@ -253,6 +253,7 @@ operation_identifiers = frozenset(
         "discardpairing",
         "importencryptedbackup",
         "exportencryptedbackup",
+        "beginrecoverysetup",
         "confirmrecoverysetup",
         "prepareexistingrecoveryexport",
         "savepreparedexport",
@@ -285,30 +286,54 @@ def _is_sensitive_operation(
 def _local_method_bodies(source: str) -> dict[str, str]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)?"
-        r"(?P<name>_[A-Za-z_$][A-Za-z0-9_$]*)\s*\([^)]*\)\s*"
-        r"(?:async\s*)?(?P<body>\{|=>)"
+        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
+        r"(?P<name>_[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
     )
     methods = {}
     for match in declaration.finditer(masked):
-        start = match.start("body")
-        if match.group("body") == "=>":
-            end = masked.find(";", match.end("body"))
+        parameter_start = match.end() - 1
+        depth = 0
+        for parameter_end in range(parameter_start, len(masked)):
+            if masked[parameter_end] == "(":
+                depth += 1
+            elif masked[parameter_end] == ")":
+                depth -= 1
+                if depth == 0:
+                    parameter_end += 1
+                    break
+        else:
+            raise SystemExit("Unable to parse an AtlasVault local method signature.")
+
+        body_start = parameter_end
+        while body_start < len(masked) and masked[body_start].isspace():
+            body_start += 1
+        if masked.startswith("async*", body_start):
+            body_start += len("async*")
+        elif masked.startswith("async", body_start):
+            body_start += len("async")
+        while body_start < len(masked) and masked[body_start].isspace():
+            body_start += 1
+        if masked.startswith("=>", body_start):
+            end = masked.find(";", body_start + 2)
             if end < 0:
                 raise SystemExit("Unable to parse an AtlasVault local method.")
             methods[match.group("name").casefold()] = masked[
-                match.end("body") : end
+                body_start + 2 : end
             ]
+            continue
+        if body_start >= len(masked) or masked[body_start] != "{":
             continue
 
         depth = 0
-        for end in range(start, len(masked)):
+        for end in range(body_start, len(masked)):
             if masked[end] == "{":
                 depth += 1
             elif masked[end] == "}":
                 depth -= 1
                 if depth == 0:
-                    methods[match.group("name").casefold()] = masked[start + 1 : end]
+                    methods[match.group("name").casefold()] = masked[
+                        body_start + 1 : end
+                    ]
                     break
         else:
             raise SystemExit("Unable to parse an AtlasVault local method.")
@@ -381,10 +406,15 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide ordinary callback bodies; schedulers and IIFEs use the original body."""
     masked = list(body)
+    user_event = r"on[A-Za-z_$][A-Za-z0-9_$]*"
     arrow_closure = re.compile(
+        rf"\b{user_event}\s*:\s*(?:[^,;]*?\?\s*[^:]+:\s*)?"
         r"(?:\([^()]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
     )
-    block_closure = re.compile(r"\([^()]*\)\s*\{")
+    block_closure = re.compile(
+        rf"\b{user_event}\s*:\s*(?:[^,;]*?\?\s*[^:]+:\s*)?"
+        r"\([^()]*\)\s*\{"
+    )
     closures = [
         (match.end(), False) for match in arrow_closure.finditer(body)
     ] + [
@@ -415,7 +445,8 @@ def _build_scheduler_invokes_sensitive_operation(
     local_wrappers: frozenset[str],
 ) -> bool:
     scheduler = re.compile(
-        r"(?:Future(?:\.(?:microtask|sync|delayed))?|scheduleMicrotask|Timer\.run|"
+        r"(?:Future(?:<[^>\n]+>)?(?:\.(?:microtask|sync|delayed))?|"
+        r"scheduleMicrotask|Timer\.run|"
         r"WidgetsBinding\.instance\.addPostFrameCallback)\s*"
         r"\((?P<argument>[^;]+)\)",
         re.DOTALL,
@@ -442,14 +473,18 @@ def _build_iife_invokes_sensitive_operation(
     body: str,
     local_wrappers: frozenset[str],
 ) -> bool:
-    iife = re.compile(
+    arrow_iife = re.compile(
         r"\(\s*(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
         r"(?P<expression>[^;{}]+?)\s*\)\s*\([^)]*\)",
         re.DOTALL,
     )
+    block_iife = re.compile(
+        r"\(\s*\([^)]*\)\s*\{(?P<expression>[^{}]*)\}\s*\)\s*\([^)]*\)",
+        re.DOTALL,
+    )
     return any(
         _is_sensitive_operation(reference.group("target"), local_wrappers)
-        for match in iife.finditer(body)
+        for match in (*arrow_iife.finditer(body), *block_iife.finditer(body))
         for reference in operation_reference.finditer(match.group("expression"))
     )
 
@@ -757,6 +792,14 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  return ActionButton(
+    onPressed: busy ? null : () => owner.prepareRecoveryImport(),
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
   if (enabled) {
     controller.startPairing();
   }
@@ -928,11 +971,11 @@ void initState() {
     raise SystemExit("Dart generic-wrapper lifecycle self-test failed.")
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
-if any(
-    _has_automatic_operation(path.read_text(encoding="utf-8"))
-    for path in targets
-):
-    raise SystemExit("Automatic AtlasVault pairing/import/export is not permitted.")
+for path in targets:
+    if _has_automatic_operation(path.read_text(encoding="utf-8")):
+        raise SystemExit(
+            f"Automatic AtlasVault pairing/import/export is not permitted: {path}."
+        )
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
