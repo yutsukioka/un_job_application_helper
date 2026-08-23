@@ -1257,10 +1257,12 @@ def _has_automatic_operation(
     source: str,
     state_class_names: frozenset[str] | None = None,
     lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
+    metadata_source: str | None = None,
 ) -> bool:
-    methods_by_owner = _local_method_bodies(source)
-    local_wrappers_by_owner = _sensitive_local_wrappers(source)
-    class_bases = _class_bases(source)
+    wrapper_source = metadata_source or source
+    methods_by_owner = _local_method_bodies(wrapper_source)
+    local_wrappers_by_owner = _sensitive_local_wrappers(wrapper_source)
+    class_bases = _class_bases(wrapper_source)
     for owner, method, body in _automatic_lifecycle_bodies(
         source, state_class_names, lifecycle_class_methods
     ):
@@ -1318,8 +1320,12 @@ def _sources_have_automatic_operation(
     part_of_uri_directive = re.compile(
         r"(?m)^\s*part\s+of\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)\s*;"
     )
-    import_directive = re.compile(
-        r"(?m)^\s*import\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)"
+    import_declaration = re.compile(
+        r"(?m)^\s*import\s+(?P<declaration>[^;]+);"
+    )
+    import_uri = re.compile(r"(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)")
+    import_prefix = re.compile(
+        r"\bas\s+(?P<prefix>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*$"
     )
     source_metadata = []
     path_groups = {}
@@ -1348,6 +1354,47 @@ def _sources_have_automatic_operation(
             library = group
         libraries.setdefault(library, []).append((source, path))
 
+    declared_names = {}
+    for library, library_sources in libraries.items():
+        declared_names[library] = frozenset(
+            name
+            for source, _ in library_sources
+            for name, _, _ in (
+                *_class_records(_mask_dart_non_code(source)),
+                *_mixin_records(_mask_dart_non_code(source)),
+            )
+        )
+
+    imports_by_library = {}
+    for library, library_sources in libraries.items():
+        imports = []
+        for source, path in library_sources:
+            if path is None:
+                continue
+            for match in import_declaration.finditer(source):
+                declaration = match.group("declaration")
+                prefix_match = import_prefix.search(declaration)
+                prefix = prefix_match.group("prefix") if prefix_match else None
+                for uri_match in import_uri.finditer(declaration):
+                    uri = uri_match.group("uri")
+                    if ":" in uri:
+                        continue
+                    imported_library = path_groups.get(
+                        (path.parent / uri).resolve()
+                    )
+                    if imported_library in libraries:
+                        candidate = (prefix, imported_library)
+                        if candidate not in imports:
+                            imports.append(candidate)
+        imports_by_library[library] = tuple(imports)
+
+    library_order = {library: index for index, library in enumerate(libraries)}
+
+    def metadata_name(library: str, name: str, root: str) -> str:
+        if library == root:
+            return name
+        return f"__atlas_meta_{library_order[library]}_{name}"
+
     def metadata_libraries(library: str) -> tuple[str, ...]:
         discovered = []
         pending = [library]
@@ -1358,30 +1405,62 @@ def _sources_have_automatic_operation(
                 continue
             seen.add(current)
             discovered.append(current)
-            for source, path in libraries.get(current, []):
-                if path is None:
-                    continue
-                for match in import_directive.finditer(source):
-                    uri = match.group("uri")
-                    if ":" in uri:
-                        continue
-                    imported_path = (path.parent / uri).resolve()
-                    imported_library = path_groups.get(imported_path)
-                    if imported_library in libraries and imported_library not in seen:
-                        pending.append(imported_library)
+            for _, imported_library in imports_by_library[current]:
+                if imported_library not in seen:
+                    pending.append(imported_library)
         return tuple(discovered)
+
+    def metadata_source_for(library: str, root: str) -> str:
+        masked = _mask_dart_non_code("\n".join(
+            source for source, _ in libraries[library]
+        ))
+        imported_by_prefix = {}
+        unprefixed_names = {}
+        for prefix, imported_library in imports_by_library[library]:
+            if prefix is not None:
+                imported_by_prefix.setdefault(prefix, []).append(imported_library)
+                continue
+            for name in declared_names[imported_library]:
+                unprefixed_names.setdefault(name, []).append(imported_library)
+
+        for prefix, imported_libraries in imported_by_prefix.items():
+            for imported_library in imported_libraries:
+                for name in declared_names[imported_library]:
+                    masked = re.sub(
+                        rf"(?<![A-Za-z0-9_$]){re.escape(prefix)}\s*\.\s*"
+                        rf"{re.escape(name)}(?![A-Za-z0-9_$])",
+                        metadata_name(imported_library, name, root),
+                        masked,
+                    )
+        for name, imported_libraries in unprefixed_names.items():
+            if name in declared_names[library] or len(imported_libraries) != 1:
+                continue
+            masked = re.sub(
+                rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+                metadata_name(imported_libraries[0], name, root),
+                masked,
+            )
+        for name in declared_names[library]:
+            masked = re.sub(
+                rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+                metadata_name(library, name, root),
+                masked,
+            )
+        return masked
 
     for library, library_sources in libraries.items():
         combined = "\n".join(source for source, _ in library_sources)
-        metadata_sources = tuple(
-            _mask_dart_non_code(source)
+        metadata_source = "\n".join(
+            metadata_source_for(metadata_library, library)
             for metadata_library in metadata_libraries(library)
-            for source, _ in libraries[metadata_library]
         )
-        state_class_names = _state_class_names(metadata_sources)
-        lifecycle_class_methods = _flutter_lifecycle_class_methods(metadata_sources)
+        state_class_names = _state_class_names((metadata_source,))
+        lifecycle_class_methods = _flutter_lifecycle_class_methods((metadata_source,))
         if _has_automatic_operation(
-            combined, state_class_names, lifecycle_class_methods
+            combined,
+            state_class_names,
+            lifecycle_class_methods,
+            metadata_source,
         ):
             return True
     return False
