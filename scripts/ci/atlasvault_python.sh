@@ -424,6 +424,7 @@ def _blocked_imports(source: str) -> bool:
     }
     importlib_spec_aliases = set()
     importlib_loader_aliases = set()
+    importlib_loader_execution_aliases = set()
     os_module_aliases = set()
     os_process_aliases = set()
     for node in ast.walk(tree):
@@ -535,6 +536,21 @@ def _blocked_imports(source: str) -> bool:
             and node.value.id in importlib_spec_aliases
         )
 
+    def _is_importlib_loader_execution_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in importlib_loader_execution_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "exec_module"
+            and (
+                _is_importlib_loader_reference(node.value)
+                or (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id in importlib_loader_aliases
+                )
+            )
+        )
+
     changed = True
     while changed:
         changed = False
@@ -562,6 +578,9 @@ def _blocked_imports(source: str) -> bool:
                 )
             )
             aliases_importlib_loader = _is_importlib_loader_reference(value)
+            aliases_importlib_loader_execution = (
+                _is_importlib_loader_execution_reference(value)
+            )
             if (
                 not aliases_importlib
                 and not aliases_import_module
@@ -570,6 +589,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_os_process
                 and not aliases_importlib_spec
                 and not aliases_importlib_loader
+                and not aliases_importlib_loader_execution
             ):
                 continue
             for target in targets:
@@ -611,23 +631,19 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     importlib_loader_aliases.add(target.id)
                     changed = True
+                if (
+                    aliases_importlib_loader_execution
+                    and target.id not in importlib_loader_execution_aliases
+                ):
+                    importlib_loader_execution_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         if _is_os_process_reference(node.func):
             return True
-        if (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "exec_module"
-            and (
-                _is_importlib_loader_reference(node.func.value)
-                or (
-                    isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in importlib_loader_aliases
-                )
-            )
-        ):
+        if _is_importlib_loader_execution_reference(node.func):
             return True
         if (
             _is_builtin_import_reference(node.func)

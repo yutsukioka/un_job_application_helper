@@ -559,9 +559,25 @@ def _immediately_invoked_closure_bodies(source: str) -> tuple[str, ...]:
 def _mask_field_closure_literals(source: str) -> str:
     """Leave non-closure field execution visible while hiding stored closures."""
     masked = list(source)
+
+    def is_switch_arm(index: int) -> bool:
+        braces = []
+        for offset, character in enumerate(source[:index]):
+            if character == "{":
+                braces.append(offset)
+            elif character == "}" and braces:
+                braces.pop()
+        if not braces:
+            return False
+        return re.search(
+            r"\bswitch\s*\([^{}]*\)\s*$", source[: braces[-1]]
+        ) is not None
+
     for parameter_start in (
         index for index, character in enumerate(source) if character == "("
     ):
+        if re.search(r"\bswitch\s*$", source[:parameter_start]):
+            continue
         parameter_end = _matching_delimiter_end(source, parameter_start)
         if parameter_end is None:
             continue
@@ -582,6 +598,8 @@ def _mask_field_closure_literals(source: str) -> str:
         r"(?<![A-Za-z0-9_$])(?P<parameter>[A-Za-z_$][A-Za-z0-9_$]*)\s*=>"
     )
     for match in bare_parameter_arrow.finditer(source):
+        if is_switch_arm(match.start("parameter")):
+            continue
         body_end = _arrow_expression_end(source, match.end())
         for index in range(match.start("parameter"), body_end):
             masked[index] = " "
@@ -612,9 +630,36 @@ def _state_construction_bodies(
     state_classes = tuple(class_declaration.finditer(masked))
     if state_class_names is None:
         state_class_names = _state_class_names((masked,))
+    state_mixin_names = set()
+    mixin_records = {
+        name: heritage for name, heritage, _ in _mixin_records(masked)
+    }
+    for name, heritage, _ in _class_records(masked):
+        if name in state_class_names:
+            state_mixin_names.update(_heritage_mixin_names(heritage))
+    changed = True
+    while changed:
+        changed = False
+        for name in tuple(state_mixin_names):
+            for inherited in _heritage_mixin_names(mixin_records.get(name, "")):
+                if inherited not in state_mixin_names:
+                    state_mixin_names.add(inherited)
+                    changed = True
+    state_declarations = (
+        tuple((match, True) for match in state_classes)
+        + tuple(
+            (match, False)
+            for match in mixin_declaration.finditer(masked)
+            if match.group("name") in state_mixin_names
+        )
+    )
     bodies = []
-    for class_match in state_classes:
-        if class_match.group("name") not in state_class_names:
+    for class_match, has_constructor in state_declarations:
+        owner = class_match.group("name")
+        if (
+            owner not in state_class_names
+            and owner not in state_mixin_names
+        ):
             continue
         class_start = class_match.end() - 1
         depth = 0
@@ -629,37 +674,32 @@ def _state_construction_bodies(
             raise SystemExit("Unable to parse an AtlasVault State class.")
 
         class_body = masked[class_start + 1 : class_end]
-        constructor = re.compile(
-            rf"(?m)^[ \t]*(?:(?:const|factory)\s+)?{re.escape(class_match.group('name'))}"
-            r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?\s*\("
-        )
-        for match in constructor.finditer(class_body):
-            parameter_end = _matching_delimiter_end(class_body, match.end() - 1)
-            if parameter_end is None:
-                raise SystemExit("Unable to parse an AtlasVault State constructor signature.")
-            initializers, body_start = _constructor_parts(class_body, parameter_end)
-            constructor_parts = []
-            if initializers.strip():
-                constructor_parts.append(_mask_field_closure_literals(initializers))
-            if body_start is not None:
-                if class_body.startswith("=>", body_start):
-                    end = _expression_end(class_body, body_start + 2)
-                    if end < 0:
-                        raise SystemExit("Unable to parse an AtlasVault State constructor.")
-                    constructor_parts.append(class_body[body_start + 2 : end])
-                elif class_body[body_start] == "{":
-                    end = _matching_delimiter_end(class_body, body_start)
-                    if end is None:
-                        raise SystemExit("Unable to parse an AtlasVault State constructor.")
-                    constructor_parts.append(class_body[body_start + 1 : end - 1])
-            if constructor_parts:
-                bodies.append(
-                    (
-                        class_match.group("name"),
-                        "state_constructor",
-                        ";\n".join(constructor_parts),
-                    )
-                )
+        if has_constructor:
+            constructor = re.compile(
+                rf"(?m)^[ \t]*(?:(?:const|factory)\s+)?{re.escape(owner)}"
+                r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?\s*\("
+            )
+            for match in constructor.finditer(class_body):
+                parameter_end = _matching_delimiter_end(class_body, match.end() - 1)
+                if parameter_end is None:
+                    raise SystemExit("Unable to parse an AtlasVault State constructor signature.")
+                initializers, body_start = _constructor_parts(class_body, parameter_end)
+                constructor_parts = []
+                if initializers.strip():
+                    constructor_parts.append(_mask_field_closure_literals(initializers))
+                if body_start is not None:
+                    if class_body.startswith("=>", body_start):
+                        end = _expression_end(class_body, body_start + 2)
+                        if end < 0:
+                            raise SystemExit("Unable to parse an AtlasVault State constructor.")
+                        constructor_parts.append(class_body[body_start + 2 : end])
+                    elif class_body[body_start] == "{":
+                        end = _matching_delimiter_end(class_body, body_start)
+                        if end is None:
+                            raise SystemExit("Unable to parse an AtlasVault State constructor.")
+                        constructor_parts.append(class_body[body_start + 1 : end - 1])
+                if constructor_parts:
+                    bodies.append((owner, "state_constructor", ";\n".join(constructor_parts)))
 
         statement_start = 0
         depth = 0
@@ -684,9 +724,9 @@ def _state_construction_bodies(
                 statement_start = index + 1
                 if (
                     "=" not in statement
-                    or re.match(r"^\s*late\b", statement)
+                    or re.match(r"^\s*(?:late|static)\b", statement)
                     or _member_expression_is_method(
-                        statement, class_match.group("name")
+                        statement, owner
                     )
                 ):
                     index += 1
@@ -697,7 +737,7 @@ def _state_construction_bodies(
                 )
                 if invoked_closure_bodies:
                     bodies.extend(
-                        (class_match.group("name"), "state_field", closure_body)
+                        (owner, "state_field", closure_body)
                         for closure_body in invoked_closure_bodies
                     )
                 if "=>" in field_expression or re.search(
@@ -705,14 +745,14 @@ def _state_construction_bodies(
                 ):
                     bodies.append(
                         (
-                            class_match.group("name"),
+                            owner,
                             "state_field",
                             _mask_field_closure_literals(field_expression),
                         )
                     )
                     continue
                 bodies.append(
-                    (class_match.group("name"), "state_field", field_expression)
+                    (owner, "state_field", field_expression)
                 )
             index += 1
     return bodies
@@ -1162,18 +1202,46 @@ def _has_automatic_operation(
     return False
 
 
-def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
+def _sources_have_automatic_operation(
+    sources: tuple[str, ...],
+    source_paths: tuple[Path, ...] | None = None,
+) -> bool:
+    if source_paths is not None and len(source_paths) != len(sources):
+        raise SystemExit("AtlasVault Dart source paths do not match sources.")
     library_directive = re.compile(
         r"(?m)^\s*library\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)\s*;"
     )
     part_of_directive = re.compile(
         r"(?m)^\s*part\s+of\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)\s*;"
     )
-    libraries: dict[str, list[str]] = {}
+    part_of_uri_directive = re.compile(
+        r"(?m)^\s*part\s+of\s+(?P<quote>['\"])(?P<uri>[^'\"\r\n]+)(?P=quote)\s*;"
+    )
+    source_metadata = []
+    path_groups = {}
     for index, source in enumerate(sources):
-        masked = _mask_dart_non_code(source)
-        directive = part_of_directive.search(masked) or library_directive.search(masked)
-        library = directive.group("name") if directive else f"source:{index}"
+        path = source_paths[index].resolve() if source_paths is not None else None
+        library_match = library_directive.search(source)
+        group = (
+            f"library:{library_match.group('name')}"
+            if library_match is not None
+            else f"path:{path}" if path is not None else f"source:{index}"
+        )
+        source_metadata.append((source, path, group))
+        if path is not None:
+            path_groups[path] = group
+
+    libraries: dict[str, list[str]] = {}
+    for source, path, group in source_metadata:
+        part_of = part_of_directive.search(source)
+        part_of_uri = part_of_uri_directive.search(source)
+        if part_of is not None:
+            library = f"library:{part_of.group('name')}"
+        elif part_of_uri is not None and path is not None:
+            owner_path = (path.parent / part_of_uri.group("uri")).resolve()
+            library = path_groups.get(owner_path, f"path:{owner_path}")
+        else:
+            library = group
         libraries.setdefault(library, []).append(source)
 
     for library_sources in libraries.values():
@@ -1188,15 +1256,11 @@ def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
     return False
 
 
-def _production_target_scan(sources: tuple[str, ...]) -> bool:
-    masked_sources = tuple(_mask_dart_non_code(source) for source in sources)
-    state_class_names = _state_class_names(masked_sources)
-    lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
-    return any(
-        _has_automatic_operation(
-            source, state_class_names, lifecycle_class_methods
-        )
-        for source in sources
+def _production_target_scan(
+    sources: tuple[str, ...], source_paths: tuple[Path, ...] | None = None
+) -> bool:
+    return _sources_have_automatic_operation(
+        sources, source_paths=source_paths
     )
 
 
@@ -1916,7 +1980,8 @@ class PairingState extends BaseState<PairingWidget> {
     _run();
   }
 }""",
-    )
+    ),
+    source_paths=(Path("lib/pairing.dart"), Path("lib/pairing_part.dart")),
 ):
     raise SystemExit("Dart cross-file inherited-wrapper self-test failed.")
 
@@ -2220,7 +2285,8 @@ class PairingState extends BaseState<PairingWidget> {
     _run();
   }
 }""",
-    )
+    ),
+    source_paths=(Path("lib/pairing.dart"), Path("lib/pairing_part.dart")),
 ):
     raise SystemExit("Dart URI part ownership self-test failed.")
 
@@ -2263,7 +2329,7 @@ Widget build(context) {
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
 target_sources = tuple(path.read_text(encoding="utf-8") for path in targets)
-if _production_target_scan(target_sources):
+if _production_target_scan(target_sources, source_paths=targets):
     raise SystemExit("Automatic AtlasVault pairing/import/export is not permitted.")
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY

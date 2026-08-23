@@ -259,6 +259,12 @@ State field initializers from construction-time analysis. The Python preflight
 also propagates assigned `os` launch aliases and rejects execution through an
 `importlib` loader derived from a dynamic module specification.
 
+The production Flutter scan uses the same library-aware aggregation as the
+policy fixtures, including URI-form `part of` declarations. It distinguishes
+switch-expression arms from stored bare-parameter closures, excludes lazy
+static fields, and evaluates eager fields contributed by State mixins. The
+Python policy also follows aliases of a tracked loader's `exec_module` method.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and
