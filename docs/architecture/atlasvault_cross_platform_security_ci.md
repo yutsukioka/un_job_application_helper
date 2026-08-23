@@ -165,11 +165,13 @@ the tracked holder root and all descendants even when startup failed before an
 Atlas runner existed. It never broadens ownership beyond the tracked root.
 
 Finally cleanup independently attempts every live waiter and holder tree,
-then the deterministic coordination and log roots. It collects errors so one
-failed termination cannot skip the remaining owned resources; it reports after
-all attempts complete. The workflow-policy self-tests assert strict runner
-validation for deliberate crashes, runner-free holder cleanup in `finally`,
-descendant termination, and resource deletion after process cleanup attempts.
+then the deterministic coordination and log roots. Paths already removed by
+an earlier successful cleanup are skipped, while real removal failures are
+collected so one failed termination cannot skip the remaining owned resources;
+the workflow reports after all attempts complete. The workflow-policy self-tests
+assert strict runner validation for deliberate crashes, runner-free holder
+cleanup in `finally`, descendant termination, and resource deletion after
+process cleanup attempts.
 
 ## Artifact Policy
 

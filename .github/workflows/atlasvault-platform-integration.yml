@@ -508,11 +508,13 @@ jobs:
                 }
               }
               foreach ($CleanupPath in @($MigrationCoordinationRoot, $InteropCoordinationRoot, $RecoveryLogRoot)) {
-                try {
-                  Remove-Item -LiteralPath $CleanupPath -Recurse -Force -ErrorAction Stop
-                }
-                catch {
-                  $CleanupErrors.Add("cleanup path: $($_.Exception.Message)")
+                if (Test-Path -LiteralPath $CleanupPath) {
+                  try {
+                    Remove-Item -LiteralPath $CleanupPath -Recurse -Force -ErrorAction Stop
+                  }
+                  catch {
+                    $CleanupErrors.Add("cleanup path: $($_.Exception.Message)")
+                  }
                 }
               }
               if ($CleanupErrors.Count -gt 0) {
