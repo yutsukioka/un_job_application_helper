@@ -659,6 +659,14 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  return ActionButton(onPressed: () {
+    owner.createDeviceIdentity();
+  });
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
   final callback = owner.startPairing;
   return ActionButton(onPressed: callback);
 }""",
@@ -724,6 +732,21 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  ((_) => controller.startPairing())(null);
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  Future.delayed(Duration.zero, owner.createDeviceIdentity);
+  Future(owner.createDeviceIdentity);
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   final callbacks = {'pair': controller.startPairing};
   callbacks['pair']();
   return panel;
@@ -753,9 +776,21 @@ if any(
 ):
     raise SystemExit("Dart build execution-policy self-test failed.")
 
+if not _has_automatic_operation(
+    """void _confirmRecoverySetup() {
+  widget.owner.confirmRecoverySetup();
+}
+void initState() {
+  _confirmRecoverySetup();
+}"""
+):
+    raise SystemExit("Dart local-wrapper lifecycle self-test failed.")
+
 targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
     Path("lib/features/app_shell/atlas_app.dart"),
 )
+if targets != tuple(sorted(Path("lib").rglob("*.dart"))):
+    raise SystemExit("Dart lifecycle guard must scan every lib source file.")
 if any(
     _has_automatic_operation(path.read_text(encoding="utf-8"))
     for path in targets
