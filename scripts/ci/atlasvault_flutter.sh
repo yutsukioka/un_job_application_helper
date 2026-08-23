@@ -233,6 +233,11 @@ operation_reference = re.compile(
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*"
     r"(?:\(|\??\.\s*call\s*\(|(?=[,:)]))",
 )
+operation_invocation = re.compile(
+    r"(?<![A-Za-z0-9_$])"
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*"
+    r"(?:\(|\??\.\s*call\s*\()"
+)
 operation_identifiers = frozenset(
     {
         "startpairing",
@@ -260,6 +265,11 @@ operation_identifiers = frozenset(
         "preparerecoveryimport",
         "confirmrecoveryimport",
         "discardpendingimport",
+        "prepareencryptedmigration",
+        "finalizemigration",
+        "resumemigration",
+        "activateencryptedprivatedata",
+        "activateencryptedprivatestate",
     }
 )
 operation_alias_assignment = re.compile(
@@ -349,13 +359,14 @@ def _sensitive_local_wrappers(source: str) -> frozenset[str]:
         for name, body in methods.items():
             if name in wrappers:
                 continue
+            execution_body = _mask_deferred_build_closures(body)
             if any(
                 _is_sensitive_operation(reference.group("target"), frozenset(wrappers))
-                for reference in operation_reference.finditer(body)
+                for reference in operation_invocation.finditer(execution_body)
             ) or any(
                 re.search(
                     rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
-                    body,
+                    execution_body,
                 )
                 for wrapper in wrappers
             ):
@@ -406,13 +417,17 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide ordinary callback bodies; schedulers and IIFEs use the original body."""
     masked = list(body)
-    user_event = r"on[A-Za-z_$][A-Za-z0-9_$]*"
+    user_event = (
+        r"(?:onPressed|onTap|onLongPress|onDoubleTap|onChanged|onSubmitted|"
+        r"onFieldSubmitted|onDeleted|onDestinationSelected|onShowFilters|"
+        r"onSourceSelected|onToggle|onSelected|onDismissed)"
+    )
     arrow_closure = re.compile(
-        rf"\b{user_event}\s*:\s*(?:[^,;]*?\?\s*[^:]+:\s*)?"
+        rf"\b{user_event}\s*:\s*[^,;]*?"
         r"(?:\([^()]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
     )
     block_closure = re.compile(
-        rf"\b{user_event}\s*:\s*(?:[^,;]*?\?\s*[^:]+:\s*)?"
+        rf"\b{user_event}\s*:\s*[^,;]*?"
         r"\([^()]*\)\s*\{"
     )
     closures = [
@@ -494,12 +509,9 @@ def _has_automatic_operation(source: str) -> bool:
     for method, body in _automatic_lifecycle_bodies(source):
         build = method == "build"
         aliases = _operation_aliases(body, local_wrappers)
-        direct = re.compile(
-            r"(?<![A-Za-z0-9_$])(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\(|\??\.\s*call\s*\()"
-        )
         execution_body = _mask_deferred_build_closures(body) if build else body
         references = (
-            direct.finditer(execution_body)
+            operation_invocation.finditer(execution_body)
             if build
             else operation_reference.finditer(execution_body)
         )
@@ -998,6 +1010,16 @@ void initState() {
 }"""
 ):
     raise SystemExit("Dart generic-wrapper lifecycle self-test failed.")
+
+if _has_automatic_operation(
+    """Widget _statusContent() {
+  return ActionButton(onPressed: owner.prepareEncryptedMigration);
+}
+Widget build(context) {
+  return _statusContent();
+}"""
+):
+    raise SystemExit("Dart passive-wrapper lifecycle self-test failed.")
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
 for path in targets:

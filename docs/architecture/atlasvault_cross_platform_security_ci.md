@@ -137,16 +137,20 @@ closures, and sensitive work passed to `Future.microtask`,
 `scheduleMicrotask`, `Future.sync`, `Future.delayed`, `Future`, `Timer.run`, or
 a post-frame callback, including typed `Future<T>` forms. It accepts a
 sensitive tear-off or either expression- or block-bodied closure only when it
-is wired to a named user-event handler; framework builder closures and ordinary
-control-flow blocks remain build execution and are analyzed. Parameterized,
+is wired to an explicitly allowlisted user-event handler, including either
+branch of a ternary handler; framework route/builder/error callbacks and
+ordinary control-flow blocks remain build execution and are analyzed.
+Parameterized,
 zero-argument, expression-bodied, and block-bodied immediately invoked closures
 remain execution. The guard traces local private wrapper methods that directly
 or transitively invoke a sensitive operation, including generic methods with
-nested callback parameter types, and includes recovery-key setup in the
-sensitive operation set. It scans every Dart source under `lib`; it does not
-equate a comma or named widget argument with execution during `build`. Its
-self-tests exercise both accepted callback wiring and rejected build-time
-execution, including map/set closing delimiters and dynamic collection indices.
+nested callback parameter types, while passive button tear-offs do not make a
+UI helper sensitive. It includes recovery-key setup plus migration preparation,
+finalization, resume, and activation in the sensitive operation set. It scans
+every Dart source under `lib`; it does not equate a comma or named widget
+argument with execution during `build`. Its self-tests exercise both accepted
+callback wiring and rejected build-time execution, including map/set closing
+delimiters and dynamic collection indices.
 
 ## No-Network Preflight
 
