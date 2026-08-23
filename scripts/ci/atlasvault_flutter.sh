@@ -800,6 +800,14 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  return ActionButton(
+    onPressed: enabled ? () => owner.startPairing() : null,
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
   if (enabled) {
     controller.startPairing();
   }
@@ -812,6 +820,15 @@ build_execution_samples = (
   return Builder(builder: (_) {
     controller.startPairing();
     return panel;
+  });
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  return MaterialApp(onGenerateRoute: (_) {
+    controller.startPairing();
+    return null;
   });
 }""",
         True,
@@ -959,6 +976,18 @@ if not _has_automatic_operation(
     "void initState() { widget.owner.beginRecoverySetup(); }"
 ):
     raise SystemExit("Dart recovery-setup lifecycle self-test failed.")
+
+for migration_operation in (
+    "prepareEncryptedMigration",
+    "finalizeMigration",
+    "resumeMigration",
+    "activateEncryptedPrivateData",
+    "activateEncryptedPrivateState",
+):
+    if not _has_automatic_operation(
+        f"void initState() {{ owner.{migration_operation}(); }}"
+    ):
+        raise SystemExit("Dart migration lifecycle self-test failed.")
 
 if not _has_automatic_operation(
     """Future<void> _run<T>(Future<T> Function() operation) async {
