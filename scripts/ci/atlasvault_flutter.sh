@@ -228,6 +228,92 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
     return tuple(bodies + _state_construction_bodies(masked))
 
 
+def _matching_delimiter_end(source: str, start: int) -> int | None:
+    delimiters = {"(": ")", "[": "]", "{": "}"}
+    opening = source[start]
+    closing = delimiters.get(opening)
+    if closing is None:
+        raise SystemExit("Expected a Dart delimiter.")
+
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == opening:
+            depth += 1
+        elif source[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _skip_dart_whitespace(source: str, start: int) -> int:
+    while start < len(source) and source[start].isspace():
+        start += 1
+    return start
+
+
+def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | None]:
+    """Return constructor initializers and the block or arrow body delimiter."""
+    start = _skip_dart_whitespace(source, after_parameters)
+    if source.startswith("=>", start) or (start < len(source) and source[start] == "{"):
+        return "", start
+    if start >= len(source) or source[start] != ":":
+        return "", None
+
+    initializer_start = start + 1
+    parenthesis_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    for index in range(initializer_start, len(source)):
+        character = source[index]
+        if character == "(":
+            parenthesis_depth += 1
+            continue
+        if character == ")":
+            parenthesis_depth = max(0, parenthesis_depth - 1)
+            continue
+        if character == "[":
+            bracket_depth += 1
+            continue
+        if character == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+            continue
+        if character == "{":
+            if parenthesis_depth or bracket_depth or brace_depth:
+                brace_depth += 1
+                continue
+            previous = index - 1
+            while previous >= initializer_start and source[previous].isspace():
+                previous -= 1
+            if previous >= initializer_start and source[previous] in "=,:( [":
+                brace_depth += 1
+                continue
+            return source[initializer_start:index], index
+        if character == "}" and brace_depth:
+            brace_depth -= 1
+            continue
+        if parenthesis_depth or bracket_depth or brace_depth:
+            continue
+        if source.startswith("=>", index):
+            return source[initializer_start:index], index
+        if character == ";":
+            return source[initializer_start:index], None
+    raise SystemExit("Unable to parse an AtlasVault State constructor initializer.")
+
+
+def _expression_end(source: str, start: int) -> int:
+    depth = 0
+    for end in range(start, len(source)):
+        character = source[end]
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth = max(0, depth - 1)
+        elif character == ";" and depth == 0:
+            return end
+    return -1
+
+
 def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
     """Return automatically executed State construction and field expressions."""
     state_class = re.compile(
@@ -251,31 +337,29 @@ def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
         class_body = masked[class_start + 1 : class_end]
         constructor = re.compile(
             rf"(?m)^[ \t]*(?:const\s+)?{re.escape(class_match.group('name'))}"
-            r"\s*\([^)]*\)(?P<initializers>\s*:\s*[^{};]+)?\s*"
-            r"(?:async\s*)?(?P<body>\{|=>)"
+            r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?\s*\("
         )
         for match in constructor.finditer(class_body):
-            initializers = match.group("initializers")
-            if initializers:
-                bodies.append(("state_constructor", initializers))
-            start = match.start("body")
-            if match.group("body") == "=>":
-                end = class_body.find(";", match.end("body"))
-                if end < 0:
-                    raise SystemExit("Unable to parse an AtlasVault State constructor.")
-                bodies.append(("state_constructor", class_body[match.end("body") : end]))
-                continue
-            depth = 0
-            for end in range(start, len(class_body)):
-                if class_body[end] == "{":
-                    depth += 1
-                elif class_body[end] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        bodies.append(("state_constructor", class_body[start + 1 : end]))
-                        break
-            else:
-                raise SystemExit("Unable to parse an AtlasVault State constructor.")
+            parameter_end = _matching_delimiter_end(class_body, match.end() - 1)
+            if parameter_end is None:
+                raise SystemExit("Unable to parse an AtlasVault State constructor signature.")
+            initializers, body_start = _constructor_parts(class_body, parameter_end)
+            constructor_parts = []
+            if initializers.strip():
+                constructor_parts.append(initializers)
+            if body_start is not None:
+                if class_body.startswith("=>", body_start):
+                    end = _expression_end(class_body, body_start + 2)
+                    if end < 0:
+                        raise SystemExit("Unable to parse an AtlasVault State constructor.")
+                    constructor_parts.append(class_body[body_start + 2 : end])
+                elif class_body[body_start] == "{":
+                    end = _matching_delimiter_end(class_body, body_start)
+                    if end is None:
+                        raise SystemExit("Unable to parse an AtlasVault State constructor.")
+                    constructor_parts.append(class_body[body_start + 1 : end - 1])
+            if constructor_parts:
+                bodies.append(("state_constructor", ";\n".join(constructor_parts)))
 
         statement_start = 0
         depth = 0
@@ -499,7 +583,7 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
 
 
 def _mask_deferred_build_closures(body: str) -> str:
-    """Hide ordinary callback bodies; schedulers and IIFEs use the original body."""
+    """Hide allowlisted user-event callback bodies from build-time execution scans."""
     masked = list(body)
     user_event = (
         r"(?:onPressed|onTap|onLongPress|onDoubleTap|onChanged|onSubmitted|"
@@ -512,7 +596,7 @@ def _mask_deferred_build_closures(body: str) -> str:
     )
     block_closure = re.compile(
         rf"\b{user_event}\s*:\s*[^,;]*?"
-        r"\([^()]*\)\s*\{"
+        r"\([^()]*\)\s*(?:async\s*)?\{"
     )
     closures = [
         (match.end(), False) for match in arrow_closure.finditer(body)
@@ -603,8 +687,8 @@ def _has_automatic_operation(source: str) -> bool:
     local_wrappers = _sensitive_local_wrappers(source)
     for method, body in _automatic_lifecycle_bodies(source):
         build = method == "build"
-        aliases = _operation_aliases(body, local_wrappers)
         execution_body = _mask_deferred_build_closures(body) if build else body
+        aliases = _operation_aliases(execution_body, local_wrappers)
         references = (
             _operation_invocations(execution_body)
             if build
@@ -617,9 +701,11 @@ def _has_automatic_operation(source: str) -> bool:
             return True
         if build and (
             _build_scheduler_invokes_sensitive_operation(
-                body, aliases, local_wrappers
+                execution_body, aliases, local_wrappers
             )
-            or _build_iife_invokes_sensitive_operation(body, local_wrappers)
+            or _build_iife_invokes_sensitive_operation(
+                execution_body, local_wrappers
+            )
         ):
             return True
         if any(

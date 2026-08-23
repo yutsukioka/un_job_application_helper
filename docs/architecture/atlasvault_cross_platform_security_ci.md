@@ -140,22 +140,27 @@ sensitive tear-off or either expression- or block-bodied closure only when it
 is wired to an explicitly allowlisted user-event handler, including either
 branch of a ternary handler; framework route/builder/error callbacks and
 ordinary control-flow blocks remain build execution and are analyzed.
-Parameterized,
-zero-argument, expression-bodied, and block-bodied immediately invoked closures
-remain execution. The guard traces local private wrapper methods that directly
-or transitively invoke a sensitive operation, including generic methods with
-nested callback parameter types, while passive button tear-offs do not make a
-UI helper sensitive. It includes recovery-key setup plus migration preparation,
-finalization, resume, and activation in the sensitive operation set. It scans
-every Dart source under `lib`; it does not equate a comma or named widget
-argument with execution during `build`. Its self-tests exercise both accepted
-callback wiring and rejected build-time execution, including map/set closing
-delimiters and dynamic collection indices. Wrapper analysis follows direct,
-parenthesized, alias-invoked, and scheduled execution, but not a passive widget
-tear-off. Arrow callback boundaries balance nested delimiters so user-event
-expressions may contain calls with commas. The guard also treats `createState`,
-State constructors, and executable State field initializers as automatic
-construction paths.
+Parameterized, zero-argument, expression-bodied, and block-bodied immediately
+invoked closures remain execution. The same masked build execution body is used
+for direct calls, aliases, schedulers, and IIFEs, so deferred work inside an
+allowlisted user-event callback is not treated as build-time execution. The
+allowlist recognizes block handlers with `async`, including either ternary
+branch, but does not mask framework callbacks. The guard traces local private
+wrapper methods that directly or transitively invoke a sensitive operation,
+including generic methods with nested callback parameter types, while passive
+button tear-offs do not make a UI helper sensitive. It includes recovery-key
+setup plus migration preparation, finalization, resume, and activation in the
+sensitive operation set. It scans every Dart source under `lib`; it does not
+equate a comma or named widget argument with execution during `build`. Its
+self-tests exercise both accepted callback wiring and rejected build-time
+execution, including map/set closing delimiters and dynamic collection indices.
+Wrapper analysis follows direct, parenthesized, alias-invoked, and scheduled
+execution, but not a passive widget tear-off. Arrow callback boundaries balance
+nested delimiters so user-event expressions may contain calls with commas. The
+guard treats `createState`, executable State field initializers, and State
+constructors as automatic construction paths. State constructor parsing accepts
+optional named and private constructor segments, nested parameter signatures,
+initializer lists, block bodies, and arrow bodies with balanced delimiters.
 
 ## No-Network Preflight
 
