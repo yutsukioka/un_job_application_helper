@@ -418,6 +418,12 @@ def _blocked_imports(source: str) -> bool:
     builtin_import_aliases = set()
     importlib_module_aliases = set()
     import_module_aliases = set()
+    importlib_loader_factory_aliases = {
+        "find_spec": set(),
+        "module_from_spec": set(),
+    }
+    importlib_spec_aliases = set()
+    importlib_loader_aliases = set()
     os_module_aliases = set()
     os_process_aliases = set()
     for node in ast.walk(tree):
@@ -453,6 +459,18 @@ def _blocked_imports(source: str) -> bool:
                         import_module_aliases.add(
                             alias.asname or alias.name
                         )
+                    elif alias.name in importlib_loader_factory_aliases:
+                        importlib_loader_factory_aliases[alias.name].add(
+                            alias.asname or alias.name
+                        )
+                    elif alias.name in {"util", "machinery"}:
+                        importlib_module_aliases.add(alias.asname or alias.name)
+            elif module in {"importlib.util", "importlib.machinery"}:
+                for alias in node.names:
+                    if alias.name in importlib_loader_factory_aliases:
+                        importlib_loader_factory_aliases[alias.name].add(
+                            alias.asname or alias.name
+                        )
             elif module == "os":
                 for alias in node.names:
                     if alias.name in os_process_apis:
@@ -469,9 +487,11 @@ def _blocked_imports(source: str) -> bool:
         )
 
     def _is_importlib_module_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in importlib_module_aliases
         return (
-            isinstance(node, ast.Name)
-            and node.id in importlib_module_aliases
+            isinstance(node, ast.Attribute)
+            and _is_importlib_module_reference(node.value)
         )
 
     def _is_builtin_import_reference(node: ast.expr) -> bool:
@@ -482,6 +502,37 @@ def _blocked_imports(source: str) -> bool:
             and node.attr == "__import__"
             and isinstance(node.value, ast.Name)
             and node.value.id in builtins_module_aliases
+        )
+
+    def _is_os_module_reference(node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id in os_module_aliases
+
+    def _is_os_process_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in os_process_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr in os_process_apis
+            and _is_os_module_reference(node.value)
+        )
+
+    def _is_importlib_loader_factory_reference(
+        node: ast.expr, factory: str
+    ) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in importlib_loader_factory_aliases[factory]
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == factory
+            and _is_importlib_module_reference(node.value)
+        )
+
+    def _is_importlib_loader_reference(node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "loader"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in importlib_spec_aliases
         )
 
     changed = True
@@ -502,10 +553,23 @@ def _blocked_imports(source: str) -> bool:
             aliases_importlib = _is_importlib_module_reference(value)
             aliases_import_module = _is_import_module_reference(value)
             aliases_builtin_import = _is_builtin_import_reference(value)
+            aliases_os_module = _is_os_module_reference(value)
+            aliases_os_process = _is_os_process_reference(value)
+            aliases_importlib_spec = (
+                isinstance(value, ast.Call)
+                and _is_importlib_loader_factory_reference(
+                    value.func, "find_spec"
+                )
+            )
+            aliases_importlib_loader = _is_importlib_loader_reference(value)
             if (
                 not aliases_importlib
                 and not aliases_import_module
                 and not aliases_builtin_import
+                and not aliases_os_module
+                and not aliases_os_process
+                and not aliases_importlib_spec
+                and not aliases_importlib_loader
             ):
                 continue
             for target in targets:
@@ -529,18 +593,40 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     builtin_import_aliases.add(target.id)
                     changed = True
+                if aliases_os_module and target.id not in os_module_aliases:
+                    os_module_aliases.add(target.id)
+                    changed = True
+                if aliases_os_process and target.id not in os_process_aliases:
+                    os_process_aliases.add(target.id)
+                    changed = True
+                if (
+                    aliases_importlib_spec
+                    and target.id not in importlib_spec_aliases
+                ):
+                    importlib_spec_aliases.add(target.id)
+                    changed = True
+                if (
+                    aliases_importlib_loader
+                    and target.id not in importlib_loader_aliases
+                ):
+                    importlib_loader_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        if _is_os_process_reference(node.func):
+            return True
         if (
-            isinstance(node.func, ast.Name)
-            and node.func.id in os_process_aliases
-        ) or (
             isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in os_module_aliases
-            and node.func.attr in os_process_apis
+            and node.func.attr == "exec_module"
+            and (
+                _is_importlib_loader_reference(node.func.value)
+                or (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in importlib_loader_aliases
+                )
+            )
         ):
             return True
         if (

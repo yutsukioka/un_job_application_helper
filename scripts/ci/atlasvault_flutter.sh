@@ -256,6 +256,12 @@ def _unqualified_identifier(identifier: str) -> str:
 
 
 def _heritage_base_name(heritage: str) -> str | None:
+    start = _skip_dart_whitespace(heritage, 0)
+    if start < len(heritage) and heritage[start] == "<":
+        type_end = _matching_type_argument_end(heritage, start)
+        if type_end is None:
+            raise SystemExit("Unable to parse an AtlasVault Dart type parameter.")
+        heritage = heritage[type_end:]
     match = re.search(
         r"\bextends\s+(?P<base>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
         r"_?[A-Za-z_$][A-Za-z0-9_$]*)",
@@ -572,15 +578,14 @@ def _mask_field_closure_literals(source: str) -> str:
             continue
         for index in range(parameter_start, body_end):
             masked[index] = " "
+    bare_parameter_arrow = re.compile(
+        r"(?<![A-Za-z0-9_$])(?P<parameter>[A-Za-z_$][A-Za-z0-9_$]*)\s*=>"
+    )
+    for match in bare_parameter_arrow.finditer(source):
+        body_end = _arrow_expression_end(source, match.end())
+        for index in range(match.start("parameter"), body_end):
+            masked[index] = " "
     return "".join(masked)
-
-
-state_class_declaration = re.compile(
-    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)[^{}]*?\s+"
-    r"extends\s+(?P<base>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
-    r"_?[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?:\s*<[^{}]+>)?[^{}]*\{"
-)
 
 
 def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
@@ -589,13 +594,12 @@ def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
     while changed:
         changed = False
         for source in masked_sources:
-            for class_match in state_class_declaration.finditer(source):
+            for name, heritage, _ in _class_records(source):
                 if (
-                    _unqualified_identifier(class_match.group("base"))
-                    in state_class_names
-                    and class_match.group("name") not in state_class_names
+                    _heritage_base_name(heritage) in state_class_names
+                    and name not in state_class_names
                 ):
-                    state_class_names.add(class_match.group("name"))
+                    state_class_names.add(name)
                     changed = True
     return frozenset(state_class_names)
 
@@ -605,7 +609,7 @@ def _state_construction_bodies(
     state_class_names: frozenset[str] | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return automatically executed State construction and field expressions."""
-    state_classes = tuple(state_class_declaration.finditer(masked))
+    state_classes = tuple(class_declaration.finditer(masked))
     if state_class_names is None:
         state_class_names = _state_class_names((masked,))
     bodies = []
@@ -678,8 +682,12 @@ def _state_construction_bodies(
             elif character == ";" and depth == 0:
                 statement = class_body[statement_start:index]
                 statement_start = index + 1
-                if "=" not in statement or _member_expression_is_method(
-                    statement, class_match.group("name")
+                if (
+                    "=" not in statement
+                    or re.match(r"^\s*late\b", statement)
+                    or _member_expression_is_method(
+                        statement, class_match.group("name")
+                    )
                 ):
                     index += 1
                     continue
@@ -832,7 +840,7 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
-        r"(?P<name>_[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
+        r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
     )
     methods_by_owner = {}
     for owner, _, class_body in _class_records(masked):
@@ -1155,15 +1163,29 @@ def _has_automatic_operation(
 
 
 def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
-    masked_sources = tuple(_mask_dart_non_code(source) for source in sources)
-    state_class_names = _state_class_names(masked_sources)
-    lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
-    return any(
-        _has_automatic_operation(
-            source, state_class_names, lifecycle_class_methods
-        )
-        for source in sources
+    library_directive = re.compile(
+        r"(?m)^\s*library\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)\s*;"
     )
+    part_of_directive = re.compile(
+        r"(?m)^\s*part\s+of\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)\s*;"
+    )
+    libraries: dict[str, list[str]] = {}
+    for index, source in enumerate(sources):
+        masked = _mask_dart_non_code(source)
+        directive = part_of_directive.search(masked) or library_directive.search(masked)
+        library = directive.group("name") if directive else f"source:{index}"
+        libraries.setdefault(library, []).append(source)
+
+    for library_sources in libraries.values():
+        combined = "\n".join(library_sources)
+        masked_sources = (_mask_dart_non_code(combined),)
+        state_class_names = _state_class_names(masked_sources)
+        lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
+        if _has_automatic_operation(
+            combined, state_class_names, lifecycle_class_methods
+        ):
+            return True
+    return False
 
 
 def _state_fixture(source: str) -> str:
@@ -1920,8 +1942,10 @@ if not _has_automatic_operation(
 
 if not _sources_have_automatic_operation(
     (
-        """class BaseState<T> extends State<T> {}""",
-        """class PairingState extends BaseState<PairingWidget> {
+        """library pairing_construction;
+class BaseState<T> extends State<T> {}""",
+        """part of pairing_construction;
+class PairingState extends BaseState<PairingWidget> {
   PairingState() {
     controller.startPairing();
   }

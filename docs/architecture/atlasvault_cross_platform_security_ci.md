@@ -251,6 +251,14 @@ ownership and inherited wrapper visibility, recognizes explicit generic calls
 and null-asserted collection callbacks, and still distinguishes deferred
 allowlisted user handlers from automatically executed lifecycle work.
 
+The parser scopes Flutter ownership to each Dart library, while combining
+explicit `library` and `part of` sources to preserve State ancestry and wrapper
+metadata across one library. It skips bounded type parameters before resolving
+the actual superclass, includes public instance wrappers, and excludes lazy
+State field initializers from construction-time analysis. The Python preflight
+also propagates assigned `os` launch aliases and rejects execution through an
+`importlib` loader derived from a dynamic module specification.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and
