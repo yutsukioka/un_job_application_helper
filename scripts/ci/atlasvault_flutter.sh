@@ -2435,6 +2435,64 @@ class PairingState extends BaseState<PairingWidget> {
 ):
     raise SystemExit("Dart imported-State ancestry self-test failed.")
 
+if not _production_target_scan(
+    (
+        """class BaseState<T> extends State<T> {
+  void runPairing() {
+    controller.startPairing();
+  }
+}""",
+        """import 'base.dart';
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    runPairing();
+  }
+}""",
+    ),
+    source_paths=(Path("lib/base.dart"), Path("lib/pairing.dart")),
+):
+    raise SystemExit("Dart imported-wrapper lifecycle self-test failed.")
+
+if not _production_target_scan(
+    (
+        """class StubState {}""",
+        """class IoState<T> extends State<T> {}""",
+        """import 'stub.dart' if (dart.library.io) 'base_io.dart';
+class PairingState extends IoState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(
+        Path("lib/stub.dart"),
+        Path("lib/base_io.dart"),
+        Path("lib/pairing.dart"),
+    ),
+):
+    raise SystemExit("Dart conditional-import State ancestry self-test failed.")
+
+if _production_target_scan(
+    (
+        """class SharedName extends State<PolicyWidget> {}""",
+        """class SharedName {}""",
+        """import 'ui.dart' as ui;
+import 'service.dart' as svc;
+class ServiceOwner extends svc.SharedName {
+  void dispose() {
+    controller.startPairing();
+  }
+}
+class UiOwner extends ui.SharedName {}""",
+    ),
+    source_paths=(
+        Path("lib/ui.dart"),
+        Path("lib/service.dart"),
+        Path("lib/owner.dart"),
+    ),
+):
+    raise SystemExit("Dart imported-prefix lifecycle ownership self-test failed.")
+
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   final token = switch (enabled) {
