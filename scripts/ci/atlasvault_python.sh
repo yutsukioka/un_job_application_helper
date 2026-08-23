@@ -748,6 +748,13 @@ run = spec.loader.exec_module
 run(module)"""
 ):
     raise SystemExit("Python AST importlib-loader alias self-test failed.")
+if not _blocked_imports(
+    """import importlib.util
+spec = importlib.util.spec_from_file_location('unsafe', '/tmp/unsafe.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)"""
+):
+    raise SystemExit("Python AST file-location loader self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):

@@ -2892,6 +2892,77 @@ class PairingState extends State<PairingWidget> {
 
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
+  bool get shouldRun {
+    controller.startPairing();
+    return true;
+  }
+  void initState() {
+    if (shouldRun) {}
+  }
+}"""
+):
+    raise SystemExit("Dart getter-wrapper lifecycle self-test failed.")
+
+if _production_target_scan(
+    (
+        """void runPairing() {}""",
+        """void runPairing() {
+  controller.startPairing();
+}""",
+        """import 'safe.dart';
+import 'sensitive.dart' as remote;
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    runPairing();
+  }
+}""",
+    ),
+    source_paths=(
+        Path("lib/safe.dart"),
+        Path("lib/sensitive.dart"),
+        Path("lib/pairing.dart"),
+    ),
+):
+    raise SystemExit("Dart top-level wrapper namespace self-test failed.")
+
+for observer_callback in (
+    "didChangeAccessibilityFeatures",
+    "didChangeLocales",
+    "didChangeMetrics",
+    "didChangePlatformBrightness",
+    "didChangeTextScaleFactor",
+    "didHaveMemoryPressure",
+    "didPushRoute",
+    "didPopRoute",
+    "didRequestAppExit",
+    "didChangeViewFocus",
+):
+    if not _has_automatic_operation(
+        f"""class PairingObserver with WidgetsBindingObserver {{
+  void {observer_callback}() {{
+    controller.startPairing();
+  }}
+}}"""
+    ):
+        raise SystemExit("Dart WidgetsBindingObserver self-test failed.")
+
+for widget_construction_source in (
+    """class PairingWidget extends StatelessWidget {
+  final token = controller.startPairing();
+  Widget build(context) => panel;
+}""",
+    """class PairingWidget extends StatefulWidget {
+  PairingWidget() {
+    controller.startPairing();
+  }
+  PairingState createState() => PairingState();
+}""",
+):
+    if not _has_automatic_operation(widget_construction_source):
+        raise SystemExit("Dart Widget construction self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
   final token = switch (enabled) {
     _ => controller.startPairing(),
   };
