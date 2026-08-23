@@ -1067,6 +1067,14 @@ build_execution_samples = (
         False,
     ),
     (
+        """Widget build(context) => (() {
+  noop();
+  controller.startPairing();
+  return panel;
+})();""",
+        True,
+    ),
+    (
         """Widget build(context) {
   if (enabled) {
     controller.startPairing();
@@ -1219,6 +1227,13 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  Function.apply(controller.startPairing, const []);
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   final callbacks = {'pair': controller.startPairing};
   callbacks['pair']();
   return panel;
@@ -1356,6 +1371,15 @@ named_state_constructor_samples = (
         True,
     ),
     (
+        """class PairingState extends State<PairingWidget> {
+  factory PairingState.named() {
+    controller.startPairing();
+    return PairingState();
+  }
+}""",
+        True,
+    ),
+    (
         """class NotAState {
   NotAState.named() {
     controller.startPairing();
@@ -1377,6 +1401,26 @@ if any(
     for source, expected in named_state_constructor_samples
 ):
     raise SystemExit("Dart named State-constructor source-guard self-test failed.")
+
+state_field_initializer_samples = (
+    (
+        """class PairingState extends State<PairingWidget> {
+  final token = (() => controller.startPairing())();
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final callback = () => controller.startPairing();
+}""",
+        False,
+    ),
+)
+if any(
+    _has_automatic_operation(source) is not expected
+    for source, expected in state_field_initializer_samples
+):
+    raise SystemExit("Dart State-field initializer source-guard self-test failed.")
 
 if _has_automatic_operation(
     """Widget _statusContent() {
