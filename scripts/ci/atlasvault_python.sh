@@ -153,8 +153,8 @@ for marker in (
     "WaitForExit(120000)",
     "Stop-Process -Id $Waiter.Process.Id -Force",
     "finally {",
-    "Remove-Item -LiteralPath $MigrationCoordinationRoot",
-    "Remove-Item -LiteralPath $InteropCoordinationRoot",
+    "foreach ($CleanupPath in @($MigrationCoordinationRoot, $InteropCoordinationRoot, $RecoveryLogRoot))",
+    "Remove-Item -LiteralPath $CleanupPath -Recurse -Force -ErrorAction Stop",
 ):
     if marker not in workflow:
         raise SystemExit("Windows recovery process-boundary cleanup is incomplete.")
@@ -214,6 +214,33 @@ for marker in (
 ):
     if marker not in workflow:
         raise SystemExit("Windows finally cleanup must tolerate pre-runner holders.")
+cleanup_holder_start = workflow.index("function Stop-AtlasRecoveryHolderForCleanup")
+cleanup_holder_end = workflow.index("$MigrationRecoveryTest", cleanup_holder_start)
+cleanup_holder_function = workflow[cleanup_holder_start:cleanup_holder_end]
+if "Get-AtlasRecoveryHolderProcessTree" in cleanup_holder_function:
+    raise SystemExit("Finally cleanup must tolerate a holder without an Atlas runner.")
+for marker in (
+    "Stop-AtlasRecoveryProcessTree $Holder",
+    "Write-AtlasRecoveryLogs $Holder",
+):
+    if marker not in cleanup_holder_function:
+        raise SystemExit("Finally cleanup must stop and retain evidence for its holder root.")
+finally_start = workflow.index("finally {\n              $CleanupErrors")
+finally_end = workflow.index("flutter test integration_test\\atlas_vault_windows_device_identity", finally_start)
+finally_block = workflow[finally_start:finally_end]
+for marker in (
+    "$CleanupErrors = [System.Collections.Generic.List[string]]::new()",
+    "Stop-AtlasRecoveryProcessTree $Waiter",
+    "Stop-AtlasRecoveryHolderForCleanup $Holder",
+    "foreach ($CleanupPath",
+    "if ($CleanupErrors.Count -gt 0)",
+):
+    if marker not in finally_block:
+        raise SystemExit("Windows finally cleanup must attempt every owned resource.")
+if finally_block.index("Stop-AtlasRecoveryHolderForCleanup $Holder") > finally_block.index(
+    "foreach ($CleanupPath"
+):
+    raise SystemExit("Windows cleanup paths must be removed after holder cleanup attempts.")
 print("Validated Windows recovery process-boundary orchestration policy.")
 PY
 

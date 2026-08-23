@@ -407,6 +407,13 @@ jobs:
               Write-AtlasRecoveryLogs $Holder
             }
 
+            function Stop-AtlasRecoveryHolderForCleanup {
+              param([PSCustomObject] $Holder)
+              # The finally path owns the holder root even when startup never created atlas.exe.
+              Stop-AtlasRecoveryProcessTree $Holder
+              Write-AtlasRecoveryLogs $Holder
+            }
+
             $MigrationRecoveryTest = "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart"
             $MigrationStageVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE"
             $MigrationVaultVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID"
@@ -479,19 +486,38 @@ jobs:
               Invoke-AtlasRecoveryStage "interop-cleanup-after" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
             }
             finally {
+              $CleanupErrors = [System.Collections.Generic.List[string]]::new()
               foreach ($Waiter in @($MigrationAdmissionWaiter, $MigrationFinalizationWaiter, $MigrationCrashVerify, $InteropAdmissionWaiter, $InteropSelectionWaiter, $InteropCrashVerify)) {
                 if ($null -ne $Waiter -and -not $Waiter.Process.HasExited) {
-                  Stop-AtlasRecoveryProcessTree $Waiter
+                  try {
+                    Stop-AtlasRecoveryProcessTree $Waiter
+                  }
+                  catch {
+                    $CleanupErrors.Add("$($Waiter.Name): $($_.Exception.Message)")
+                  }
                 }
               }
               foreach ($Holder in @($MigrationCrashHolder, $InteropCrashHolder)) {
                 if ($null -ne $Holder -and -not $Holder.Process.HasExited) {
-                  Stop-AtlasRecoveryHolder $Holder
+                  try {
+                    Stop-AtlasRecoveryHolderForCleanup $Holder
+                  }
+                  catch {
+                    $CleanupErrors.Add("$($Holder.Name): $($_.Exception.Message)")
+                  }
                 }
               }
-              Remove-Item -LiteralPath $MigrationCoordinationRoot -Recurse -Force -ErrorAction SilentlyContinue
-              Remove-Item -LiteralPath $InteropCoordinationRoot -Recurse -Force -ErrorAction SilentlyContinue
-              Remove-Item -LiteralPath $RecoveryLogRoot -Recurse -Force -ErrorAction SilentlyContinue
+              foreach ($CleanupPath in @($MigrationCoordinationRoot, $InteropCoordinationRoot, $RecoveryLogRoot)) {
+                try {
+                  Remove-Item -LiteralPath $CleanupPath -Recurse -Force -ErrorAction Stop
+                }
+                catch {
+                  $CleanupErrors.Add("cleanup path: $($_.Exception.Message)")
+                }
+              }
+              if ($CleanupErrors.Count -gt 0) {
+                throw "Atlas recovery cleanup failed: $($CleanupErrors -join '; ')"
+              }
             }
             flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
             if ($LASTEXITCODE -ne 0) { throw "Windows identity prepare failed" }

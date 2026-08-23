@@ -123,6 +123,54 @@ strictly validates fake canonical ingress and egress against the shared vector,
 which exercises the platform parsers without uploading forbidden pairing
 documents or weakening job isolation.
 
+## Lifecycle Execution Policy
+
+The Dart source guard retains method identity while extracting automatically
+invoked widget hooks. `initState`, `didChangeDependencies`,
+`didUpdateWidget`, and `didChangeAppLifecycleState` use the strict policy:
+sensitive calls, scheduled tear-offs, aliases, collections, and interpolated
+calls are prohibited because the hook itself is automatic.
+
+`build` uses an execution-aware policy. It rejects direct calls, `.call()`,
+invoked aliases, selected-and-invoked list/map/set aliases, immediately invoked
+closures, and sensitive work passed to `Future.microtask`,
+`scheduleMicrotask`, `Future.sync`, `Timer.run`, or a post-frame callback.
+It accepts a sensitive tear-off or deferred closure when it is merely wired to
+a widget action, as well as harmless owner/property references. The guard does
+not equate a comma or named widget argument with execution during `build`.
+Its self-tests exercise both accepted callback wiring and rejected build-time
+execution, including map/set closing delimiters and dynamic collection indices.
+
+## No-Network Preflight
+
+The complete AST-based VaultSync no-network policy executes before the first
+VaultSync pytest command. It parses the complete top-level package module set
+without importing `vaultsync`, so module-scope code cannot run before policy
+admission. There is one canonical checker rather than a weaker early import
+scan and a later dynamic-import scan.
+
+The checker covers import/import-from roots, aliases, dotted `importlib`,
+`importlib.import_module`, aliased import-module functions, direct and aliased
+`builtins.__import__`, locally assigned dynamic-import aliases, `asyncio`, and
+the blocked standard-library and third-party networking clients. Deterministic
+samples include direct and aliased dynamic imports plus `asyncio` connection
+and server forms; harmless JSON and importlib cache operations remain allowed.
+
+## Windows Recovery Cleanup Modes
+
+The deliberate crash proof remains strict: it verifies that the expected
+test-owned `atlas.exe` runner is a descendant of the tracked holder root before
+terminating that holder. The `finally` path is separate and tolerant: it owns
+the tracked holder root and all descendants even when startup failed before an
+Atlas runner existed. It never broadens ownership beyond the tracked root.
+
+Finally cleanup independently attempts every live waiter and holder tree,
+then the deterministic coordination and log roots. It collects errors so one
+failed termination cannot skip the remaining owned resources; it reports after
+all attempts complete. The workflow-policy self-tests assert strict runner
+validation for deliberate crashes, runner-free holder cleanup in `finally`,
+descendant termination, and resource deletion after process cleanup attempts.
+
 ## Artifact Policy
 
 The workflows upload no raw workspaces or native protected-state outputs.
