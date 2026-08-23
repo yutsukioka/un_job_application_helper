@@ -64,6 +64,15 @@ focused_tests=(
   packages/vaultsync/tests/test_trusted_device_vectors.py
 )
 python - <<'PY'
+from pathlib import Path
+
+script = Path("scripts/ci/atlasvault_python.sh").read_text(encoding="utf-8")
+if script.rindex("blocked_import_roots = frozenset") > script.index(
+    'python -m pytest "${focused_tests[@]}"'
+):
+    raise SystemExit("VaultSync pytest must follow the complete AST preflight.")
+PY
+python - <<'PY'
 import ast
 from pathlib import Path
 
@@ -517,6 +526,7 @@ if not all(
 ):
     raise SystemExit("Python AST no-network self-test failed.")
 dynamic_import_samples = (
+    "import importlib\nimportlib.import_module('requests').get('https://invalid')",
     "from importlib import import_module\nimport_module('http.client')",
     "from importlib import import_module as load\nload('requests')",
     "import importlib as loader\nloader.import_module('http.client')",
@@ -534,6 +544,12 @@ dynamic_import_samples = (
 )
 if not all(_blocked_imports(sample) for sample in dynamic_import_samples):
     raise SystemExit("Python AST dynamic-import self-test failed.")
+asyncio_network_samples = (
+    "import asyncio\nawait asyncio.open_connection(host, port)",
+    "import asyncio\nasyncio.start_server(handler, host, port)",
+)
+if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
+    raise SystemExit("Python AST asyncio network self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
     raise SystemExit("Python AST no-network self-test failed.")
 if _blocked_imports("import importlib\nimportlib.invalidate_caches()"):
