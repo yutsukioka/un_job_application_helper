@@ -1017,9 +1017,8 @@ def _sensitive_wrapper_names(methods: dict[str, str]) -> frozenset[str]:
     return frozenset(wrappers)
 
 
-def _top_level_method_bodies(source: str) -> dict[str, str]:
-    """Return only package-library functions, never class members."""
-    masked = _mask_dart_non_code(source)
+def _package_executable_method_bodies(masked: str) -> dict[str, str]:
+    """Return function declarations at the root of one package scope."""
     declaration = re.compile(
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:<[^>\n]+>)?\s*\("
@@ -1052,6 +1051,26 @@ def _top_level_method_bodies(source: str) -> dict[str, str]:
             continue
         name = match.group("name").casefold()
         methods[name] = methods.get(name, "") + "\n" + body
+    return methods
+
+
+def _top_level_method_bodies(source: str) -> dict[str, str]:
+    """Return package functions and extension methods, never class members."""
+    masked = _mask_dart_non_code(source)
+    methods = _package_executable_method_bodies(masked)
+    extension_declaration = re.compile(
+        r"\bextension(?:\s+_?[A-Za-z_$][A-Za-z0-9_$]*)?"
+        r"(?:\s*<[^{}\n]*>)?\s+on\b[^{}\n]*\{"
+    )
+    for match in extension_declaration.finditer(masked):
+        body_end = _matching_delimiter_end(masked, match.end() - 1)
+        if body_end is None:
+            raise SystemExit("Unable to parse an AtlasVault extension declaration.")
+        extension_methods = _package_executable_method_bodies(
+            masked[match.end() : body_end - 1]
+        )
+        for name, body in extension_methods.items():
+            methods[name] = methods.get(name, "") + "\n" + body
     return methods
 
 

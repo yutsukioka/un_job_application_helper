@@ -274,7 +274,7 @@ public names receive one synthetic policy identity instead of becoming a false
 ambiguity. Imported class and mixin declarations otherwise receive stable
 library-qualified identities, so prefix imports cannot collide with same-named
 classes from another library. The scan also follows top-level package-library
-wrapper functions and recognizes public State mixin-application aliases. It
+and extension wrapper functions and recognizes public State mixin-application aliases. It
 preserves callbacks consumed synchronously by eager collection expressions and
 masks user-event closures only for known deferred widget consumers. Direct
 public AtlasVault pairing primitives remain sensitive operations. The Python
