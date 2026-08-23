@@ -840,6 +840,20 @@ if not _blocked_imports(
 SourceFileLoader('unsafe', '/tmp/unsafe.py').load_module()"""
 ):
     raise SystemExit("Python AST importlib-machinery loader self-test failed.")
+if not _blocked_imports(
+    """import importlib.machinery as machinery
+Loader = machinery.SourceFileLoader
+Loader('unsafe', '/tmp/unsafe.py').load_module()"""
+):
+    raise SystemExit("Python AST importlib-machinery factory alias self-test failed.")
+if not _blocked_imports("from os import *\nsystem('blocked')"):
+    raise SystemExit("Python AST os wildcard-import self-test failed.")
+runpy_execution_samples = (
+    "import runpy\nrunpy.run_path('/tmp/unsafe.py')",
+    "from runpy import run_module\nrun_module('unsafe')",
+)
+if not all(_blocked_imports(sample) for sample in runpy_execution_samples):
+    raise SystemExit("Python AST runpy execution self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
@@ -914,6 +928,15 @@ for path in artifact_scans:
     ):
         raise SystemExit(
             f"{path} does not scan generated ephemeral-private artifact paths."
+        )
+    if (
+        "identity.*secret" not in source
+        or "secret.*identity" not in source
+        or "ephemeral.*private" not in source
+        or "private.*ephemeral" not in source
+    ):
+        raise SystemExit(
+            f"{path} does not scan generated artifact paths through named components."
         )
 print("Validated case-insensitive generated-artifact scans.")
 PY
