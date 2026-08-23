@@ -836,6 +836,10 @@ def _has_automatic_operation(source: str) -> bool:
     return False
 
 
+def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
+    return any(_has_automatic_operation(source) for source in sources)
+
+
 multiline_init_state_samples = (
     (
         """void initState() {
@@ -1470,6 +1474,18 @@ class PairingState extends BaseState<PairingWidget> {
 ):
     raise SystemExit("Dart indirect-State construction self-test failed.")
 
+if not _sources_have_automatic_operation(
+    (
+        """class BaseState<T> extends State<T> {}""",
+        """class PairingState extends BaseState<PairingWidget> {
+  PairingState() {
+    controller.startPairing();
+  }
+}""",
+    )
+):
+    raise SystemExit("Dart cross-file State construction self-test failed.")
+
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   PairingState()
@@ -1479,6 +1495,15 @@ if not _has_automatic_operation(
 }"""
 ):
     raise SystemExit("Dart typed-collection initializer self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  PairingState() : callback = () { noop(); } {
+    globalOwner.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart callback-initializer constructor self-test failed.")
 
 for teardown_hook in ("activate", "deactivate", "dispose"):
     if not _has_automatic_operation(
@@ -1595,6 +1620,12 @@ state_field_initializer_samples = (
   final callbacks = [() => controller.startPairing(), (() => noop())()];
 }""",
         False,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  final values = [globalOwner.startPairing(), (() => noop())()];
+}""",
+        True,
     ),
 )
 if any(
