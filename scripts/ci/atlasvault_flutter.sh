@@ -274,11 +274,75 @@ operation_tear_off_target = re.compile(
 )
 
 
-def _is_sensitive_operation(identifier: str) -> bool:
-    return identifier.casefold() in operation_identifiers
+def _is_sensitive_operation(
+    identifier: str,
+    local_wrappers: frozenset[str] = frozenset(),
+) -> bool:
+    identifier = identifier.casefold()
+    return identifier in operation_identifiers or identifier in local_wrappers
 
 
-def _operation_aliases(body: str) -> frozenset[str]:
+def _local_method_bodies(source: str) -> dict[str, str]:
+    masked = _mask_dart_non_code(source)
+    declaration = re.compile(
+        r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)?"
+        r"(?P<name>_[A-Za-z_$][A-Za-z0-9_$]*)\s*\([^)]*\)\s*"
+        r"(?:async\s*)?(?P<body>\{|=>)"
+    )
+    methods = {}
+    for match in declaration.finditer(masked):
+        start = match.start("body")
+        if match.group("body") == "=>":
+            end = masked.find(";", match.end("body"))
+            if end < 0:
+                raise SystemExit("Unable to parse an AtlasVault local method.")
+            methods[match.group("name").casefold()] = masked[
+                match.end("body") : end
+            ]
+            continue
+
+        depth = 0
+        for end in range(start, len(masked)):
+            if masked[end] == "{":
+                depth += 1
+            elif masked[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    methods[match.group("name").casefold()] = masked[start + 1 : end]
+                    break
+        else:
+            raise SystemExit("Unable to parse an AtlasVault local method.")
+    return methods
+
+
+def _sensitive_local_wrappers(source: str) -> frozenset[str]:
+    methods = _local_method_bodies(source)
+    wrappers = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, body in methods.items():
+            if name in wrappers:
+                continue
+            if any(
+                _is_sensitive_operation(reference.group("target"), frozenset(wrappers))
+                for reference in operation_reference.finditer(body)
+            ) or any(
+                re.search(
+                    rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
+                    body,
+                )
+                for wrapper in wrappers
+            ):
+                wrappers.add(name)
+                changed = True
+    return frozenset(wrappers)
+
+
+def _operation_aliases(
+    body: str,
+    local_wrappers: frozenset[str] = frozenset(),
+) -> frozenset[str]:
     assignments = tuple(
         (match.group("alias"), target_match.group("target"))
         for match in operation_alias_assignment.finditer(body)
@@ -292,7 +356,7 @@ def _operation_aliases(body: str) -> frozenset[str]:
         changed = False
         for alias, target in assignments:
             if (
-                not _is_sensitive_operation(target)
+                not _is_sensitive_operation(target, local_wrappers)
                 and target not in aliases
             ):
                 continue
@@ -317,12 +381,30 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide ordinary callback bodies; schedulers and IIFEs use the original body."""
     masked = list(body)
-    closure = re.compile(
+    arrow_closure = re.compile(
         r"(?:\([^()]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
-        r"(?P<expression>[^,;]+)"
     )
-    for match in closure.finditer(body):
-        for index in range(match.start("expression"), match.end("expression")):
+    block_closure = re.compile(r"\([^()]*\)\s*\{")
+    closures = [
+        (match.end(), False) for match in arrow_closure.finditer(body)
+    ] + [
+        (match.end(), True) for match in block_closure.finditer(body)
+    ]
+    for start, block in closures:
+        if block:
+            depth = 1
+            end = start
+            while end < len(body) and depth:
+                if body[end] == "{":
+                    depth += 1
+                elif body[end] == "}":
+                    depth -= 1
+                end += 1
+        else:
+            end = start
+            while end < len(body) and body[end] not in ",;":
+                end += 1
+        for index in range(start, end):
             masked[index] = " "
     return "".join(masked)
 
@@ -330,9 +412,10 @@ def _mask_deferred_build_closures(body: str) -> str:
 def _build_scheduler_invokes_sensitive_operation(
     body: str,
     aliases: frozenset[str],
+    local_wrappers: frozenset[str],
 ) -> bool:
     scheduler = re.compile(
-        r"(?:Future\.(?:microtask|sync)|scheduleMicrotask|Timer\.run|"
+        r"(?:Future(?:\.(?:microtask|sync|delayed))?|scheduleMicrotask|Timer\.run|"
         r"WidgetsBinding\.instance\.addPostFrameCallback)\s*"
         r"\((?P<argument>[^;]+)\)",
         re.DOTALL,
@@ -340,7 +423,7 @@ def _build_scheduler_invokes_sensitive_operation(
     for match in scheduler.finditer(body):
         argument = match.group("argument")
         if any(
-            _is_sensitive_operation(reference.group("target"))
+            _is_sensitive_operation(reference.group("target"), local_wrappers)
             for reference in (
                 *operation_reference.finditer(argument),
                 *operation_tear_off_target.finditer(argument),
@@ -355,22 +438,27 @@ def _build_scheduler_invokes_sensitive_operation(
     return False
 
 
-def _build_iife_invokes_sensitive_operation(body: str) -> bool:
+def _build_iife_invokes_sensitive_operation(
+    body: str,
+    local_wrappers: frozenset[str],
+) -> bool:
     iife = re.compile(
-        r"\(\s*\(\s*\)\s*=>\s*(?P<expression>[^;{}]+?)\s*\)\s*\(",
+        r"\(\s*(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>\s*"
+        r"(?P<expression>[^;{}]+?)\s*\)\s*\([^)]*\)",
         re.DOTALL,
     )
     return any(
-        _is_sensitive_operation(reference.group("target"))
+        _is_sensitive_operation(reference.group("target"), local_wrappers)
         for match in iife.finditer(body)
         for reference in operation_reference.finditer(match.group("expression"))
     )
 
 
 def _has_automatic_operation(source: str) -> bool:
+    local_wrappers = _sensitive_local_wrappers(source)
     for method, body in _automatic_lifecycle_bodies(source):
         build = method == "build"
-        aliases = _operation_aliases(body)
+        aliases = _operation_aliases(body, local_wrappers)
         direct = re.compile(
             r"(?<![A-Za-z0-9_$])(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\(|\??\.\s*call\s*\()"
         )
@@ -381,13 +469,15 @@ def _has_automatic_operation(source: str) -> bool:
             else operation_reference.finditer(execution_body)
         )
         if any(
-            _is_sensitive_operation(match.group("target"))
+            _is_sensitive_operation(match.group("target"), local_wrappers)
             for match in references
         ):
             return True
         if build and (
-            _build_scheduler_invokes_sensitive_operation(body, aliases)
-            or _build_iife_invokes_sensitive_operation(body)
+            _build_scheduler_invokes_sensitive_operation(
+                body, aliases, local_wrappers
+            )
+            or _build_iife_invokes_sensitive_operation(body, local_wrappers)
         ):
             return True
         if any(
@@ -770,11 +860,13 @@ build_execution_samples = (
         True,
     ),
 )
-if any(
-    _has_automatic_operation(source) is not expected
-    for source, expected in build_execution_samples
-):
-    raise SystemExit("Dart build execution-policy self-test failed.")
+for source, expected in build_execution_samples:
+    actual = _has_automatic_operation(source)
+    if actual is not expected:
+        raise SystemExit(
+            "Dart build execution-policy self-test failed: "
+            f"{actual=} {expected=} {source=!r}."
+        )
 
 if not _has_automatic_operation(
     """void _confirmRecoverySetup() {
@@ -786,11 +878,7 @@ void initState() {
 ):
     raise SystemExit("Dart local-wrapper lifecycle self-test failed.")
 
-targets = tuple(sorted(Path("lib/src/atlas_vault").rglob("*.dart"))) + (
-    Path("lib/features/app_shell/atlas_app.dart"),
-)
-if targets != tuple(sorted(Path("lib").rglob("*.dart"))):
-    raise SystemExit("Dart lifecycle guard must scan every lib source file.")
+targets = tuple(sorted(Path("lib").rglob("*.dart")))
 if any(
     _has_automatic_operation(path.read_text(encoding="utf-8"))
     for path in targets

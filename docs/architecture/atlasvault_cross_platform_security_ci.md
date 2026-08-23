@@ -134,12 +134,16 @@ calls are prohibited because the hook itself is automatic.
 `build` uses an execution-aware policy. It rejects direct calls, `.call()`,
 invoked aliases, selected-and-invoked list/map/set aliases, immediately invoked
 closures, and sensitive work passed to `Future.microtask`,
-`scheduleMicrotask`, `Future.sync`, `Timer.run`, or a post-frame callback.
-It accepts a sensitive tear-off or deferred closure when it is merely wired to
-a widget action, as well as harmless owner/property references. The guard does
-not equate a comma or named widget argument with execution during `build`.
-Its self-tests exercise both accepted callback wiring and rejected build-time
-execution, including map/set closing delimiters and dynamic collection indices.
+`scheduleMicrotask`, `Future.sync`, `Future.delayed`, `Future`, `Timer.run`, or
+a post-frame callback. It accepts a sensitive tear-off or either expression- or
+block-bodied deferred closure when it is merely wired to a widget action, as
+well as harmless owner/property references. Parameterized and zero-argument
+immediately invoked closures remain execution. The guard traces local private
+wrapper methods that directly or transitively invoke a sensitive operation, and
+scans every Dart source under `lib`; it does not equate a comma or named widget
+argument with execution during `build`. Its self-tests exercise both accepted
+callback wiring and rejected build-time execution, including map/set closing
+delimiters and dynamic collection indices.
 
 ## No-Network Preflight
 
