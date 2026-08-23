@@ -205,6 +205,15 @@ if "Stop-AtlasRecoveryProcessTree $Waiter" not in waiter_function:
     raise SystemExit(
         "Windows recovery timeouts must terminate the complete waiter process tree."
     )
+for marker in (
+    "function Stop-AtlasRecoveryHolderForCleanup",
+    "Stop-AtlasRecoveryProcessTree $Holder",
+    "finally {\n              $CleanupErrors",
+    "Stop-AtlasRecoveryHolderForCleanup $Holder",
+    "foreach ($CleanupPath",
+):
+    if marker not in workflow:
+        raise SystemExit("Windows finally cleanup must tolerate pre-runner holders.")
 print("Validated Windows recovery process-boundary orchestration policy.")
 PY
 
