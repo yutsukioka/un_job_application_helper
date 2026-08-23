@@ -923,6 +923,65 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  return ActionButton(
+    onPressed: () => Future.microtask(controller.startPairing),
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(
+    onPressed: () {
+      Future.microtask(controller.startPairing);
+    },
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(
+    onPressed: () async {
+      await owner.startPairing();
+    },
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(
+    onPressed:
+        enabled
+            ? () async {
+                await owner.startPairing();
+              }
+            : null,
+  );
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(onTap: () async { await owner.startPairing(); });
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(onLongPress: () async { await owner.startPairing(); });
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
+  return ActionButton(onSubmitted: (value) async { await owner.startPairing(); });
+}""",
+        False,
+    ),
+    (
+        """Widget build(context) {
   if (enabled) {
     controller.startPairing();
   }
@@ -1046,6 +1105,26 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  (() async {
+    await owner.startPairing();
+  })();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  return MaterialApp(
+    onGenerateRoute: (_) {
+      Future.microtask(controller.startPairing);
+      return route;
+    },
+  );
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   (controller.startPairing)();
   (controller.createDeviceIdentity).call();
   return panel;
@@ -1148,6 +1227,70 @@ class PairingState extends State<PairingWidget> {
 }"""
 ):
     raise SystemExit("Dart construction lifecycle self-test failed.")
+
+named_state_constructor_samples = (
+    (
+        """class PairingState extends State<PairingWidget> {
+  PairingState.named() {
+    controller.startPairing();
+  }
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  PairingState._private() {
+    controller.createDeviceIdentity();
+  }
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  const PairingState.named();
+  PairingState.namedWithInitializer()
+      : callback = controller.startPairing {
+    callback();
+  }
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  PairingState.named(Future<void> Function() callback) {
+    controller.startPairing();
+  }
+}""",
+        True,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  PairingState.named() => controller.startPairing();
+}""",
+        True,
+    ),
+    (
+        """class NotAState {
+  NotAState.named() {
+    controller.startPairing();
+  }
+}""",
+        False,
+    ),
+    (
+        """class PairingState extends State<PairingWidget> {
+  void named() {
+    controller.startPairing();
+  }
+}""",
+        False,
+    ),
+)
+if any(
+    _has_automatic_operation(source) is not expected
+    for source, expected in named_state_constructor_samples
+):
+    raise SystemExit("Dart named State-constructor source-guard self-test failed.")
 
 if _has_automatic_operation(
     """Widget _statusContent() {
