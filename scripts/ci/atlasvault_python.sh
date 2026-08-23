@@ -705,6 +705,14 @@ spec.loader.exec_module(module)""",
 )
 if not all(_blocked_imports(sample) for sample in importlib_loader_samples):
     raise SystemExit("Python AST importlib-loader self-test failed.")
+if not _blocked_imports(
+    """import importlib.util
+spec = importlib.util.find_spec('socket')
+module = importlib.util.module_from_spec(spec)
+run = spec.loader.exec_module
+run(module)"""
+):
+    raise SystemExit("Python AST importlib-loader alias self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):

@@ -1188,6 +1188,18 @@ def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
     return False
 
 
+def _production_target_scan(sources: tuple[str, ...]) -> bool:
+    masked_sources = tuple(_mask_dart_non_code(source) for source in sources)
+    state_class_names = _state_class_names(masked_sources)
+    lifecycle_class_methods = _flutter_lifecycle_class_methods(masked_sources)
+    return any(
+        _has_automatic_operation(
+            source, state_class_names, lifecycle_class_methods
+        )
+        for source in sources
+    )
+
+
 def _state_fixture(source: str) -> str:
     return (
         "class PolicyState extends State<PolicyWidget> {\n"
@@ -2176,6 +2188,67 @@ if _has_automatic_operation(
 ):
     raise SystemExit("Dart lazy State-field initializer self-test failed.")
 
+if not _production_target_scan(
+    (
+        """library pairing_construction;
+class BaseState<T> extends State<T> {
+  void _run() {
+    controller.startPairing();
+  }
+}""",
+        """part of pairing_construction;
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    _run();
+  }
+}""",
+    )
+):
+    raise SystemExit("Dart production cross-source scanner self-test failed.")
+
+if not _sources_have_automatic_operation(
+    (
+        """library pairing;
+class BaseState<T> extends State<T> {
+  void _run() {
+    controller.startPairing();
+  }
+}""",
+        """part of 'pairing.dart';
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    _run();
+  }
+}""",
+    )
+):
+    raise SystemExit("Dart URI part ownership self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  final token = switch (enabled) {
+    _ => controller.startPairing(),
+  };
+}"""
+):
+    raise SystemExit("Dart switch-arm State-field self-test failed.")
+
+if _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  static final token = controller.startPairing();
+}"""
+):
+    raise SystemExit("Dart static State-field initializer self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingFields<T extends StatefulWidget> on State<T> {
+  final token = controller.startPairing();
+}
+class PairingState extends State<PairingWidget>
+    with PairingFields<PairingWidget> {}"""
+):
+    raise SystemExit("Dart State-mixin field initializer self-test failed.")
+
 if _has_automatic_operation(
     _state_fixture(
         """Widget _statusContent() {
@@ -2190,19 +2263,8 @@ Widget build(context) {
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
 target_sources = tuple(path.read_text(encoding="utf-8") for path in targets)
-target_state_class_names = _state_class_names(
-    tuple(_mask_dart_non_code(source) for source in target_sources)
-)
-target_lifecycle_class_methods = _flutter_lifecycle_class_methods(
-    tuple(_mask_dart_non_code(source) for source in target_sources)
-)
-for path, source in zip(targets, target_sources, strict=True):
-    if _has_automatic_operation(
-        source, target_state_class_names, target_lifecycle_class_methods
-    ):
-        raise SystemExit(
-            f"Automatic AtlasVault pairing/import/export is not permitted: {path}."
-        )
+if _production_target_scan(target_sources):
+    raise SystemExit("Automatic AtlasVault pairing/import/export is not permitted.")
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
 
