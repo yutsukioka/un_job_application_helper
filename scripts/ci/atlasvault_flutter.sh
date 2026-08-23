@@ -192,7 +192,7 @@ def _mask_dart_non_code(source: str) -> str:
 def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
-        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
+        r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|createState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
     )
     bodies = []
     for match in declaration.finditer(masked):
@@ -225,7 +225,72 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
                     break
         else:
             raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
-    return tuple(bodies)
+    return tuple(bodies + _state_construction_bodies(masked))
+
+
+def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
+    """Return automatically executed State construction and field expressions."""
+    state_class = re.compile(
+        r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s+"
+        r"extends\s+State(?:\s*<[^>{}]+>)?[^{}]*\{"
+    )
+    bodies = []
+    for class_match in state_class.finditer(masked):
+        class_start = class_match.end() - 1
+        depth = 0
+        for class_end in range(class_start, len(masked)):
+            if masked[class_end] == "{":
+                depth += 1
+            elif masked[class_end] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        else:
+            raise SystemExit("Unable to parse an AtlasVault State class.")
+
+        class_body = masked[class_start + 1 : class_end]
+        constructor = re.compile(
+            rf"(?m)^[ \t]*(?:const\s+)?{re.escape(class_match.group('name'))}"
+            r"\s*\([^)]*\)(?P<initializers>\s*:\s*[^{};]+)?\s*"
+            r"(?:async\s*)?(?P<body>\{|=>)"
+        )
+        for match in constructor.finditer(class_body):
+            initializers = match.group("initializers")
+            if initializers:
+                bodies.append(("state_constructor", initializers))
+            start = match.start("body")
+            if match.group("body") == "=>":
+                end = class_body.find(";", match.end("body"))
+                if end < 0:
+                    raise SystemExit("Unable to parse an AtlasVault State constructor.")
+                bodies.append(("state_constructor", class_body[match.end("body") : end]))
+                continue
+            depth = 0
+            for end in range(start, len(class_body)):
+                if class_body[end] == "{":
+                    depth += 1
+                elif class_body[end] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        bodies.append(("state_constructor", class_body[start + 1 : end]))
+                        break
+            else:
+                raise SystemExit("Unable to parse an AtlasVault State constructor.")
+
+        statement_start = 0
+        depth = 0
+        for index, character in enumerate(class_body):
+            if character in "([{":
+                depth += 1
+            elif character in ")]}":
+                depth = max(0, depth - 1)
+            elif character == ";" and depth == 0:
+                statement = class_body[statement_start:index]
+                statement_start = index + 1
+                if "=>" in statement or "=" not in statement:
+                    continue
+                bodies.append(("state_field", statement.split("=", 1)[1]))
+    return bodies
 
 
 operation_reference = re.compile(
@@ -236,6 +301,11 @@ operation_reference = re.compile(
 operation_invocation = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*"
+    r"(?:\(|\??\.\s*call\s*\()"
+)
+parenthesized_operation_invocation = re.compile(
+    r"\(\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*\)\s*"
     r"(?:\(|\??\.\s*call\s*\()"
 )
 operation_identifiers = frozenset(
@@ -291,6 +361,13 @@ def _is_sensitive_operation(
 ) -> bool:
     identifier = identifier.casefold()
     return identifier in operation_identifiers or identifier in local_wrappers
+
+
+def _operation_invocations(source: str) -> tuple[re.Match[str], ...]:
+    return (
+        *operation_invocation.finditer(source),
+        *parenthesized_operation_invocation.finditer(source),
+    )
 
 
 def _local_method_bodies(source: str) -> dict[str, str]:
@@ -360,15 +437,22 @@ def _sensitive_local_wrappers(source: str) -> frozenset[str]:
             if name in wrappers:
                 continue
             execution_body = _mask_deferred_build_closures(body)
+            known_wrappers = frozenset(wrappers)
+            aliases = _operation_aliases(execution_body, known_wrappers)
             if any(
-                _is_sensitive_operation(reference.group("target"), frozenset(wrappers))
-                for reference in operation_invocation.finditer(execution_body)
+                _is_sensitive_operation(reference.group("target"), known_wrappers)
+                for reference in _operation_invocations(execution_body)
             ) or any(
                 re.search(
                     rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
                     execution_body,
                 )
                 for wrapper in wrappers
+            ) or _build_scheduler_invokes_sensitive_operation(
+                execution_body, aliases, known_wrappers
+            ) or any(
+                _alias_is_executed(execution_body, alias, build=True)
+                for alias in aliases
             ):
                 wrappers.add(name)
                 changed = True
@@ -446,12 +530,23 @@ def _mask_deferred_build_closures(body: str) -> str:
                     depth -= 1
                 end += 1
         else:
-            end = start
-            while end < len(body) and body[end] not in ",;":
-                end += 1
+            end = _arrow_expression_end(body, start)
         for index in range(start, end):
             masked[index] = " "
     return "".join(masked)
+
+
+def _arrow_expression_end(body: str, start: int) -> int:
+    depth = 0
+    for end in range(start, len(body)):
+        character = body[end]
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth = max(0, depth - 1)
+        elif character in ",;" and depth == 0:
+            return end
+    return len(body)
 
 
 def _build_scheduler_invokes_sensitive_operation(
@@ -511,7 +606,7 @@ def _has_automatic_operation(source: str) -> bool:
         aliases = _operation_aliases(body, local_wrappers)
         execution_body = _mask_deferred_build_closures(body) if build else body
         references = (
-            operation_invocation.finditer(execution_body)
+            _operation_invocations(execution_body)
             if build
             else operation_reference.finditer(execution_body)
         )

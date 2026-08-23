@@ -150,7 +150,12 @@ finalization, resume, and activation in the sensitive operation set. It scans
 every Dart source under `lib`; it does not equate a comma or named widget
 argument with execution during `build`. Its self-tests exercise both accepted
 callback wiring and rejected build-time execution, including map/set closing
-delimiters and dynamic collection indices.
+delimiters and dynamic collection indices. Wrapper analysis follows direct,
+parenthesized, alias-invoked, and scheduled execution, but not a passive widget
+tear-off. Arrow callback boundaries balance nested delimiters so user-event
+expressions may contain calls with commas. The guard also treats `createState`,
+State constructors, and executable State field initializers as automatic
+construction paths.
 
 ## No-Network Preflight
 
@@ -165,7 +170,8 @@ The checker covers import/import-from roots, aliases, dotted `importlib`,
 `builtins.__import__`, locally assigned dynamic-import aliases, `asyncio`, and
 the blocked standard-library and third-party networking clients. Deterministic
 samples include direct and aliased dynamic imports plus `asyncio` connection
-and server forms; harmless JSON and importlib cache operations remain allowed.
+and server forms plus process-launch imports; harmless JSON and importlib cache
+operations remain allowed.
 
 ## Windows Recovery Cleanup Modes
 

@@ -375,6 +375,7 @@ blocked_import_roots = frozenset(
         "socket",
         "socketserver",
         "ssl",
+        "subprocess",
         "telnetlib",
         "urllib",
         "urllib3",
