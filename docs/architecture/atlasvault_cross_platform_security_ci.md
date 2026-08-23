@@ -159,8 +159,13 @@ execution, but not a passive widget tear-off. Arrow callback boundaries balance
 nested delimiters so user-event expressions may contain calls with commas. The
 guard treats `createState`, executable State field initializers, and State
 constructors as automatic construction paths. State constructor parsing accepts
-optional named and private constructor segments, nested parameter signatures,
-initializer lists, block bodies, and arrow bodies with balanced delimiters.
+optional named, private, and factory constructor segments, nested parameter
+signatures, initializer lists, block bodies, and arrow bodies with balanced
+delimiters. A State field closure is considered construction work only when it
+is immediately invoked; a stored callback remains passive. Arrow-bodied
+automatic hooks use a balanced expression terminator, so nested IIFEs are
+scanned in full. `Function.apply` of a sensitive tear-off or sensitive alias is
+also a direct build-time invocation.
 
 ## No-Network Preflight
 

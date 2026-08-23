@@ -198,7 +198,7 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
     for match in declaration.finditer(masked):
         start = match.start("body")
         if match.group("body") == "=>":
-            end = masked.find(";", match.end("body"))
+            end = _expression_end(masked, match.end("body"))
             if end < 0:
                 raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
             bodies.append(
@@ -314,6 +314,31 @@ def _expression_end(source: str, start: int) -> int:
     return -1
 
 
+def _is_immediately_invoked_closure(source: str) -> bool:
+    for opening in (index for index, character in enumerate(source) if character == "("):
+        parameter_start = _skip_dart_whitespace(source, opening + 1)
+        if parameter_start >= len(source) or source[parameter_start] != "(":
+            continue
+        parameter_end = _matching_delimiter_end(source, parameter_start)
+        if parameter_end is None:
+            continue
+        body_start = _skip_dart_whitespace(source, parameter_end)
+        if source.startswith("async", body_start):
+            body_start = _skip_dart_whitespace(source, body_start + len("async"))
+        if not (
+            source.startswith("=>", body_start)
+            or (body_start < len(source) and source[body_start] == "{")
+        ):
+            continue
+        closure_end = _matching_delimiter_end(source, opening)
+        if closure_end is None:
+            continue
+        invocation_start = _skip_dart_whitespace(source, closure_end)
+        if invocation_start < len(source) and source[invocation_start] == "(":
+            return True
+    return False
+
+
 def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
     """Return automatically executed State construction and field expressions."""
     state_class = re.compile(
@@ -336,7 +361,7 @@ def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
 
         class_body = masked[class_start + 1 : class_end]
         constructor = re.compile(
-            rf"(?m)^[ \t]*(?:const\s+)?{re.escape(class_match.group('name'))}"
+            rf"(?m)^[ \t]*(?:(?:const|factory)\s+)?{re.escape(class_match.group('name'))}"
             r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)?\s*\("
         )
         for match in constructor.finditer(class_body):
@@ -371,9 +396,15 @@ def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
             elif character == ";" and depth == 0:
                 statement = class_body[statement_start:index]
                 statement_start = index + 1
-                if "=>" in statement or "=" not in statement:
+                if "=" not in statement:
                     continue
-                bodies.append(("state_field", statement.split("=", 1)[1]))
+                field_expression = statement.split("=", 1)[1]
+                if (
+                    ("=>" in field_expression or re.search(r"\)\s*(?:async\s*)?\{", field_expression))
+                    and not _is_immediately_invoked_closure(field_expression)
+                ):
+                    continue
+                bodies.append(("state_field", field_expression))
     return bodies
 
 
@@ -683,6 +714,35 @@ def _build_iife_invokes_sensitive_operation(
     )
 
 
+def _function_apply_invokes_sensitive_operation(
+    body: str,
+    aliases: frozenset[str],
+    local_wrappers: frozenset[str],
+) -> bool:
+    function_apply = re.compile(
+        r"\bFunction\s*\.\s*apply\s*\(\s*(?P<argument>[^,]+)"
+    )
+    for match in function_apply.finditer(body):
+        argument = match.group("argument")
+        if any(
+            _is_sensitive_operation(reference.group("target"), local_wrappers)
+            for reference in (
+                *operation_reference.finditer(argument),
+                *operation_tear_off_target.finditer(argument),
+            )
+        ):
+            return True
+        if any(
+            re.search(
+                rf"(?<![A-Za-z0-9_$]){re.escape(alias)}(?![A-Za-z0-9_$])",
+                argument,
+            )
+            for alias in aliases
+        ):
+            return True
+    return False
+
+
 def _has_automatic_operation(source: str) -> bool:
     local_wrappers = _sensitive_local_wrappers(source)
     for method, body in _automatic_lifecycle_bodies(source):
@@ -705,6 +765,9 @@ def _has_automatic_operation(source: str) -> bool:
             )
             or _build_iife_invokes_sensitive_operation(
                 execution_body, local_wrappers
+            )
+            or _function_apply_invokes_sensitive_operation(
+                execution_body, aliases, local_wrappers
             )
         ):
             return True
