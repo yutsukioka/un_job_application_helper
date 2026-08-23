@@ -189,7 +189,10 @@ def _mask_dart_non_code(source: str) -> str:
     return "".join(masked)
 
 
-def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
+def _automatic_lifecycle_bodies(
+    source: str,
+    state_class_names: frozenset[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
         r"\b(?:void\s+)?(?:initState|didChangeDependencies|didUpdateWidget|didChangeAppLifecycleState|activate|deactivate|dispose|createState|build)\s*\([^)]*\)\s*(?:async\s*)?(?P<body>\{|=>)"
@@ -225,7 +228,7 @@ def _automatic_lifecycle_bodies(source: str) -> tuple[tuple[str, str], ...]:
                     break
         else:
             raise SystemExit("Unable to parse an AtlasVault lifecycle body.")
-    return tuple(bodies + _state_construction_bodies(masked))
+    return tuple(bodies + _state_construction_bodies(masked, state_class_names))
 
 
 def _matching_delimiter_end(source: str, start: int) -> int | None:
@@ -286,6 +289,13 @@ def _constructor_parts(source: str, after_parameters: int) -> tuple[str, int | N
             while previous >= initializer_start and source[previous].isspace():
                 previous -= 1
             if previous >= initializer_start and source[previous] in "=,:( [>":
+                brace_depth += 1
+                continue
+            if re.search(
+                r"(?:^|,)\s*(?:this\.)?[A-Za-z_$][A-Za-z0-9_$]*\s*="
+                r"\s*\([^()]*\)\s*(?:async\s*)?$",
+                source[initializer_start:index],
+            ):
                 brace_depth += 1
                 continue
             return source[initializer_start:index], index
@@ -373,25 +383,62 @@ def _immediately_invoked_closure_bodies(source: str) -> tuple[str, ...]:
     return tuple(bodies)
 
 
-def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
-    """Return automatically executed State construction and field expressions."""
-    state_class = re.compile(
-        r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?\s+"
-        r"extends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)"
-        r"(?:\s*<[^{}]+>)?[^{}]*\{"
-    )
-    state_classes = tuple(state_class.finditer(masked))
+def _mask_field_closure_literals(source: str) -> str:
+    """Leave non-closure field execution visible while hiding stored closures."""
+    masked = list(source)
+    for parameter_start in (
+        index for index, character in enumerate(source) if character == "("
+    ):
+        parameter_end = _matching_delimiter_end(source, parameter_start)
+        if parameter_end is None:
+            continue
+        body_start = _skip_dart_whitespace(source, parameter_end)
+        if source.startswith("async", body_start):
+            body_start = _skip_dart_whitespace(source, body_start + len("async"))
+        if source.startswith("=>", body_start):
+            body_end = _arrow_expression_end(source, body_start + 2)
+        elif body_start < len(source) and source[body_start] == "{":
+            body_end = _matching_delimiter_end(source, body_start)
+            if body_end is None:
+                continue
+        else:
+            continue
+        for index in range(parameter_start, body_end):
+            masked[index] = " "
+    return "".join(masked)
+
+
+state_class_declaration = re.compile(
+    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?\s+"
+    r"extends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"(?:\s*<[^{}]+>)?[^{}]*\{"
+)
+
+
+def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
     state_class_names = {"State"}
     changed = True
     while changed:
         changed = False
-        for class_match in state_classes:
-            if (
-                class_match.group("base") in state_class_names
-                and class_match.group("name") not in state_class_names
-            ):
-                state_class_names.add(class_match.group("name"))
-                changed = True
+        for source in masked_sources:
+            for class_match in state_class_declaration.finditer(source):
+                if (
+                    class_match.group("base") in state_class_names
+                    and class_match.group("name") not in state_class_names
+                ):
+                    state_class_names.add(class_match.group("name"))
+                    changed = True
+    return frozenset(state_class_names)
+
+
+def _state_construction_bodies(
+    masked: str,
+    state_class_names: frozenset[str] | None = None,
+) -> list[tuple[str, str]]:
+    """Return automatically executed State construction and field expressions."""
+    state_classes = tuple(state_class_declaration.finditer(masked))
+    if state_class_names is None:
+        state_class_names = _state_class_names((masked,))
     bodies = []
     for class_match in state_classes:
         if class_match.group("name") not in state_class_names:
@@ -456,10 +503,15 @@ def _state_construction_bodies(masked: str) -> list[tuple[str, str]]:
                         ("state_field", closure_body)
                         for closure_body in invoked_closure_bodies
                     )
-                    continue
                 if "=>" in field_expression or re.search(
                     r"\)\s*(?:async\s*)?\{", field_expression
                 ):
+                    bodies.append(
+                        (
+                            "state_field",
+                            _mask_field_closure_literals(field_expression),
+                        )
+                    )
                     continue
                 bodies.append(("state_field", field_expression))
     return bodies
@@ -800,9 +852,12 @@ def _function_apply_invokes_sensitive_operation(
     return False
 
 
-def _has_automatic_operation(source: str) -> bool:
+def _has_automatic_operation(
+    source: str,
+    state_class_names: frozenset[str] | None = None,
+) -> bool:
     local_wrappers = _sensitive_local_wrappers(source)
-    for method, body in _automatic_lifecycle_bodies(source):
+    for method, body in _automatic_lifecycle_bodies(source, state_class_names):
         build = method == "build"
         execution_body = _mask_deferred_build_closures(body) if build else body
         aliases = _operation_aliases(execution_body, local_wrappers)
@@ -837,7 +892,12 @@ def _has_automatic_operation(source: str) -> bool:
 
 
 def _sources_have_automatic_operation(sources: tuple[str, ...]) -> bool:
-    return any(_has_automatic_operation(source) for source in sources)
+    state_class_names = _state_class_names(
+        tuple(_mask_dart_non_code(source) for source in sources)
+    )
+    return any(
+        _has_automatic_operation(source, state_class_names) for source in sources
+    )
 
 
 multiline_init_state_samples = (
@@ -1645,8 +1705,12 @@ Widget build(context) {
     raise SystemExit("Dart passive-wrapper lifecycle self-test failed.")
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
-for path in targets:
-    if _has_automatic_operation(path.read_text(encoding="utf-8")):
+target_sources = tuple(path.read_text(encoding="utf-8") for path in targets)
+target_state_class_names = _state_class_names(
+    tuple(_mask_dart_non_code(source) for source in target_sources)
+)
+for path, source in zip(targets, target_sources, strict=True):
+    if _has_automatic_operation(source, target_state_class_names):
         raise SystemExit(
             f"Automatic AtlasVault pairing/import/export is not permitted: {path}."
         )

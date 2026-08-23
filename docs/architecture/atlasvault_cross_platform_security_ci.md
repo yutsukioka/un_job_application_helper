@@ -161,15 +161,17 @@ nested delimiters so user-event expressions may contain calls with commas. The
 guard treats `createState`, executable State field initializers, and State
 constructors as automatic construction paths. State constructor parsing accepts
 optional named, private, and factory constructor segments, nested parameter
-signatures, typed collection initializer literals, block bodies, and arrow
-bodies with balanced delimiters. It follows indirect subclasses of `State`.
+signatures, typed collection initializer literals, and block-bodied callback
+initializers before locating block or arrow bodies with balanced delimiters. It
+follows indirect subclasses of `State` across every scanned Dart source file.
 A State field closure is considered construction work only when that exact
 closure is immediately invoked through `()`, `.call()`, `?.call()`, or
 `Function.apply`; a stored callback remains passive even when another closure
-in the initializer is executed. Arrow-bodied automatic hooks and local
-wrappers use a balanced expression terminator, so nested IIFEs are scanned in
-full. `Function.apply` of a sensitive tear-off or sensitive alias is also a
-direct build-time invocation.
+in the initializer is executed, while non-closure direct execution outside
+that closure is still analyzed. Arrow-bodied automatic hooks and local wrappers
+use a balanced expression terminator, so nested IIFEs are scanned in full.
+`Function.apply` of a sensitive tear-off or sensitive alias is also a direct
+build-time invocation.
 
 ## No-Network Preflight
 
