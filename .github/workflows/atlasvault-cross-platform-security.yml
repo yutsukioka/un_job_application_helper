@@ -46,6 +46,21 @@ jobs:
               raise SystemExit(
                   "Forbidden AtlasVault artifact filenames:\n" + "\n".join(forbidden)
               )
+          admission_samples = (
+              Path("private/IdentitySecret/bundle.json"),
+              Path("scratch/EphemeralPrivate/data.bin"),
+          )
+          if any(
+              not (
+                  (name := sample.name.casefold()).endswith(
+                      (".atlasvault", ".atlaspair")
+                  )
+                  or ("identity" in name and "secret" in name)
+                  or ("ephemeral" in name and "private" in name)
+              )
+              for sample in admission_samples
+          ):
+              raise SystemExit("AtlasVault artifact admission path self-test failed.")
           print("AtlasVault artifact admission passed.")
           PY
 

@@ -561,6 +561,8 @@ if not all(_blocked_imports(sample) for sample in asyncio_network_samples):
 process_launch_samples = (
     "import subprocess\nsubprocess.run(['python', '-c', 'import socket'])",
     "from subprocess import run\nrun(['python', '-c', 'import requests'])",
+    "import os\nos.system('python -c \"import socket\"')",
+    "import os\nos.popen('python -c \"import requests\"')",
 )
 if not all(_blocked_imports(sample) for sample in process_launch_samples):
     raise SystemExit("Python AST process-launch self-test failed.")

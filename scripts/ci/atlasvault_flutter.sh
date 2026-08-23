@@ -1695,6 +1695,53 @@ if any(
     raise SystemExit("Dart State-field initializer source-guard self-test failed.")
 
 if _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  PairingState() : callback = () => controller.startPairing();
+}"""
+):
+    raise SystemExit("Dart arrow-callback constructor self-test failed.")
+
+if _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void _onPressed() {
+    flag = true;
+    controller.startPairing();
+  }
+  final count = 0;
+}"""
+):
+    raise SystemExit("Dart instance-method field scan self-test failed.")
+
+if _has_automatic_operation(
+    """class PairingController {
+  void dispose() {
+    controller.startPairing();
+  }
+  Widget build(context) {
+    return panel;
+  }
+}"""
+):
+    raise SystemExit("Dart non-Flutter lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void _run() {
+    controller.startPairing();
+  }
+  void initState() {
+    _run();
+  }
+}
+class Helper {
+  void _run() {
+    noop();
+  }
+}"""
+):
+    raise SystemExit("Dart owner-scoped wrapper self-test failed.")
+
+if _has_automatic_operation(
     """Widget _statusContent() {
   return ActionButton(onPressed: owner.prepareEncryptedMigration);
 }
