@@ -67,45 +67,10 @@ python - <<'PY'
 from pathlib import Path
 
 script = Path("scripts/ci/atlasvault_python.sh").read_text(encoding="utf-8")
-if script.rindex("blocked_import_roots = frozenset") > script.index(
+if script.index("\ndef _blocked_imports") > script.rindex(
     'python -m pytest "${focused_tests[@]}"'
 ):
     raise SystemExit("VaultSync pytest must follow the complete AST preflight.")
-PY
-python - <<'PY'
-import ast
-from pathlib import Path
-
-blocked = {"aiohttp", "asyncio", "ftplib", "grpc", "http", "httpcore", "httpx", "imaplib", "nntplib", "poplib", "requests", "smtplib", "socket", "socketserver", "ssl", "telnetlib", "urllib", "urllib3", "websocket", "websockets", "xmlrpc"}
-for path in Path("packages/vaultsync/vaultsync").glob("*.py"):
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import) and any(alias.name.partition(".")[0] in blocked for alias in node.names):
-            raise SystemExit("VaultSync no-network preflight failed.")
-        if isinstance(node, ast.ImportFrom) and (node.module or "").partition(".")[0] in blocked:
-            raise SystemExit("VaultSync no-network preflight failed.")
-print("Validated VaultSync no-network preflight.")
-PY
-python -m pytest "${focused_tests[@]}"
-
-python -m pytest packages/vaultsync/tests
-
-if [[ ! -f tests/test_job_api_private_access.py ]]; then
-  printf 'The secure-local-API admission test is missing.\n' >&2
-  exit 1
-fi
-python -m pytest tests/test_job_api_private_access.py
-
-python - <<'PY'
-import json
-from pathlib import Path
-
-paths = sorted(Path("contracts/sync/test_vectors").glob("*.json"))
-if not paths:
-    raise SystemExit("No AtlasVault JSON vectors were found.")
-for path in paths:
-    with path.open("r", encoding="utf-8") as handle:
-        json.load(handle)
-print(f"Validated {len(paths)} AtlasVault JSON vectors.")
 PY
 
 python - <<'PY'
@@ -558,6 +523,29 @@ for path in targets:
     if _blocked_imports(path.read_text(encoding="utf-8")):
         raise SystemExit("Network imports are not permitted in pairing primitives.")
 print("Validated Python AST no-network policy.")
+PY
+
+python -m pytest "${focused_tests[@]}"
+
+python -m pytest packages/vaultsync/tests
+
+if [[ ! -f tests/test_job_api_private_access.py ]]; then
+  printf 'The secure-local-API admission test is missing.\n' >&2
+  exit 1
+fi
+python -m pytest tests/test_job_api_private_access.py
+
+python - <<'PY'
+import json
+from pathlib import Path
+
+paths = sorted(Path("contracts/sync/test_vectors").glob("*.json"))
+if not paths:
+    raise SystemExit("No AtlasVault JSON vectors were found.")
+for path in paths:
+    with path.open("r", encoding="utf-8") as handle:
+        json.load(handle)
+print(f"Validated {len(paths)} AtlasVault JSON vectors.")
 PY
 
 python - <<'PY'
