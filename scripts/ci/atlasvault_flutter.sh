@@ -757,6 +757,24 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  if (enabled) {
+    controller.startPairing();
+  }
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  return Builder(builder: (_) {
+    controller.startPairing();
+    return panel;
+  });
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   final callback = owner.startPairing;
   return ActionButton(onPressed: callback);
 }""",
@@ -829,8 +847,24 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  (() {
+    controller.startPairing();
+  })();
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   Future.delayed(Duration.zero, owner.createDeviceIdentity);
   Future(owner.createDeviceIdentity);
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  Future<void>.delayed(Duration.zero, controller.startPairing);
   return panel;
 }""",
         True,
@@ -877,6 +911,21 @@ void initState() {
 }"""
 ):
     raise SystemExit("Dart local-wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    "void initState() { widget.owner.beginRecoverySetup(); }"
+):
+    raise SystemExit("Dart recovery-setup lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """Future<void> _run<T>(Future<T> Function() operation) async {
+  controller.startPairing();
+}
+void initState() {
+  _run(noop);
+}"""
+):
+    raise SystemExit("Dart generic-wrapper lifecycle self-test failed.")
 
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
 if any(
