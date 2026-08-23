@@ -239,6 +239,18 @@ Runner scripts fail when forbidden generated files are found in the repository.
 Temporary fake pairing-ring files are confined to the runner temporary
 directory, are never uploaded, and are removed on exit.
 
+The Python preflight parses the complete VaultSync source closure before pytest
+imports it. It rejects absolute networking and dynamic-import routes plus
+`subprocess` and the standard `os` process-launch APIs, including imported
+aliases. Relative imports remain local-module references even when their module
+name resembles a blocked standard-library networking package.
+
+The Flutter policy parser follows Flutter lifecycle ownership through qualified
+base classes, State inheritance, and State-applied mixins. It preserves wrapper
+ownership and inherited wrapper visibility, recognizes explicit generic calls
+and null-asserted collection callbacks, and still distinguishes deferred
+allowlisted user handlers from automatically executed lifecycle work.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and

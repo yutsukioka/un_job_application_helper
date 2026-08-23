@@ -190,8 +190,10 @@ def _mask_dart_non_code(source: str) -> str:
 
 
 class_declaration = re.compile(
-    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?"
-    r"(?P<heritage>[^{}]*)\{"
+    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?P<heritage>[^{}]*)\{"
+)
+mixin_declaration = re.compile(
+    r"\bmixin\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?P<heritage>[^{}]*)\{"
 )
 lifecycle_declaration = re.compile(
     r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
@@ -232,6 +234,52 @@ def _class_records(masked: str) -> tuple[tuple[str, str, str], ...]:
     return tuple(records)
 
 
+def _mixin_records(masked: str) -> tuple[tuple[str, str, str], ...]:
+    records = []
+    for match in mixin_declaration.finditer(masked):
+        body_start = match.end() - 1
+        body_end = _matching_delimiter_end(masked, body_start)
+        if body_end is None:
+            raise SystemExit("Unable to parse an AtlasVault Dart mixin.")
+        records.append(
+            (
+                match.group("name"),
+                match.group("heritage"),
+                masked[body_start + 1 : body_end - 1],
+            )
+        )
+    return tuple(records)
+
+
+def _unqualified_identifier(identifier: str) -> str:
+    return re.split(r"\s*\.\s*", identifier)[-1]
+
+
+def _heritage_base_name(heritage: str) -> str | None:
+    match = re.search(
+        r"\bextends\s+(?P<base>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+        r"_?[A-Za-z_$][A-Za-z0-9_$]*)",
+        heritage,
+    )
+    return _unqualified_identifier(match.group("base")) if match else None
+
+
+def _heritage_mixin_names(heritage: str) -> frozenset[str]:
+    match = re.search(r"\bwith\s+(?P<mixins>.*?)(?=\bimplements\b|$)", heritage)
+    if match is None:
+        return frozenset()
+    names = set()
+    for declaration in match.group("mixins").split(","):
+        name = re.match(
+            r"\s*(?P<name>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+            r"_?[A-Za-z_$][A-Za-z0-9_$]*)",
+            declaration,
+        )
+        if name is not None:
+            names.add(_unqualified_identifier(name.group("name")))
+    return frozenset(names)
+
+
 def _at_class_member_depth(source: str, end: int) -> bool:
     return (
         sum(1 for character in source[:end] if character == "{")
@@ -245,6 +293,10 @@ def _flutter_lifecycle_class_methods(
     records = tuple(
         record for source in masked_sources for record in _class_records(source)
     )
+    mixins = tuple(
+        record for source in masked_sources for record in _mixin_records(source)
+    )
+    known_mixins = {name for name, _, _ in mixins}
     state_names = {"State"}
     widget_names = {"StatefulWidget", "StatelessWidget", "Widget"}
     observer_names = {"WidgetsBindingObserver"}
@@ -252,11 +304,7 @@ def _flutter_lifecycle_class_methods(
     while changed:
         changed = False
         for name, heritage, _ in records:
-            base_match = re.search(
-                r"\bextends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)",
-                heritage,
-            )
-            base = base_match.group("base") if base_match else None
+            base = _heritage_base_name(heritage)
             if base in state_names and name not in state_names:
                 state_names.add(name)
                 changed = True
@@ -281,6 +329,10 @@ def _flutter_lifecycle_class_methods(
             allowed.update(observer_lifecycle_methods)
         if allowed:
             methods[name] = frozenset(allowed)
+            for mixin in _heritage_mixin_names(heritage) & known_mixins:
+                methods[mixin] = frozenset(
+                    set(methods.get(mixin, frozenset())) | allowed
+                )
     return methods
 
 
@@ -293,7 +345,7 @@ def _automatic_lifecycle_bodies(
     if lifecycle_class_methods is None:
         lifecycle_class_methods = _flutter_lifecycle_class_methods((masked,))
     bodies = []
-    for owner, _, class_body in _class_records(masked):
+    for owner, _, class_body in (*_class_records(masked), *_mixin_records(masked)):
         allowed = lifecycle_class_methods.get(owner, frozenset())
         if not allowed:
             continue
@@ -342,6 +394,20 @@ def _matching_delimiter_end(source: str, start: int) -> int | None:
         if source[index] == opening:
             depth += 1
         elif source[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _matching_type_argument_end(source: str, start: int) -> int | None:
+    if start >= len(source) or source[start] != "<":
+        return None
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "<":
+            depth += 1
+        elif source[index] == ">":
             depth -= 1
             if depth == 0:
                 return index + 1
@@ -510,8 +576,9 @@ def _mask_field_closure_literals(source: str) -> str:
 
 
 state_class_declaration = re.compile(
-    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*<[^{}]+>)?\s+"
-    r"extends\s+(?P<base>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"\bclass\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)[^{}]*?\s+"
+    r"extends\s+(?P<base>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+    r"_?[A-Za-z_$][A-Za-z0-9_$]*)"
     r"(?:\s*<[^{}]+>)?[^{}]*\{"
 )
 
@@ -524,7 +591,8 @@ def _state_class_names(masked_sources: tuple[str, ...]) -> frozenset[str]:
         for source in masked_sources:
             for class_match in state_class_declaration.finditer(source):
                 if (
-                    class_match.group("base") in state_class_names
+                    _unqualified_identifier(class_match.group("base"))
+                    in state_class_names
                     and class_match.group("name") not in state_class_names
                 ):
                     state_class_names.add(class_match.group("name"))
@@ -746,6 +814,20 @@ def _operation_invocations(source: str) -> tuple[re.Match[str], ...]:
     )
 
 
+def _typed_operation_invocation_targets(source: str) -> tuple[str, ...]:
+    targets = []
+    prefix = re.compile(
+        r"(?<![A-Za-z0-9_$])(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*<"
+    )
+    for match in prefix.finditer(source):
+        type_end = _matching_type_argument_end(source, match.end() - 1)
+        if type_end is None:
+            continue
+        if re.match(r"\s*(?:\(|\??\.\s*call\s*\()", source[type_end:]):
+            targets.append(match.group("target"))
+    return tuple(targets)
+
+
 def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
     masked = _mask_dart_non_code(source)
     declaration = re.compile(
@@ -807,6 +889,9 @@ def _sensitive_local_wrappers(source: str) -> dict[str, frozenset[str]]:
                     _is_sensitive_operation(reference.group("target"), known_wrappers)
                     for reference in _operation_invocations(execution_body)
                 ) or any(
+                    _is_sensitive_operation(target, known_wrappers)
+                    for target in _typed_operation_invocation_targets(execution_body)
+                ) or any(
                     re.search(
                         rf"(?<![A-Za-z0-9_$]){re.escape(wrapper)}\s*(?:\(|\??\.\s*call\s*\()",
                         execution_body,
@@ -858,9 +943,35 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
     usage = re.compile(
         rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*"
         r"(?:\[[^\]]+\]|\.\s*(?:first|last|single))?\s*"
+        r"(?:!\s*)?"
         + invocation
     )
     return usage.search(body) is not None
+
+
+def _class_bases(source: str) -> dict[str, str | None]:
+    return {
+        name: _heritage_base_name(heritage)
+        for name, heritage, _ in _class_records(_mask_dart_non_code(source))
+    }
+
+
+def _inherited_local_wrappers(
+    owner: str,
+    wrappers_by_owner: dict[str, frozenset[str]],
+    methods_by_owner: dict[str, dict[str, str]],
+    class_bases: dict[str, str | None],
+) -> frozenset[str]:
+    ancestry = []
+    current = owner
+    while current is not None and current not in ancestry:
+        ancestry.append(current)
+        current = class_bases.get(current)
+    visible = {}
+    for current in reversed(ancestry):
+        for name in methods_by_owner.get(current, {}):
+            visible[name] = name in wrappers_by_owner.get(current, frozenset())
+    return frozenset(name for name, sensitive in visible.items() if sensitive)
 
 
 def _mask_deferred_build_closures(body: str) -> str:
@@ -998,11 +1109,15 @@ def _has_automatic_operation(
     state_class_names: frozenset[str] | None = None,
     lifecycle_class_methods: dict[str, frozenset[str]] | None = None,
 ) -> bool:
+    methods_by_owner = _local_method_bodies(source)
     local_wrappers_by_owner = _sensitive_local_wrappers(source)
+    class_bases = _class_bases(source)
     for owner, method, body in _automatic_lifecycle_bodies(
         source, state_class_names, lifecycle_class_methods
     ):
-        local_wrappers = local_wrappers_by_owner.get(owner, frozenset())
+        local_wrappers = _inherited_local_wrappers(
+            owner, local_wrappers_by_owner, methods_by_owner, class_bases
+        )
         build = method == "build"
         execution_body = _mask_deferred_build_closures(body) if build else body
         aliases = _operation_aliases(execution_body, local_wrappers)
@@ -1014,6 +1129,9 @@ def _has_automatic_operation(
         if any(
             _is_sensitive_operation(match.group("target"), local_wrappers)
             for match in references
+        ) or any(
+            _is_sensitive_operation(target, local_wrappers)
+            for target in _typed_operation_invocation_targets(execution_body)
         ):
             return True
         if build and (

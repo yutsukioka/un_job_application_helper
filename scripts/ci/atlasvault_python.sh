@@ -390,6 +390,26 @@ def _vaultsync_targets(root: Path) -> tuple[Path, ...]:
 
 
 targets = _vaultsync_targets(Path("packages/vaultsync/vaultsync"))
+os_process_apis = frozenset(
+    {
+        "system",
+        "popen",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "spawnl",
+        "spawnle",
+        "spawnlp",
+        "spawnlpe",
+        "spawnv",
+        "spawnve",
+        "spawnvp",
+        "spawnvpe",
+        "posix_spawn",
+        "posix_spawnp",
+    }
+)
 
 
 def _blocked_imports(source: str) -> bool:
@@ -421,7 +441,7 @@ def _blocked_imports(source: str) -> bool:
                     importlib_module_aliases.add("importlib")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module.partition(".")[0] in blocked_import_roots:
+            if node.level == 0 and module.partition(".")[0] in blocked_import_roots:
                 return True
             if module == "builtins":
                 for alias in node.names:
@@ -435,18 +455,7 @@ def _blocked_imports(source: str) -> bool:
                         )
             elif module == "os":
                 for alias in node.names:
-                    if alias.name in {
-                        "system",
-                        "popen",
-                        "execv",
-                        "execve",
-                        "execvp",
-                        "execvpe",
-                        "spawnv",
-                        "spawnve",
-                        "spawnvp",
-                        "spawnvpe",
-                    }:
+                    if alias.name in os_process_apis:
                         os_process_aliases.add(alias.asname or alias.name)
 
     def _is_import_module_reference(node: ast.expr) -> bool:
@@ -531,19 +540,7 @@ def _blocked_imports(source: str) -> bool:
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id in os_module_aliases
-            and node.func.attr
-            in {
-                "system",
-                "popen",
-                "execv",
-                "execve",
-                "execvp",
-                "execvpe",
-                "spawnv",
-                "spawnve",
-                "spawnvp",
-                "spawnvpe",
-            }
+            and node.func.attr in os_process_apis
         ):
             return True
         if (
