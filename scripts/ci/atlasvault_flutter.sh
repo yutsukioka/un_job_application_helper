@@ -696,6 +696,27 @@ build_execution_samples = (
     ),
     (
         """Widget build(context) {
+  Future.sync(() => controller.startPairing());
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  Timer.run(() => controller.startPairing());
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
+  WidgetsBinding.instance.addPostFrameCallback((_) => controller.startPairing());
+  return panel;
+}""",
+        True,
+    ),
+    (
+        """Widget build(context) {
   (() => controller.startPairing())();
   return panel;
 }""",
