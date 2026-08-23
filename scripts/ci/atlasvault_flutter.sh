@@ -2290,6 +2290,20 @@ class PairingState extends BaseState<PairingWidget> {
 ):
     raise SystemExit("Dart URI part ownership self-test failed.")
 
+if not _production_target_scan(
+    (
+        """class BaseState<T> extends State<T> {}""",
+        """import 'base.dart';
+class PairingState extends BaseState<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}""",
+    ),
+    source_paths=(Path("lib/base.dart"), Path("lib/pairing.dart")),
+):
+    raise SystemExit("Dart imported-State ancestry self-test failed.")
+
 if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   final token = switch (enabled) {
@@ -2314,6 +2328,42 @@ class PairingState extends State<PairingWidget>
     with PairingFields<PairingWidget> {}"""
 ):
     raise SystemExit("Dart State-mixin field initializer self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingLifecycle<T extends StatefulWidget> on State<T> {
+  void initState() {
+    controller.startPairing();
+  }
+}
+class PairingState = State<PairingWidget> with PairingLifecycle<PairingWidget>;"""
+):
+    raise SystemExit("Dart State mixin-application alias self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  final values = [1].map((_) => controller.startPairing()).toList();
+}"""
+):
+    raise SystemExit("Dart eager collection callback self-test failed.")
+
+if not _has_automatic_operation(
+    _state_fixture(
+        """Widget build(context) {
+  invoke(onTap: () => controller.startPairing());
+  return panel;
+}"""
+    )
+):
+    raise SystemExit("Dart immediate named-callback self-test failed.")
+
+if not _has_automatic_operation(
+    _state_fixture(
+        """void initState() {
+  createAtlasVaultPairingOffer();
+}"""
+    )
+):
+    raise SystemExit("Dart public pairing primitive self-test failed.")
 
 if _has_automatic_operation(
     _state_fixture(

@@ -689,6 +689,8 @@ dynamic_import_samples = (
     ),
     "__import__(module_name)",
     "from builtins import __import__ as load\nload('requests')",
+    "import importlib\nimportlib.__import__('socket')",
+    "import importlib as loader\nload = loader.__import__\nload('socket')",
 )
 if not all(_blocked_imports(sample) for sample in dynamic_import_samples):
     raise SystemExit("Python AST dynamic-import self-test failed.")
@@ -710,6 +712,7 @@ process_launch_samples = (
     "from os import posix_spawn as launch\nlaunch('/bin/echo', ['echo'], {})",
     "import os\nlauncher = os\nlauncher.posix_spawn('/bin/echo', ['echo'], {})",
     "import os\nlaunch = os.spawnl\nlaunch(0, 'python', 'python')",
+    "from multiprocessing.connection import Client\nClient((host, port))",
 )
 if not all(_blocked_imports(sample) for sample in process_launch_samples):
     raise SystemExit("Python AST process-launch self-test failed.")
