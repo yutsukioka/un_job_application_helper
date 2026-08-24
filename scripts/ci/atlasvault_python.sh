@@ -413,6 +413,8 @@ os_process_apis = frozenset(
         "spawnvpe",
         "posix_spawn",
         "posix_spawnp",
+        "fork",
+        "forkpty",
     }
 )
 
@@ -437,6 +439,7 @@ def _blocked_imports(source: str) -> bool:
     runpy_module_aliases = set()
     runpy_execution_aliases = set()
     dynamic_execution_aliases = set()
+    dynamic_execution_builtins = frozenset({"eval", "exec"})
     pty_module_aliases = set()
     pty_spawn_aliases = set()
     os_module_aliases = set()
@@ -478,7 +481,7 @@ def _blocked_imports(source: str) -> bool:
                 for alias in node.names:
                     if alias.name == "__import__":
                         builtin_import_aliases.add(alias.asname or alias.name)
-                    elif alias.name == "exec":
+                    elif alias.name in dynamic_execution_builtins:
                         dynamic_execution_aliases.add(alias.asname or alias.name)
             elif module == "importlib":
                 for alias in node.names:
@@ -583,10 +586,13 @@ def _blocked_imports(source: str) -> bool:
 
     def _is_dynamic_execution_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
-            return node.id == "exec" or node.id in dynamic_execution_aliases
+            return (
+                node.id in dynamic_execution_builtins
+                or node.id in dynamic_execution_aliases
+            )
         return (
             isinstance(node, ast.Attribute)
-            and node.attr == "exec"
+            and node.attr in dynamic_execution_builtins
             and isinstance(node.value, ast.Name)
             and node.value.id in builtins_module_aliases
         )

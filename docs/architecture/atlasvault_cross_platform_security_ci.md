@@ -380,3 +380,11 @@ ancestry and applied-mixin field visibility, and each record's own mixin
 heritage. The no-network preflight rejects dynamic execution through bare or
 `builtins`-qualified `exec`, and process launch through `pty.spawn`, before
 any VaultSync import or pytest command.
+
+Named helper constructors are parsed as synchronous construction paths, and
+mixin-declared wrapper methods remain visible to lifecycle bodies through the
+applied mixin heritage. Top-level `final` and `late final` initializers are
+analyzed when the automatic `main` root reads them. Native encrypted-document
+pick/save transport methods are sensitive operations. The preflight applies the
+same direct, imported, and `builtins`-qualified policy to `eval`, and blocks
+`os.fork` and `os.forkpty` before package import or pytest execution.

@@ -1013,6 +1013,8 @@ operation_identifiers = frozenset(
         "resumemigration",
         "activateencryptedprivatedata",
         "activateencryptedprivatestate",
+        "pickencryptedexport",
+        "saveencryptedexport",
     }
 )
 operation_alias_assignment = re.compile(
@@ -1067,8 +1069,10 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
         r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
         r"get\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*(?P<body>\{|=>)"
     )
+    class_records = _class_records(masked)
+    class_owner_names = frozenset(name for name, _, _ in class_records)
     methods_by_owner = {}
-    for owner, _, class_body in _class_records(masked):
+    for owner, _, class_body in (*class_records, *_mixin_records(masked)):
         methods = {}
         for match in declaration.finditer(class_body):
             if not _at_class_member_depth(class_body, match.start()):
@@ -1119,6 +1123,45 @@ def _local_method_bodies(source: str) -> dict[str, dict[str, str]]:
                 body = class_body[body_start + 1 : end - 1]
             name = match.group("name").casefold()
             methods[name] = methods.get(name, "") + "\n" + body
+        if owner in class_owner_names:
+            named_constructor = re.compile(
+                rf"(?m)^[ \t]*(?:(?:const|factory)\s+)?{re.escape(owner)}"
+                r"\.(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*\("
+            )
+            for match in named_constructor.finditer(class_body):
+                if not _at_class_member_depth(class_body, match.start()):
+                    continue
+                parameter_end = _matching_delimiter_end(
+                    class_body, match.end() - 1
+                )
+                if parameter_end is None:
+                    raise SystemExit(
+                        "Unable to parse an AtlasVault named constructor signature."
+                    )
+                initializers, body_start = _constructor_parts(
+                    class_body, parameter_end
+                )
+                parts = []
+                if initializers.strip():
+                    parts.append(_mask_field_closure_literals(initializers))
+                if body_start is not None:
+                    if class_body.startswith("=>", body_start):
+                        end = _expression_end(class_body, body_start + 2)
+                        if end < 0:
+                            raise SystemExit(
+                                "Unable to parse an AtlasVault named constructor."
+                            )
+                        parts.append(class_body[body_start + 2 : end])
+                    elif class_body[body_start] == "{":
+                        end = _matching_delimiter_end(class_body, body_start)
+                        if end is None:
+                            raise SystemExit(
+                                "Unable to parse an AtlasVault named constructor."
+                            )
+                        parts.append(class_body[body_start + 1 : end - 1])
+                if parts:
+                    name = f"{owner}.{match.group('name')}".casefold()
+                    methods[name] = methods.get(name, "") + "\n" + ";\n".join(parts)
         methods_by_owner[owner] = methods
     return methods_by_owner
 
@@ -1291,10 +1334,11 @@ def _alias_is_executed(body: str, alias: str, *, build: bool) -> bool:
     return usage.search(body) is not None
 
 
-def _class_bases(source: str) -> dict[str, str | None]:
+def _owner_heritage(source: str) -> dict[str, str]:
+    masked = _mask_dart_non_code(source)
     return {
-        name: _heritage_base_name(heritage)
-        for name, heritage, _ in _class_records(_mask_dart_non_code(source))
+        name: heritage
+        for name, heritage, _ in (*_class_records(masked), *_mixin_records(masked))
     }
 
 
@@ -1302,17 +1346,24 @@ def _inherited_local_wrappers(
     owner: str,
     wrappers_by_owner: dict[str, frozenset[str]],
     methods_by_owner: dict[str, dict[str, str]],
-    class_bases: dict[str, str | None],
+    owner_heritage: dict[str, str],
 ) -> frozenset[str]:
-    ancestry = []
-    current = owner
-    while current is not None and current not in ancestry:
-        ancestry.append(current)
-        current = class_bases.get(current)
     visible = {}
-    for current in reversed(ancestry):
+
+    def visit(current: str, visited: set[str]) -> None:
+        if current in visited:
+            return
+        visited.add(current)
+        heritage = owner_heritage.get(current, "")
+        base = _heritage_base_name(heritage)
+        if base is not None:
+            visit(base, visited)
+        for mixin in _heritage_mixin_names(heritage):
+            visit(mixin, visited)
         for name in methods_by_owner.get(current, {}):
             visible[name] = name in wrappers_by_owner.get(current, frozenset())
+
+    visit(owner, set())
     return frozenset(name for name, sensitive in visible.items() if sensitive)
 
 
@@ -1366,15 +1417,49 @@ def _receiver_owned_constructor_invoked(
     wrappers_by_owner: dict[str, frozenset[str]],
 ) -> bool:
     constructor = re.compile(
-        r"(?<![A-Za-z0-9_$])(?:new\s+)?"
+        r"(?<![A-Za-z0-9_$])(?:(?:new|const)\s+)?"
         r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*\.\s*(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*))?"
         r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)"
     )
     for match in constructor.finditer(body):
         wrappers = wrappers_by_owner.get(match.group("owner"), frozenset())
-        if match.group("owner").casefold() in wrappers:
+        constructor_name = match.group("owner").casefold()
+        if match.group("name") is not None:
+            constructor_name += "." + match.group("name").casefold()
+        if constructor_name in wrappers:
             return True
     return False
+
+
+def _top_level_lazy_initializer_bodies(
+    source: str, main_body: str
+) -> tuple[tuple[str, str, str], ...]:
+    """Return top-level final initializers reached by the automatic main root."""
+    masked = _mask_dart_non_code(source)
+    depths = _brace_depths(masked)
+    declaration = re.compile(
+        r"(?m)^[ \t]*(?:late\s+)?final\s+"
+        r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"(?P<expression>[^;]+);"
+    )
+    bodies = []
+    for match in declaration.finditer(masked):
+        if depths[match.start()] != 0:
+            continue
+        name = match.group("name")
+        if re.search(
+            rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+            main_body,
+        ):
+            bodies.append(
+                (
+                    "__atlasvault_main__",
+                    "top_level_lazy_initializer",
+                    match.group("expression"),
+                )
+            )
+    return tuple(bodies)
 
 
 def _mask_deferred_build_closures(body: str) -> str:
@@ -1578,7 +1663,7 @@ def _has_automatic_operation(
     top_level_wrappers = _sensitive_wrapper_names(
         _top_level_method_bodies(wrapper_source)
     )
-    class_bases = _class_bases(wrapper_source)
+    owner_heritage = _owner_heritage(wrapper_source)
     widget_class_names = _widget_class_names((wrapper_source,))
     automatic_bodies = list(
         _automatic_lifecycle_bodies(
@@ -1592,9 +1677,10 @@ def _has_automatic_operation(
     for name, body in _top_level_method_bodies(source).items():
         if name == "main":
             automatic_bodies.append(("__atlasvault_main__", "main", body))
+            automatic_bodies.extend(_top_level_lazy_initializer_bodies(source, body))
     for owner, method, body in automatic_bodies:
         local_wrappers = _inherited_local_wrappers(
-            owner, local_wrappers_by_owner, methods_by_owner, class_bases
+            owner, local_wrappers_by_owner, methods_by_owner, owner_heritage
         ) | top_level_wrappers
         build = method == "build"
         execution_body = _mask_deferred_build_closures(body) if build else body
