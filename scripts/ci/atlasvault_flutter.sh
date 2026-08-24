@@ -3397,6 +3397,59 @@ class PairingState extends State<PairingWidget> {
 ):
     raise SystemExit("Dart receiver-owned constructor self-test failed.")
 
+if not _has_automatic_operation(
+    """class PairingHelper {
+  PairingHelper.secure() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    PairingHelper.secure();
+  }
+}"""
+):
+    raise SystemExit("Dart named receiver-owned constructor self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingLifecycle on State<PairingWidget> {
+  void initState() {
+    runPairing();
+  }
+  void runPairing() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> with PairingLifecycle {}"""
+):
+    raise SystemExit("Dart mixin wrapper lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """final token = controller.startPairing();
+void main() {
+  token;
+}"""
+):
+    raise SystemExit("Dart top-level lazy main self-test failed.")
+
+if not _has_automatic_operation(
+    """late final token = controller.startPairing();
+void main() {
+  token;
+}"""
+):
+    raise SystemExit("Dart late top-level lazy main self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void initState() {
+    transport.pickEncryptedExport();
+    transport.saveEncryptedExport();
+  }
+}"""
+):
+    raise SystemExit("Dart document transport lifecycle self-test failed.")
+
 if _has_automatic_operation(
     """class SafeHelper {
   void run() {}
