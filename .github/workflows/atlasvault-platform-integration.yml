@@ -569,7 +569,31 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Windows pairing journey failed" }
             }
             finally {
-              Remove-Item -LiteralPath $Ring -Recurse -Force -ErrorAction SilentlyContinue
+              $RingCleanupErrors = [System.Collections.Generic.List[string]]::new()
+              try {
+                if (Test-Path -LiteralPath $Ring) {
+                  Remove-Item -LiteralPath $Ring -Recurse -Force -ErrorAction Stop
+                }
+              }
+              catch {
+                $RingCleanupErrors.Add("remove ring: $($_.Exception.Message)")
+              }
+              try {
+                if (Test-Path -LiteralPath $Ring) {
+                  $ResidualRingArtifacts = @(
+                    Get-ChildItem -LiteralPath $Ring -Recurse -File -Filter *.atlaspair -ErrorAction Stop
+                  )
+                  $RingCleanupErrors.Add(
+                    "ring directory remains with $($ResidualRingArtifacts.Count) AtlasPair artifact(s)"
+                  )
+                }
+              }
+              catch {
+                $RingCleanupErrors.Add("verify ring removal: $($_.Exception.Message)")
+              }
+              if ($RingCleanupErrors.Count -gt 0) {
+                throw "Windows pairing-ring cleanup failed: $($RingCleanupErrors -join '; ')"
+              }
             }
           }
 

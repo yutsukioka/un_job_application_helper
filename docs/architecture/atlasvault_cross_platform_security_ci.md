@@ -245,7 +245,10 @@ The following must never be uploaded:
 
 Runner scripts fail when forbidden generated files are found in the repository.
 Temporary fake pairing-ring files are confined to the runner temporary
-directory, are never uploaded, and are removed on exit.
+directory, are never uploaded, and are removed on exit. Windows ring cleanup
+uses terminating deletion, verifies the exact temporary ring is absent after
+the attempt, records any retained `.atlaspair` count, and fails the job with an
+aggregate cleanup error rather than suppressing an open-handle or ACL failure.
 
 The Python preflight parses the complete VaultSync source closure before pytest
 imports it. It rejects absolute networking and dynamic-import routes plus
