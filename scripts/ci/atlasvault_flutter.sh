@@ -209,7 +209,7 @@ lifecycle_declaration = re.compile(
     r"didChangeViewFocus|didPushRouteInformation|handleStartBackGesture|"
     r"handleUpdateBackGestureProgress|handleCommitBackGesture|"
     r"handleCancelBackGesture|activate|deactivate|dispose|"
-    r"createState|build)"
+    r"createState|createElement|build)"
     r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
 )
 state_lifecycle_methods = frozenset(
@@ -224,7 +224,7 @@ state_lifecycle_methods = frozenset(
         "build",
     }
 )
-widget_lifecycle_methods = frozenset({"build", "createState"})
+widget_lifecycle_methods = frozenset({"build", "createState", "createElement"})
 observer_lifecycle_methods = frozenset(
     {
         "didChangeAccessibilityFeatures",
@@ -964,7 +964,12 @@ def _member_expression_is_method(statement: str, class_name: str) -> bool:
 operation_reference = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*"
-    r"(?:\(|\??\.\s*call\s*\(|(?=[,:)]))",
+    r"(?:\(|\??\.\s*call\s*\(|(?=[,)]))",
+)
+qualified_operation_tear_off = re.compile(
+    r"(?<![A-Za-z0-9_$])"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)+"
+    r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)\s*(?=:)"
 )
 operation_invocation = re.compile(
     r"(?<![A-Za-z0-9_$])"
@@ -1026,8 +1031,20 @@ operation_tear_off_target = re.compile(
     r"(?<![A-Za-z0-9_$])"
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?|!)?\.\s*)*"
     r"(?P<target>[A-Za-z_$][A-Za-z0-9_$]*)"
-    r"(?=\s*(?:[,:;\]\}]|\?\?|\Z))"
+    r"(?=\s*(?:[,;\]\}]|\?\?|\Z))"
 )
+
+receiver_owned_sensitive_operations = {
+    "atlasvaultplaintextmigrationcoordinator": frozenset(
+        {
+            "prepare",
+            "resumepreparation",
+            "discardprepared",
+            "finalizeandactivate",
+            "activateselected",
+        }
+    ),
+}
 
 
 def _is_sensitive_operation(
@@ -1038,10 +1055,23 @@ def _is_sensitive_operation(
     return identifier in operation_identifiers or identifier in local_wrappers
 
 
+def _is_receiver_owned_sensitive_operation(owner: str, method: str) -> bool:
+    return method.casefold() in receiver_owned_sensitive_operations.get(
+        owner.casefold(), frozenset()
+    )
+
+
 def _operation_invocations(source: str) -> tuple[re.Match[str], ...]:
     return (
         *operation_invocation.finditer(source),
         *parenthesized_operation_invocation.finditer(source),
+    )
+
+
+def _operation_references(source: str) -> tuple[re.Match[str], ...]:
+    return (
+        *operation_reference.finditer(source),
+        *qualified_operation_tear_off.finditer(source),
     )
 
 
@@ -1383,6 +1413,9 @@ def _receiver_owned_wrapper_invoked(
         if (
             match.group("method").casefold() in wrappers
             or match.group("owner").casefold() in wrappers
+            or _is_receiver_owned_sensitive_operation(
+                match.group("owner"), match.group("method")
+            )
         ):
             return True
     assignments = re.compile(
@@ -1395,7 +1428,11 @@ def _receiver_owned_wrapper_invoked(
     aliases = {
         match.group("alias"): match.group("owner")
         for match in assignments.finditer(body)
-        if wrappers_by_owner.get(match.group("owner"), frozenset())
+        if (
+            wrappers_by_owner.get(match.group("owner"), frozenset())
+            or match.group("owner").casefold()
+            in receiver_owned_sensitive_operations
+        )
     }
     for alias, owner in aliases.items():
         alias_invocation = re.compile(
@@ -1406,6 +1443,9 @@ def _receiver_owned_wrapper_invoked(
         wrappers = wrappers_by_owner.get(owner, frozenset())
         if any(
             match.group("method").casefold() in wrappers
+            or _is_receiver_owned_sensitive_operation(
+                owner, match.group("method")
+            )
             for match in alias_invocation.finditer(body)
         ):
             return True
@@ -1433,13 +1473,15 @@ def _receiver_owned_constructor_invoked(
 
 
 def _top_level_lazy_initializer_bodies(
-    source: str, main_body: str
+    source: str, automatic_body: str
 ) -> tuple[tuple[str, str, str], ...]:
-    """Return top-level final initializers reached by the automatic main root."""
+    """Return top-level lazy initializers reached by an automatic root."""
     masked = _mask_dart_non_code(source)
     depths = _brace_depths(masked)
     declaration = re.compile(
-        r"(?m)^[ \t]*(?:late\s+)?final\s+"
+        r"(?m)^[ \t]*(?:late\s+)?(?:"
+        r"(?:final|var)\s+|[A-Za-z_$][A-Za-z0-9_$]*(?:<[^;=]+>)?(?:[?!])?\s+"
+        r")"
         r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
         r"(?P<expression>[^;]+);"
     )
@@ -1450,11 +1492,11 @@ def _top_level_lazy_initializer_bodies(
         name = match.group("name")
         if re.search(
             rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
-            main_body,
+            automatic_body,
         ):
             bodies.append(
                 (
-                    "__atlasvault_main__",
+                    "__atlasvault_top_level__",
                     "top_level_lazy_initializer",
                     match.group("expression"),
                 )
@@ -1589,7 +1631,7 @@ def _build_scheduler_invokes_sensitive_operation(
         if any(
             _is_sensitive_operation(reference.group("target"), local_wrappers)
             for reference in (
-                *operation_reference.finditer(argument),
+                *_operation_references(argument),
                 *operation_tear_off_target.finditer(argument),
             )
         ):
@@ -1618,7 +1660,7 @@ def _build_iife_invokes_sensitive_operation(
     return any(
         _is_sensitive_operation(reference.group("target"), local_wrappers)
         for match in (*arrow_iife.finditer(body), *block_iife.finditer(body))
-        for reference in operation_reference.finditer(match.group("expression"))
+        for reference in _operation_references(match.group("expression"))
     )
 
 
@@ -1635,7 +1677,7 @@ def _function_apply_invokes_sensitive_operation(
         if any(
             _is_sensitive_operation(reference.group("target"), local_wrappers)
             for reference in (
-                *operation_reference.finditer(argument),
+                *_operation_references(argument),
                 *operation_tear_off_target.finditer(argument),
             )
         ):
@@ -1677,7 +1719,8 @@ def _has_automatic_operation(
     for name, body in _top_level_method_bodies(source).items():
         if name == "main":
             automatic_bodies.append(("__atlasvault_main__", "main", body))
-            automatic_bodies.extend(_top_level_lazy_initializer_bodies(source, body))
+    for _, _, body in tuple(automatic_bodies):
+        automatic_bodies.extend(_top_level_lazy_initializer_bodies(source, body))
     for owner, method, body in automatic_bodies:
         local_wrappers = _inherited_local_wrappers(
             owner, local_wrappers_by_owner, methods_by_owner, owner_heritage
@@ -1688,7 +1731,7 @@ def _has_automatic_operation(
         references = (
             _operation_invocations(execution_body)
             if build
-            else operation_reference.finditer(execution_body)
+            else _operation_references(execution_body)
         )
         if any(
             _is_sensitive_operation(match.group("target"), local_wrappers)

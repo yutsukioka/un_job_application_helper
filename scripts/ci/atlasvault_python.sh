@@ -590,6 +590,17 @@ def _blocked_imports(source: str) -> bool:
                 node.id in dynamic_execution_builtins
                 or node.id in dynamic_execution_aliases
             )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in builtins_module_aliases
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in dynamic_execution_builtins
+        ):
+            return True
         return (
             isinstance(node, ast.Attribute)
             and node.attr in dynamic_execution_builtins

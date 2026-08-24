@@ -388,3 +388,11 @@ analyzed when the automatic `main` root reads them. Native encrypted-document
 pick/save transport methods are sensitive operations. The preflight applies the
 same direct, imported, and `builtins`-qualified policy to `eval`, and blocks
 `os.fork` and `os.forkpty` before package import or pytest execution.
+
+Top-level lazy initializers are traced from every automatic Flutter root,
+including lifecycle hooks, and cover final, mutable, and explicitly typed
+variables. `createElement` is treated as a framework callback for both widget
+families. The lifecycle policy masks named argument labels while preserving
+actual sensitive tear-offs, recognizes direct operations on the plaintext
+migration coordinator by that owner type, and rejects `getattr` retrieval of
+the blocked `builtins` dynamic-execution functions before pytest.
