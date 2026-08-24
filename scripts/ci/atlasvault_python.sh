@@ -983,9 +983,12 @@ dynamic_execution_samples = (
     "from builtins import eval as run\nrun(\"__import__('socket')\")",
     "import builtins\ngetattr(builtins, 'exec')(\"import socket\")",
     "import builtins\nrun = getattr(builtins, 'eval')\nrun(\"__import__('socket')\")",
+    "import builtins\nlookup = getattr\nlookup(builtins, 'exec')(\"import socket\")",
 )
 if not all(_blocked_imports(sample) for sample in dynamic_execution_samples):
     raise SystemExit("Python AST dynamic execution self-test failed.")
+if not _blocked_imports("import _socket\n_socket.socket().connect(('127.0.0.1', 1))"):
+    raise SystemExit("Python AST low-level socket self-test failed.")
 pty_execution_samples = (
     "import pty\npty.spawn(['/bin/sh'])",
     "from pty import spawn\nspawn(['/bin/sh'])",

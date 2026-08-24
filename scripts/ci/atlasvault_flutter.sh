@@ -3725,6 +3725,83 @@ Widget build(context) {
 ):
     raise SystemExit("Dart passive-wrapper lifecycle self-test failed.")
 
+if not _has_automatic_operation(
+    """var first = 0, token = controller.startPairing();
+class PairingState extends State<PairingWidget> {
+  Widget build(context) {
+    token;
+    return panel;
+  }
+}"""
+):
+    raise SystemExit("Dart multi-declarator top-level lazy self-test failed.")
+
+if not _has_automatic_operation(
+    """final trigger = token;
+final token = controller.startPairing();
+void main() {
+  trigger;
+}"""
+):
+    raise SystemExit("Dart chained top-level lazy self-test failed.")
+
+for coordinator_source in (
+    """class PairingState extends State<PairingWidget> {
+  final AtlasVaultPlaintextMigrationCoordinating coordinator;
+  void initState() {
+    coordinator.finalizeAndActivate();
+  }
+}""",
+    """class PairingState extends State<PairingWidget> {
+  void initState() {
+    final AtlasVaultPlaintextMigrationCoordinating coordinator = lookup();
+    coordinator.prepare();
+  }
+}""",
+):
+    if not _has_automatic_operation(coordinator_source):
+        raise SystemExit("Dart typed migration coordinator self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void reassemble() {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart reassemble lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class BaseObserver implements WidgetsBindingObserver {}
+class PairingObserver implements BaseObserver {
+  void didChangeAppLifecycleState(state) {
+    controller.startPairing();
+  }
+}"""
+):
+    raise SystemExit("Dart indirect observer lifecycle self-test failed.")
+
+for eager_callback in (
+    "[1].any((_) { controller.startPairing(); return true; })",
+    "[1].every((_) { controller.startPairing(); return true; })",
+    "[1].firstWhere((_) { controller.startPairing(); return true; })",
+    "[1].singleWhere((_) { controller.startPairing(); return true; })",
+    "[1].sort((_, __) { controller.startPairing(); return 0; })",
+):
+    if not _has_automatic_operation(
+        f"""class PairingState extends State<PairingWidget> {{
+  final value = {eager_callback};
+}}"""
+    ):
+        raise SystemExit("Dart eager collection consumer self-test failed.")
+
+flutter_policy_script = (Path("..").resolve().parent / "scripts/ci/atlasvault_flutter.sh")
+flutter_policy_source = flutter_policy_script.read_text(encoding="utf-8")
+if flutter_policy_source.index("python3 - <<'PY'") > flutter_policy_source.index(
+    'flutter test "${focused[@]}"'
+):
+    raise SystemExit("Dart lifecycle admission ordering self-test failed.")
+
 targets = tuple(sorted(Path("lib").rglob("*.dart")))
 target_sources = tuple(path.read_text(encoding="utf-8") for path in targets)
 if _production_target_scan(target_sources, source_paths=targets):
