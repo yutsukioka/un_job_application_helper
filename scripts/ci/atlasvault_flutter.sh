@@ -1534,13 +1534,38 @@ def _top_level_lazy_initializers(source: str) -> dict[str, str]:
     def declarators(source: str) -> tuple[str, ...]:
         values = []
         start = 0
-        depth = 0
+        parentheses = 0
+        brackets = 0
+        braces = 0
+
+        def begins_declarator(offset: int) -> bool:
+            remainder = source[offset:]
+            candidate = re.match(
+                r"\s*_?[A-Za-z_$][A-Za-z0-9_$]*\s*(?==|,|$)",
+                remainder,
+            )
+            return candidate is not None
+
         for index, character in enumerate(source):
-            if character in "([{<":
-                depth += 1
-            elif character in ")]}>":
-                depth = max(0, depth - 1)
-            elif character == "," and depth == 0:
+            if character == "(":
+                parentheses += 1
+            elif character == ")":
+                parentheses = max(0, parentheses - 1)
+            elif character == "[":
+                brackets += 1
+            elif character == "]":
+                brackets = max(0, brackets - 1)
+            elif character == "{":
+                braces += 1
+            elif character == "}":
+                braces = max(0, braces - 1)
+            elif (
+                character == ","
+                and parentheses == 0
+                and brackets == 0
+                and braces == 0
+                and begins_declarator(index + 1)
+            ):
                 values.append(source[start:index])
                 start = index + 1
         values.append(source[start:])

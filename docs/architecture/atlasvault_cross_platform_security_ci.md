@@ -407,6 +407,12 @@ Flutter source guard runs before any Flutter test command; it treats eager
 collection consumers (`any`, `every`, `firstWhere`, `singleWhere`, and `sort`)
 as execution while retaining deferred widget callbacks as non-automatic.
 
+Multi-variable declarations are split only at a top-level comma whose
+lookahead is another variable declarator. Parentheses, brackets, and braces
+remain balanced, while comparison and shift operators are not mistaken for
+generic delimiters. Commas in generic calls, typed collections, and nested
+generic construction therefore remain part of the preceding initializer.
+
 The no-network AST preflight also follows aliases of `getattr` before resolving
 blocked `builtins` dynamic-execution members and rejects `_socket` imports. The
 same full source-only policy continues to run before the first VaultSync pytest
