@@ -141,6 +141,38 @@ PY
 python - <<'PY'
 from pathlib import Path
 
+integration_tests = (
+    Path(
+        "apps/atlas_flutter/integration_test/"
+        "atlas_vault_android_trusted_pairing_integration_test.dart"
+    ),
+    Path(
+        "apps/atlas_flutter/integration_test/"
+        "atlas_vault_windows_trusted_pairing_integration_test.dart"
+    ),
+)
+for path in integration_tests:
+    source = path.read_text(encoding="utf-8")
+    for marker in (
+        "final runtimeArtifacts = await scenario.runExplicitRoleCycle();",
+        "runtimeArtifacts: runtimeArtifacts,",
+        "Future<Map<AtlasVaultPairingArtifactKind, Uint8List>> "
+        "runExplicitRoleCycle() async",
+        "required Map<AtlasVaultPairingArtifactKind, Uint8List> runtimeArtifacts,",
+        "runtimeArtifacts[kind]",
+        "await produced.readAsBytes()",
+    ):
+        if marker not in source:
+            raise SystemExit(f"{path} does not export runtime journey artifacts.")
+    exchange = source.split("Future<void> _exchangePairingRing(", 1)[1]
+    if "base64Decode(encoded['canonical_b64']" in exchange:
+        raise SystemExit(f"{path} still uses fixture bytes as outgoing evidence.")
+print("Validated Android and Windows runtime journey artifact egress policy.")
+PY
+
+python - <<'PY'
+from pathlib import Path
+
 workflow = Path(
     ".github/workflows/atlasvault-platform-integration.yml"
 ).read_text(encoding="utf-8")
