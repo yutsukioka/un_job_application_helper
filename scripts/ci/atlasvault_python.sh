@@ -970,6 +970,8 @@ dynamic_execution_samples = (
     "from builtins import exec as run\nrun(\"import socket\")",
     "eval(\"__import__('socket')\")",
     "from builtins import eval as run\nrun(\"__import__('socket')\")",
+    "import builtins\ngetattr(builtins, 'exec')(\"import socket\")",
+    "import builtins\nrun = getattr(builtins, 'eval')\nrun(\"__import__('socket')\")",
 )
 if not all(_blocked_imports(sample) for sample in dynamic_execution_samples):
     raise SystemExit("Python AST dynamic execution self-test failed.")

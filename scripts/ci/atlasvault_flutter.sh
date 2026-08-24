@@ -3527,6 +3527,67 @@ void main() {
     raise SystemExit("Dart late top-level lazy main self-test failed.")
 
 if not _has_automatic_operation(
+    """final token = controller.startPairing();
+class PairingState extends State<PairingWidget> {
+  Widget build(context) {
+    token;
+    return panel;
+  }
+}"""
+):
+    raise SystemExit("Dart top-level lazy lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """var token = controller.startPairing();
+void main() {
+  token;
+}"""
+):
+    raise SystemExit("Dart mutable top-level lazy main self-test failed.")
+
+if not _has_automatic_operation(
+    """Object token = controller.startPairing();
+void main() {
+  token;
+}"""
+):
+    raise SystemExit("Dart typed top-level lazy main self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingWidget extends StatelessWidget {
+  Element createElement() {
+    controller.startPairing();
+    return super.createElement();
+  }
+  Widget build(context) => panel;
+}"""
+):
+    raise SystemExit("Dart Widget createElement lifecycle self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void initState() {
+    final coordinator = AtlasVaultPlaintextMigrationCoordinator();
+    coordinator.prepare();
+    coordinator.resumePreparation();
+    coordinator.discardPrepared();
+    coordinator.finalizeAndActivate();
+    coordinator.activateSelected();
+  }
+}"""
+):
+    raise SystemExit("Dart migration coordinator lifecycle self-test failed.")
+
+if _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  void initState() {
+    configure(startPairing: false);
+  }
+}"""
+):
+    raise SystemExit("Dart named argument label lifecycle self-test failed.")
+
+if not _has_automatic_operation(
     """class PairingState extends State<PairingWidget> {
   void initState() {
     transport.pickEncryptedExport();
