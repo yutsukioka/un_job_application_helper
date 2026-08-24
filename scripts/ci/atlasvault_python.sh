@@ -436,6 +436,7 @@ def _blocked_imports(source: str) -> bool:
     importlib_direct_loader_execution_aliases = set()
     runpy_module_aliases = set()
     runpy_execution_aliases = set()
+    dynamic_execution_aliases = set()
     os_module_aliases = set()
     os_process_aliases = set()
     importlib_direct_loader_names = frozenset(
@@ -568,6 +569,11 @@ def _blocked_imports(source: str) -> bool:
             and node.value.id in runpy_module_aliases
         )
 
+    def _is_dynamic_execution_reference(node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and (
+            node.id == "exec" or node.id in dynamic_execution_aliases
+        )
+
     def _is_importlib_loader_factory_reference(
         node: ast.expr, factory: str
     ) -> bool:
@@ -592,7 +598,7 @@ def _blocked_imports(source: str) -> bool:
             return node.id in importlib_loader_execution_aliases
         return (
             isinstance(node, ast.Attribute)
-            and node.attr == "exec_module"
+            and node.attr in {"exec_module", "load_module"}
             and (
                 _is_importlib_loader_reference(node.value)
                 or (
@@ -674,6 +680,7 @@ def _blocked_imports(source: str) -> bool:
                 _is_importlib_direct_loader_execution_reference(value)
             )
             aliases_runpy_execution = _is_runpy_execution_reference(value)
+            aliases_dynamic_execution = _is_dynamic_execution_reference(value)
             if (
                 not aliases_importlib
                 and not aliases_import_module
@@ -687,6 +694,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_direct_loader_factory
                 and not aliases_importlib_direct_loader_execution
                 and not aliases_runpy_execution
+                and not aliases_dynamic_execution
             ):
                 continue
             for target in targets:
@@ -756,6 +764,12 @@ def _blocked_imports(source: str) -> bool:
                 if aliases_runpy_execution and target.id not in runpy_execution_aliases:
                     runpy_execution_aliases.add(target.id)
                     changed = True
+                if (
+                    aliases_dynamic_execution
+                    and target.id not in dynamic_execution_aliases
+                ):
+                    dynamic_execution_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -767,6 +781,8 @@ def _blocked_imports(source: str) -> bool:
         if _is_importlib_direct_loader_execution_reference(node.func):
             return True
         if _is_runpy_execution_reference(node.func):
+            return True
+        if _is_dynamic_execution_reference(node.func):
             return True
         if (
             _is_dynamic_import_reference(node.func)

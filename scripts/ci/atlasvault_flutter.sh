@@ -206,7 +206,9 @@ lifecycle_declaration = re.compile(
     r"didChangeAccessibilityFeatures|didChangeAppLifecycleState|didChangeLocales|"
     r"didChangeMetrics|didChangePlatformBrightness|didChangeTextScaleFactor|"
     r"didHaveMemoryPressure|didPushRoute|didPopRoute|didRequestAppExit|"
-    r"didChangeViewFocus|didPushRouteInformation|activate|deactivate|dispose|"
+    r"didChangeViewFocus|didPushRouteInformation|handleStartBackGesture|"
+    r"handleUpdateBackGestureProgress|handleCommitBackGesture|"
+    r"handleCancelBackGesture|activate|deactivate|dispose|"
     r"createState|build)"
     r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
 )
@@ -237,6 +239,10 @@ observer_lifecycle_methods = frozenset(
         "didRequestAppExit",
         "didChangeViewFocus",
         "didPushRouteInformation",
+        "handleStartBackGesture",
+        "handleUpdateBackGestureProgress",
+        "handleCommitBackGesture",
+        "handleCancelBackGesture",
     }
 )
 
@@ -434,7 +440,10 @@ def _automatic_lifecycle_bodies(
     return tuple(
         bodies
         + _state_construction_bodies(
-            masked, state_class_names, widget_class_names
+            masked,
+            state_class_names,
+            widget_class_names,
+            automatic_bodies=tuple(bodies),
         )
     )
 
@@ -718,6 +727,7 @@ def _state_construction_bodies(
     masked: str,
     state_class_names: frozenset[str] | None = None,
     widget_class_names: frozenset[str] | None = None,
+    automatic_bodies: tuple[tuple[str, str, str], ...] = (),
 ) -> list[tuple[str, str, str]]:
     """Return automatically executed State and Widget construction expressions."""
     state_classes = tuple(class_declaration.finditer(masked))
@@ -775,6 +785,7 @@ def _state_construction_bodies(
             raise SystemExit("Unable to parse an AtlasVault State class.")
 
         class_body = masked[class_start + 1 : class_end]
+        lazy_field_expressions: list[tuple[str, str]] = []
         if has_constructor:
             constructor = re.compile(
                 rf"(?m)^[ \t]*(?:(?:const|factory)\s+)?{re.escape(owner)}"
@@ -825,7 +836,6 @@ def _state_construction_bodies(
                 statement_start = index + 1
                 if (
                     "=" not in statement
-                    or re.match(r"^\s*(?:late|static)\b", statement)
                     or _member_expression_is_method(
                         statement, owner
                     )
@@ -833,6 +843,17 @@ def _state_construction_bodies(
                     index += 1
                     continue
                 field_expression = statement.split("=", 1)[1]
+                if re.match(r"^\s*(?:late|static)\b", statement):
+                    names = re.findall(
+                        r"_?[A-Za-z_$][A-Za-z0-9_$]*",
+                        statement.split("=", 1)[0],
+                    )
+                    if names:
+                        lazy_field_expressions.append(
+                            (names[-1], field_expression)
+                        )
+                    index += 1
+                    continue
                 invoked_closure_bodies = _immediately_invoked_closure_bodies(
                     field_expression
                 )
@@ -856,6 +877,36 @@ def _state_construction_bodies(
                     (owner, "state_field", field_expression)
                 )
             index += 1
+        for field_name, field_expression in lazy_field_expressions:
+            if not any(
+                lifecycle_owner == owner
+                and re.search(
+                    rf"(?<![A-Za-z0-9_$]){re.escape(field_name)}(?![A-Za-z0-9_$])",
+                    lifecycle_body,
+                )
+                for lifecycle_owner, _, lifecycle_body in automatic_bodies
+            ):
+                continue
+            invoked_closure_bodies = _immediately_invoked_closure_bodies(
+                field_expression
+            )
+            if invoked_closure_bodies:
+                bodies.extend(
+                    (owner, "state_lazy_field", closure_body)
+                    for closure_body in invoked_closure_bodies
+                )
+            if "=>" in field_expression or re.search(
+                r"\)\s*(?:async\s*)?\{", field_expression
+            ):
+                bodies.append(
+                    (
+                        owner,
+                        "state_lazy_field",
+                        _mask_field_closure_literals(field_expression),
+                    )
+                )
+                continue
+            bodies.append((owner, "state_lazy_field", field_expression))
     return bodies
 
 
@@ -1257,6 +1308,30 @@ def _receiver_owned_wrapper_invoked(
         if (
             match.group("method").casefold() in wrappers
             or match.group("owner").casefold() in wrappers
+        ):
+            return True
+    assignments = re.compile(
+        r"(?m)^\s*(?:final|var|late\s+final|"
+        r"_?[A-Za-z_$][A-Za-z0-9_$]*(?:<[^;=()]*>)?\s+)?"
+        r"(?P<alias>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:new\s+)?"
+        r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)\s*;"
+    )
+    aliases = {
+        match.group("alias"): match.group("owner")
+        for match in assignments.finditer(body)
+        if wrappers_by_owner.get(match.group("owner"), frozenset())
+    }
+    for alias, owner in aliases.items():
+        alias_invocation = re.compile(
+            rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*\.\s*"
+            r"(?P<method>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*"
+            r"(?:\(|\??\.\s*call\s*\()"
+        )
+        wrappers = wrappers_by_owner.get(owner, frozenset())
+        if any(
+            match.group("method").casefold() in wrappers
+            for match in alias_invocation.finditer(body)
         ):
             return True
     return False

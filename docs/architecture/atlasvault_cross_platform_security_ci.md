@@ -308,6 +308,14 @@ orders of identity/secret and ephemeral/private tokens even when named
 directories appear between the words. Python, Flutter, Swift, Windows, and
 platform-integration guards use the same predicate.
 
+The Dart lifecycle policy also treats predictive-back observer callbacks as
+automatic hooks, follows a locally stored constructed helper to a sensitive
+wrapper invocation, and evaluates a lazy `late` or `static` field initializer
+only when an automatic State or Widget body reads that field. Deferred handlers
+and unread lazy fields remain non-automatic. The Python preflight rejects both
+`exec` and its local aliases, and recognizes `load_module` on direct and
+spec-derived importlib loaders, including aliases, before any pytest import.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and
