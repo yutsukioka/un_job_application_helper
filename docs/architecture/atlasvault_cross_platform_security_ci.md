@@ -396,3 +396,18 @@ families. The lifecycle policy masks named argument labels while preserving
 actual sensitive tear-offs, recognizes direct operations on the plaintext
 migration coordinator by that owner type, and rejects `getattr` retrieval of
 the blocked `builtins` dynamic-execution functions before pytest.
+
+The top-level initializer graph is parsed once per library and traversed by
+word-bounded reachability, including every declarator in a single `var` or
+`final` declaration and transitive initializer references. Typed receiver
+references to both the migration coordinator implementation and its interface
+are treated as sensitive. `reassemble` and indirect
+`WidgetsBindingObserver` implementations are automatic lifecycle roots. The
+Flutter source guard runs before any Flutter test command; it treats eager
+collection consumers (`any`, `every`, `firstWhere`, `singleWhere`, and `sort`)
+as execution while retaining deferred widget callbacks as non-automatic.
+
+The no-network AST preflight also follows aliases of `getattr` before resolving
+blocked `builtins` dynamic-execution members and rejects `_socket` imports. The
+same full source-only policy continues to run before the first VaultSync pytest
+command.

@@ -374,6 +374,7 @@ blocked_import_roots = frozenset(
         "poplib",
         "requests",
         "smtplib",
+        "_socket",
         "socket",
         "socketserver",
         "ssl",
@@ -439,6 +440,7 @@ def _blocked_imports(source: str) -> bool:
     runpy_module_aliases = set()
     runpy_execution_aliases = set()
     dynamic_execution_aliases = set()
+    getattr_aliases = {"getattr"}
     dynamic_execution_builtins = frozenset({"eval", "exec"})
     pty_module_aliases = set()
     pty_spawn_aliases = set()
@@ -593,7 +595,7 @@ def _blocked_imports(source: str) -> bool:
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id == "getattr"
+            and node.func.id in getattr_aliases
             and len(node.args) >= 2
             and isinstance(node.args[0], ast.Name)
             and node.args[0].id in builtins_module_aliases
@@ -725,6 +727,9 @@ def _blocked_imports(source: str) -> bool:
             )
             aliases_runpy_execution = _is_runpy_execution_reference(value)
             aliases_dynamic_execution = _is_dynamic_execution_reference(value)
+            aliases_getattr = (
+                isinstance(value, ast.Name) and value.id in getattr_aliases
+            )
             aliases_pty_spawn = _is_pty_spawn_reference(value)
             if (
                 not aliases_importlib
@@ -740,6 +745,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_direct_loader_execution
                 and not aliases_runpy_execution
                 and not aliases_dynamic_execution
+                and not aliases_getattr
                 and not aliases_pty_spawn
             ):
                 continue
@@ -815,6 +821,9 @@ def _blocked_imports(source: str) -> bool:
                     and target.id not in dynamic_execution_aliases
                 ):
                     dynamic_execution_aliases.add(target.id)
+                    changed = True
+                if aliases_getattr and target.id not in getattr_aliases:
+                    getattr_aliases.add(target.id)
                     changed = True
                 if aliases_pty_spawn and target.id not in pty_spawn_aliases:
                     pty_spawn_aliases.add(target.id)

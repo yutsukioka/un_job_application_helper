@@ -22,8 +22,6 @@ if (( ${#focused[@]} == 0 )); then
   printf 'No focused AtlasVault Flutter tests were found.\n' >&2
   exit 1
 fi
-flutter test "${focused[@]}"
-
 full_tests=()
 while IFS= read -r test_path; do
   full_tests+=("$test_path")
@@ -36,9 +34,6 @@ if (( ${#full_tests[@]} == 0 )); then
   printf 'No full Flutter test set was found.\n' >&2
   exit 1
 fi
-flutter test "${full_tests[@]}"
-flutter build apk --debug
-
 python3 - <<'PY'
 import re
 from pathlib import Path
@@ -208,7 +203,7 @@ lifecycle_declaration = re.compile(
     r"didHaveMemoryPressure|didPushRoute|didPopRoute|didRequestAppExit|"
     r"didChangeViewFocus|didPushRouteInformation|handleStartBackGesture|"
     r"handleUpdateBackGestureProgress|handleCommitBackGesture|"
-    r"handleCancelBackGesture|activate|deactivate|dispose|"
+    r"handleCancelBackGesture|activate|deactivate|dispose|reassemble|"
     r"createState|createElement|build)"
     r"\s*\([^)]*\)\s*(?:async\*?\s*)?(?P<body>\{|=>)"
 )
@@ -221,6 +216,7 @@ state_lifecycle_methods = frozenset(
         "activate",
         "deactivate",
         "dispose",
+        "reassemble",
         "build",
     }
 )
@@ -324,6 +320,22 @@ def _heritage_mixin_names(heritage: str) -> frozenset[str]:
     return frozenset(names)
 
 
+def _heritage_interface_names(heritage: str) -> frozenset[str]:
+    match = re.search(r"\bimplements\s+(?P<interfaces>.*)$", heritage)
+    if match is None:
+        return frozenset()
+    names = set()
+    for declaration in match.group("interfaces").split(","):
+        name = re.match(
+            r"\s*(?P<name>(?:_?[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)*"
+            r"_?[A-Za-z_$][A-Za-z0-9_$]*)",
+            declaration,
+        )
+        if name is not None:
+            names.add(_unqualified_identifier(name.group("name")))
+    return frozenset(names)
+
+
 def _at_class_member_depth(source: str, end: int) -> bool:
     return (
         sum(1 for character in source[:end] if character == "{")
@@ -361,6 +373,7 @@ def _flutter_lifecycle_class_methods(
         changed = False
         for name, heritage, _ in records:
             base = _heritage_base_name(heritage)
+            interfaces = _heritage_interface_names(heritage)
             if base in state_names and name not in state_names:
                 state_names.add(name)
                 changed = True
@@ -368,7 +381,11 @@ def _flutter_lifecycle_class_methods(
                 widget_names.add(name)
                 changed = True
             if (
-                (base in observer_names or "WidgetsBindingObserver" in heritage)
+                (
+                    base in observer_names
+                    or bool(interfaces & observer_names)
+                    or "WidgetsBindingObserver" in heritage
+                )
                 and name not in observer_names
             ):
                 observer_names.add(name)
@@ -642,13 +659,23 @@ def _mask_field_closure_literals(source: str) -> str:
                 continue
             callee = source[:opening].rstrip()
             method = re.search(
-                r"\.\s*(?P<name>map|where|expand|forEach|fold|reduce)\s*$",
+                r"\.\s*(?P<name>map|where|expand|forEach|fold|reduce|any|"
+                r"every|firstWhere|singleWhere|sort)\s*$",
                 callee,
             )
             if method is None:
                 continue
             name = method.group("name")
-            if name in {"forEach", "fold", "reduce"}:
+            if name in {
+                "forEach",
+                "fold",
+                "reduce",
+                "any",
+                "every",
+                "firstWhere",
+                "singleWhere",
+                "sort",
+            }:
                 return True
             suffix = source[closing:].lstrip()
             return re.match(
@@ -1044,6 +1071,15 @@ receiver_owned_sensitive_operations = {
             "activateselected",
         }
     ),
+    "atlasvaultplaintextmigrationcoordinating": frozenset(
+        {
+            "prepare",
+            "resumepreparation",
+            "discardprepared",
+            "finalizeandactivate",
+            "activateselected",
+        }
+    ),
 }
 
 
@@ -1400,6 +1436,7 @@ def _inherited_local_wrappers(
 def _receiver_owned_wrapper_invoked(
     body: str,
     wrappers_by_owner: dict[str, frozenset[str]],
+    receiver_type_source: str = "",
 ) -> bool:
     invocation = re.compile(
         r"(?<![A-Za-z0-9_$])(?:(?:new|const)\s+)?"
@@ -1434,6 +1471,17 @@ def _receiver_owned_wrapper_invoked(
             in receiver_owned_sensitive_operations
         )
     }
+    declared_receiver = re.compile(
+        r"\b(?P<owner>AtlasVaultPlaintextMigrationCoordinator|"
+        r"AtlasVaultPlaintextMigrationCoordinating)\s+"
+        r"(?P<alias>_?[A-Za-z_$][A-Za-z0-9_$]*)\b"
+    )
+    aliases.update(
+        {
+            match.group("alias"): match.group("owner")
+            for match in declared_receiver.finditer(receiver_type_source + "\n" + body)
+        }
+    )
     for alias, owner in aliases.items():
         alias_invocation = re.compile(
             rf"(?<![A-Za-z0-9_$]){re.escape(alias)}\s*\.\s*"
@@ -1472,36 +1520,47 @@ def _receiver_owned_constructor_invoked(
     return False
 
 
-def _top_level_lazy_initializer_bodies(
-    source: str, automatic_body: str
-) -> tuple[tuple[str, str, str], ...]:
-    """Return top-level lazy initializers reached by an automatic root."""
+def _top_level_lazy_initializers(source: str) -> dict[str, str]:
+    """Return the top-level lazy initializer graph without scanning it per root."""
     masked = _mask_dart_non_code(source)
     depths = _brace_depths(masked)
     declaration = re.compile(
         r"(?m)^[ \t]*(?:late\s+)?(?:"
         r"(?:final|var)\s+|[A-Za-z_$][A-Za-z0-9_$]*(?:<[^;=]+>)?(?:[?!])?\s+"
         r")"
-        r"(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
-        r"(?P<expression>[^;]+);"
+        r"(?P<declarators>[^;]+);"
     )
-    bodies = []
+
+    def declarators(source: str) -> tuple[str, ...]:
+        values = []
+        start = 0
+        depth = 0
+        for index, character in enumerate(source):
+            if character in "([{<":
+                depth += 1
+            elif character in ")]}>":
+                depth = max(0, depth - 1)
+            elif character == "," and depth == 0:
+                values.append(source[start:index])
+                start = index + 1
+        values.append(source[start:])
+        return tuple(values)
+
+    initializers = {}
     for match in declaration.finditer(masked):
         if depths[match.start()] != 0:
             continue
-        name = match.group("name")
-        if re.search(
-            rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
-            automatic_body,
-        ):
-            bodies.append(
-                (
-                    "__atlasvault_top_level__",
-                    "top_level_lazy_initializer",
-                    match.group("expression"),
-                )
+        for declarator in declarators(match.group("declarators")):
+            initializer = re.match(
+                r"\s*(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+                r"(?P<expression>.*)$",
+                declarator,
+                re.DOTALL,
             )
-    return tuple(bodies)
+            if initializer is None:
+                continue
+            initializers[initializer.group("name")] = initializer.group("expression")
+    return initializers
 
 
 def _mask_deferred_build_closures(body: str) -> str:
@@ -1706,6 +1765,13 @@ def _has_automatic_operation(
         _top_level_method_bodies(wrapper_source)
     )
     owner_heritage = _owner_heritage(wrapper_source)
+    owner_bodies = {
+        owner: body
+        for owner, _, body in (
+            *_class_records(_mask_dart_non_code(wrapper_source)),
+            *_mixin_records(_mask_dart_non_code(wrapper_source)),
+        )
+    }
     widget_class_names = _widget_class_names((wrapper_source,))
     automatic_bodies = list(
         _automatic_lifecycle_bodies(
@@ -1719,8 +1785,26 @@ def _has_automatic_operation(
     for name, body in _top_level_method_bodies(source).items():
         if name == "main":
             automatic_bodies.append(("__atlasvault_main__", "main", body))
-    for _, _, body in tuple(automatic_bodies):
-        automatic_bodies.extend(_top_level_lazy_initializer_bodies(source, body))
+    top_level_initializers = _top_level_lazy_initializers(source)
+    reached_top_level_initializers = set()
+    body_index = 0
+    while body_index < len(automatic_bodies):
+        _, _, body = automatic_bodies[body_index]
+        for name, initializer_body in top_level_initializers.items():
+            if name in reached_top_level_initializers or re.search(
+                rf"(?<![A-Za-z0-9_$]){re.escape(name)}(?![A-Za-z0-9_$])",
+                body,
+            ) is None:
+                continue
+            reached_top_level_initializers.add(name)
+            automatic_bodies.append(
+                (
+                    "__atlasvault_top_level__",
+                    "top_level_lazy_initializer",
+                    initializer_body,
+                )
+            )
+        body_index += 1
     for owner, method, body in automatic_bodies:
         local_wrappers = _inherited_local_wrappers(
             owner, local_wrappers_by_owner, methods_by_owner, owner_heritage
@@ -1759,7 +1843,9 @@ def _has_automatic_operation(
         ):
             return True
         if _receiver_owned_wrapper_invoked(
-            execution_body, local_wrappers_by_owner
+            execution_body,
+            local_wrappers_by_owner,
+            owner_bodies.get(owner, ""),
         ):
             return True
         if _receiver_owned_constructor_invoked(
@@ -3808,6 +3894,10 @@ if _production_target_scan(target_sources, source_paths=targets):
     raise SystemExit("Automatic AtlasVault pairing/import/export is not permitted.")
 print("Validated Dart lifecycle-body automatic-operation policy.")
 PY
+
+flutter test "${focused[@]}"
+flutter test "${full_tests[@]}"
+flutter build apk --debug
 
 forbidden="$(
   { find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f -print |
