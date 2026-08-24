@@ -2842,6 +2842,26 @@ if _has_automatic_operation(
 ):
     raise SystemExit("Dart lazy State-field initializer self-test failed.")
 
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  late final token = controller.startPairing();
+  Widget build(context) {
+    return Text(token);
+  }
+}"""
+):
+    raise SystemExit("Dart lazy State-field read self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingState extends State<PairingWidget> {
+  static final token = controller.startPairing();
+  Widget build(context) {
+    return Text(token);
+  }
+}"""
+):
+    raise SystemExit("Dart static State-field read self-test failed.")
+
 if not _production_target_scan(
     (
         """library pairing_construction;
@@ -3102,6 +3122,10 @@ for observer_callback in (
     "didRequestAppExit",
     "didChangeViewFocus",
     "didPushRouteInformation",
+    "handleStartBackGesture",
+    "handleUpdateBackGestureProgress",
+    "handleCommitBackGesture",
+    "handleCancelBackGesture",
 ):
     if not _has_automatic_operation(
         f"""class PairingObserver with WidgetsBindingObserver {{
@@ -3193,6 +3217,21 @@ class PairingState extends State<PairingWidget> {
 }"""
 ):
     raise SystemExit("Dart receiver-owned wrapper self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingHelper {
+  void run() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    final helper = PairingHelper();
+    helper.run();
+  }
+}"""
+):
+    raise SystemExit("Dart stored receiver-wrapper self-test failed.")
 
 if not _has_automatic_operation(
     """class PairingHelper {

@@ -868,6 +868,20 @@ spec.loader.exec_module(module)"""
 ):
     raise SystemExit("Python AST file-location loader self-test failed.")
 if not _blocked_imports(
+    """import importlib.util
+spec = importlib.util.spec_from_file_location('unsafe', '/tmp/unsafe.py')
+spec.loader.load_module('unsafe')"""
+):
+    raise SystemExit("Python AST spec-loader load_module self-test failed.")
+if not _blocked_imports(
+    """import importlib.util
+spec = importlib.util.find_spec('socket')
+loader = spec.loader
+run = loader.load_module
+run('socket')"""
+):
+    raise SystemExit("Python AST spec-loader load_module alias self-test failed.")
+if not _blocked_imports(
     """import importlib.util as util
 spec = util.find_spec('socket')
 module = util.module_from_spec(spec)
@@ -893,6 +907,12 @@ runpy_execution_samples = (
 )
 if not all(_blocked_imports(sample) for sample in runpy_execution_samples):
     raise SystemExit("Python AST runpy execution self-test failed.")
+dynamic_execution_samples = (
+    "exec(\"import socket\")",
+    "run = exec\nrun(\"import socket\")",
+)
+if not all(_blocked_imports(sample) for sample in dynamic_execution_samples):
+    raise SystemExit("Python AST dynamic execution self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):
