@@ -112,6 +112,29 @@ if "TRUSTED_PAIRING_STAGE=journey" in android or "TRUSTED_PAIRING_STAGE=journey"
 android_journey = workflow.split("\n            else", 1)[1].split("\n            fi", 1)[0]
 if "--dart-define=ATLAS_PAIRING_ARTIFACT_DIR=" not in android_journey:
     raise SystemExit("Android pairing artifact exchange must use app-private staging.")
+
+windows_journey = workflow.split("\n          else", 1)[1].split(
+    "\n\n      - name: Enforce Windows artifact policy", 1
+)[0]
+if "-ErrorAction SilentlyContinue" in windows_journey:
+    raise SystemExit("Windows pairing-ring cleanup must not suppress deletion errors.")
+for marker in (
+    "$RingCleanupErrors = [System.Collections.Generic.List[string]]::new()",
+    "Remove-Item -LiteralPath $Ring -Recurse -Force -ErrorAction Stop",
+    "if (Test-Path -LiteralPath $Ring)",
+    "Get-ChildItem -LiteralPath $Ring -Recurse -File -Filter *.atlaspair",
+    "throw \"Windows pairing-ring cleanup failed:",
+):
+    if marker not in windows_journey:
+        raise SystemExit("Windows pairing-ring cleanup must fail closed.")
+
+def cleanup_succeeds(*, remove_failed: bool, directory_exists: bool, artifacts: int) -> bool:
+    return not (remove_failed or directory_exists or artifacts)
+
+if cleanup_succeeds(remove_failed=True, directory_exists=True, artifacts=1):
+    raise SystemExit("A retained Windows pairing ring must fail the job.")
+if not cleanup_succeeds(remove_failed=False, directory_exists=False, artifacts=0):
+    raise SystemExit("A removed Windows pairing ring must pass cleanup.")
 print("Validated isolated pairing persistence and canonical artifact-ring policy.")
 PY
 
