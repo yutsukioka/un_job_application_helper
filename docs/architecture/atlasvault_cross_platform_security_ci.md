@@ -250,6 +250,12 @@ uses terminating deletion, verifies the exact temporary ring is absent after
 the attempt, records any retained `.atlaspair` count, and fails the job with an
 aggregate cleanup error rather than suppressing an open-handle or ACL failure.
 
+Android and Windows journey legs export the canonical artifact bytes returned
+by their actual inviter and invitee platform journeys. The deterministic vector
+remains the expected-byte and SHA-256 oracle, but is not the outgoing byte
+source: each runtime artifact is type-checked, compared with the oracle, written
+to the temporary ring, read back, and then consumed by the next platform.
+
 The Python preflight parses the complete VaultSync source closure before pytest
 imports it. It rejects absolute networking and dynamic-import routes plus
 `subprocess` and the standard `os` process-launch APIs, including imported

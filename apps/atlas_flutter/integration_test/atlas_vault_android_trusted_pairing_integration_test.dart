@@ -35,9 +35,10 @@ void main() {
     );
     final scenario = _AndroidPairingScenario(vector);
     if (stage == 'journey') {
-      await scenario.runExplicitRoleCycle();
+      final runtimeArtifacts = await scenario.runExplicitRoleCycle();
       await _exchangePairingRing(
         vector,
+        runtimeArtifacts: runtimeArtifacts,
         producer: 'android-to-windows',
         consumer: 'apple-to-android',
       );
@@ -90,7 +91,8 @@ final class _AndroidPairingScenario {
   final transactionStore = AtlasAndroidPairingTransactionStore();
   final stageStore = AtlasAndroidPairingArtifactStageStore();
 
-  Future<void> runExplicitRoleCycle() async {
+  Future<Map<AtlasVaultPairingArtifactKind, Uint8List>>
+  runExplicitRoleCycle() async {
     final stores = AtlasVaultPairingPlatformStores(
       identity: AtlasAndroidDeviceIdentitySecretStore(),
       registry: registryStore,
@@ -119,6 +121,20 @@ final class _AndroidPairingScenario {
     expect(inviter.tombstoneCount, 1);
     expect(invitee.artifacts.keys, AtlasVaultPairingArtifactKind.values);
     expect(inviter.artifacts.keys, AtlasVaultPairingArtifactKind.values);
+    return <AtlasVaultPairingArtifactKind, Uint8List>{
+      AtlasVaultPairingArtifactKind.offer: Uint8List.fromList(
+        inviter.artifacts[AtlasVaultPairingArtifactKind.offer]!,
+      ),
+      AtlasVaultPairingArtifactKind.acceptance: Uint8List.fromList(
+        invitee.artifacts[AtlasVaultPairingArtifactKind.acceptance]!,
+      ),
+      AtlasVaultPairingArtifactKind.delivery: Uint8List.fromList(
+        inviter.artifacts[AtlasVaultPairingArtifactKind.delivery]!,
+      ),
+      AtlasVaultPairingArtifactKind.acknowledgement: Uint8List.fromList(
+        invitee.artifacts[AtlasVaultPairingArtifactKind.acknowledgement]!,
+      ),
+    };
   }
 
   Future<void> prepare() async {
@@ -258,6 +274,7 @@ Uint8List _artifactBytes(Map<String, Object?> vector, String kind) {
 
 Future<void> _exchangePairingRing(
   Map<String, Object?> vector, {
+  required Map<AtlasVaultPairingArtifactKind, Uint8List> runtimeArtifacts,
   required String producer,
   required String consumer,
 }) async {
@@ -278,10 +295,18 @@ Future<void> _exchangePairingRing(
           as String;
   for (final kind in AtlasVaultPairingArtifactKind.values) {
     final encoded = atlasVaultObject(artifacts[kind.encoded]);
-    final bytes = Uint8List.fromList(
-      base64Decode(encoded['canonical_b64']! as String),
+    final expectedBytes = _artifactBytes(vector, kind.encoded);
+    final runtimeBytes = runtimeArtifacts[kind];
+    expect(runtimeBytes, isNotNull);
+    final bytes = Uint8List.fromList(runtimeBytes!);
+    expect(bytes, expectedBytes);
+    final expectedDigest = encoded['sha256']! as String;
+    final digest = await atlasVaultSha256Hex(bytes);
+    expect(digest, expectedDigest);
+    final runtimeArtifact = AtlasVaultPairingArtifact.fromCanonicalBytes(
+      Uint8List.fromList(bytes),
     );
-    final digest = encoded['sha256']! as String;
+    expect(runtimeArtifact.kind, kind);
     final produced = File(
       '${directory.path}/$producer-${kind.encoded}.atlaspair',
     );
@@ -289,6 +314,7 @@ Future<void> _exchangePairingRing(
     await File(
       '${directory.path}/$producer-${kind.encoded}.sha256',
     ).writeAsString('$digest\n', flush: true);
+    expect(await produced.readAsBytes(), bytes);
 
     final consumed = File(
       '${directory.path}/$consumer-${kind.encoded}.atlaspair',
@@ -300,7 +326,7 @@ Future<void> _exchangePairingRing(
       Uint8List.fromList(consumedBytes),
     );
     expect(artifact.kind, kind);
-    expect(await atlasVaultSha256Hex(consumedBytes), digest);
+    expect(await atlasVaultSha256Hex(consumedBytes), expectedDigest);
     final consumedDigest = File(
       '${directory.path}/$consumer-${kind.encoded}.sha256',
     );

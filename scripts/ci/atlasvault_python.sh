@@ -156,7 +156,7 @@ for path in integration_tests:
     for marker in (
         "final runtimeArtifacts = await scenario.runExplicitRoleCycle();",
         "runtimeArtifacts: runtimeArtifacts,",
-        "Future<Map<AtlasVaultPairingArtifactKind, Uint8List>> "
+        "Future<Map<AtlasVaultPairingArtifactKind, Uint8List>>",
         "runExplicitRoleCycle() async",
         "required Map<AtlasVaultPairingArtifactKind, Uint8List> runtimeArtifacts,",
         "runtimeArtifacts[kind]",
