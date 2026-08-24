@@ -197,7 +197,8 @@ class_alias_declaration = re.compile(
     r"(?P<heritage>[^;{}]+);"
 )
 mixin_declaration = re.compile(
-    r"\bmixin\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)(?P<heritage>[^{}]*)\{"
+    r"\bmixin(?:\s+class)?\s+(?P<name>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"(?P<heritage>[^{}]*)\{"
 )
 lifecycle_declaration = re.compile(
     r"(?m)^[ \t]*(?:[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>\n]+>)?\s+)*"
@@ -1261,6 +1262,22 @@ def _receiver_owned_wrapper_invoked(
     return False
 
 
+def _receiver_owned_constructor_invoked(
+    body: str,
+    wrappers_by_owner: dict[str, frozenset[str]],
+) -> bool:
+    constructor = re.compile(
+        r"(?<![A-Za-z0-9_$])(?:new\s+)?"
+        r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)"
+    )
+    for match in constructor.finditer(body):
+        wrappers = wrappers_by_owner.get(match.group("owner"), frozenset())
+        if match.group("owner").casefold() in wrappers:
+            return True
+    return False
+
+
 def _mask_deferred_build_closures(body: str) -> str:
     """Hide allowlisted user-event callback bodies from build-time execution scans."""
     masked = list(body)
@@ -1514,6 +1531,10 @@ def _has_automatic_operation(
         ):
             return True
         if _receiver_owned_wrapper_invoked(
+            execution_body, local_wrappers_by_owner
+        ):
+            return True
+        if _receiver_owned_constructor_invoked(
             execution_body, local_wrappers_by_owner
         ):
             return True
@@ -3281,7 +3302,7 @@ PY
 
 forbidden="$(
   { find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f -print |
-      LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity[^[:alnum:]]*secret|secret[^[:alnum:]]*identity|ephemeral[^[:alnum:]]*private|private[^[:alnum:]]*ephemeral'; } || true
+      LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
 )"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2

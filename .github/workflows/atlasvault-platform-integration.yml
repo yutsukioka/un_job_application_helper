@@ -154,7 +154,7 @@ jobs:
         run: |
           forbidden="$(
             { find . -path ./.git -prune -o -type f -print |
-                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity[^[:alnum:]]*secret|secret[^[:alnum:]]*identity|ephemeral[^[:alnum:]]*private|private[^[:alnum:]]*ephemeral'; } || true
+                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
           )"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
 
@@ -582,7 +582,7 @@ jobs:
               $_.FullName -notmatch '[\\/]\.git[\\/]' -and
               ($_.Extension -eq ".atlasvault" -or
                $_.Extension -eq ".atlaspair" -or
-               $_.FullName -match "(?i)identity[^a-z0-9]*secret|secret[^a-z0-9]*identity|ephemeral[^a-z0-9]*private|private[^a-z0-9]*ephemeral")
+               $_.FullName -match "(?i)identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral")
             }
           if ($Forbidden) { throw "Forbidden AtlasVault repository artifact found." }
 
@@ -617,6 +617,6 @@ jobs:
         run: |
           forbidden="$(
             { find . -path ./.git -prune -o -type f -print |
-                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity[^[:alnum:]]*secret|secret[^[:alnum:]]*identity|ephemeral[^[:alnum:]]*private|private[^[:alnum:]]*ephemeral'; } || true
+                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
           )"
           test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }

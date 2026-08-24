@@ -434,6 +434,8 @@ def _blocked_imports(source: str) -> bool:
     importlib_direct_loader_aliases = set()
     importlib_direct_loader_instance_aliases = set()
     importlib_direct_loader_execution_aliases = set()
+    runpy_module_aliases = set()
+    runpy_execution_aliases = set()
     os_module_aliases = set()
     os_process_aliases = set()
     importlib_direct_loader_names = frozenset(
@@ -457,6 +459,8 @@ def _blocked_imports(source: str) -> bool:
                     importlib_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "os":
                     os_module_aliases.add(alias.asname or alias.name)
+                elif alias.name == "runpy":
+                    runpy_module_aliases.add(alias.asname or alias.name)
                 elif alias.name.startswith("importlib."):
                     importlib_module_aliases.add(alias.asname or "importlib")
                 elif alias.name.startswith("os.") and alias.asname is None:
@@ -496,8 +500,16 @@ def _blocked_imports(source: str) -> bool:
                         )
             elif module == "os":
                 for alias in node.names:
+                    if alias.name == "*":
+                        return True
                     if alias.name in os_process_apis:
                         os_process_aliases.add(alias.asname or alias.name)
+            elif module == "runpy":
+                for alias in node.names:
+                    if alias.name == "*":
+                        return True
+                    if alias.name in {"run_path", "run_module"}:
+                        runpy_execution_aliases.add(alias.asname or alias.name)
 
     def _is_import_module_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
@@ -544,6 +556,16 @@ def _blocked_imports(source: str) -> bool:
             isinstance(node, ast.Attribute)
             and node.attr in os_process_apis
             and _is_os_module_reference(node.value)
+        )
+
+    def _is_runpy_execution_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in runpy_execution_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr in {"run_path", "run_module"}
+            and isinstance(node.value, ast.Name)
+            and node.value.id in runpy_module_aliases
         )
 
     def _is_importlib_loader_factory_reference(
@@ -645,9 +667,13 @@ def _blocked_imports(source: str) -> bool:
             aliases_importlib_direct_loader_instance = (
                 _is_importlib_direct_loader_instance(value)
             )
+            aliases_importlib_direct_loader_factory = (
+                _is_importlib_direct_loader_factory_reference(value)
+            )
             aliases_importlib_direct_loader_execution = (
                 _is_importlib_direct_loader_execution_reference(value)
             )
+            aliases_runpy_execution = _is_runpy_execution_reference(value)
             if (
                 not aliases_importlib
                 and not aliases_import_module
@@ -658,7 +684,9 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_loader
                 and not aliases_importlib_loader_execution
                 and not aliases_importlib_direct_loader_instance
+                and not aliases_importlib_direct_loader_factory
                 and not aliases_importlib_direct_loader_execution
+                and not aliases_runpy_execution
             ):
                 continue
             for target in targets:
@@ -707,6 +735,12 @@ def _blocked_imports(source: str) -> bool:
                     importlib_loader_execution_aliases.add(target.id)
                     changed = True
                 if (
+                    aliases_importlib_direct_loader_factory
+                    and target.id not in importlib_direct_loader_aliases
+                ):
+                    importlib_direct_loader_aliases.add(target.id)
+                    changed = True
+                if (
                     aliases_importlib_direct_loader_instance
                     and target.id not in importlib_direct_loader_instance_aliases
                 ):
@@ -719,6 +753,9 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     importlib_direct_loader_execution_aliases.add(target.id)
                     changed = True
+                if aliases_runpy_execution and target.id not in runpy_execution_aliases:
+                    runpy_execution_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -728,6 +765,8 @@ def _blocked_imports(source: str) -> bool:
         if _is_importlib_loader_execution_reference(node.func):
             return True
         if _is_importlib_direct_loader_execution_reference(node.func):
+            return True
+        if _is_runpy_execution_reference(node.func):
             return True
         if (
             _is_dynamic_import_reference(node.func)
@@ -916,34 +955,25 @@ for path in artifact_scans:
             f"{path} does not match generated AtlasVault artifact extensions."
         )
     if (
-        "identity[^[:alnum:]]*secret" not in source
-        or "secret[^[:alnum:]]*identity" not in source
+        "identity.*secret" not in source
+        or "secret.*identity" not in source
     ):
         raise SystemExit(
             f"{path} does not scan generated identity-secret artifact paths."
         )
     if (
-        "ephemeral[^[:alnum:]]*private" not in source
-        or "private[^[:alnum:]]*ephemeral" not in source
-    ):
-        raise SystemExit(
-            f"{path} does not scan generated ephemeral-private artifact paths."
-        )
-    if (
-        "identity.*secret" not in source
-        or "secret.*identity" not in source
-        or "ephemeral.*private" not in source
+        "ephemeral.*private" not in source
         or "private.*ephemeral" not in source
     ):
         raise SystemExit(
-            f"{path} does not scan generated artifact paths through named components."
+            f"{path} does not scan generated ephemeral-private artifact paths."
         )
 print("Validated case-insensitive generated-artifact scans.")
 PY
 
 forbidden="$(
   { find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f -print |
-      LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity[^[:alnum:]]*secret|secret[^[:alnum:]]*identity|ephemeral[^[:alnum:]]*private|private[^[:alnum:]]*ephemeral'; } || true
+      LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
 )"
 if [[ -n "$forbidden" ]]; then
   printf 'Forbidden AtlasVault artifact found in the repository:\n%s\n' "$forbidden" >&2

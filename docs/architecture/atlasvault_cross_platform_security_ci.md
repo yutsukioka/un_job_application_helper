@@ -294,6 +294,20 @@ preflight treats `importlib.__import__` aliases, both tracked importlib spec
 factories, direct `importlib.machinery` source/extension loader execution, and
 `multiprocessing` networking routes as dynamic network imports.
 
+The Flutter parser recognizes both `mixin` and Dart `mixin class` declarations.
+It treats a synchronously constructed helper with a sensitive constructor as
+automatic execution, while retaining receiver-qualified method ownership so
+same-named methods on unrelated classes stay isolated. The Python preflight
+also follows assigned direct `importlib.machinery` loader factories, rejects
+`os` wildcard imports conservatively, and blocks `runpy.run_path` and
+`runpy.run_module` execution, including imported aliases.
+
+Post-run artifact admission evaluates the complete relative path
+case-insensitively. It rejects AtlasVault and AtlasPair extensions and both
+orders of identity/secret and ephemeral/private tokens even when named
+directories appear between the words. Python, Flutter, Swift, Windows, and
+platform-integration guards use the same predicate.
+
 ## Runner Safety
 
 Shell scripts use `set -euo pipefail`. The Windows script uses strict mode and
