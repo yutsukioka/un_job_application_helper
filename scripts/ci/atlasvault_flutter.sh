@@ -3822,6 +3822,38 @@ class PairingState extends State<PairingWidget> {
 ):
     raise SystemExit("Dart multi-declarator top-level lazy self-test failed.")
 
+for comparison in (
+    "left < right",
+    "left <= right",
+    "left > right",
+    "left >= right",
+    "value << 1",
+    "value >> 1",
+    "condition ? left < right : false",
+):
+    if not _has_automatic_operation(
+        f"""var harmless = {comparison}, token = controller.startPairing();
+void main() {{
+  token;
+}}"""
+    ):
+        raise SystemExit(
+            "Dart comparison-aware multi-declarator self-test failed."
+        )
+
+for generic_expression in (
+    "makePair<String, int>()",
+    "<String, VoidCallback>{'safe': noop}",
+    "Generic<Map<String, List<int>>>()",
+):
+    if not _has_automatic_operation(
+        f"""var harmless = {generic_expression}, token = controller.startPairing();
+void main() {{
+  token;
+}}"""
+    ):
+        raise SystemExit("Dart generic multi-declarator self-test failed.")
+
 if not _has_automatic_operation(
     """final trigger = token;
 final token = controller.startPairing();
