@@ -437,6 +437,8 @@ def _blocked_imports(source: str) -> bool:
     runpy_module_aliases = set()
     runpy_execution_aliases = set()
     dynamic_execution_aliases = set()
+    pty_module_aliases = set()
+    pty_spawn_aliases = set()
     os_module_aliases = set()
     os_process_aliases = set()
     importlib_direct_loader_names = frozenset(
@@ -462,6 +464,8 @@ def _blocked_imports(source: str) -> bool:
                     os_module_aliases.add(alias.asname or alias.name)
                 elif alias.name == "runpy":
                     runpy_module_aliases.add(alias.asname or alias.name)
+                elif alias.name == "pty":
+                    pty_module_aliases.add(alias.asname or alias.name)
                 elif alias.name.startswith("importlib."):
                     importlib_module_aliases.add(alias.asname or "importlib")
                 elif alias.name.startswith("os.") and alias.asname is None:
@@ -474,6 +478,8 @@ def _blocked_imports(source: str) -> bool:
                 for alias in node.names:
                     if alias.name == "__import__":
                         builtin_import_aliases.add(alias.asname or alias.name)
+                    elif alias.name == "exec":
+                        dynamic_execution_aliases.add(alias.asname or alias.name)
             elif module == "importlib":
                 for alias in node.names:
                     if alias.name == "import_module":
@@ -511,6 +517,12 @@ def _blocked_imports(source: str) -> bool:
                         return True
                     if alias.name in {"run_path", "run_module"}:
                         runpy_execution_aliases.add(alias.asname or alias.name)
+            elif module == "pty":
+                for alias in node.names:
+                    if alias.name == "*":
+                        return True
+                    if alias.name == "spawn":
+                        pty_spawn_aliases.add(alias.asname or alias.name)
 
     def _is_import_module_reference(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
@@ -570,8 +582,23 @@ def _blocked_imports(source: str) -> bool:
         )
 
     def _is_dynamic_execution_reference(node: ast.expr) -> bool:
-        return isinstance(node, ast.Name) and (
-            node.id == "exec" or node.id in dynamic_execution_aliases
+        if isinstance(node, ast.Name):
+            return node.id == "exec" or node.id in dynamic_execution_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "exec"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in builtins_module_aliases
+        )
+
+    def _is_pty_spawn_reference(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in pty_spawn_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "spawn"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in pty_module_aliases
         )
 
     def _is_importlib_loader_factory_reference(
@@ -681,6 +708,7 @@ def _blocked_imports(source: str) -> bool:
             )
             aliases_runpy_execution = _is_runpy_execution_reference(value)
             aliases_dynamic_execution = _is_dynamic_execution_reference(value)
+            aliases_pty_spawn = _is_pty_spawn_reference(value)
             if (
                 not aliases_importlib
                 and not aliases_import_module
@@ -695,6 +723,7 @@ def _blocked_imports(source: str) -> bool:
                 and not aliases_importlib_direct_loader_execution
                 and not aliases_runpy_execution
                 and not aliases_dynamic_execution
+                and not aliases_pty_spawn
             ):
                 continue
             for target in targets:
@@ -770,6 +799,9 @@ def _blocked_imports(source: str) -> bool:
                 ):
                     dynamic_execution_aliases.add(target.id)
                     changed = True
+                if aliases_pty_spawn and target.id not in pty_spawn_aliases:
+                    pty_spawn_aliases.add(target.id)
+                    changed = True
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -783,6 +815,8 @@ def _blocked_imports(source: str) -> bool:
         if _is_runpy_execution_reference(node.func):
             return True
         if _is_dynamic_execution_reference(node.func):
+            return True
+        if _is_pty_spawn_reference(node.func):
             return True
         if (
             _is_dynamic_import_reference(node.func)

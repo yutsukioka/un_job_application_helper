@@ -375,7 +375,7 @@ def _flutter_lifecycle_class_methods(
                 changed = True
 
     methods = {}
-    for name, _, _ in records:
+    for name, heritage, _ in records:
         allowed = set()
         if name in state_names:
             allowed.update(state_lifecycle_methods)
@@ -739,6 +739,30 @@ def _state_construction_bodies(
     mixin_records = {
         name: heritage for name, heritage, _ in _mixin_records(masked)
     }
+    heritage_by_owner = {
+        name: heritage for name, heritage, _ in _class_records(masked)
+    }
+    heritage_by_owner.update(mixin_records)
+
+    def _owner_sees_declared_field(
+        lifecycle_owner: str, field_owner: str
+    ) -> bool:
+        pending = [lifecycle_owner]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            if current == field_owner:
+                return True
+            heritage = heritage_by_owner.get(current, "")
+            base = _heritage_base_name(heritage)
+            if base is not None:
+                pending.append(base)
+            pending.extend(_heritage_mixin_names(heritage))
+        return False
+
     for name, heritage, _ in _class_records(masked):
         if name in state_class_names or name in widget_class_names:
             state_mixin_names.update(_heritage_mixin_names(heritage))
@@ -879,7 +903,7 @@ def _state_construction_bodies(
             index += 1
         for field_name, field_expression in lazy_field_expressions:
             if not any(
-                lifecycle_owner == owner
+                _owner_sees_declared_field(lifecycle_owner, owner)
                 and re.search(
                     rf"(?<![A-Za-z0-9_$]){re.escape(field_name)}(?![A-Za-z0-9_$])",
                     lifecycle_body,
@@ -1297,7 +1321,7 @@ def _receiver_owned_wrapper_invoked(
     wrappers_by_owner: dict[str, frozenset[str]],
 ) -> bool:
     invocation = re.compile(
-        r"(?<![A-Za-z0-9_$])(?:new\s+)?"
+        r"(?<![A-Za-z0-9_$])(?:(?:new|const)\s+)?"
         r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
         r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)\s*\.\s*"
         r"(?P<method>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*"
@@ -1313,7 +1337,7 @@ def _receiver_owned_wrapper_invoked(
     assignments = re.compile(
         r"(?m)^\s*(?:final|var|late\s+final|"
         r"_?[A-Za-z_$][A-Za-z0-9_$]*(?:<[^;=()]*>)?\s+)?"
-        r"(?P<alias>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:new\s+)?"
+        r"(?P<alias>_?[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:(?:new|const)\s+)?"
         r"(?P<owner>_?[A-Za-z_$][A-Za-z0-9_$]*)"
         r"(?:\s*<[^()<>]*>)?\s*\([^()]*\)\s*;"
     )

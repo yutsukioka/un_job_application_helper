@@ -372,3 +372,11 @@ Package verification requires:
 
 Issue #101 remains the immediate production-hardening gate. Phase 2F-3
 ciphertext-only account and device-registry backend work has not started.
+
+The static policy treats every automatically invoked Flutter lifecycle path as
+an execution context while preserving deferred user callbacks. This includes
+predictive-back observers, const-constructed helper receivers, State/Widget
+ancestry and applied-mixin field visibility, and each record's own mixin
+heritage. The no-network preflight rejects dynamic execution through bare or
+`builtins`-qualified `exec`, and process launch through `pty.spawn`, before
+any VaultSync import or pytest command.
