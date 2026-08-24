@@ -926,9 +926,17 @@ if not all(_blocked_imports(sample) for sample in runpy_execution_samples):
 dynamic_execution_samples = (
     "exec(\"import socket\")",
     "run = exec\nrun(\"import socket\")",
+    "import builtins\nbuiltins.exec(\"import socket\")",
+    "from builtins import exec as run\nrun(\"import socket\")",
 )
 if not all(_blocked_imports(sample) for sample in dynamic_execution_samples):
     raise SystemExit("Python AST dynamic execution self-test failed.")
+pty_execution_samples = (
+    "import pty\npty.spawn(['/bin/sh'])",
+    "from pty import spawn\nspawn(['/bin/sh'])",
+)
+if not all(_blocked_imports(sample) for sample in pty_execution_samples):
+    raise SystemExit("Python AST pty execution self-test failed.")
 if _blocked_imports("from .http import encode"):
     raise SystemExit("Python AST relative-import self-test failed.")
 if _blocked_imports("import json\njson.loads('{}')"):

@@ -2937,6 +2937,46 @@ if not _has_automatic_operation(
 ):
     raise SystemExit("Dart static State-field read self-test failed.")
 
+if not _has_automatic_operation(
+    """class PairingHelper {
+  const PairingHelper();
+  void run() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> {
+  void initState() {
+    final helper = const PairingHelper();
+    helper.run();
+  }
+}"""
+):
+    raise SystemExit("Dart const helper-wrapper self-test failed.")
+
+if not _has_automatic_operation(
+    """class PairingBaseState extends State<PairingWidget> {
+  late final token = controller.startPairing();
+}
+class PairingState extends PairingBaseState {
+  Widget build(context) {
+    return Text(token);
+  }
+}"""
+):
+    raise SystemExit("Dart inherited lazy State-field self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingFields on State<PairingWidget> {
+  late final token = controller.startPairing();
+}
+class PairingState extends State<PairingWidget> with PairingFields {
+  Widget build(context) {
+    return Text(token);
+  }
+}"""
+):
+    raise SystemExit("Dart mixin lazy State-field self-test failed.")
+
 if not _production_target_scan(
     (
         """library pairing_construction;
@@ -3255,6 +3295,17 @@ if not _has_automatic_operation(
 class PairingState extends State<PairingWidget> with PairingFields {}"""
 ):
     raise SystemExit("Dart mixin-class execution self-test failed.")
+
+if not _has_automatic_operation(
+    """mixin PairingLifecycle on State<PairingWidget> {
+  void initState() {
+    controller.startPairing();
+  }
+}
+class PairingState extends State<PairingWidget> with PairingLifecycle {}
+class Harmless {}"""
+):
+    raise SystemExit("Dart mixin lifecycle-heritage self-test failed.")
 
 if not _production_target_scan(
     (
