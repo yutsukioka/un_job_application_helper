@@ -196,6 +196,35 @@ workflow = Path(
     ".github/workflows/atlasvault-platform-integration.yml"
 ).read_text(encoding="utf-8")
 required = (
+    "def validate_ring_artifact(*, prefix, kind, expected=None, expected_digest=None):",
+    'prefix="apple-to-android",',
+    "expected=expected,",
+    "expected_digest=entry[\"sha256\"],",
+    'prefix="android-to-windows",',
+    "if artifact != canonical:",
+    'decoded["format"] != "atlasvault-pairing-artifact"',
+    'decoded["version"] != 1',
+    'decoded["kind"] != kind',
+    "if digest != recorded:",
+)
+missing = [marker for marker in required if marker not in workflow]
+if missing:
+    raise SystemExit(
+        "Android fixed-vector and runtime-ring validation lanes are not separated."
+    )
+runtime_call = workflow.split('prefix="android-to-windows",', 1)[1].split(")", 1)[0]
+if "expected=" in runtime_call or "expected_digest=" in runtime_call:
+    raise SystemExit("Android runtime artifacts must not use the fixed-vector oracle.")
+print("Validated separate fixed-vector and runtime pairing-ring workflow lanes.")
+PY
+
+python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/atlasvault-platform-integration.yml"
+).read_text(encoding="utf-8")
+required = (
     "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE",
     "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID",
     "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_STAGE",
