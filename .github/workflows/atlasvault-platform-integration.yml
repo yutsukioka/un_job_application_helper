@@ -568,6 +568,8 @@ jobs:
           }
           else {
             $Ring = Join-Path $env:RUNNER_TEMP "atlas-pairing-ring"
+            $HostedIngressProvenance = "fixed-vector-conformance"
+            Write-Output "Hosted Windows pairing ingress provenance: $HostedIngressProvenance"
             New-Item -ItemType Directory -Path $Ring -Force | Out-Null
             try {
               $VectorPath = "..\..\contracts\sync\test_vectors\atlasvault_trusted_pairing_delivery_vectors_v1.json"

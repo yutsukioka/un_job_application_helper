@@ -1541,7 +1541,7 @@ def _top_level_lazy_initializers(source: str) -> dict[str, str]:
         def begins_declarator(offset: int) -> bool:
             remainder = source[offset:]
             candidate = re.match(
-                r"\s*_?[A-Za-z_$][A-Za-z0-9_$]*\s*(?==|,|$)",
+                r"\s*_?[A-Za-z_$][A-Za-z0-9_$]*\s*(?==)",
                 remainder,
             )
             return candidate is not None

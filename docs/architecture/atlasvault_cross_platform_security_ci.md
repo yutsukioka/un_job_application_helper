@@ -263,6 +263,10 @@ match the fixed vector or one another; only the same transported file must keep
 one hash from producer through consumer. Isolated hosted jobs may seed their
 incoming leg from the fixed fake vector, while the external platform ring carries
 actual runtime output between hosts without uploading protected artifacts.
+Hosted Windows fixed-vector ingress is not a cross-runner runtime handoff. The
+`android-to-windows` filename remains the platform-consumer contract, while the
+hosted job records `fixed-vector-conformance` provenance and the external ring
+provides the separately verified Android-runtime-to-Windows transport evidence.
 
 The Python preflight parses the complete VaultSync source closure before pytest
 imports it. It rejects absolute networking and dynamic-import routes plus
