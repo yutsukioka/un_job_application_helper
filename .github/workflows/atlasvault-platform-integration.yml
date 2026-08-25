@@ -1,0 +1,681 @@
+name: AtlasVault Platform Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.44.4"
+
+jobs:
+  android:
+    name: Android / Fake AtlasVault Integrations / ${{ matrix.pairing_scenario }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pairing_scenario:
+          - persistence
+          - journey
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "${{ env.FLUTTER_VERSION }}"
+          channel: stable
+          cache: true
+
+      - name: Run Android fake-data security integrations
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            vector_root="$GITHUB_WORKSPACE/contracts/sync/test_vectors"
+            interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_ios_flutter_interop_vectors_v1.json")"
+            windows_interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_windows_interop_vectors_v1.json")"
+            identity_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_device_identity_pairing_vectors_v1.json")"
+            pairing_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_trusted_pairing_delivery_vectors_v1.json")"
+            cd apps/atlas_flutter
+            flutter pub get
+            if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]; then
+              flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_private_state_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_plaintext_migration_integration_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
+              flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64" --dart-define=ATLAS_WINDOWS_INTEROP_VECTOR_B64="$windows_interop_vector_b64"
+              flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64"
+              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+            else
+              app_id="com.yutsukioka.jobagg.atlas"
+              device_ring_relative="files/atlas-pairing-ring"
+              device_ring="/data/user/0/$app_id/$device_ring_relative"
+              host_ring="$RUNNER_TEMP/atlas-pairing-ring"
+              mkdir -p "$host_ring"
+              cleanup_android_pairing() {
+                adb shell run-as "$app_id" rm -rf "$device_ring_relative" >/dev/null 2>&1 || true
+                adb uninstall "$app_id" >/dev/null 2>&1 || true
+                rm -rf "$host_ring"
+              }
+              trap cleanup_android_pairing EXIT
+              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
+            import base64
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
+            vector = json.loads(vector_path.read_text(encoding="utf-8"))
+            for kind, entry in vector["artifacts"].items():
+                payload = base64.b64decode(entry["canonical_b64"], validate=True)
+                digest = hashlib.sha256(payload).hexdigest()
+                if digest != entry["sha256"]:
+                    raise SystemExit("Pairing vector digest mismatch.")
+                (root / f"apple-to-android-{kind}.atlaspair").write_bytes(payload)
+                (root / f"apple-to-android-{kind}.sha256").write_text(
+                    f"{digest}\n", encoding="ascii"
+                )
+            PY
+              flutter build apk --debug --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64"
+              adb install -r build/app/outputs/flutter-apk/app-debug.apk >/dev/null
+              adb shell run-as "$app_id" mkdir -p "$device_ring_relative"
+              for path in "$host_ring"/apple-to-android-*; do
+                name="$(basename "$path")"
+                adb push "$path" "/data/local/tmp/$name" >/dev/null
+                adb shell chmod 0644 "/data/local/tmp/$name"
+                adb shell run-as "$app_id" cp "/data/local/tmp/$name" "$device_ring_relative/$name"
+                adb shell rm -f "/data/local/tmp/$name"
+              done
+              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_PAIRING_ARTIFACT_DIR="$device_ring" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=journey
+              for kind in offer acceptance delivery acknowledgement; do
+                for extension in atlaspair sha256; do
+                  name="android-to-windows-$kind.$extension"
+                  adb exec-out run-as "$app_id" cat "$device_ring_relative/$name" > "$host_ring/$name"
+                done
+              done
+              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
+            import base64
+            import hashlib
+            import json
+            import os
+            from pathlib import Path
+
+            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
+            vector = json.loads(vector_path.read_text(encoding="utf-8"))
+            sentinel = vector["expected_payloads"]["unsupported_private_sentinel"].encode()
+
+            def validate_ring_artifact(*, prefix, kind, expected=None, expected_digest=None):
+                artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
+                digest = hashlib.sha256(artifact).hexdigest()
+                recorded = (root / f"{prefix}-{kind}.sha256").read_text(
+                    encoding="ascii"
+                ).strip()
+                if digest != recorded:
+                    raise SystemExit("Android pairing artifact sidecar mismatch.")
+                decoded = json.loads(artifact)
+                canonical = json.dumps(
+                    decoded,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                if artifact != canonical:
+                    raise SystemExit("Android pairing artifact is not canonical JSON.")
+                if (
+                    set(decoded) != {"format", "version", "kind", "payload"}
+                    or decoded["format"] != "atlasvault-pairing-artifact"
+                    or decoded["version"] != 1
+                    or decoded["kind"] != kind
+                    or not isinstance(decoded["payload"], dict)
+                ):
+                    raise SystemExit("Android pairing artifact envelope mismatch.")
+                if expected is not None and artifact != expected:
+                    raise SystemExit("Apple fixed-vector pairing artifact mismatch.")
+                if expected_digest is not None and digest != expected_digest:
+                    raise SystemExit("Apple fixed-vector pairing digest mismatch.")
+                if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
+                    raise SystemExit("Android pairing artifact contains forbidden plaintext.")
+
+            for kind, entry in vector["artifacts"].items():
+                expected = base64.b64decode(entry["canonical_b64"], validate=True)
+                validate_ring_artifact(
+                    prefix="apple-to-android",
+                    kind=kind,
+                    expected=expected,
+                    expected_digest=entry["sha256"],
+                )
+                validate_ring_artifact(
+                    prefix="android-to-windows",
+                    kind=kind,
+                )
+            print("Validated fixed-vector input and Android runtime pairing artifact ring.")
+            PY
+            fi
+
+      - name: Enforce Android artifact policy
+        if: always()
+        shell: bash
+        run: |
+          forbidden="$(
+            { find . -path ./.git -prune -o -type f -print |
+                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
+          )"
+          test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
+
+  windows:
+    name: Windows / Deterministic Native Integrations / ${{ matrix.pairing_scenario }}
+    runs-on: windows-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pairing_scenario:
+          - persistence
+          - journey
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "${{ env.FLUTTER_VERSION }}"
+          channel: stable
+          cache: true
+
+      - name: Run Windows fake-data security integrations
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          Set-Location apps\atlas_flutter
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed" }
+          if ("${{ matrix.pairing_scenario }}" -eq "persistence") {
+            $env:ATLAS_WINDOWS_STORAGE_TEST_VAULT_ID = "c1000000-0000-4000-8000-000000000001"
+            $env:ATLAS_WINDOWS_STORAGE_TEST_STAGE = "prepare"
+            flutter test integration_test\atlas_vault_windows_storage_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows storage prepare failed" }
+            $env:ATLAS_WINDOWS_STORAGE_TEST_STAGE = "verify"
+            flutter test integration_test\atlas_vault_windows_storage_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows storage verify failed" }
+            Remove-Item Env:ATLAS_WINDOWS_STORAGE_TEST_STAGE
+            Remove-Item Env:ATLAS_WINDOWS_STORAGE_TEST_VAULT_ID
+
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_VAULT_ID = "c1000000-0000-4000-8000-000000000002"
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE = "prepare"
+            flutter test integration_test\atlas_vault_windows_private_state_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows private-state prepare failed" }
+            $env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE = "verify"
+            flutter test integration_test\atlas_vault_windows_private_state_integration_test.dart -d windows
+            if ($LASTEXITCODE -ne 0) { throw "Windows private-state verify failed" }
+            Remove-Item Env:ATLAS_WINDOWS_PRIVATE_TEST_STAGE
+            Remove-Item Env:ATLAS_WINDOWS_PRIVATE_TEST_VAULT_ID
+
+            $Tests = @(
+              "integration_test\atlas_vault_windows_plaintext_migration_integration_test.dart",
+              "integration_test\atlas_vault_windows_interoperability_integration_test.dart"
+            )
+            foreach ($Test in $Tests) {
+              flutter test $Test -d windows
+              if ($LASTEXITCODE -ne 0) { throw "$Test failed" }
+            }
+
+            $RecoveryLogRoot = Join-Path $env:RUNNER_TEMP "atlas-windows-recovery-processes"
+            New-Item -ItemType Directory -Path $RecoveryLogRoot -Force | Out-Null
+            $FlutterExecutable = (
+              Get-Command flutter -CommandType Application |
+                Select-Object -First 1
+            ).Source
+
+            function Start-AtlasRecoveryWaiter {
+              param(
+                [string] $Name,
+                [string] $Test,
+                [string] $StageVariable,
+                [string] $VaultVariable,
+                [string] $Stage,
+                [string] $VaultId
+              )
+              $PriorStage = [Environment]::GetEnvironmentVariable($StageVariable, "Process")
+              $PriorVault = [Environment]::GetEnvironmentVariable($VaultVariable, "Process")
+              $Stdout = Join-Path $RecoveryLogRoot "$Name.stdout.log"
+              $Stderr = Join-Path $RecoveryLogRoot "$Name.stderr.log"
+              $ExitCodeFile = Join-Path $RecoveryLogRoot "$Name.exit-code"
+              Remove-Item -LiteralPath $Stdout, $Stderr, $ExitCodeFile -Force -ErrorAction SilentlyContinue
+              try {
+                Set-Item -Path "Env:$StageVariable" -Value $Stage
+                Set-Item -Path "Env:$VaultVariable" -Value $VaultId
+                $FlutterInvocation = '/d /v:on /s /c ""{0}" test "{1}" -d windows 1>"{2}" 2>"{3}" & echo !errorlevel! > "{4}""' -f $FlutterExecutable, $Test, $Stdout, $Stderr, $ExitCodeFile
+                $Process = Start-Process -FilePath $env:ComSpec -ArgumentList $FlutterInvocation -PassThru -NoNewWindow
+              }
+              finally {
+                if ($null -eq $PriorStage) {
+                  Remove-Item -Path "Env:$StageVariable" -ErrorAction SilentlyContinue
+                }
+                else {
+                  Set-Item -Path "Env:$StageVariable" -Value $PriorStage
+                }
+                if ($null -eq $PriorVault) {
+                  Remove-Item -Path "Env:$VaultVariable" -ErrorAction SilentlyContinue
+                }
+                else {
+                  Set-Item -Path "Env:$VaultVariable" -Value $PriorVault
+                }
+              }
+              return [PSCustomObject]@{
+                Name = $Name
+                Process = $Process
+                Stdout = $Stdout
+                Stderr = $Stderr
+                ExitCodeFile = $ExitCodeFile
+                RunnerPath = [IO.Path]::GetFullPath((Join-Path (Get-Location) "build\\windows\\x64\\runner\\Debug\\atlas.exe"))
+              }
+            }
+
+            function Write-AtlasRecoveryLogs {
+              param([PSCustomObject] $Waiter)
+              foreach ($Path in @($Waiter.Stdout, $Waiter.Stderr)) {
+                if (Test-Path -LiteralPath $Path) {
+                  Get-Content -LiteralPath $Path -Raw | Write-Host
+                }
+              }
+            }
+
+            function Get-AtlasRecoveryProcessTree {
+              param([int] $RootProcessId)
+              $Pending = [System.Collections.Queue]::new()
+              $Seen = [System.Collections.Generic.HashSet[int]]::new()
+              $Descendants = [System.Collections.Generic.List[PSCustomObject]]::new()
+              $Pending.Enqueue([PSCustomObject]@{
+                Id = $RootProcessId
+                Depth = 0
+              })
+              while ($Pending.Count -gt 0) {
+                $Current = $Pending.Dequeue()
+                if (-not $Seen.Add([int]$Current.Id)) {
+                  continue
+                }
+                $Children = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Current.Id)" -ErrorAction Stop
+                foreach ($Child in @($Children)) {
+                  $Process = Get-Process -Id $Child.ProcessId -ErrorAction SilentlyContinue
+                  if ($null -eq $Process) {
+                    continue
+                  }
+                  $Descendant = [PSCustomObject]@{
+                    Id = [int]$Child.ProcessId
+                    Depth = ([int]$Current.Depth) + 1
+                  }
+                  $Descendants.Add($Descendant)
+                  $Pending.Enqueue($Descendant)
+                }
+              }
+              return @($Descendants)
+            }
+
+            function Stop-AtlasRecoveryProcessTree {
+              param([PSCustomObject] $Waiter)
+              $Descendants = @(Get-AtlasRecoveryProcessTree ([int]$Waiter.Process.Id))
+              foreach ($Descendant in @($Descendants | Sort-Object -Property Depth -Descending)) {
+                Stop-Process -Id $Descendant.Id -Force -ErrorAction SilentlyContinue
+              }
+              Stop-Process -Id $Waiter.Process.Id -Force -ErrorAction SilentlyContinue
+              $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+              foreach ($ProcessId in @($Descendants.Id) + @([int]$Waiter.Process.Id)) {
+                $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+                if ($null -eq $Process) {
+                  continue
+                }
+                $RemainingMilliseconds = [Math]::Max(
+                  1,
+                  [int]($Deadline - [DateTime]::UtcNow).TotalMilliseconds
+                )
+                if (-not $Process.WaitForExit($RemainingMilliseconds)) {
+                  throw "$($Waiter.Name) retained process $ProcessId after deliberate termination."
+                }
+              }
+            }
+
+            function Wait-AtlasRecoveryWaiter {
+              param([PSCustomObject] $Waiter)
+              if (-not $Waiter.Process.WaitForExit(120000)) {
+                Stop-AtlasRecoveryProcessTree $Waiter
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) exceeded the 120-second recovery-stage timeout."
+              }
+              if (-not (Test-Path -LiteralPath $Waiter.ExitCodeFile)) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) did not write an exit code."
+              }
+              $ExitCodeText = (Get-Content -LiteralPath $Waiter.ExitCodeFile -Raw).Trim()
+              $ExitCode = 0
+              if (-not [int]::TryParse($ExitCodeText, [ref] $ExitCode)) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) wrote an invalid exit code."
+              }
+              if ($ExitCode -ne 0) {
+                Write-AtlasRecoveryLogs $Waiter
+                throw "$($Waiter.Name) failed with exit code $ExitCode."
+              }
+            }
+
+            function Invoke-AtlasRecoveryStage {
+              param(
+                [string] $Name,
+                [string] $Test,
+                [string] $StageVariable,
+                [string] $VaultVariable,
+                [string] $Stage,
+                [string] $VaultId
+              )
+              $Waiter = Start-AtlasRecoveryWaiter $Name $Test $StageVariable $VaultVariable $Stage $VaultId
+              Wait-AtlasRecoveryWaiter $Waiter
+            }
+
+            function Wait-AtlasRecoverySignal {
+              param([string] $Root, [string] $Signal)
+              $SignalPath = Join-Path $Root "$Signal.ready"
+              $Deadline = [DateTime]::UtcNow.AddSeconds(120)
+              while (-not (Test-Path -LiteralPath $SignalPath)) {
+                if ([DateTime]::UtcNow -ge $Deadline) {
+                  throw "Timed out waiting for recovery signal $Signal."
+                }
+                Start-Sleep -Milliseconds 200
+              }
+            }
+
+            function Get-AtlasRecoveryHolderProcessTree {
+              param([PSCustomObject] $Holder)
+              $Descendants = @(Get-AtlasRecoveryProcessTree ([int]$Holder.Process.Id))
+              $Runner = $null
+              foreach ($Descendant in $Descendants) {
+                $Process = Get-Process -Id $Descendant.Id -ErrorAction SilentlyContinue
+                if ($null -ne $Process -and $Process.ProcessName -eq "atlas" -and $Process.Path -eq $Holder.RunnerPath) {
+                  $Runner = $Descendant
+                }
+              }
+              if ($null -eq $Runner) {
+                throw "No test-owned Atlas runner descended from $($Holder.Name)."
+              }
+              return [PSCustomObject]@{
+                Runner = $Runner
+                Descendants = @($Descendants)
+              }
+            }
+
+            function Stop-AtlasRecoveryHolder {
+              param([PSCustomObject] $Holder)
+              $ProcessTree = Get-AtlasRecoveryHolderProcessTree $Holder
+              $TestRunner = Get-Process -Id $ProcessTree.Runner.Id -ErrorAction Stop
+              if ($TestRunner.ProcessName -ne "atlas" -or $TestRunner.Path -ne $Holder.RunnerPath) {
+                throw "$($Holder.Name) did not retain the expected test-owned Atlas runner."
+              }
+              Stop-AtlasRecoveryProcessTree $Holder
+              Write-AtlasRecoveryLogs $Holder
+            }
+
+            function Stop-AtlasRecoveryHolderForCleanup {
+              param([PSCustomObject] $Holder)
+              # The finally path owns the holder root even when startup never created atlas.exe.
+              Stop-AtlasRecoveryProcessTree $Holder
+              Write-AtlasRecoveryLogs $Holder
+            }
+
+            $MigrationRecoveryTest = "integration_test\atlas_vault_windows_plaintext_migration_recovery_test.dart"
+            $MigrationStageVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE"
+            $MigrationVaultVariable = "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID"
+            $MigrationVaultId = "c1000000-0000-4000-8000-000000000003"
+            $MigrationCoordinationRoot = Join-Path ([IO.Path]::GetTempPath()) (
+              "atlas_windows_migration_coordination_" + ($MigrationVaultId -replace "-", "")
+            )
+
+            $InteropRecoveryTest = "integration_test\atlas_vault_windows_interoperability_recovery_test.dart"
+            $InteropStageVariable = "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_STAGE"
+            $InteropVaultVariable = "ATLAS_WINDOWS_INTEROP_RECOVERY_PROCESS_VAULT_ID"
+            $InteropVaultId = "windows_recovery_import_cross_process_ci"
+            $InteropCoordinationRoot = Join-Path ([IO.Path]::GetTempPath()) (
+              "atlas_windows_import_cross_process_" + $InteropVaultId
+            )
+            $MigrationCrashHolder = $null
+            $InteropCrashHolder = $null
+            $MigrationAdmissionWaiter = $null
+            $MigrationFinalizationWaiter = $null
+            $MigrationCrashVerify = $null
+            $InteropAdmissionWaiter = $null
+            $InteropSelectionWaiter = $null
+            $InteropCrashVerify = $null
+
+            try {
+              Invoke-AtlasRecoveryStage "migration-cleanup-before" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-prepare" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "prepare" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-verify" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "verify" $MigrationVaultId
+
+              $MigrationAdmissionWaiter = Start-AtlasRecoveryWaiter "migration-admission-waiter" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-waiter" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "legacy-ready"
+              Invoke-AtlasRecoveryStage "migration-admission-prepare" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-prepare" $MigrationVaultId
+              Invoke-AtlasRecoveryStage "migration-admission-rollback" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "admission-rollback" $MigrationVaultId
+              Wait-AtlasRecoveryWaiter $MigrationAdmissionWaiter
+
+              Invoke-AtlasRecoveryStage "migration-cleanup-before-finalization" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              $MigrationFinalizationWaiter = Start-AtlasRecoveryWaiter "migration-finalization-waiter" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "finalization-waiter" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "finalization-waiter-ready"
+              Invoke-AtlasRecoveryStage "migration-finalization-run" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "finalization-run" $MigrationVaultId
+              Wait-AtlasRecoveryWaiter $MigrationFinalizationWaiter
+
+              Invoke-AtlasRecoveryStage "migration-cleanup-before-crash" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+              $MigrationCrashHolder = Start-AtlasRecoveryWaiter "migration-crash-holder" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-holder" $MigrationVaultId
+              Wait-AtlasRecoverySignal $MigrationCoordinationRoot "crash-lock-held"
+              $MigrationCrashVerify = Start-AtlasRecoveryWaiter "migration-crash-verify" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "crash-verify" $MigrationVaultId
+              Stop-AtlasRecoveryHolder $MigrationCrashHolder
+              Wait-AtlasRecoveryWaiter $MigrationCrashVerify
+              Invoke-AtlasRecoveryStage "migration-cleanup-after" $MigrationRecoveryTest $MigrationStageVariable $MigrationVaultVariable "cleanup" $MigrationVaultId
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropAdmissionWaiter = Start-AtlasRecoveryWaiter "interop-admission-waiter" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-waiter" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "legacy-ready"
+              Invoke-AtlasRecoveryStage "interop-admission-prepare" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-prepare" $InteropVaultId
+              Invoke-AtlasRecoveryStage "interop-admission-reset" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "admission-reset" $InteropVaultId
+              Wait-AtlasRecoveryWaiter $InteropAdmissionWaiter
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before-selection" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropSelectionWaiter = Start-AtlasRecoveryWaiter "interop-selection-waiter" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "selection-waiter" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "selection-waiter-ready"
+              Invoke-AtlasRecoveryStage "interop-selection-run" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "selection-run" $InteropVaultId
+              Wait-AtlasRecoveryWaiter $InteropSelectionWaiter
+
+              Invoke-AtlasRecoveryStage "interop-cleanup-before-crash" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+              $InteropCrashHolder = Start-AtlasRecoveryWaiter "interop-crash-holder" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-holder" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-lock-held"
+              $InteropCrashVerify = Start-AtlasRecoveryWaiter "interop-crash-verify" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "crash-verify" $InteropVaultId
+              Wait-AtlasRecoverySignal $InteropCoordinationRoot "crash-waiter-ready"
+              Stop-AtlasRecoveryHolder $InteropCrashHolder
+              Wait-AtlasRecoveryWaiter $InteropCrashVerify
+              Invoke-AtlasRecoveryStage "interop-cleanup-after" $InteropRecoveryTest $InteropStageVariable $InteropVaultVariable "cleanup" $InteropVaultId
+            }
+            finally {
+              $CleanupErrors = [System.Collections.Generic.List[string]]::new()
+              foreach ($Waiter in @($MigrationAdmissionWaiter, $MigrationFinalizationWaiter, $MigrationCrashVerify, $InteropAdmissionWaiter, $InteropSelectionWaiter, $InteropCrashVerify)) {
+                if ($null -ne $Waiter -and -not $Waiter.Process.HasExited) {
+                  try {
+                    Stop-AtlasRecoveryProcessTree $Waiter
+                  }
+                  catch {
+                    $CleanupErrors.Add("$($Waiter.Name): $($_.Exception.Message)")
+                  }
+                }
+              }
+              foreach ($Holder in @($MigrationCrashHolder, $InteropCrashHolder)) {
+                if ($null -ne $Holder -and -not $Holder.Process.HasExited) {
+                  try {
+                    Stop-AtlasRecoveryHolderForCleanup $Holder
+                  }
+                  catch {
+                    $CleanupErrors.Add("$($Holder.Name): $($_.Exception.Message)")
+                  }
+                }
+              }
+              foreach ($CleanupPath in @($MigrationCoordinationRoot, $InteropCoordinationRoot, $RecoveryLogRoot)) {
+                if (Test-Path -LiteralPath $CleanupPath) {
+                  try {
+                    Remove-Item -LiteralPath $CleanupPath -Recurse -Force -ErrorAction Stop
+                  }
+                  catch {
+                    $CleanupErrors.Add("cleanup path: $($_.Exception.Message)")
+                  }
+                }
+              }
+              if ($CleanupErrors.Count -gt 0) {
+                throw "Atlas recovery cleanup failed: $($CleanupErrors -join '; ')"
+              }
+            }
+            flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+            if ($LASTEXITCODE -ne 0) { throw "Windows identity prepare failed" }
+            flutter test integration_test\atlas_vault_windows_device_identity_integration_test.dart -d windows --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+            if ($LASTEXITCODE -ne 0) { throw "Windows identity verify failed" }
+            flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=prepare
+            if ($LASTEXITCODE -ne 0) { throw "Windows pairing prepare failed" }
+            flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=verify
+            if ($LASTEXITCODE -ne 0) { throw "Windows pairing verify failed" }
+          }
+          else {
+            $Ring = Join-Path $env:RUNNER_TEMP "atlas-pairing-ring"
+            $HostedIngressProvenance = "fixed-vector-conformance"
+            Write-Output "Hosted Windows pairing ingress provenance: $HostedIngressProvenance"
+            New-Item -ItemType Directory -Path $Ring -Force | Out-Null
+            try {
+              $VectorPath = "..\..\contracts\sync\test_vectors\atlasvault_trusted_pairing_delivery_vectors_v1.json"
+              $Vector = Get-Content -LiteralPath $VectorPath -Raw | ConvertFrom-Json
+              foreach ($Kind in @("offer", "acceptance", "delivery", "acknowledgement")) {
+                $Entry = $Vector.artifacts.PSObject.Properties[$Kind].Value
+                $Bytes = [Convert]::FromBase64String([string] $Entry.canonical_b64)
+                $Sha256 = [Security.Cryptography.SHA256]::Create()
+                try {
+                  $Hash = $Sha256.ComputeHash($Bytes)
+                  $Digest = ([BitConverter]::ToString($Hash)).Replace("-", "").ToLowerInvariant()
+                }
+                finally {
+                  $Sha256.Dispose()
+                }
+                if ($Digest -ne [string] $Entry.sha256) {
+                  throw "Pairing vector digest mismatch."
+                }
+                [IO.File]::WriteAllBytes(
+                  (Join-Path $Ring "android-to-windows-$Kind.atlaspair"),
+                  $Bytes
+                )
+                [IO.File]::WriteAllText(
+                  (Join-Path $Ring "android-to-windows-$Kind.sha256"),
+                  "$Digest`n",
+                  [Text.Encoding]::ASCII
+                )
+                [Array]::Clear($Bytes, 0, $Bytes.Length)
+              }
+              $env:ATLAS_PAIRING_ARTIFACT_DIR = $Ring
+              flutter test integration_test\atlas_vault_windows_trusted_pairing_integration_test.dart -d windows --dart-define=ATLAS_WINDOWS_TRUSTED_PAIRING_STAGE=journey
+              if ($LASTEXITCODE -ne 0) { throw "Windows pairing journey failed" }
+            }
+            finally {
+              $RingCleanupErrors = [System.Collections.Generic.List[string]]::new()
+              try {
+                if (Test-Path -LiteralPath $Ring) {
+                  Remove-Item -LiteralPath $Ring -Recurse -Force -ErrorAction Stop
+                }
+              }
+              catch {
+                $RingCleanupErrors.Add("remove ring: $($_.Exception.Message)")
+              }
+              try {
+                if (Test-Path -LiteralPath $Ring) {
+                  $ResidualRingArtifacts = @(
+                    Get-ChildItem -LiteralPath $Ring -Recurse -File -Filter *.atlaspair -ErrorAction Stop
+                  )
+                  $RingCleanupErrors.Add(
+                    "ring directory remains with $($ResidualRingArtifacts.Count) AtlasPair artifact(s)"
+                  )
+                }
+              }
+              catch {
+                $RingCleanupErrors.Add("verify ring removal: $($_.Exception.Message)")
+              }
+              if ($RingCleanupErrors.Count -gt 0) {
+                throw "Windows pairing-ring cleanup failed: $($RingCleanupErrors -join '; ')"
+              }
+            }
+          }
+
+      - name: Enforce Windows artifact policy
+        if: always()
+        shell: pwsh
+        run: |
+          $Forbidden = Get-ChildItem -LiteralPath . -Recurse -File |
+            Where-Object {
+              $_.FullName -notmatch '[\\/]\.git[\\/]' -and
+              ($_.Extension -eq ".atlasvault" -or
+               $_.Extension -eq ".atlaspair" -or
+               $_.FullName -match "(?i)identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral")
+            }
+          if ($Forbidden) { throw "Forbidden AtlasVault repository artifact found." }
+
+  apple:
+    name: Apple / Simulator-Compatible Security Integrations
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run Apple fake-data integration tests
+        working-directory: apps/apple
+        run: |
+          set -euo pipefail
+          ring="$RUNNER_TEMP/atlas-pairing-ring"
+          mkdir -p "$ring"
+          trap 'rm -rf "$ring"' EXIT
+          swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-integration" --filter '(AtlasVault(DeviceIdentity|PairingFoundation|KeyDelivery|PairingTransaction|CrossPlatformTrustedPairing|TrustedDeviceRegistry)Tests|AtlasIOSFlutterEncryptedInteroperabilityTests)'
+          ATLAS_PAIRING_ARTIFACT_DIR="$ring" ATLAS_PAIRING_RING_STAGE=produce swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-ring-produce" --filter 'testExternalAppleAndroidWindowsPairingRingUsesCanonicalArtifacts'
+          for kind in offer acceptance delivery acknowledgement; do
+            cp "$ring/apple-to-android-$kind.atlaspair" "$ring/windows-to-apple-$kind.atlaspair"
+            cp "$ring/apple-to-android-$kind.sha256" "$ring/windows-to-apple-$kind.sha256"
+          done
+          ATLAS_PAIRING_ARTIFACT_DIR="$ring" ATLAS_PAIRING_RING_STAGE=verify swift test --scratch-path "$RUNNER_TEMP/atlasvault-apple-ring-verify" --filter 'testExternalAppleAndroidWindowsPairingRingUsesCanonicalArtifacts'
+          xcodebuild -scheme AtlasApple -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/AtlasAppleIntegration" CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -project AtlasIOSHost/AtlasIOSHost.xcodeproj -scheme AtlasIOSHost -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/AtlasIOSHostIntegration" CODE_SIGNING_ALLOWED=NO build
+
+      - name: Enforce Apple artifact policy
+        if: always()
+        shell: bash
+        run: |
+          forbidden="$(
+            { find . -path ./.git -prune -o -type f -print |
+                LC_ALL=C grep -Ei '\.atlasvault$|\.atlaspair$|identity.*secret|secret.*identity|ephemeral.*private|private.*ephemeral'; } || true
+          )"
+          test -z "$forbidden" || { printf 'Forbidden repository artifact:\n%s\n' "$forbidden" >&2; exit 1; }
