@@ -132,19 +132,52 @@ jobs:
             vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
             vector = json.loads(vector_path.read_text(encoding="utf-8"))
             sentinel = vector["expected_payloads"]["unsupported_private_sentinel"].encode()
-            for prefix in ("apple-to-android", "android-to-windows"):
-                for kind, entry in vector["artifacts"].items():
-                    expected = base64.b64decode(entry["canonical_b64"], validate=True)
-                    artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
-                    digest = hashlib.sha256(artifact).hexdigest()
-                    recorded = (root / f"{prefix}-{kind}.sha256").read_text(
-                        encoding="ascii"
-                    ).strip()
-                    if artifact != expected or digest != entry["sha256"] or recorded != digest:
-                        raise SystemExit("Android pairing artifact-ring mismatch.")
-                    if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
-                        raise SystemExit("Android pairing artifact contains forbidden plaintext.")
-            print("Validated Android canonical pairing artifact ring.")
+
+            def validate_ring_artifact(*, prefix, kind, expected=None, expected_digest=None):
+                artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
+                digest = hashlib.sha256(artifact).hexdigest()
+                recorded = (root / f"{prefix}-{kind}.sha256").read_text(
+                    encoding="ascii"
+                ).strip()
+                if digest != recorded:
+                    raise SystemExit("Android pairing artifact sidecar mismatch.")
+                decoded = json.loads(artifact)
+                canonical = json.dumps(
+                    decoded,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                if artifact != canonical:
+                    raise SystemExit("Android pairing artifact is not canonical JSON.")
+                if (
+                    set(decoded) != {"format", "version", "kind", "payload"}
+                    or decoded["format"] != "atlasvault-pairing-artifact"
+                    or decoded["version"] != 1
+                    or decoded["kind"] != kind
+                    or not isinstance(decoded["payload"], dict)
+                ):
+                    raise SystemExit("Android pairing artifact envelope mismatch.")
+                if expected is not None and artifact != expected:
+                    raise SystemExit("Apple fixed-vector pairing artifact mismatch.")
+                if expected_digest is not None and digest != expected_digest:
+                    raise SystemExit("Apple fixed-vector pairing digest mismatch.")
+                if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
+                    raise SystemExit("Android pairing artifact contains forbidden plaintext.")
+
+            for kind, entry in vector["artifacts"].items():
+                expected = base64.b64decode(entry["canonical_b64"], validate=True)
+                validate_ring_artifact(
+                    prefix="apple-to-android",
+                    kind=kind,
+                    expected=expected,
+                    expected_digest=entry["sha256"],
+                )
+                validate_ring_artifact(
+                    prefix="android-to-windows",
+                    kind=kind,
+                )
+            print("Validated fixed-vector input and Android runtime pairing artifact ring.")
             PY
             fi
 

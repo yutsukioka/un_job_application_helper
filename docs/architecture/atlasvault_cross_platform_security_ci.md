@@ -250,11 +250,19 @@ uses terminating deletion, verifies the exact temporary ring is absent after
 the attempt, records any retained `.atlaspair` count, and fails the job with an
 aggregate cleanup error rather than suppressing an open-handle or ACL failure.
 
-Android and Windows journey legs export the canonical artifact bytes returned
-by their actual inviter and invitee platform journeys. The deterministic vector
-remains the expected-byte and SHA-256 oracle, but is not the outgoing byte
-source: each runtime artifact is type-checked, compared with the oracle, written
-to the temporary ring, read back, and then consumed by the next platform.
+Pairing evidence has two independent lanes. Existing Python, Dart, and Swift
+vector tests retain exact-byte and SHA-256 conformance for the prescribed fixed
+vector. Android and Windows journey legs instead export the canonical bytes
+returned by their actual inviter platform journeys, compute sidecars from those
+bytes, read them back, and validate each complete artifact set through the
+production canonical parsers and cryptographic verifiers. Consumers calculate
+their own transport hashes and verify signatures plus transcript, device,
+request, bootstrap, and acknowledgement bindings. Runtime journeys with
+different UUID, clock, nonce, or ephemeral-key schedules are not required to
+match the fixed vector or one another; only the same transported file must keep
+one hash from producer through consumer. Isolated hosted jobs may seed their
+incoming leg from the fixed fake vector, while the external platform ring carries
+actual runtime output between hosts without uploading protected artifacts.
 
 The Python preflight parses the complete VaultSync source closure before pytest
 imports it. It rejects absolute networking and dynamic-import routes plus
