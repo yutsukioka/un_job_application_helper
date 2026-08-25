@@ -154,19 +154,38 @@ integration_tests = (
 for path in integration_tests:
     source = path.read_text(encoding="utf-8")
     for marker in (
-        "final runtimeArtifacts = await scenario.runExplicitRoleCycle();",
-        "runtimeArtifacts: runtimeArtifacts,",
-        "Future<Map<AtlasVaultPairingArtifactKind, Uint8List>>",
+        "final journey = await scenario.runExplicitRoleCycle();",
+        "runtimeArtifacts: journey.artifacts,",
+        "Future<AtlasVaultPairingPlatformJourneyEvidence>",
         "runExplicitRoleCycle() async",
         "required Map<AtlasVaultPairingArtifactKind, Uint8List> runtimeArtifacts,",
         "runtimeArtifacts[kind]",
-        "await produced.readAsBytes()",
+        "await _verifyPairingArtifactSet(runtimeArtifacts, vector);",
+        "final producedReadBack = await produced.readAsBytes();",
+        "expect(producedReadBack, bytes);",
+        "final consumerCalculatedDigest = await atlasVaultSha256Hex(",
+        "expect(consumerCalculatedDigest, consumerRecordedDigest);",
+        "expect(artifact.canonicalBytes(), consumedBytes);",
+        "await _verifyPairingArtifactSet(consumedArtifacts, vector);",
+        "AtlasVaultPairingArtifact.fromCanonicalBytes(tampered)",
     ):
         if marker not in source:
-            raise SystemExit(f"{path} does not export runtime journey artifacts.")
+            raise SystemExit(
+                f"{path} does not preserve runtime journey artifact semantics."
+            )
     exchange = source.split("Future<void> _exchangePairingRing(", 1)[1]
     if "base64Decode(encoded['canonical_b64']" in exchange:
         raise SystemExit(f"{path} still uses fixture bytes as outgoing evidence.")
+    for forbidden in (
+        "expect(bytes, expectedBytes)",
+        "expect(consumedBytes, bytes)",
+        "expectedDigest = encoded['sha256']",
+        "expect(digest, expectedDigest)",
+    ):
+        if forbidden in exchange:
+            raise SystemExit(
+                f"{path} conflates fixed-vector and runtime-journey evidence."
+            )
 print("Validated Android and Windows runtime journey artifact egress policy.")
 PY
 
