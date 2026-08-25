@@ -3880,6 +3880,16 @@ void main() {{
         raise SystemExit("Dart generic multi-declarator self-test failed.")
 
 if not _has_automatic_operation(
+    """var token = makeTriple<String, int, bool>(
+  controller.startPairing(),
+), harmless = 0;
+void main() {
+  token;
+}"""
+):
+    raise SystemExit("Dart flat generic-argument declarator self-test failed.")
+
+if not _has_automatic_operation(
     """final trigger = token;
 final token = controller.startPairing();
 void main() {

@@ -224,6 +224,33 @@ from pathlib import Path
 workflow = Path(
     ".github/workflows/atlasvault-platform-integration.yml"
 ).read_text(encoding="utf-8")
+architecture = Path(
+    "docs/architecture/atlasvault_cross_platform_security_ci.md"
+).read_text(encoding="utf-8")
+for marker in (
+    '$HostedIngressProvenance = "fixed-vector-conformance"',
+    'Hosted Windows pairing ingress provenance: $HostedIngressProvenance',
+):
+    if marker not in workflow:
+        raise SystemExit(
+            "Hosted Windows pairing ingress is not classified as fixed-vector conformance."
+        )
+if (
+    "Hosted Windows fixed-vector ingress is not a cross-runner runtime handoff."
+    not in architecture
+):
+    raise SystemExit("Architecture does not separate hosted ingress from runtime handoff.")
+if "actions/upload-artifact" in workflow or "actions/download-artifact" in workflow:
+    raise SystemExit("Pairing documents must not be uploaded between hosted jobs.")
+print("Validated hosted fixed-vector ingress provenance and no-upload policy.")
+PY
+
+python - <<'PY'
+from pathlib import Path
+
+workflow = Path(
+    ".github/workflows/atlasvault-platform-integration.yml"
+).read_text(encoding="utf-8")
 required = (
     "ATLAS_WINDOWS_MIGRATION_RECOVERY_STAGE",
     "ATLAS_WINDOWS_MIGRATION_RECOVERY_VAULT_ID",
