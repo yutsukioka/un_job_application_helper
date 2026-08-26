@@ -67,6 +67,9 @@ python - <<'PY'
 from pathlib import Path
 
 script = Path("scripts/ci/atlasvault_python.sh").read_text(encoding="utf-8")
+obsolete_android_runner = "android_" + "runner = workflow.split("
+if obsolete_android_runner in script:
+    raise SystemExit("Android policy retains an obsolete runner extraction.")
 if script.index("\ndef _blocked_imports") > script.rindex(
     'python -m pytest "${focused_tests[@]}"'
 ):
