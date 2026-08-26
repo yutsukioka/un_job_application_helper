@@ -44,6 +44,147 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Materialize Android platform integration script
+        shell: bash
+        run: |
+          script_path="$RUNNER_TEMP/atlasvault-android-platform-integration.sh"
+          cat > "$script_path" <<'ATLAS_ANDROID_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          pairing_scenario="${1:?missing Android pairing scenario}"
+          vector_root="${GITHUB_WORKSPACE:?}/contracts/sync/test_vectors"
+          interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_ios_flutter_interop_vectors_v1.json")"
+          windows_interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_windows_interop_vectors_v1.json")"
+          identity_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_device_identity_pairing_vectors_v1.json")"
+          pairing_vector_path="$vector_root/atlasvault_trusted_pairing_delivery_vectors_v1.json"
+          pairing_vector_b64="$(base64 --wrap=0 "$pairing_vector_path")"
+
+          cd "${GITHUB_WORKSPACE:?}/apps/atlas_flutter"
+          flutter pub get
+          if [[ "$pairing_scenario" == "persistence" ]]; then
+            flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
+            flutter test integration_test/atlas_vault_android_private_state_integration_test.dart -d emulator-5554
+            flutter test integration_test/atlas_vault_android_plaintext_migration_integration_test.dart -d emulator-5554
+            flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
+            flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64" --dart-define=ATLAS_WINDOWS_INTEROP_VECTOR_B64="$windows_interop_vector_b64"
+            flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64"
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
+            flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
+          else
+            app_id="com.yutsukioka.jobagg.atlas"
+            device_ring_relative="files/atlas-pairing-ring"
+            device_ring="/data/user/0/$app_id/$device_ring_relative"
+            host_ring="$RUNNER_TEMP/atlas-pairing-ring"
+            mkdir -p "$host_ring"
+            cleanup_android_pairing() {
+              adb shell run-as "$app_id" rm -rf "$device_ring_relative" >/dev/null 2>&1 || true
+              adb uninstall "$app_id" >/dev/null 2>&1 || true
+              rm -rf "$host_ring"
+            }
+            trap cleanup_android_pairing EXIT
+            ATLAS_PAIRING_HOST_RING="$host_ring" ATLAS_PAIRING_VECTOR_PATH="$pairing_vector_path" python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+          vector_path = Path(os.environ["ATLAS_PAIRING_VECTOR_PATH"])
+          vector = json.loads(vector_path.read_text(encoding="utf-8"))
+          for kind, entry in vector["artifacts"].items():
+              payload = base64.b64decode(entry["canonical_b64"], validate=True)
+              digest = hashlib.sha256(payload).hexdigest()
+              if digest != entry["sha256"]:
+                  raise SystemExit("Pairing vector digest mismatch.")
+              (root / f"apple-to-android-{kind}.atlaspair").write_bytes(payload)
+              (root / f"apple-to-android-{kind}.sha256").write_text(
+                  f"{digest}\n", encoding="ascii"
+              )
+          PY
+            flutter build apk --debug --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64"
+            adb install -r build/app/outputs/flutter-apk/app-debug.apk >/dev/null
+            adb shell run-as "$app_id" mkdir -p "$device_ring_relative"
+            for path in "$host_ring"/apple-to-android-*; do
+              name="$(basename "$path")"
+              adb push "$path" "/data/local/tmp/$name" >/dev/null
+              adb shell chmod 0644 "/data/local/tmp/$name"
+              adb shell run-as "$app_id" cp "/data/local/tmp/$name" "$device_ring_relative/$name"
+              adb shell rm -f "/data/local/tmp/$name"
+            done
+            flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_PAIRING_ARTIFACT_DIR="$device_ring" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=journey
+            for kind in offer acceptance delivery acknowledgement; do
+              for extension in atlaspair sha256; do
+                name="android-to-windows-$kind.$extension"
+                adb exec-out run-as "$app_id" cat "$device_ring_relative/$name" > "$host_ring/$name"
+              done
+            done
+            ATLAS_PAIRING_HOST_RING="$host_ring" ATLAS_PAIRING_VECTOR_PATH="$pairing_vector_path" python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
+          vector_path = Path(os.environ["ATLAS_PAIRING_VECTOR_PATH"])
+          vector = json.loads(vector_path.read_text(encoding="utf-8"))
+          sentinel = vector["expected_payloads"]["unsupported_private_sentinel"].encode()
+
+          def validate_ring_artifact(*, prefix, kind, expected=None, expected_digest=None):
+              artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
+              digest = hashlib.sha256(artifact).hexdigest()
+              recorded = (root / f"{prefix}-{kind}.sha256").read_text(
+                  encoding="ascii"
+              ).strip()
+              if digest != recorded:
+                  raise SystemExit("Android pairing artifact sidecar mismatch.")
+              decoded = json.loads(artifact)
+              canonical = json.dumps(
+                  decoded,
+                  sort_keys=True,
+                  separators=(",", ":"),
+                  ensure_ascii=False,
+              ).encode("utf-8")
+              if artifact != canonical:
+                  raise SystemExit("Android pairing artifact is not canonical JSON.")
+              if (
+                  set(decoded) != {"format", "version", "kind", "payload"}
+                  or decoded["format"] != "atlasvault-pairing-artifact"
+                  or decoded["version"] != 1
+                  or decoded["kind"] != kind
+                  or not isinstance(decoded["payload"], dict)
+              ):
+                  raise SystemExit("Android pairing artifact envelope mismatch.")
+              if expected is not None and artifact != expected:
+                  raise SystemExit("Apple fixed-vector pairing artifact mismatch.")
+              if expected_digest is not None and digest != expected_digest:
+                  raise SystemExit("Apple fixed-vector pairing digest mismatch.")
+              if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
+                  raise SystemExit("Android pairing artifact contains forbidden plaintext.")
+
+          for kind, entry in vector["artifacts"].items():
+              expected = base64.b64decode(entry["canonical_b64"], validate=True)
+              validate_ring_artifact(
+                  prefix="apple-to-android",
+                  kind=kind,
+                  expected=expected,
+                  expected_digest=entry["sha256"],
+              )
+              validate_ring_artifact(
+                  prefix="android-to-windows",
+                  kind=kind,
+              )
+          print("Validated fixed-vector input and Android runtime pairing artifact ring.")
+          PY
+          fi
+          ATLAS_ANDROID_SCRIPT
+          chmod 0700 "$script_path"
+          bash -n "$script_path"
+
       - name: Run Android fake-data security integrations
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
@@ -52,135 +193,13 @@ jobs:
           target: google_apis
           profile: pixel_6
           disable-animations: true
-          script: |
-            bash -euo pipefail <<'ATLAS_ANDROID_BASH'
-            vector_root="$GITHUB_WORKSPACE/contracts/sync/test_vectors"
-            interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_ios_flutter_interop_vectors_v1.json")"
-            windows_interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_windows_interop_vectors_v1.json")"
-            identity_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_device_identity_pairing_vectors_v1.json")"
-            pairing_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_trusted_pairing_delivery_vectors_v1.json")"
-            cd apps/atlas_flutter
-            flutter pub get
-            if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]; then
-              flutter test integration_test/atlas_vault_android_storage_integration_test.dart -d emulator-5554
-              flutter test integration_test/atlas_vault_android_private_state_integration_test.dart -d emulator-5554
-              flutter test integration_test/atlas_vault_android_plaintext_migration_integration_test.dart -d emulator-5554
-              flutter test integration_test/atlas_vault_android_plaintext_migration_recovery_test.dart -d emulator-5554
-              flutter test integration_test/atlas_vault_android_interoperability_integration_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64" --dart-define=ATLAS_WINDOWS_INTEROP_VECTOR_B64="$windows_interop_vector_b64"
-              flutter test integration_test/atlas_vault_android_interoperability_recovery_test.dart -d emulator-5554 --dart-define=ATLAS_INTEROP_VECTOR_B64="$interop_vector_b64"
-              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=prepare
-              flutter test integration_test/atlas_vault_android_device_identity_integration_test.dart -d emulator-5554 --dart-define=ATLAS_DEVICE_IDENTITY_VECTOR_B64="$identity_vector_b64" --dart-define=ATLAS_DEVICE_IDENTITY_TEST_STAGE=verify
-              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=prepare
-              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=verify
-            else
-              app_id="com.yutsukioka.jobagg.atlas"
-              device_ring_relative="files/atlas-pairing-ring"
-              device_ring="/data/user/0/$app_id/$device_ring_relative"
-              host_ring="$RUNNER_TEMP/atlas-pairing-ring"
-              mkdir -p "$host_ring"
-              cleanup_android_pairing() {
-                adb shell run-as "$app_id" rm -rf "$device_ring_relative" >/dev/null 2>&1 || true
-                adb uninstall "$app_id" >/dev/null 2>&1 || true
-                rm -rf "$host_ring"
-              }
-              trap cleanup_android_pairing EXIT
-              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
-            import base64
-            import hashlib
-            import json
-            import os
-            from pathlib import Path
+          script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"
 
-            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
-            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
-            vector = json.loads(vector_path.read_text(encoding="utf-8"))
-            for kind, entry in vector["artifacts"].items():
-                payload = base64.b64decode(entry["canonical_b64"], validate=True)
-                digest = hashlib.sha256(payload).hexdigest()
-                if digest != entry["sha256"]:
-                    raise SystemExit("Pairing vector digest mismatch.")
-                (root / f"apple-to-android-{kind}.atlaspair").write_bytes(payload)
-                (root / f"apple-to-android-{kind}.sha256").write_text(
-                    f"{digest}\n", encoding="ascii"
-                )
-            PY
-              flutter build apk --debug --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64"
-              adb install -r build/app/outputs/flutter-apk/app-debug.apk >/dev/null
-              adb shell run-as "$app_id" mkdir -p "$device_ring_relative"
-              for path in "$host_ring"/apple-to-android-*; do
-                name="$(basename "$path")"
-                adb push "$path" "/data/local/tmp/$name" >/dev/null
-                adb shell chmod 0644 "/data/local/tmp/$name"
-                adb shell run-as "$app_id" cp "/data/local/tmp/$name" "$device_ring_relative/$name"
-                adb shell rm -f "/data/local/tmp/$name"
-              done
-              flutter test integration_test/atlas_vault_android_trusted_pairing_integration_test.dart -d emulator-5554 --no-uninstall --dart-define=ATLAS_TRUSTED_PAIRING_VECTOR_B64="$pairing_vector_b64" --dart-define=ATLAS_PAIRING_ARTIFACT_DIR="$device_ring" --dart-define=ATLAS_ANDROID_TRUSTED_PAIRING_STAGE=journey
-              for kind in offer acceptance delivery acknowledgement; do
-                for extension in atlaspair sha256; do
-                  name="android-to-windows-$kind.$extension"
-                  adb exec-out run-as "$app_id" cat "$device_ring_relative/$name" > "$host_ring/$name"
-                done
-              done
-              ATLAS_PAIRING_HOST_RING="$host_ring" python3 - <<'PY'
-            import base64
-            import hashlib
-            import json
-            import os
-            from pathlib import Path
-
-            root = Path(os.environ["ATLAS_PAIRING_HOST_RING"])
-            vector_path = Path("../../contracts/sync/test_vectors/atlasvault_trusted_pairing_delivery_vectors_v1.json")
-            vector = json.loads(vector_path.read_text(encoding="utf-8"))
-            sentinel = vector["expected_payloads"]["unsupported_private_sentinel"].encode()
-
-            def validate_ring_artifact(*, prefix, kind, expected=None, expected_digest=None):
-                artifact = (root / f"{prefix}-{kind}.atlaspair").read_bytes()
-                digest = hashlib.sha256(artifact).hexdigest()
-                recorded = (root / f"{prefix}-{kind}.sha256").read_text(
-                    encoding="ascii"
-                ).strip()
-                if digest != recorded:
-                    raise SystemExit("Android pairing artifact sidecar mismatch.")
-                decoded = json.loads(artifact)
-                canonical = json.dumps(
-                    decoded,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                if artifact != canonical:
-                    raise SystemExit("Android pairing artifact is not canonical JSON.")
-                if (
-                    set(decoded) != {"format", "version", "kind", "payload"}
-                    or decoded["format"] != "atlasvault-pairing-artifact"
-                    or decoded["version"] != 1
-                    or decoded["kind"] != kind
-                    or not isinstance(decoded["payload"], dict)
-                ):
-                    raise SystemExit("Android pairing artifact envelope mismatch.")
-                if expected is not None and artifact != expected:
-                    raise SystemExit("Apple fixed-vector pairing artifact mismatch.")
-                if expected_digest is not None and digest != expected_digest:
-                    raise SystemExit("Apple fixed-vector pairing digest mismatch.")
-                if sentinel in artifact or b'"vault_key"' in artifact or b'"private_key"' in artifact:
-                    raise SystemExit("Android pairing artifact contains forbidden plaintext.")
-
-            for kind, entry in vector["artifacts"].items():
-                expected = base64.b64decode(entry["canonical_b64"], validate=True)
-                validate_ring_artifact(
-                    prefix="apple-to-android",
-                    kind=kind,
-                    expected=expected,
-                    expected_digest=entry["sha256"],
-                )
-                validate_ring_artifact(
-                    prefix="android-to-windows",
-                    kind=kind,
-                )
-            print("Validated fixed-vector input and Android runtime pairing artifact ring.")
-            PY
-            fi
-            ATLAS_ANDROID_BASH
+      - name: Remove Android platform integration script
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- "$RUNNER_TEMP/atlasvault-android-platform-integration.sh"
 
       - name: Enforce Android artifact policy
         if: always()

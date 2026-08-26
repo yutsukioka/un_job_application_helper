@@ -89,9 +89,15 @@ prepare before verify. The journey leg seeds fake inbound Apple artifacts from
 the checked-in canonical vector in app-private storage, injects that same
 test-only vector at compile time, then pulls and validates Android output in a
 runner-temporary ring. Package state is retained only across explicit
-prepare/verify pairs and is removed after each scenario. The emulator action
-delegates its script through POSIX `sh`, so the script explicitly enters Bash
-before using `pipefail`, `[[ ... ]]`, or other Bash-only constructs.
+prepare/verify pairs and is removed after each scenario. The pinned emulator
+action trims its `script` input, splits it into nonempty non-comment lines, and
+executes each parsed line independently through POSIX `sh -c`. The workflow
+therefore materializes the complete integration program under `RUNNER_TEMP` in
+a preceding normal Bash step, syntax-checks it with `bash -n`, and gives the
+emulator action exactly one command that invokes that file with the matrix
+scenario as an argument. An always-running step removes the temporary script.
+Multiline state, heredocs, functions, traps, and `pipefail` live only inside
+the materialized Bash process, never inside the action's line-oriented input.
 
 The Windows job also separates persistence and journey onto fresh matrix
 runners. This prevents the journey's intentionally retained empty registry and
