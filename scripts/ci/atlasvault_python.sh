@@ -233,6 +233,8 @@ def _validate_android_kvm_boundary(source):
         raise ValueError("Android hardware acceleration must be explicitly required.")
     if "disable-linux-hw-accel: auto" in runner:
         raise ValueError("Android security integration must not use automatic fallback.")
+    if "-no-metrics" not in runner:
+        raise ValueError("Android emulator metrics must be disabled explicitly.")
     _validate_android_command_boundary(source)
 
 
@@ -335,6 +337,7 @@ valid_fixture = '''
         uses: reactivecircus/android-emulator-runner@example
         with:
           disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"
 
       - name: Remove Android platform integration script
@@ -398,6 +401,7 @@ invalid_kvm_fixtures = (
         "          disable-linux-hw-accel: false",
         "          disable-linux-hw-accel: auto",
     ),
+    valid_fixture.replace(" -no-metrics", ""),
 )
 for fixture in invalid_kvm_fixtures:
     try:
