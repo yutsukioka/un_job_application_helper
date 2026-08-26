@@ -396,6 +396,15 @@ for fixture in invalid_fixtures:
 
 invalid_kvm_fixtures = (
     valid_fixture.replace("      - name: Enable Android KVM", "      - name: Missing KVM"),
+    valid_fixture.replace(
+        "      - name: Enable Android KVM\n"
+        "        shell: bash\n"
+        "        run: |\n"
+        "          set -euo pipefail\n",
+        "      - name: Enable Android KVM\n"
+        "        shell: bash\n"
+        "        run: |\n",
+    ),
     valid_fixture.replace("          test -e /dev/kvm\n", ""),
     valid_fixture.replace("          test -r /dev/kvm\n", ""),
     valid_fixture.replace("          test -w /dev/kvm\n", ""),
