@@ -22,14 +22,18 @@ String? get _processStage => Platform.environment[_processStageEnvironment];
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  if (_processStage == null) {
+    _registerNormalRecoveryTests();
+  } else {
+    _registerCrossProcessRecoveryTest(_processStage!);
+  }
+}
 
+void _registerNormalRecoveryTests() {
   testWidgets('Windows recovery-import journal is DPAPI and CAS protected', (
     tester,
   ) async {
     if (!Platform.isWindows) {
-      return;
-    }
-    if (_processStage != null) {
       return;
     }
     final store = AtlasWindowsProtectedRecoveryImportJournalStore();
@@ -107,9 +111,6 @@ void main() {
     if (!Platform.isWindows) {
       return;
     }
-    if (_processStage != null) {
-      return;
-    }
     final vector = _RecoveryVector.load();
     var scenario = 10;
     try {
@@ -170,9 +171,6 @@ void main() {
 
   testWidgets('Windows reset is pre-selection and hash bound', (tester) async {
     if (!Platform.isWindows) {
-      return;
-    }
-    if (_processStage != null) {
       return;
     }
     final vector = _RecoveryVector.load();
@@ -258,77 +256,74 @@ void main() {
       'Windows import reset stayed hash-bound and pre-selection only.',
     );
   });
+}
 
-  testWidgets('Windows import admission is authoritative across processes', (
-    tester,
-  ) async {
+void _registerCrossProcessRecoveryTest(String stage) {
+  test('Windows import admission is authoritative across processes', () async {
     if (!Platform.isWindows) {
       return;
     }
-    final stage = _processStage;
-    if (stage == null) {
-      return;
-    }
-    final vaultId =
-        Platform.environment[_processVaultEnvironment] ??
-        _defaultProcessVaultId;
-    final scenario = _CrossProcessRecoveryScenario(vaultId);
-    switch (stage) {
-      case 'admission-waiter':
-        await scenario.runLegacyAdmissionWaiter();
-        tester.printToConsole(
-          'An already-running Windows legacy process was blocked by the '
-          'recovery-import journal and reopened only after reset completed.',
-        );
-        return;
-      case 'admission-prepare':
-        await scenario.prepareAdmissionFence();
-        tester.printToConsole(
-          'The Windows recovery-import journal was created under the shared '
-          'cross-process admission lock.',
-        );
-        return;
-      case 'admission-reset':
-        await scenario.resetAdmissionFence();
-        tester.printToConsole(
-          'Windows import reset removed the protected journal before '
-          'reopening legacy admission.',
-        );
-        return;
-      case 'selection-waiter':
-        await scenario.runSelectionWaiter();
-        tester.printToConsole(
-          'A concurrent Windows legacy process remained excluded through '
-          'selected-vault commitment.',
-        );
-        return;
-      case 'selection-run':
-        await scenario.runSelectionFence();
-        tester.printToConsole(
-          'Windows import held cross-process admission continuously through '
-          'selection read-back and journal deletion.',
-        );
-        return;
-      case 'crash-holder':
-        await scenario.holdAdmissionUntilProcessTermination();
-        return;
-      case 'crash-verify':
-        await scenario.verifyAdmissionAfterProcessCrash();
-        tester.printToConsole(
-          'Windows released recovery-import admission after holder process '
-          'termination.',
-        );
-        return;
-      case 'cleanup':
-        await scenario.cleanTestResources();
-        tester.printToConsole(
-          'Windows recovery-import cross-process resources were cleaned.',
-        );
-        return;
-      default:
-        fail('Unsupported fixed Windows recovery-import process stage.');
-    }
+    await _runCrossProcessRecoveryStage(stage);
   });
+}
+
+Future<void> _runCrossProcessRecoveryStage(String stage) async {
+  final vaultId =
+      Platform.environment[_processVaultEnvironment] ?? _defaultProcessVaultId;
+  final scenario = _CrossProcessRecoveryScenario(vaultId);
+  switch (stage) {
+    case 'admission-waiter':
+      await scenario.runLegacyAdmissionWaiter();
+      print(
+        'An already-running Windows legacy process was blocked by the '
+        'recovery-import journal and reopened only after reset completed.',
+      );
+      return;
+    case 'admission-prepare':
+      await scenario.prepareAdmissionFence();
+      print(
+        'The Windows recovery-import journal was created under the shared '
+        'cross-process admission lock.',
+      );
+      return;
+    case 'admission-reset':
+      await scenario.resetAdmissionFence();
+      print(
+        'Windows import reset removed the protected journal before '
+        'reopening legacy admission.',
+      );
+      return;
+    case 'selection-waiter':
+      await scenario.runSelectionWaiter();
+      print(
+        'A concurrent Windows legacy process remained excluded through '
+        'selected-vault commitment.',
+      );
+      return;
+    case 'selection-run':
+      await scenario.runSelectionFence();
+      print(
+        'Windows import held cross-process admission continuously through '
+        'selection read-back and journal deletion.',
+      );
+      return;
+    case 'crash-holder':
+      await scenario.holdAdmissionUntilProcessTermination();
+      return;
+    case 'crash-verify':
+      await scenario.verifyAdmissionAfterProcessCrash();
+      print(
+        'Windows released recovery-import admission after holder process '
+        'termination.',
+      );
+      return;
+    case 'cleanup':
+      await scenario.cleanTestResources();
+      print('Windows recovery-import cross-process resources were cleaned.');
+      return;
+    default:
+      fail('Unsupported fixed Windows recovery-import process stage.');
+  }
 }
 
 final class _CrossProcessRecoveryScenario {
