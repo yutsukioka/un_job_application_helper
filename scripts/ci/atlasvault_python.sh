@@ -213,6 +213,7 @@ def _validate_android_kvm_boundary(source):
         raise ValueError("Android KVM must be enabled before emulator launch.")
     for marker in (
         "shell: bash",
+        "set -euo pipefail",
         "test -e /dev/kvm",
         'KERNEL=="kvm"',
         'GROUP="kvm"',
