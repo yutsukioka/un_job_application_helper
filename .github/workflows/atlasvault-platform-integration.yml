@@ -53,7 +53,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            set -euo pipefail
+            bash -euo pipefail <<'ATLAS_ANDROID_BASH'
             vector_root="$GITHUB_WORKSPACE/contracts/sync/test_vectors"
             interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_ios_flutter_interop_vectors_v1.json")"
             windows_interop_vector_b64="$(base64 --wrap=0 "$vector_root/atlasvault_windows_interop_vectors_v1.json")"
@@ -180,6 +180,7 @@ jobs:
             print("Validated fixed-vector input and Android runtime pairing artifact ring.")
             PY
             fi
+            ATLAS_ANDROID_BASH
 
       - name: Enforce Android artifact policy
         if: always()
