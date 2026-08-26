@@ -111,7 +111,8 @@ def has_explicit_android_bash_boundary(source):
         "script: |\n"
         "            bash -euo pipefail <<'ATLAS_ANDROID_BASH'\n"
         in source
-        and source.rstrip().endswith("ATLAS_ANDROID_BASH")
+        and source.rstrip("\n").split("\n")[-1]
+        == "            ATLAS_ANDROID_BASH"
     )
 
 
