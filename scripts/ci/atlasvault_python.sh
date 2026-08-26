@@ -104,12 +104,28 @@ if workflow.count("pairing_scenario:") != 2:
 android_runner = workflow.split(
     "uses: reactivecircus/android-emulator-runner@", 1
 )[1].split("\n      - name: Enforce Android artifact policy", 1)[0]
-if (
-    "script: |\n"
-    "            bash -euo pipefail <<'ATLAS_ANDROID_BASH'\n"
-    not in android_runner
-    or not android_runner.rstrip().endswith("ATLAS_ANDROID_BASH")
+
+
+def has_explicit_android_bash_boundary(source):
+    return (
+        "script: |\n"
+        "            bash -euo pipefail <<'ATLAS_ANDROID_BASH'\n"
+        in source
+        and source.rstrip().endswith("ATLAS_ANDROID_BASH")
+    )
+
+
+for malformed_delimiter in (
+    "              ATLAS_ANDROID_BASH",
+    "            prefixATLAS_ANDROID_BASH",
 ):
+    malformed_runner = android_runner.replace(
+        "\n            ATLAS_ANDROID_BASH", f"\n{malformed_delimiter}"
+    )
+    if has_explicit_android_bash_boundary(malformed_runner):
+        raise SystemExit("Android Bash delimiter policy self-test failed.")
+
+if not has_explicit_android_bash_boundary(android_runner):
     raise SystemExit(
         "Android emulator integration script must execute under explicit Bash."
     )
