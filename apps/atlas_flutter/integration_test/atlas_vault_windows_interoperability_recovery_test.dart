@@ -8,6 +8,7 @@ import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/atlas_vault_windows.dart';
 import 'package:atlas/features/app_shell/atlas_cache_location.dart';
 import 'package:atlas/src/atlas_vault/plaintext_migration.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -274,35 +275,35 @@ Future<void> _runCrossProcessRecoveryStage(String stage) async {
   switch (stage) {
     case 'admission-waiter':
       await scenario.runLegacyAdmissionWaiter();
-      print(
+      debugPrint(
         'An already-running Windows legacy process was blocked by the '
         'recovery-import journal and reopened only after reset completed.',
       );
       return;
     case 'admission-prepare':
       await scenario.prepareAdmissionFence();
-      print(
+      debugPrint(
         'The Windows recovery-import journal was created under the shared '
         'cross-process admission lock.',
       );
       return;
     case 'admission-reset':
       await scenario.resetAdmissionFence();
-      print(
+      debugPrint(
         'Windows import reset removed the protected journal before '
         'reopening legacy admission.',
       );
       return;
     case 'selection-waiter':
       await scenario.runSelectionWaiter();
-      print(
+      debugPrint(
         'A concurrent Windows legacy process remained excluded through '
         'selected-vault commitment.',
       );
       return;
     case 'selection-run':
       await scenario.runSelectionFence();
-      print(
+      debugPrint(
         'Windows import held cross-process admission continuously through '
         'selection read-back and journal deletion.',
       );
@@ -312,14 +313,16 @@ Future<void> _runCrossProcessRecoveryStage(String stage) async {
       return;
     case 'crash-verify':
       await scenario.verifyAdmissionAfterProcessCrash();
-      print(
+      debugPrint(
         'Windows released recovery-import admission after holder process '
         'termination.',
       );
       return;
     case 'cleanup':
       await scenario.cleanTestResources();
-      print('Windows recovery-import cross-process resources were cleaned.');
+      debugPrint(
+        'Windows recovery-import cross-process resources were cleaned.',
+      );
       return;
     default:
       fail('Unsupported fixed Windows recovery-import process stage.');
