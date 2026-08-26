@@ -101,6 +101,19 @@ if missing:
 if workflow.count("pairing_scenario:") != 2:
     raise SystemExit("Android and Windows pairing scenarios must be isolated.")
 
+android_runner = workflow.split(
+    "uses: reactivecircus/android-emulator-runner@", 1
+)[1].split("\n      - name: Enforce Android artifact policy", 1)[0]
+if (
+    "script: |\n"
+    "            bash -euo pipefail <<'ATLAS_ANDROID_BASH'\n"
+    not in android_runner
+    or not android_runner.rstrip().endswith("ATLAS_ANDROID_BASH")
+):
+    raise SystemExit(
+        "Android emulator integration script must execute under explicit Bash."
+    )
+
 android = workflow.split(
     'if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]', 1
 )[1].split("\n            else", 1)[0]
