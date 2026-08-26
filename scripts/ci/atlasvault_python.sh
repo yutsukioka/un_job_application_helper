@@ -173,6 +173,10 @@ def _validate_android_command_boundary(source):
     )
     if any(marker not in materialize for marker in materialize_markers):
         raise ValueError("Android materialized script policy is incomplete.")
+    if materialize.count(
+        "$RUNNER_TEMP/atlasvault-android-platform-integration.sh"
+    ) != 1:
+        raise ValueError("Android materialized script path must be assigned exactly once.")
 
     raw_script = _android_action_script(source)
     commands = parse_android_runner_script(raw_script)
@@ -183,8 +187,6 @@ def _validate_android_command_boundary(source):
         'bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" '
         '"${{ matrix.pairing_scenario }}"'
     )
-    if command != expected:
-        raise ValueError("Android emulator runner command is not the approved invocation.")
     if "\n" in command or "<<" in command or "set -euo pipefail" in command:
         raise ValueError("Android emulator runner command contains multiline shell state.")
     if re.search(
@@ -192,6 +194,8 @@ def _validate_android_command_boundary(source):
         command,
     ):
         raise ValueError("Android emulator runner command defines a shell function.")
+    if command != expected:
+        raise ValueError("Android emulator runner command is not the approved invocation.")
 
     cleanup_markers = (
         "if: always()",
@@ -251,6 +255,18 @@ invalid_fixtures = (
         'script: |\n            value="x"\n            echo "$value"',
     ),
     valid_fixture.replace(
+        'script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"',
+        "script: bash -euo pipefail <<'EOF'",
+    ),
+    valid_fixture.replace(
+        'script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"',
+        "script: set -euo pipefail",
+    ),
+    valid_fixture.replace(
+        'script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"',
+        "script: helper() { true; }",
+    ),
+    valid_fixture.replace(
         "      - name: Materialize Android platform integration script",
         "      - name: Missing materialization step",
     ),
@@ -273,19 +289,23 @@ try:
 except (ValueError, IndexError) as error:
     raise SystemExit(f"Android command-boundary policy failed: {error}") from error
 
-android = workflow.split(
-    'if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]', 1
-)[1].split("\n            else", 1)[0]
-windows = workflow.split(
+android_section = workflow.split("\n  android:", 1)[1].split("\n  windows:", 1)[0]
+windows_section = workflow.split("\n  windows:", 1)[1].split("\n  apple:", 1)[0]
+android = android_section.split(
+    'if [[ "$pairing_scenario" == "persistence" ]]', 1
+)[1].split("\n          else", 1)[0]
+windows = windows_section.split(
     'if ("${{ matrix.pairing_scenario }}" -eq "persistence")', 1
 )[1].split("\n          else", 1)[0]
 if "TRUSTED_PAIRING_STAGE=journey" in android or "TRUSTED_PAIRING_STAGE=journey" in windows:
     raise SystemExit("Pairing journey must use a fresh matrix runner.")
-android_journey = workflow.split("\n            else", 1)[1].split("\n            fi", 1)[0]
+android_journey = android_section.split("\n          else", 1)[1].split(
+    "\n          fi", 1
+)[0]
 if "--dart-define=ATLAS_PAIRING_ARTIFACT_DIR=" not in android_journey:
     raise SystemExit("Android pairing artifact exchange must use app-private staging.")
 
-windows_journey = workflow.split("\n          else", 1)[1].split(
+windows_journey = windows_section.split("\n          else", 1)[1].split(
     "\n\n      - name: Enforce Windows artifact policy", 1
 )[0]
 if "-ErrorAction SilentlyContinue" in windows_journey:
