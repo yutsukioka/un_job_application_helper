@@ -74,6 +74,7 @@ if script.index("\ndef _blocked_imports") > script.rindex(
 PY
 
 python - <<'PY'
+import re
 from pathlib import Path
 
 workflow = Path(
@@ -106,30 +107,171 @@ android_runner = workflow.split(
 )[1].split("\n      - name: Enforce Android artifact policy", 1)[0]
 
 
-def has_explicit_android_bash_boundary(source):
-    return (
-        "script: |\n"
-        "            bash -euo pipefail <<'ATLAS_ANDROID_BASH'\n"
-        in source
-        and source.rstrip("\n").split("\n")[-1]
-        == "            ATLAS_ANDROID_BASH"
-    )
+def parse_android_runner_script(raw):
+    return [
+        line.strip()
+        for line in raw.strip().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
 
 
-for malformed_delimiter in (
-    "              ATLAS_ANDROID_BASH",
-    "            prefixATLAS_ANDROID_BASH",
-):
-    malformed_runner = android_runner.replace(
-        "\n            ATLAS_ANDROID_BASH", f"\n{malformed_delimiter}"
-    )
-    if has_explicit_android_bash_boundary(malformed_runner):
-        raise SystemExit("Android Bash delimiter policy self-test failed.")
+def _step_block(source, name):
+    marker = f"\n      - name: {name}\n"
+    if marker not in source:
+        raise ValueError(f"Missing workflow step: {name}")
+    return source.split(marker, 1)[1].split("\n      - name:", 1)[0]
 
-if not has_explicit_android_bash_boundary(android_runner):
-    raise SystemExit(
-        "Android emulator integration script must execute under explicit Bash."
+
+def _android_action_script(source):
+    runner = source.split(
+        "uses: reactivecircus/android-emulator-runner@", 1
+    )[1].split("\n      - name:", 1)[0]
+    lines = runner.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("script:"):
+            continue
+        value = stripped.split(":", 1)[1].strip()
+        if value not in {"|", "|-", "|+"}:
+            return value
+        body = []
+        script_indent = len(line) - len(line.lstrip())
+        for body_line in lines[index + 1 :]:
+            body_indent = len(body_line) - len(body_line.lstrip())
+            if body_line.strip() and body_indent <= script_indent:
+                break
+            body.append(body_line)
+        return "\n".join(body)
+    raise ValueError("Android emulator runner is missing script input.")
+
+
+def _validate_android_command_boundary(source):
+    materialize_name = "Materialize Android platform integration script"
+    cleanup_name = "Remove Android platform integration script"
+    materialize = _step_block(source, materialize_name)
+    cleanup = _step_block(source, cleanup_name)
+    runner_index = source.index("uses: reactivecircus/android-emulator-runner@")
+    if source.index(f"- name: {materialize_name}") > runner_index:
+        raise ValueError("Android script must be materialized before emulator launch.")
+    if source.index(f"- name: {cleanup_name}") < runner_index:
+        raise ValueError("Android script cleanup must follow emulator execution.")
+
+    materialize_markers = (
+        "shell: bash",
+        'script_path="$RUNNER_TEMP/atlasvault-android-platform-integration.sh"',
+        "cat > \"$script_path\" <<'ATLAS_ANDROID_SCRIPT'",
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'pairing_scenario="${1:?missing Android pairing scenario}"',
+        'vector_root="${GITHUB_WORKSPACE:?}/contracts/sync/test_vectors"',
+        'cd "${GITHUB_WORKSPACE:?}/apps/atlas_flutter"',
+        'if [[ "$pairing_scenario" == "persistence" ]]',
+        "else",
+        "trap cleanup_android_pairing EXIT",
+        'chmod 0700 "$script_path"',
+        'bash -n "$script_path"',
     )
+    if any(marker not in materialize for marker in materialize_markers):
+        raise ValueError("Android materialized script policy is incomplete.")
+
+    raw_script = _android_action_script(source)
+    commands = parse_android_runner_script(raw_script)
+    if len(commands) != 1:
+        raise ValueError("Android emulator runner must receive exactly one command.")
+    command = commands[0]
+    expected = (
+        'bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" '
+        '"${{ matrix.pairing_scenario }}"'
+    )
+    if command != expected:
+        raise ValueError("Android emulator runner command is not the approved invocation.")
+    if "\n" in command or "<<" in command or "set -euo pipefail" in command:
+        raise ValueError("Android emulator runner command contains multiline shell state.")
+    if re.search(
+        r"(?:\bfunction\b|\b[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{)",
+        command,
+    ):
+        raise ValueError("Android emulator runner command defines a shell function.")
+
+    cleanup_markers = (
+        "if: always()",
+        "shell: bash",
+        'rm -f -- "$RUNNER_TEMP/atlasvault-android-platform-integration.sh"',
+    )
+    if any(marker not in cleanup for marker in cleanup_markers):
+        raise ValueError("Android materialized script cleanup policy is incomplete.")
+    return commands
+
+
+valid_fixture = '''
+      - name: Materialize Android platform integration script
+        shell: bash
+        run: |
+          script_path="$RUNNER_TEMP/atlasvault-android-platform-integration.sh"
+          cat > "$script_path" <<'ATLAS_ANDROID_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          pairing_scenario="${1:?missing Android pairing scenario}"
+          vector_root="${GITHUB_WORKSPACE:?}/contracts/sync/test_vectors"
+          cd "${GITHUB_WORKSPACE:?}/apps/atlas_flutter"
+          if [[ "$pairing_scenario" == "persistence" ]]; then
+            true
+          else
+            cleanup_android_pairing() { true; }
+            trap cleanup_android_pairing EXIT
+          fi
+          ATLAS_ANDROID_SCRIPT
+          chmod 0700 "$script_path"
+          bash -n "$script_path"
+
+      - name: Run Android fake-data security integrations
+        uses: reactivecircus/android-emulator-runner@example
+        with:
+          script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"
+
+      - name: Remove Android platform integration script
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- "$RUNNER_TEMP/atlasvault-android-platform-integration.sh"
+
+      - name: Enforce Android artifact policy
+'''
+if len(_validate_android_command_boundary(valid_fixture)) != 1:
+    raise SystemExit("Android single-command boundary positive self-test failed.")
+
+invalid_fixtures = (
+    valid_fixture.replace(
+        'script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"',
+        "script: |\n            bash -euo pipefail <<'EOF'\n"
+        "            value=\"x\"\n            echo \"$value\"\n            EOF",
+    ),
+    valid_fixture.replace(
+        'script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"',
+        'script: |\n            value="x"\n            echo "$value"',
+    ),
+    valid_fixture.replace(
+        "      - name: Materialize Android platform integration script",
+        "      - name: Missing materialization step",
+    ),
+    valid_fixture.replace('          bash -n "$script_path"\n', ""),
+    valid_fixture.replace(' "${{ matrix.pairing_scenario }}"', ""),
+    valid_fixture.replace(
+        "      - name: Remove Android platform integration script",
+        "      - name: Missing Android script cleanup",
+    ),
+)
+for fixture in invalid_fixtures:
+    try:
+        _validate_android_command_boundary(fixture)
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Android single-command boundary negative self-test failed.")
+
+try:
+    _validate_android_command_boundary(workflow)
+except (ValueError, IndexError) as error:
+    raise SystemExit(f"Android command-boundary policy failed: {error}") from error
 
 android = workflow.split(
     'if [[ "${{ matrix.pairing_scenario }}" == "persistence" ]]', 1
