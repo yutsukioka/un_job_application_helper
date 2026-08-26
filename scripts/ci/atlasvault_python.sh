@@ -205,6 +205,98 @@ def _validate_android_command_boundary(source):
     return commands
 
 
+def _validate_android_kvm_boundary(source):
+    step_name = "Enable Android KVM"
+    kvm = _step_block(source, step_name)
+    runner_index = source.index("uses: reactivecircus/android-emulator-runner@")
+    if source.index(f"- name: {step_name}") > runner_index:
+        raise ValueError("Android KVM must be enabled before emulator launch.")
+    for marker in (
+        "shell: bash",
+        "test -e /dev/kvm",
+        'KERNEL=="kvm"',
+        'GROUP="kvm"',
+        'MODE="0666"',
+        'OPTIONS+="static_node=kvm"',
+        "sudo udevadm control --reload-rules",
+        "sudo udevadm trigger --name-match=kvm",
+        "test -r /dev/kvm",
+        "test -w /dev/kvm",
+        "ls -l /dev/kvm",
+    ):
+        if marker not in kvm:
+            raise ValueError("Android KVM permission policy is incomplete.")
+    runner = source.split(
+        "uses: reactivecircus/android-emulator-runner@", 1
+    )[1].split("\n      - name:", 1)[0]
+    if "disable-linux-hw-accel: false" not in runner:
+        raise ValueError("Android hardware acceleration must be explicitly required.")
+    if "disable-linux-hw-accel: auto" in runner:
+        raise ValueError("Android security integration must not use automatic fallback.")
+    _validate_android_command_boundary(source)
+
+
+def _validate_windows_process_stage_boundary(source):
+    normal_marker = "void _registerNormalRecoveryTests()"
+    process_marker = "void _registerCrossProcessRecoveryTest(String stage)"
+    runner_marker = "Future<void> _runCrossProcessRecoveryStage(String stage) async"
+    for marker in (normal_marker, process_marker, runner_marker):
+        if marker not in source:
+            raise ValueError("Windows recovery test registration is not separated.")
+    normal_index = source.index(normal_marker)
+    process_index = source.index(process_marker)
+    runner_index = source.index(runner_marker)
+    if not normal_index < process_index < runner_index:
+        raise ValueError("Windows recovery registration helpers are out of order.")
+
+    main = source[source.index("void main()"):normal_index]
+    for marker in (
+        "if (_processStage == null)",
+        "_registerNormalRecoveryTests();",
+        "} else {",
+        "_registerCrossProcessRecoveryTest(_processStage!);",
+    ):
+        if marker not in main:
+            raise ValueError("Windows main does not select exactly one test lane.")
+
+    normal = source[normal_index:process_index]
+    if "testWidgets(" not in normal:
+        raise ValueError("Windows normal recovery tests are missing.")
+    if "_processStage" in normal:
+        raise ValueError("Windows normal tests must not register in process-stage runs.")
+
+    process = source[process_index:runner_index]
+    if "testWidgets(" in process or "test(" not in process:
+        raise ValueError("Windows process-stage lane must use a plain test.")
+    for forbidden in ("WidgetTester", "tester.", "printToConsole"):
+        if forbidden in process:
+            raise ValueError("Windows process-stage test still depends on widget state.")
+    if "await _runCrossProcessRecoveryStage(stage);" not in process:
+        raise ValueError("Windows process-stage test does not invoke its stage runner.")
+
+    stage_runner = source[runner_index:]
+    for stage in (
+        "admission-waiter",
+        "admission-prepare",
+        "admission-reset",
+        "selection-waiter",
+        "selection-run",
+        "crash-holder",
+        "crash-verify",
+        "cleanup",
+    ):
+        if f"case '{stage}':" not in stage_runner:
+            raise ValueError("Windows process-stage runner is incomplete.")
+    for forbidden in (
+        "FocusManager",
+        "FlutterError.onError",
+        "runZonedGuarded",
+        "printToConsole",
+    ):
+        if forbidden in process or forbidden in stage_runner:
+            raise ValueError("Windows process-stage lane suppresses framework errors.")
+
+
 valid_fixture = '''
       - name: Materialize Android platform integration script
         shell: bash
@@ -226,9 +318,23 @@ valid_fixture = '''
           chmod 0700 "$script_path"
           bash -n "$script_path"
 
+      - name: Enable Android KVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          ls -l /dev/kvm
+
       - name: Run Android fake-data security integrations
         uses: reactivecircus/android-emulator-runner@example
         with:
+          disable-linux-hw-accel: false
           script: bash "$RUNNER_TEMP/atlasvault-android-platform-integration.sh" "${{ matrix.pairing_scenario }}"
 
       - name: Remove Android platform integration script
@@ -241,6 +347,7 @@ valid_fixture = '''
 '''
 if len(_validate_android_command_boundary(valid_fixture)) != 1:
     raise SystemExit("Android single-command boundary positive self-test failed.")
+_validate_android_kvm_boundary(valid_fixture)
 
 invalid_fixtures = (
     valid_fixture.replace(
@@ -282,10 +389,104 @@ for fixture in invalid_fixtures:
         continue
     raise SystemExit("Android single-command boundary negative self-test failed.")
 
+invalid_kvm_fixtures = (
+    valid_fixture.replace("      - name: Enable Android KVM", "      - name: Missing KVM"),
+    valid_fixture.replace("          test -e /dev/kvm\n", ""),
+    valid_fixture.replace("          test -r /dev/kvm\n", ""),
+    valid_fixture.replace("          test -w /dev/kvm\n", ""),
+    valid_fixture.replace(
+        "          disable-linux-hw-accel: false",
+        "          disable-linux-hw-accel: auto",
+    ),
+)
+for fixture in invalid_kvm_fixtures:
+    try:
+        _validate_android_kvm_boundary(fixture)
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Android KVM boundary negative self-test failed.")
+
+valid_windows_fixture = '''
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  if (_processStage == null) {
+    _registerNormalRecoveryTests();
+  } else {
+    _registerCrossProcessRecoveryTest(_processStage!);
+  }
+}
+
+void _registerNormalRecoveryTests() {
+  testWidgets('normal recovery', (tester) async {});
+}
+
+void _registerCrossProcessRecoveryTest(String stage) {
+  test('cross-process recovery', () async {
+    if (!Platform.isWindows) {
+      return;
+    }
+    await _runCrossProcessRecoveryStage(stage);
+  });
+}
+
+Future<void> _runCrossProcessRecoveryStage(String stage) async {
+  switch (stage) {
+    case 'admission-waiter':
+    case 'admission-prepare':
+    case 'admission-reset':
+    case 'selection-waiter':
+    case 'selection-run':
+    case 'crash-holder':
+    case 'crash-verify':
+    case 'cleanup':
+      return;
+  }
+}
+'''
+_validate_windows_process_stage_boundary(valid_windows_fixture)
+invalid_windows_fixtures = (
+    valid_windows_fixture.replace(
+        "  test('cross-process recovery'",
+        "  testWidgets('cross-process recovery'",
+    ),
+    valid_windows_fixture.replace(
+        "  if (_processStage == null) {",
+        "  if (true) {",
+    ),
+    valid_windows_fixture.replace(
+        "  testWidgets('normal recovery', (tester) async {});",
+        "  if (_processStage != null) return;\n"
+        "  testWidgets('normal recovery', (tester) async {});",
+    ),
+    valid_windows_fixture.replace(
+        "    await _runCrossProcessRecoveryStage(stage);",
+        "    FocusManager.instance.applyFocusChangesIfNeeded();\n"
+        "    await _runCrossProcessRecoveryStage(stage);",
+    ),
+)
+for fixture in invalid_windows_fixtures:
+    try:
+        _validate_windows_process_stage_boundary(fixture)
+    except (ValueError, IndexError):
+        continue
+    raise SystemExit("Windows process-stage boundary negative self-test failed.")
+
 try:
     _validate_android_command_boundary(workflow)
 except (ValueError, IndexError) as error:
     raise SystemExit(f"Android command-boundary policy failed: {error}") from error
+try:
+    _validate_android_kvm_boundary(workflow)
+except (ValueError, IndexError) as error:
+    raise SystemExit(f"Android KVM boundary policy failed: {error}") from error
+recovery_source = Path(
+    "apps/atlas_flutter/integration_test/"
+    "atlas_vault_windows_interoperability_recovery_test.dart"
+).read_text(encoding="utf-8")
+try:
+    _validate_windows_process_stage_boundary(recovery_source)
+except (ValueError, IndexError) as error:
+    raise SystemExit(f"Windows process-stage boundary policy failed: {error}") from error
 
 android_section = workflow.split("\n  android:", 1)[1].split("\n  windows:", 1)[0]
 windows_section = workflow.split("\n  windows:", 1)[1].split("\n  apple:", 1)[0]
