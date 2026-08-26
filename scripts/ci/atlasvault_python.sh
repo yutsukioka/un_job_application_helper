@@ -105,11 +105,6 @@ if missing:
 if workflow.count("pairing_scenario:") != 2:
     raise SystemExit("Android and Windows pairing scenarios must be isolated.")
 
-android_runner = workflow.split(
-    "uses: reactivecircus/android-emulator-runner@", 1
-)[1].split("\n      - name: Enforce Android artifact policy", 1)[0]
-
-
 def parse_android_runner_script(raw):
     return [
         line.strip()
