@@ -297,6 +297,8 @@ def _validate_windows_process_stage_boundary(source):
     ):
         if forbidden in process or forbidden in stage_runner:
             raise ValueError("Windows process-stage lane suppresses framework errors.")
+    if re.search(r"(?m)^\s*print\(", stage_runner):
+        raise ValueError("Windows process-stage logging must satisfy avoid_print.")
 
 
 valid_fixture = '''
