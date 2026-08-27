@@ -98,6 +98,10 @@ emulator action exactly one command that invokes that file with the matrix
 scenario as an argument. An always-running step removes the temporary script.
 Multiline state, heredocs, functions, traps, and `pipefail` live only inside
 the materialized Bash process, never inside the action's line-oriented input.
+Before emulator launch, the workflow installs and triggers a test-runner KVM
+device rule and requires `/dev/kvm` to exist and be readable and writable.
+The action is configured with `disable-linux-hw-accel: false`; software
+emulation is not an accepted fallback for the long persistence matrix.
 
 The Windows job also separates persistence and journey onto fresh matrix
 runners. This prevents the journey's intentionally retained empty registry and
@@ -117,8 +121,11 @@ selection commitment, and crash-lock release. Waiters have bounded exit and
 signal timeouts, capture stdout/stderr, and are awaited; crash holders are
 deliberately terminated before their verifier proceeds. Cleanup stages and a
 `finally` block remove only the deterministic test coordination roots and
-runner-temporary logs. The Apple integration filter also includes the encrypted
-recovery-export/import interoperability class.
+runner-temporary logs. Child recovery-import stages register one plain non-UI
+test independently of the normal widget-backed recovery cases, so successful
+cross-process assertions do not depend on unrelated widget-focus teardown. The
+Apple integration filter also includes the encrypted recovery-export/import
+interoperability class.
 
 The Apple job runs simulator-compatible Swift identity, pairing, key-delivery,
 interoperability, registry, replay, and transaction tests. It explicitly runs
