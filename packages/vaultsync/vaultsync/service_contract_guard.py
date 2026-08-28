@@ -68,7 +68,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         paths_by_module,
     )
 
-    pydantic_models = _pydantic_model_keys(
+    pydantic_class_models = _pydantic_model_keys(
         module_root,
         parsed_modules,
         paths_by_module,
@@ -82,7 +82,9 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         pydantic_root_models,
     )
-    pydantic_models = pydantic_models | pydantic_root_models
+    pydantic_class_models = pydantic_class_models | pydantic_root_models
+    created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
+    pydantic_models = pydantic_class_models | frozenset(created_pydantic_models)
     dataclass_models = _dataclass_model_keys(parsed_modules)
     typed_dict_models = _typed_dict_model_keys(
         module_root,
@@ -130,7 +132,10 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         | typed_dict_models
         | functional_typed_dict_models,
     )
-    inspected_pydantic_models = request_models & pydantic_models
+    inspected_pydantic_models = request_models & pydantic_class_models
+    request_created_pydantic_models = request_models & frozenset(
+        created_pydantic_models
+    )
     request_dataclasses = request_models & dataclass_models
     request_typed_dicts = request_models & typed_dict_models
     request_functional_typed_dicts = request_models & functional_typed_dict_models
@@ -142,6 +147,21 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             if _is_banned_wire_name(field_name):
                 violations.append(
                     f"{path}:{line_number}: TypedDict request model "
+                    f"{model_name}.{field_name} would accept raw vault secret "
+                    "material over the wire"
+                )
+    for key in sorted(request_created_pydantic_models):
+        path, _, model_name = key
+        tree = dict(parsed_modules)[path]
+        for field_name, line_number in _pydantic_create_model_fields(
+            created_pydantic_models[key],
+            field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
+            field_factory_module_names=_pydantic_module_aliases(tree),
+            wire_alias_constants=_string_constants(tree.body),
+        ):
+            if _is_banned_wire_name(field_name):
+                violations.append(
+                    f"{path}:{line_number}: Pydantic model "
                     f"{model_name}.{field_name} would accept raw vault secret "
                     "material over the wire"
                 )
@@ -465,6 +485,42 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 owners.update(targets)
                 changed = changed or len(owners) != previous_size
     return frozenset(owners)
+
+
+def _starlette_route_constructor_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "starlette.routing"
+        for imported in node.names
+        if imported.name in {"Route", "WebSocketRoute"}
+    )
+
+
+def _starlette_route_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name in {"starlette", "starlette.routing"}
+    )
+
+
+def _is_starlette_route_constructor(
+    node: ast.Call,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] in {"Route", "WebSocketRoute"}
+        and parts[0] in module_aliases
+    )
 
 
 def _framework_route_owner_names_by_path(
@@ -936,16 +992,21 @@ def _dataclass_model_keys(
         direct_aliases = {
             imported.asname or imported.name
             for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module == "dataclasses"
+            if isinstance(node, ast.ImportFrom)
+            and node.module in {"dataclasses", "pydantic.dataclasses"}
             for imported in node.names
             if imported.name == "dataclass"
         }
         module_aliases = {
-            imported.asname or imported.name
+            imported.asname or imported.name.split(".")[0]
             for node in ast.walk(tree)
             if isinstance(node, ast.Import)
             for imported in node.names
-            if imported.name == "dataclasses"
+            if imported.name in {
+                "dataclasses",
+                "pydantic",
+                "pydantic.dataclasses",
+            }
         }
         for key, node, _ in _module_class_entries(path, tree):
             if any(
@@ -1023,6 +1084,86 @@ def _functional_typed_dict_definitions(
             ):
                 definitions[key] = value
     return definitions
+
+
+def _pydantic_create_model_definitions(
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> dict[tuple[Path, int, str], ast.Call]:
+    definitions: dict[tuple[Path, int, str], ast.Call] = {}
+    for path, tree in parsed_modules:
+        direct_aliases = _pydantic_symbol_aliases(tree, "create_model")
+        module_aliases = _pydantic_module_aliases(tree)
+        for key, value, _, _ in _module_assignment_entries(path, tree):
+            if isinstance(value, ast.Call) and _is_pydantic_create_model_call(
+                value,
+                direct_aliases,
+                module_aliases,
+            ):
+                definitions[key] = value
+    return definitions
+
+
+def _is_pydantic_create_model_call(
+    node: ast.Call,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "create_model"
+        and parts[0] in module_aliases
+    )
+
+
+def _pydantic_create_model_fields(
+    node: ast.Call,
+    *,
+    field_factory_names: frozenset[str],
+    field_factory_module_names: frozenset[str],
+    wire_alias_constants: dict[str, str],
+) -> list[tuple[str, int]]:
+    fields: list[tuple[str, int]] = []
+    reserved = {
+        "__base__",
+        "__cls_kwargs__",
+        "__config__",
+        "__doc__",
+        "__module__",
+        "__validators__",
+    }
+    for keyword in node.keywords:
+        if keyword.arg is None or keyword.arg in reserved:
+            continue
+        fields.append((keyword.arg, keyword.value.lineno))
+        fields.extend(
+            _pydantic_field_aliases(
+                keyword.value,
+                field_factory_names=field_factory_names,
+                field_factory_module_names=field_factory_module_names,
+                wire_alias_constants=wire_alias_constants,
+            )
+        )
+    return fields
+
+
+def _pydantic_create_model_type_roots(node: ast.Call) -> list[ast.AST]:
+    reserved = {
+        "__base__",
+        "__cls_kwargs__",
+        "__config__",
+        "__doc__",
+        "__module__",
+        "__validators__",
+    }
+    return [
+        keyword.value
+        for keyword in node.keywords
+        if keyword.arg is not None and keyword.arg not in reserved
+    ]
 
 
 def _is_typed_dict_call(
@@ -1114,11 +1255,12 @@ def _is_dataclass_decorator(
     candidate = decorator.func if isinstance(decorator, ast.Call) else decorator
     if isinstance(candidate, ast.Name):
         return candidate.id in direct_aliases
-    return (
-        isinstance(candidate, ast.Attribute)
-        and candidate.attr == "dataclass"
-        and isinstance(candidate.value, ast.Name)
-        and candidate.value.id in module_aliases
+    parts = _qualified_name_parts(candidate)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "dataclass"
+        and parts[0] in module_aliases
     )
 
 
@@ -1430,27 +1572,48 @@ def _programmatic_route_handler_keys(
         if path not in service_paths and not mounted_names:
             continue
         route_owners = route_owner_names.get(path, frozenset())
+        route_constructor_aliases = _starlette_route_constructor_aliases(tree)
+        route_module_aliases = _starlette_route_module_aliases(tree)
         for node in ast.walk(tree):
-            if (
-                not isinstance(node, ast.Call)
-                or not isinstance(node.func, ast.Attribute)
-                or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
-            ):
+            if not isinstance(node, ast.Call):
                 continue
-            owner_parts = _qualified_name_parts(node.func.value)
-            if not owner_parts or not (
-                _is_route_owner_reference(node.func.value, route_owners)
-                and (
-                    path in service_paths
-                    or owner_parts[-1] in mounted_names
-                    or ".".join(owner_parts) in mounted_names
+            if _is_starlette_route_constructor(
+                node,
+                route_constructor_aliases,
+                route_module_aliases,
+            ):
+                endpoint = next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "endpoint"
+                    ),
+                    node.args[1] if len(node.args) > 1 else None,
                 )
-            ):
-                continue
-            endpoint = next(
-                (keyword.value for keyword in node.keywords if keyword.arg == "endpoint"),
-                node.args[1] if len(node.args) > 1 else None,
-            )
+            else:
+                if (
+                    not isinstance(node.func, ast.Attribute)
+                    or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
+                ):
+                    continue
+                owner_parts = _qualified_name_parts(node.func.value)
+                if not owner_parts or not (
+                    _is_route_owner_reference(node.func.value, route_owners)
+                    and (
+                        path in service_paths
+                        or owner_parts[-1] in mounted_names
+                        or ".".join(owner_parts) in mounted_names
+                    )
+                ):
+                    continue
+                endpoint = next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "endpoint"
+                    ),
+                    node.args[1] if len(node.args) > 1 else None,
+                )
             if endpoint is None:
                 continue
             owner_key = _enclosing_function_key(path, node, functions, scopes)
@@ -1787,9 +1950,11 @@ def _referenced_model_keys(
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
     functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
     model_definitions: dict[tuple[Path, int, str], ast.AST] = {
         **classes,
         **functional_typed_dicts,
+        **created_pydantic_models,
     }
     model_scopes = {
         **class_scopes,
@@ -1798,6 +1963,12 @@ def _referenced_model_keys(
             for path, tree in parsed_modules
             for key, _, scope, _ in _module_assignment_entries(path, tree)
             if key in functional_typed_dicts
+        },
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in created_pydantic_models
         },
     }
     referenced: set[tuple[Path, int, str]] = set()
@@ -1846,9 +2017,11 @@ def _model_reference_closure(
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
     functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
     model_definitions: dict[tuple[Path, int, str], ast.AST] = {
         **classes,
         **functional_typed_dicts,
+        **created_pydantic_models,
     }
     model_scopes = {
         **class_scopes,
@@ -1857,6 +2030,12 @@ def _model_reference_closure(
             for path, tree in parsed_modules
             for key, _, scope, _ in _module_assignment_entries(path, tree)
             if key in functional_typed_dicts
+        },
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in created_pydantic_models
         },
     }
     trees_by_path = dict(parsed_modules)
@@ -1875,8 +2054,10 @@ def _model_reference_closure(
                 for child in model.body
                 if isinstance(child, ast.AnnAssign)
             )
-        elif isinstance(model, ast.Call):
+        elif key in functional_typed_dicts and isinstance(model, ast.Call):
             reference_roots = _functional_typed_dict_type_roots(model)
+        elif key in created_pydantic_models and isinstance(model, ast.Call):
+            reference_roots = _pydantic_create_model_type_roots(model)
         else:
             reference_roots = []
         for reference_root in reference_roots:
@@ -2306,6 +2487,13 @@ def _is_raw_request_mapping(
         return node.id in raw_mapping_names
     if isinstance(node, ast.Subscript):
         return _is_raw_request_mapping(node.value, request_aliases, raw_mapping_names)
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in {"cookies", "headers", "path_params", "query_params"}
+        and isinstance(node.value, ast.Name)
+        and node.value.id in request_aliases
+    ):
+        return True
     if not isinstance(node, ast.Call):
         return False
     if (
