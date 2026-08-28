@@ -88,6 +88,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 name for model_path, name in request_dataclasses if model_path == path
             ),
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
+            request_type_names=_request_type_aliases(tree),
+            request_module_names=_request_module_aliases(tree),
             boundary_function_names=frozenset(
                 name for function_path, name in boundary_functions if function_path == path
             ),
@@ -105,12 +107,16 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         pydantic_model_names: frozenset[str],
         dataclass_model_names: frozenset[str],
         field_factory_names: frozenset[str],
+        request_type_names: frozenset[str],
+        request_module_names: frozenset[str],
         boundary_function_names: frozenset[str],
     ) -> None:
         self.path = path
         self.pydantic_model_names = pydantic_model_names
         self.dataclass_model_names = dataclass_model_names
         self.field_factory_names = field_factory_names
+        self.request_type_names = request_type_names
+        self.request_module_names = request_module_names
         self.boundary_function_names = boundary_function_names
         self.violations: list[str] = []
 
@@ -124,6 +130,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             for field_name, line_number in _model_fields(
                 node,
                 field_factory_names=self.field_factory_names,
+                exclude_private=node.name in self.pydantic_model_names,
             ):
                 if _is_banned_wire_name(field_name):
                     self.violations.append(
@@ -149,7 +156,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                     f"{self.path}:{line_number}: route parameter {node.name}.{wire_name} "
                     "would accept raw vault secret material over the wire"
                 )
-        for wire_name, line_number in _route_body_wire_names(node):
+        for wire_name, line_number in _route_body_wire_names(
+            node,
+            request_type_names=self.request_type_names,
+            request_module_names=self.request_module_names,
+        ):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
                     f"{self.path}:{line_number}: route body {node.name}[{wire_name!r}] "
@@ -181,11 +192,33 @@ def _paths_by_module(
     parsed_modules: list[tuple[Path, ast.Module]],
 ) -> dict[str, Path]:
     paths: dict[str, Path] = {}
+    package_directories = {
+        path.parent for path, _ in parsed_modules if path.name == "__init__.py"
+    }
+    package_roots = {
+        directory
+        for directory in package_directories
+        if directory.parent not in package_directories
+    }
     for path, _ in parsed_modules:
         module_name = _module_name(root, path)
         paths[module_name] = path
         if module_name:
             paths[f"{root.name}.{module_name}"] = path
+        module_parts = list(path.relative_to(root).with_suffix("").parts)
+        if module_parts and module_parts[-1] == "__init__":
+            module_parts.pop()
+        for package_root in package_roots:
+            try:
+                package_parts = package_root.relative_to(root).parts
+                path.relative_to(package_root)
+            except ValueError:
+                continue
+            if not package_parts:
+                continue
+            importable_name = ".".join(module_parts[len(package_parts) - 1 :])
+            if importable_name:
+                paths[importable_name] = path
     return paths
 
 
@@ -291,10 +324,15 @@ def _model_fields(
     node: ast.ClassDef,
     *,
     field_factory_names: frozenset[str],
+    exclude_private: bool,
 ) -> list[tuple[str, int]]:
     fields: list[tuple[str, int]] = []
     for child in node.body:
         if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+            if _is_class_variable(child.annotation) or (
+                exclude_private and child.target.id.startswith("_")
+            ):
+                continue
             fields.append((child.target.id, child.lineno))
             fields.extend(
                 _pydantic_field_aliases(
@@ -304,16 +342,26 @@ def _model_fields(
                 )
             )
         elif isinstance(child, ast.Assign):
+            has_field_target = False
             for target in child.targets:
-                if isinstance(target, ast.Name):
+                if isinstance(target, ast.Name) and not (
+                    exclude_private and target.id.startswith("_")
+                ):
                     fields.append((target.id, child.lineno))
-            fields.extend(
-                _pydantic_field_aliases(
-                    child.value,
-                    field_factory_names=field_factory_names,
+                    has_field_target = True
+            if has_field_target:
+                fields.extend(
+                    _pydantic_field_aliases(
+                        child.value,
+                        field_factory_names=field_factory_names,
+                    )
                 )
-            )
     return fields
+
+
+def _is_class_variable(annotation: ast.expr) -> bool:
+    candidate = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    return _name(candidate) == "ClassVar"
 
 
 def _pydantic_field_aliases(
@@ -715,12 +763,51 @@ def _qualified_name_parts(node: ast.AST) -> list[str] | None:
 
 def _route_body_wire_names(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    request_type_names: frozenset[str],
+    request_module_names: frozenset[str],
 ) -> list[tuple[str, int]]:
+    request_names = {
+        argument.arg
+        for argument in _function_arguments(node)
+        if argument.annotation is not None
+        and _annotation_contains_request_type(
+            argument.annotation,
+            request_type_names,
+            request_module_names,
+        )
+    }
+    if not request_names:
+        return []
+
+    request_aliases = set(request_names)
+    raw_mapping_names: set[str] = set()
+    assignments = [
+        candidate
+        for statement in node.body
+        for candidate in ast.walk(statement)
+        if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            targets, value = _assignment_targets_and_value(assignment)
+            if isinstance(value, ast.Name) and value.id in request_aliases:
+                previous_size = len(request_aliases)
+                request_aliases.update(targets)
+                changed = changed or len(request_aliases) != previous_size
+            if _is_raw_request_mapping(value, request_aliases, raw_mapping_names):
+                previous_size = len(raw_mapping_names)
+                raw_mapping_names.update(targets)
+                changed = changed or len(raw_mapping_names) != previous_size
+
     wire_names: list[tuple[str, int]] = []
     for statement in node.body:
         for candidate in ast.walk(statement):
             if isinstance(candidate, ast.Subscript):
                 key = candidate.slice
+                container = candidate.value
             elif (
                 isinstance(candidate, ast.Call)
                 and isinstance(candidate.func, ast.Attribute)
@@ -728,11 +815,108 @@ def _route_body_wire_names(
                 and candidate.args
             ):
                 key = candidate.args[0]
+                container = candidate.func.value
             else:
                 continue
-            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            if (
+                isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and _is_raw_request_mapping(
+                    container,
+                    request_aliases,
+                    raw_mapping_names,
+                )
+            ):
                 wire_names.append((key.value, key.lineno))
     return wire_names
+
+
+def _request_type_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"fastapi", "starlette.requests"}
+        for imported in node.names
+        if imported.name == "Request"
+    )
+
+
+def _request_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name in {"fastapi", "starlette", "starlette.requests"}
+    )
+
+
+def _annotation_contains_request_type(
+    annotation: ast.expr,
+    request_type_names: frozenset[str],
+    request_module_names: frozenset[str],
+) -> bool:
+    for candidate in ast.walk(annotation):
+        if isinstance(candidate, ast.Name) and candidate.id in request_type_names:
+            return True
+        if isinstance(candidate, ast.Attribute) and candidate.attr == "Request":
+            parts = _qualified_name_parts(candidate)
+            if parts and parts[0] in request_module_names:
+                return True
+    return False
+
+
+def _assignment_targets_and_value(
+    node: ast.Assign | ast.AnnAssign | ast.NamedExpr,
+) -> tuple[set[str], ast.expr]:
+    if isinstance(node, ast.Assign):
+        target_nodes = node.targets
+    else:
+        target_nodes = [node.target]
+    targets = {
+        candidate.id
+        for target in target_nodes
+        for candidate in ast.walk(target)
+        if isinstance(candidate, ast.Name)
+    }
+    return targets, node.value
+
+
+def _is_raw_request_mapping(
+    node: ast.AST,
+    request_aliases: set[str],
+    raw_mapping_names: set[str],
+) -> bool:
+    if isinstance(node, ast.Await):
+        return _is_raw_request_mapping(node.value, request_aliases, raw_mapping_names)
+    if isinstance(node, ast.Name):
+        return node.id in raw_mapping_names
+    if isinstance(node, ast.Subscript):
+        return _is_raw_request_mapping(node.value, request_aliases, raw_mapping_names)
+    if not isinstance(node, ast.Call):
+        return False
+    if (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "json"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in request_aliases
+    ):
+        return True
+    if (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "pop", "setdefault", "copy"}
+        and _is_raw_request_mapping(
+            node.func.value,
+            request_aliases,
+            raw_mapping_names,
+        )
+    ):
+        return True
+    return _name(node.func) == "dict" and any(
+        _is_raw_request_mapping(argument, request_aliases, raw_mapping_names)
+        for argument in node.args
+    )
 
 
 def _is_route_handler(
