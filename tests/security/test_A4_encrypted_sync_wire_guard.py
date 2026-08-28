@@ -1541,3 +1541,103 @@ app = Starlette(routes=[Route("/api/encrypted-sync", sync, methods=["POST"])])
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("sync['vault_key']" in violation for violation in violations)
+
+
+def test_A4_guard_follows_dataclass_request_model_inheritance(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "inherited_dataclass.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from dataclasses import dataclass
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@dataclass
+class SecretFields:
+    vault_key: str
+
+class SyncRequest(SecretFields):
+    pass
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("SecretFields.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_indexes_bound_method_route_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "bound_method.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+class Controller:
+    def sync(self, vault_key: str) -> dict[str, bool]:
+        return {"ok": True}
+
+controller = Controller()
+app.add_api_route("/api/encrypted-sync", controller.sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_treats_unannotated_starlette_request_as_wire_input(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "unannotated_starlette.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+
+app = Starlette()
+
+@app.route("/api/encrypted-sync", methods=["POST"])
+async def sync(request):
+    payload = await request.json()
+    return JSONResponse({"value": payload["vault_key"]})
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync['vault_key']" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_websocket_json_payloads(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "websocket_payload.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI, WebSocket
+
+app = FastAPI()
+
+@app.websocket("/api/encrypted-sync")
+async def sync(socket: WebSocket) -> None:
+    payload = await socket.receive_json()
+    await socket.send_json({"value": payload["vault_key"]})
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync['vault_key']" in violation for violation in violations)
