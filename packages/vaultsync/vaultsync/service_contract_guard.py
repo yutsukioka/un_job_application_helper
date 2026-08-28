@@ -58,12 +58,15 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules.append((path, tree))
 
     model_names = _pydantic_model_names(parsed_modules)
+    programmatic_handlers = _programmatic_route_handler_keys(root, parsed_modules)
     for path, tree in parsed_modules:
         visitor = _ServiceContractVisitor(
             path,
             model_names=model_names,
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
-            programmatic_route_handlers=_programmatic_route_handlers(tree),
+            programmatic_route_handlers=frozenset(
+                name for handler_path, name in programmatic_handlers if handler_path == path
+            ),
         )
         visitor.visit(tree)
         violations.extend(visitor.violations)
@@ -113,6 +116,12 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
                     f"{self.path}:{line_number}: route parameter {node.name}.{wire_name} "
+                    "would accept raw vault secret material over the wire"
+                )
+        for wire_name, line_number in _route_body_wire_names(node):
+            if _is_banned_wire_name(wire_name):
+                self.violations.append(
+                    f"{self.path}:{line_number}: route body {node.name}[{wire_name!r}] "
                     "would accept raw vault secret material over the wire"
                 )
 
@@ -307,6 +316,99 @@ def _programmatic_route_handlers(tree: ast.Module) -> frozenset[str]:
         if endpoint is not None and (handler_name := _name(endpoint)) is not None:
             handlers.add(handler_name)
     return frozenset(handlers)
+
+
+def _programmatic_route_handler_keys(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> frozenset[tuple[Path, str]]:
+    paths_by_module: dict[str, Path] = {}
+    for path, _ in parsed_modules:
+        module_name = _module_name(root, path)
+        paths_by_module[module_name] = path
+        if module_name:
+            paths_by_module[f"{root.name}.{module_name}"] = path
+
+    handlers: set[tuple[Path, str]] = set()
+    for path, tree in parsed_modules:
+        local_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        imported_functions = _imported_function_targets(
+            root,
+            path,
+            tree,
+            paths_by_module,
+        )
+        for handler_name in _programmatic_route_handlers(tree):
+            if handler_name in local_functions:
+                handlers.add((path, handler_name))
+            elif handler_name in imported_functions:
+                handlers.add(imported_functions[handler_name])
+    return frozenset(handlers)
+
+
+def _module_name(root: Path, path: Path) -> str:
+    parts = list(path.relative_to(root).with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _imported_function_targets(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    paths_by_module: dict[str, Path],
+) -> dict[str, tuple[Path, str]]:
+    current_parts = _module_name(root, path).split(".")
+    if path.name != "__init__.py":
+        current_parts = current_parts[:-1]
+
+    targets: dict[str, tuple[Path, str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        if node.level:
+            trim = node.level - 1
+            if trim > len(current_parts):
+                continue
+            module_parts = current_parts[: len(current_parts) - trim]
+            module_parts.extend(node.module.split("."))
+            module_name = ".".join(module_parts)
+        else:
+            module_name = node.module
+        target_path = paths_by_module.get(module_name)
+        if target_path is None:
+            continue
+        for imported in node.names:
+            if imported.name != "*":
+                targets[imported.asname or imported.name] = (target_path, imported.name)
+    return targets
+
+
+def _route_body_wire_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, int]]:
+    wire_names: list[tuple[str, int]] = []
+    for statement in node.body:
+        for candidate in ast.walk(statement):
+            if isinstance(candidate, ast.Subscript):
+                key = candidate.slice
+            elif (
+                isinstance(candidate, ast.Call)
+                and isinstance(candidate.func, ast.Attribute)
+                and candidate.func.attr in {"get", "pop", "setdefault"}
+                and candidate.args
+            ):
+                key = candidate.args[0]
+            else:
+                continue
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                wire_names.append((key.value, key.lineno))
+    return wire_names
 
 
 def _is_route_handler(
