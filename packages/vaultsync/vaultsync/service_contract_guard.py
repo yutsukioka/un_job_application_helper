@@ -492,6 +492,25 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 or imported.name.startswith("starlette.")
             )
 
+    framework_class_names = set(constructor_aliases)
+    class_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    changed = True
+    while changed:
+        changed = False
+        for class_node in class_nodes:
+            if class_node.name in framework_class_names:
+                continue
+            if any(
+                _is_framework_class_base(
+                    base,
+                    framework_class_names,
+                    module_aliases,
+                )
+                for base in class_node.bases
+            ):
+                framework_class_names.add(class_node.name)
+                changed = True
+
     owners: set[str] = set()
     assignments = [
         node
@@ -505,7 +524,7 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
             targets, value = _assignment_targets_and_value(assignment)
             is_owner = _is_framework_constructor(
                 value,
-                constructor_aliases,
+                framework_class_names,
                 module_aliases,
             ) or (isinstance(value, ast.Name) and value.id in owners)
             if is_owner:
@@ -513,6 +532,22 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 owners.update(targets)
                 changed = changed or len(owners) != previous_size
     return frozenset(owners)
+
+
+def _is_framework_class_base(
+    node: ast.expr,
+    framework_class_names: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in framework_class_names
+    parts = _qualified_name_parts(node)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] in {"FastAPI", "APIRouter", "Starlette"}
+        and parts[0] in module_aliases
+    )
 
 
 def _starlette_route_constructor_aliases(tree: ast.Module) -> frozenset[str]:
@@ -629,7 +664,7 @@ def _mounted_route_owner_keys(
                 for node in ast.walk(tree)
                 if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "include_router"
+                and node.func.attr in {"include_router", "mount"}
             ):
                 caller = _resolve_reference_target(
                     root,
@@ -643,17 +678,31 @@ def _mounted_route_owner_keys(
                     continue
                 if path not in service_paths and caller not in mounted:
                     continue
-                router = next(
-                    (keyword.value for keyword in call.keywords if keyword.arg == "router"),
-                    call.args[0] if call.args else None,
-                )
-                if router is None:
+                if call.func.attr == "include_router":
+                    mounted_owner = next(
+                        (
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg == "router"
+                        ),
+                        call.args[0] if call.args else None,
+                    )
+                else:
+                    mounted_owner = next(
+                        (
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg == "app"
+                        ),
+                        call.args[1] if len(call.args) > 1 else None,
+                    )
+                if mounted_owner is None:
                     continue
                 target = _resolve_reference_target(
                     root,
                     path,
                     tree,
-                    router,
+                    mounted_owner,
                     paths_by_module,
                     trees_by_path,
                 )
@@ -1376,6 +1425,9 @@ def _model_fields(
 
 
 def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
+    for keyword in node.keywords:
+        if keyword.arg == "extra" and _is_allow_value(keyword.value):
+            return keyword.value.lineno
     for child in node.body:
         if isinstance(child, (ast.Assign, ast.AnnAssign)):
             targets = child.targets if isinstance(child, ast.Assign) else [child.target]
@@ -2747,6 +2799,7 @@ def _route_body_wire_names(
     request_aliases = set(request_names)
     websocket_aliases = set(websocket_names)
     raw_mapping_names: set[str] = set()
+    request_body_names: set[str] = set()
     websocket_text_names: set[str] = set()
     assignments = [
         candidate
@@ -2775,11 +2828,20 @@ def _route_body_wire_names(
                 previous_size = len(websocket_text_names)
                 websocket_text_names.update(targets)
                 changed = changed or len(websocket_text_names) != previous_size
+            if _is_request_body_value(
+                value,
+                request_aliases,
+                request_body_names,
+            ):
+                previous_size = len(request_body_names)
+                request_body_names.update(targets)
+                changed = changed or len(request_body_names) != previous_size
             if _is_raw_request_mapping(
                 value,
                 request_aliases,
                 websocket_aliases,
                 raw_mapping_names,
+                request_body_names,
                 websocket_text_names,
                 json_loads_names,
                 json_module_names,
@@ -2812,6 +2874,7 @@ def _route_body_wire_names(
                     request_aliases,
                     websocket_aliases,
                     raw_mapping_names,
+                    request_body_names,
                     websocket_text_names,
                     json_loads_names,
                     json_module_names,
@@ -2952,6 +3015,7 @@ def _is_raw_request_mapping(
     request_aliases: set[str],
     websocket_aliases: set[str],
     raw_mapping_names: set[str],
+    request_body_names: set[str],
     websocket_text_names: set[str],
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
@@ -2962,6 +3026,7 @@ def _is_raw_request_mapping(
             request_aliases,
             websocket_aliases,
             raw_mapping_names,
+            request_body_names,
             websocket_text_names,
             json_loads_names,
             json_module_names,
@@ -2974,6 +3039,7 @@ def _is_raw_request_mapping(
             request_aliases,
             websocket_aliases,
             raw_mapping_names,
+            request_body_names,
             websocket_text_names,
             json_loads_names,
             json_module_names,
@@ -2996,7 +3062,12 @@ def _is_raw_request_mapping(
         return True
     if _is_json_loads_call(node, json_loads_names, json_module_names):
         return any(
-            _is_websocket_text_value(
+            _is_request_body_value(
+                argument,
+                request_aliases,
+                request_body_names,
+            )
+            or _is_websocket_text_value(
                 argument,
                 websocket_aliases,
                 websocket_text_names,
@@ -3018,6 +3089,7 @@ def _is_raw_request_mapping(
             request_aliases,
             websocket_aliases,
             raw_mapping_names,
+            request_body_names,
             websocket_text_names,
             json_loads_names,
             json_module_names,
@@ -3030,11 +3102,34 @@ def _is_raw_request_mapping(
             request_aliases,
             websocket_aliases,
             raw_mapping_names,
+            request_body_names,
             websocket_text_names,
             json_loads_names,
             json_module_names,
         )
         for argument in node.args
+    )
+
+
+def _is_request_body_value(
+    node: ast.AST,
+    request_aliases: set[str],
+    request_body_names: set[str],
+) -> bool:
+    if isinstance(node, ast.Await):
+        return _is_request_body_value(
+            node.value,
+            request_aliases,
+            request_body_names,
+        )
+    if isinstance(node, ast.Name):
+        return node.id in request_body_names
+    return bool(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "body"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in request_aliases
     )
 
 
