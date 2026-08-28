@@ -73,6 +73,16 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    pydantic_root_models = _pydantic_root_model_keys(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
+    mapping_root_models = _mapping_pydantic_root_model_keys(
+        parsed_modules,
+        pydantic_root_models,
+    )
+    pydantic_models = pydantic_models | pydantic_root_models
     dataclass_models = _dataclass_model_keys(parsed_modules)
     typed_dict_models = _typed_dict_model_keys(
         module_root,
@@ -165,6 +175,13 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 for model_path, line_number, _ in request_typed_dicts
                 if model_path == path
             ),
+            mapping_root_model_lines=frozenset(
+                line_number
+                for model_path, line_number, _ in (
+                    request_models & mapping_root_models
+                )
+                if model_path == path
+            ),
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             field_factory_module_names=_pydantic_module_aliases(tree),
             wire_alias_constants=_string_constants(tree.body),
@@ -192,6 +209,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         pydantic_model_lines: frozenset[int],
         dataclass_model_lines: frozenset[int],
         typed_dict_model_lines: frozenset[int],
+        mapping_root_model_lines: frozenset[int],
         field_factory_names: frozenset[str],
         field_factory_module_names: frozenset[str],
         wire_alias_constants: dict[str, str],
@@ -206,6 +224,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.pydantic_model_lines = pydantic_model_lines
         self.dataclass_model_lines = dataclass_model_lines
         self.typed_dict_model_lines = typed_dict_model_lines
+        self.mapping_root_model_lines = mapping_root_model_lines
         self.field_factory_names = field_factory_names
         self.field_factory_module_names = field_factory_module_names
         self.wire_alias_constants = wire_alias_constants
@@ -235,6 +254,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 self.violations.append(
                     f"{self.path}:{extra_line}: Pydantic request model {node.name} "
                     "allows arbitrary extra wire fields"
+                )
+            if node.lineno in self.mapping_root_model_lines:
+                self.violations.append(
+                    f"{self.path}:{node.lineno}: Pydantic request model "
+                    f"{node.name} has an unconstrained mapping root"
                 )
             for field_name, line_number in _model_fields(
                 node,
@@ -797,6 +821,97 @@ def _pydantic_model_keys(
     return frozenset(model_keys)
 
 
+def _pydantic_root_model_keys(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+) -> frozenset[tuple[Path, int, str]]:
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
+    trees_by_path = dict(parsed_modules)
+    direct_aliases = {
+        path: _pydantic_symbol_aliases(tree, "RootModel")
+        for path, tree in parsed_modules
+    }
+    module_aliases = {
+        path: _pydantic_module_aliases(tree) for path, tree in parsed_modules
+    }
+    model_keys: set[tuple[Path, int, str]] = set()
+    changed = True
+    while changed:
+        changed = False
+        for key, node in classes.items():
+            if key in model_keys:
+                continue
+            path, _, _ = key
+            is_model = False
+            for base in node.bases:
+                if _is_pydantic_root_reference(
+                    base,
+                    direct_aliases[path],
+                    module_aliases[path],
+                ):
+                    is_model = True
+                    break
+                target = _resolve_model_key(
+                    root,
+                    path,
+                    trees_by_path[path],
+                    base,
+                    paths_by_module,
+                    trees_by_path,
+                    classes,
+                    class_scopes,
+                    key,
+                )
+                if target in model_keys:
+                    is_model = True
+                    break
+            if is_model:
+                model_keys.add(key)
+                changed = True
+    return frozenset(model_keys)
+
+
+def _mapping_pydantic_root_model_keys(
+    parsed_modules: list[tuple[Path, ast.Module]],
+    root_model_keys: frozenset[tuple[Path, int, str]],
+) -> frozenset[tuple[Path, int, str]]:
+    classes = _class_definitions(parsed_modules)
+    trees_by_path = dict(parsed_modules)
+    mapping_keys: set[tuple[Path, int, str]] = set()
+    for key in root_model_keys:
+        node = classes[key]
+        path, _, _ = key
+        direct_aliases = _pydantic_symbol_aliases(trees_by_path[path], "RootModel")
+        module_aliases = _pydantic_module_aliases(trees_by_path[path])
+        if any(
+            isinstance(base, ast.Subscript)
+            and _is_pydantic_root_reference(base, direct_aliases, module_aliases)
+            and _annotation_contains_mapping(base.slice)
+            for base in node.bases
+        ):
+            mapping_keys.add(key)
+    return frozenset(mapping_keys)
+
+
+def _is_pydantic_root_reference(
+    base: ast.expr,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    candidate = base.value if isinstance(base, ast.Subscript) else base
+    if isinstance(candidate, ast.Name):
+        return candidate.id in direct_aliases
+    parts = _qualified_name_parts(candidate)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "RootModel"
+        and parts[0] in module_aliases
+    )
+
+
 def _is_pydantic_base_reference(
     base: ast.expr,
     direct_aliases: frozenset[str],
@@ -1272,18 +1387,16 @@ def _string_constants(statements: list[ast.stmt]) -> dict[str, str]:
         if isinstance(statement, (ast.Assign, ast.AnnAssign))
     ]
     constants: dict[str, str] = {}
-    changed = True
-    while changed:
-        changed = False
-        for assignment in assignments:
-            value = _constant_string_value(assignment.value, constants)
-            if value is None:
+    for assignment in assignments:
+        value = _constant_string_value(assignment.value, constants)
+        targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
+        for target in targets:
+            if not isinstance(target, ast.Name):
                 continue
-            targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
-            for target in targets:
-                if isinstance(target, ast.Name) and constants.get(target.id) != value:
-                    constants[target.id] = value
-                    changed = True
+            if value is None:
+                constants.pop(target.id, None)
+            else:
+                constants[target.id] = value
     return constants
 
 
@@ -2011,6 +2124,10 @@ def _is_model_type_alias(
         for candidate in _annotation_reference_nodes(annotation)
     ):
         return True
+    if isinstance(value, ast.Call) and _name(value.func) == "TypeAliasType":
+        return len(value.args) > 1 or any(
+            keyword.arg == "value" for keyword in value.keywords
+        )
     return isinstance(value, (ast.Name, ast.Attribute, ast.Subscript, ast.BinOp))
 
 
