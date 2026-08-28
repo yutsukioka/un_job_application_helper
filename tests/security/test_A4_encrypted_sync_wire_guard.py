@@ -1747,3 +1747,96 @@ def sync(request: SyncRequest) -> dict[str, bool]:
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("SecretBase.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_follows_python_mro_for_inherited_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "mro_bound_method.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+class RootController:
+    def sync(self, payload: str) -> dict[str, bool]:
+        return {"ok": True}
+
+class LeftController(RootController):
+    pass
+
+class RightController(RootController):
+    def sync(self, vault_key: str) -> dict[str, bool]:
+        return {"ok": True}
+
+class Controller(LeftController, RightController):
+    pass
+
+controller = Controller()
+app.add_api_route("/api/encrypted-sync", controller.sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_pydantic_class_keyword_alias_generators(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "class_keyword_alias.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class SyncRequest(BaseModel, alias_generator=lambda _: "vault_key"):
+    value: str
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "SyncRequest" in violation and "alias generator" in violation
+        for violation in violations
+    )
+
+
+def test_A4_guard_ignores_dependency_lists_on_ordinary_calls(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "ordinary_dependencies.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+def load_local(vault_key: str) -> None:
+    return None
+
+def configure(*, dependencies: list[object]) -> None:
+    return None
+
+configure(dependencies=[Depends(load_local)])
+
+@app.get("/health")
+def health() -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert violations == []

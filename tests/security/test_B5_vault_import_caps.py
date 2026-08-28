@@ -19,6 +19,7 @@ from vaultsync import (  # noqa: E402
 )
 from vaultsync.export import VaultImportTooLargeError  # noqa: E402
 from vaultsync.format import (  # noqa: E402
+    Argon2idParams,
     MAX_ARGON2ID_ITERATIONS,
     MAX_ARGON2ID_MEMORY_KIB,
     MAX_ARGON2ID_PARALLELISM,
@@ -83,6 +84,19 @@ def test_B5_argon2id_import_caps_match_supported_client_profile() -> None:
     assert MAX_ARGON2ID_MEMORY_KIB == 65_536
     assert MAX_ARGON2ID_ITERATIONS == 3
     assert MAX_ARGON2ID_PARALLELISM == 4
+
+
+def test_B5_trusted_argon2id_params_are_not_limited_by_import_caps() -> None:
+    params = Argon2idParams(
+        salt=b"s" * 16,
+        memory_kib=MAX_ARGON2ID_MEMORY_KIB + 1,
+        iterations=MAX_ARGON2ID_ITERATIONS + 1,
+        parallelism=MAX_ARGON2ID_PARALLELISM + 1,
+    )
+
+    assert params.memory_kib == MAX_ARGON2ID_MEMORY_KIB + 1
+    assert params.iterations == MAX_ARGON2ID_ITERATIONS + 1
+    assert params.parallelism == MAX_ARGON2ID_PARALLELISM + 1
 
 
 def test_B5_vault_import_cap_matches_supported_cross_platform_document_limit() -> None:
