@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 
 from vaultsync import (  # noqa: E402
+    AtlasVaultExport,
+    LocalVaultStore,
     read_atlasvault_export,
     read_local_store,
     write_atlasvault_export,
@@ -25,6 +27,8 @@ from vaultsync.format import (  # noqa: E402
     MAX_ARGON2ID_PARALLELISM,
     MAX_VAULT_IMPORT_BYTES,
     UnsafeKDFParameters,
+    VaultMetadata,
+    WrappedKey,
     deserialize_vault_metadata,
     read_vault_import_bytes,
 )
@@ -168,4 +172,37 @@ def test_B5_vault_writers_reject_files_the_default_readers_cannot_reopen(
     store_path = tmp_path / "oversized-store.json"
     with pytest.raises(VaultImportTooLargeError):
         write_local_store(object(), store_path, max_bytes=1)
+    assert not store_path.exists()
+
+
+def test_B5_vault_writers_reject_unreadable_argon2id_metadata(
+    tmp_path: Path,
+) -> None:
+    params = Argon2idParams(
+        salt=b"s" * 16,
+        memory_kib=MAX_ARGON2ID_MEMORY_KIB + 1,
+        iterations=2,
+        parallelism=1,
+    )
+    metadata = VaultMetadata.new(
+        vault_id="b5000000-0000-4000-8000-000000000002",
+        key_wraps=(
+            WrappedKey(
+                id="primary-passphrase",
+                type="passphrase",
+                kdf=params,
+                nonce=b"n" * 12,
+                ciphertext=b"c" * 32,
+            ),
+        ),
+    )
+
+    export_path = tmp_path / "unreadable-export.atlasvault"
+    with pytest.raises(UnsafeKDFParameters):
+        write_atlasvault_export(AtlasVaultExport.new(metadata), export_path)
+    assert not export_path.exists()
+
+    store_path = tmp_path / "unreadable-store.json"
+    with pytest.raises(UnsafeKDFParameters):
+        write_local_store(LocalVaultStore.new(metadata), store_path)
     assert not store_path.exists()

@@ -2839,3 +2839,166 @@ def sync(request: SyncRequest) -> dict[str, bool]:
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_preserves_local_shadowing_of_imported_wire_constants(
+    tmp_path: Path,
+) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "__init__.py").write_text("", encoding="utf-8")
+    (service_root / "wire_names.py").write_text(
+        'KEY = "vault_key"\n',
+        encoding="utf-8",
+    )
+    (service_root / "api.py").write_text(
+        """
+from fastapi import Body, FastAPI
+
+from services.wire_names import KEY
+
+KEY = "encrypted_payload"
+app = FastAPI()
+
+@app.post("/api/encrypted-sync")
+def sync(value: str = Body(alias=KEY)) -> dict[str, bool]:
+    return {"ok": bool(value)}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert violations == []
+
+
+def test_A4_guard_considers_conditional_route_owner_assignments(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "conditional_owner.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+class LocalCallbacks:
+    def post(self, name):
+        def register(callback):
+            return callback
+        return register
+
+if use_fastapi:
+    app = FastAPI()
+else:
+    app = LocalCallbacks()
+
+@app.post("/api/encrypted-sync")
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": bool(vault_key)}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_named_pydantic_v1_config_field_maps(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "named_config_fields.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+ALIASES = {"encrypted_payload": {"alias": "vault_key"}}
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    encrypted_payload: str
+
+    class Config:
+        fields = ALIASES
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": bool(request.encrypted_payload)}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_matches_qualified_framework_classes_by_identity(
+    tmp_path: Path,
+) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "__init__.py").write_text("", encoding="utf-8")
+    (service_root / "framework.py").write_text(
+        """
+from fastapi import FastAPI
+
+class ServiceApp(FastAPI):
+    pass
+""",
+        encoding="utf-8",
+    )
+    (service_root / "callbacks.py").write_text(
+        """
+class ServiceApp:
+    def post(self, name):
+        def register(callback):
+            return callback
+        return register
+""",
+        encoding="utf-8",
+    )
+    (service_root / "api.py").write_text(
+        """
+from services import callbacks
+from services.framework import ServiceApp
+
+class Local(callbacks.ServiceApp):
+    pass
+
+app = Local()
+
+@app.post("local")
+def local_callback(vault_key: str) -> str:
+    return vault_key
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert violations == []
+
+
+def test_A4_guard_resolves_route_decorator_method_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "decorator_alias.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+post = app.post
+
+@post("/api/encrypted-sync")
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": bool(vault_key)}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
