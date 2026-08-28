@@ -1641,3 +1641,109 @@ async def sync(socket: WebSocket) -> None:
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("sync['vault_key']" in violation for violation in violations)
+
+
+def test_A4_guard_indexes_inherited_bound_method_route_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "inherited_bound_method.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+class BaseController:
+    def sync(self, vault_key: str) -> dict[str, bool]:
+        return {"ok": True}
+
+class Controller(BaseController):
+    pass
+
+controller = Controller()
+app.add_api_route("/api/encrypted-sync", controller.sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_websocket_text_frame_json(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "websocket_text.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+import json
+from fastapi import FastAPI, WebSocket
+
+app = FastAPI()
+
+@app.websocket("/api/encrypted-sync")
+async def sync(socket: WebSocket) -> None:
+    payload = json.loads(await socket.receive_text())
+    await socket.send_json({"value": payload["vault_key"]})
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync['vault_key']" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_pydantic_request_alias_generators(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "alias_generators.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    secret: str
+    model_config = ConfigDict(alias_generator=lambda _: "vault_key")
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "SyncRequest" in violation and "alias generator" in violation
+        for violation in violations
+    )
+
+
+def test_A4_guard_follows_create_model_base_fields(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "created_model_base.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, create_model
+
+app = FastAPI()
+
+class SecretBase(BaseModel):
+    vault_key: str
+
+SyncRequest = create_model("SyncRequest", __base__=SecretBase)
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("SecretBase.vault_key" in violation for violation in violations)
