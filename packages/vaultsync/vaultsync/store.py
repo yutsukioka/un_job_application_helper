@@ -12,6 +12,7 @@ from vaultsync.format import (
     VaultFormatError,
     VaultMetadata,
     read_vault_import_bytes,
+    require_vault_import_size,
 )
 from vaultsync.records import EncryptedRecord, RecordFormatError
 
@@ -172,8 +173,15 @@ def deserialize_local_store(data: str | bytes | bytearray | Mapping[str, Any]) -
     return LocalVaultStore.from_dict(_require_mapping(obj, "local store"))
 
 
-def write_local_store(store: LocalVaultStore, path: str | Path) -> None:
-    Path(path).write_bytes(serialize_local_store_bytes(store))
+def write_local_store(
+    store: LocalVaultStore,
+    path: str | Path,
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> None:
+    data = serialize_local_store_bytes(store)
+    require_vault_import_size(len(data), max_bytes=max_bytes)
+    Path(path).write_bytes(data)
 
 
 def read_local_store(

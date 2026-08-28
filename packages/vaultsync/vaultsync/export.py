@@ -13,6 +13,7 @@ from vaultsync.format import (
     VaultImportTooLargeError as VaultImportTooLargeError,
     VaultMetadata,
     read_vault_import_bytes,
+    require_vault_import_size,
 )
 from vaultsync.records import EncryptedRecord, RecordFormatError
 
@@ -227,8 +228,15 @@ def deserialize_vault_export(data: str | bytes | bytearray | Mapping[str, Any]) 
     return AtlasVaultExport.from_dict(_require_mapping(obj, "export"))
 
 
-def write_atlasvault_export(export: AtlasVaultExport, path: str | Path) -> None:
-    Path(path).write_bytes(serialize_vault_export_bytes(export))
+def write_atlasvault_export(
+    export: AtlasVaultExport,
+    path: str | Path,
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> None:
+    data = serialize_vault_export_bytes(export)
+    require_vault_import_size(len(data), max_bytes=max_bytes)
+    Path(path).write_bytes(data)
 
 
 def read_atlasvault_export(

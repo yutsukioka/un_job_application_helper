@@ -158,12 +158,24 @@ def read_vault_import_bytes(
     if max_bytes <= 0:
         raise VaultImportTooLargeError("vault import size cap must be positive")
     try:
-        size = path_obj.stat().st_size
+        with path_obj.open("rb") as handle:
+            data = handle.read(max_bytes + 1)
     except OSError as exc:
-        raise VaultFormatError("vault import file cannot be inspected") from exc
+        raise VaultFormatError("vault import file cannot be read") from exc
+    if len(data) > max_bytes:
+        raise VaultImportTooLargeError("vault import exceeds maximum size")
+    return data
+
+
+def require_vault_import_size(
+    size: int,
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> None:
+    if max_bytes <= 0:
+        raise VaultImportTooLargeError("vault import size cap must be positive")
     if size > max_bytes:
         raise VaultImportTooLargeError("vault import exceeds maximum size")
-    return path_obj.read_bytes()
 
 
 @dataclass(frozen=True)
