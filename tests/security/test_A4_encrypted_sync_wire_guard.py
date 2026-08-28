@@ -1321,10 +1321,17 @@ def sync(request: SyncRequest) -> dict[str, bool]:
         encoding="utf-8",
     )
     probe = """
+import importlib.util
 import sys
-sys.path.insert(0, sys.argv[2])
-from vaultsync.service_contract_guard import find_raw_secret_wire_contract_violations
-print("\\n".join(find_raw_secret_wire_contract_violations(sys.argv[1])))
+from pathlib import Path
+
+guard_path = Path(sys.argv[2]) / "vaultsync" / "service_contract_guard.py"
+spec = importlib.util.spec_from_file_location("_isolated_service_contract_guard", guard_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"could not load guard from {guard_path}")
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+print("\\n".join(guard.find_raw_secret_wire_contract_violations(sys.argv[1])))
 """
 
     completed = subprocess.run(
