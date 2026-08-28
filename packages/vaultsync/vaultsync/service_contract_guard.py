@@ -157,6 +157,19 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
     for key in sorted(request_created_pydantic_models):
         path, _, model_name = key
         tree = dict(parsed_modules)[path]
+        for config_kind, line_number in _pydantic_create_model_config_issues(
+            created_pydantic_models[key]
+        ):
+            if config_kind == "extra":
+                violations.append(
+                    f"{path}:{line_number}: Pydantic request model {model_name} "
+                    "allows arbitrary extra wire fields"
+                )
+            else:
+                violations.append(
+                    f"{path}:{line_number}: Pydantic request model {model_name} "
+                    "defines an alias generator that cannot be statically approved"
+                )
         for field_name, line_number in _pydantic_create_model_fields(
             created_pydantic_models[key],
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
@@ -182,6 +195,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         ):
             continue
         depends_aliases, depends_module_aliases = _depends_aliases(tree)
+        body_aliases, body_module_aliases = _body_aliases(tree)
         visitor = _ServiceContractVisitor(
             path,
             pydantic_model_lines=frozenset(
@@ -218,6 +232,12 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             route_owner_names=route_owner_names.get(path, frozenset()),
             depends_aliases=frozenset(depends_aliases),
             depends_module_aliases=frozenset(depends_module_aliases),
+            body_aliases=frozenset(body_aliases),
+            body_module_aliases=frozenset(body_module_aliases),
+            unconstrained_type_names=(
+                _typing_symbol_aliases(tree, "Any") | {"object"}
+            ),
+            unconstrained_type_module_names=_typing_module_aliases(tree),
             boundary_function_lines=frozenset(
                 line_number
                 for function_path, line_number, _ in boundary_functions
@@ -250,6 +270,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         route_owner_names: frozenset[str],
         depends_aliases: frozenset[str],
         depends_module_aliases: frozenset[str],
+        body_aliases: frozenset[str],
+        body_module_aliases: frozenset[str],
+        unconstrained_type_names: frozenset[str],
+        unconstrained_type_module_names: frozenset[str],
         boundary_function_lines: frozenset[int],
     ) -> None:
         self.path = path
@@ -269,6 +293,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.route_owner_names = route_owner_names
         self.depends_aliases = depends_aliases
         self.depends_module_aliases = depends_module_aliases
+        self.body_aliases = body_aliases
+        self.body_module_aliases = body_module_aliases
+        self.unconstrained_type_names = unconstrained_type_names
+        self.unconstrained_type_module_names = unconstrained_type_module_names
         self.boundary_function_lines = boundary_function_lines
         self.violations: list[str] = []
 
@@ -341,6 +369,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             node,
             depends_aliases=self.depends_aliases,
             depends_module_aliases=self.depends_module_aliases,
+            body_aliases=self.body_aliases,
+            body_module_aliases=self.body_module_aliases,
+            unconstrained_type_names=self.unconstrained_type_names,
+            unconstrained_type_module_names=self.unconstrained_type_module_names,
         ):
             self.violations.append(
                 f"{self.path}:{line_number}: route parameter "
@@ -554,9 +586,11 @@ def _starlette_route_constructor_aliases(tree: ast.Module) -> frozenset[str]:
     return frozenset(
         imported.asname or imported.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "starlette.routing"
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"fastapi.routing", "starlette.routing"}
         for imported in node.names
-        if imported.name in {"Route", "WebSocketRoute"}
+        if imported.name
+        in {"APIRoute", "APIWebSocketRoute", "Route", "WebSocketRoute"}
     )
 
 
@@ -566,7 +600,8 @@ def _starlette_route_module_aliases(tree: ast.Module) -> frozenset[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Import)
         for imported in node.names
-        if imported.name in {"starlette", "starlette.routing"}
+        if imported.name
+        in {"fastapi", "fastapi.routing", "starlette", "starlette.routing"}
     )
 
 
@@ -581,7 +616,8 @@ def _is_starlette_route_constructor(
     return bool(
         parts
         and len(parts) >= 2
-        and parts[-1] in {"Route", "WebSocketRoute"}
+        and parts[-1]
+        in {"APIRoute", "APIWebSocketRoute", "Route", "WebSocketRoute"}
         and parts[0] in module_aliases
     )
 
@@ -1263,6 +1299,20 @@ def _pydantic_create_model_fields(
     return fields
 
 
+def _pydantic_create_model_config_issues(
+    node: ast.Call,
+) -> list[tuple[str, int]]:
+    issues: list[tuple[str, int]] = []
+    for keyword in node.keywords:
+        if keyword.arg != "__config__":
+            continue
+        if _expression_allows_extra(keyword.value):
+            issues.append(("extra", keyword.value.lineno))
+        if _expression_defines_config_option(keyword.value, "alias_generator"):
+            issues.append(("alias_generator", keyword.value.lineno))
+    return issues
+
+
 def _pydantic_create_model_type_roots(node: ast.Call) -> list[ast.AST]:
     reserved = {
         "__base__",
@@ -1591,15 +1641,33 @@ def _unconstrained_mapping_request_parameters(
     *,
     depends_aliases: frozenset[str],
     depends_module_aliases: frozenset[str],
+    body_aliases: frozenset[str],
+    body_module_aliases: frozenset[str],
+    unconstrained_type_names: frozenset[str],
+    unconstrained_type_module_names: frozenset[str],
 ) -> list[tuple[str, int]]:
     defaults_by_argument = _parameter_defaults(node)
     mappings: list[tuple[str, int]] = []
     for argument in _function_arguments(node):
-        if argument.annotation is None or not _annotation_contains_mapping(
-            argument.annotation
-        ):
+        if argument.annotation is None:
             continue
         default = defaults_by_argument.get(id(argument))
+        is_mapping = _annotation_contains_mapping(argument.annotation)
+        is_explicit_untyped_body = (
+            isinstance(default, ast.Call)
+            and _is_body_call(
+                default,
+                set(body_aliases),
+                set(body_module_aliases),
+            )
+            and _annotation_contains_unconstrained_type(
+                argument.annotation,
+                unconstrained_type_names,
+                unconstrained_type_module_names,
+            )
+        )
+        if not is_mapping and not is_explicit_untyped_body:
+            continue
         if isinstance(default, ast.Call) and _is_depends_call(
             default,
             set(depends_aliases),
@@ -1646,6 +1714,21 @@ def _annotation_contains_mapping(annotation: ast.expr) -> bool:
             continue
         if len(parts) == 1 or ".".join(parts[:-1]) in module_names:
             return True
+    return False
+
+
+def _annotation_contains_unconstrained_type(
+    annotation: ast.expr,
+    direct_names: frozenset[str],
+    module_names: frozenset[str],
+) -> bool:
+    for candidate in _annotation_reference_nodes(annotation):
+        if isinstance(candidate, ast.Name) and candidate.id in direct_names:
+            return True
+        parts = _qualified_name_parts(candidate)
+        if parts and len(parts) >= 2 and parts[-1] == "Any":
+            if parts[0] in module_names:
+                return True
     return False
 
 
@@ -1788,6 +1871,17 @@ def _programmatic_route_handler_keys(
                 class_scopes=class_scopes,
                 function_scopes=scopes,
                 owner_key=owner_key,
+            ) or _resolve_callable_instance_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=endpoint,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
             ) or _resolve_function_key(
                 root,
                 path,
@@ -1865,6 +1959,71 @@ def _resolve_bound_method_key(
         root=root,
         class_key=class_key,
         method_name=reference.attr,
+        paths_by_module=paths_by_module,
+        trees_by_path=trees_by_path,
+        classes=classes,
+        class_scopes=class_scopes,
+    )
+
+
+def _resolve_callable_instance_key(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> tuple[Path, int, str] | None:
+    owner_scope = function_scopes.get(owner_key, ())
+    constructor: ast.AST | None = None
+    constructor_scope = owner_scope
+    constructor_line = reference.lineno
+    if isinstance(reference, ast.Call):
+        constructor = reference.func
+    elif isinstance(reference, ast.Name):
+        assignments = [
+            (key, value, scope)
+            for key, value, scope, _ in _module_assignment_entries(path, tree)
+            if key[2] == reference.id
+            and isinstance(value, ast.Call)
+            and len(scope) <= len(owner_scope)
+            and owner_scope[: len(scope)] == scope
+            and key[1] <= reference.lineno
+        ]
+        if assignments:
+            key, value, constructor_scope = max(
+                assignments,
+                key=lambda entry: (len(entry[2]), entry[0][1]),
+            )
+            constructor = value.func
+            constructor_line = key[1]
+    if constructor is None:
+        return None
+
+    class_key = _resolve_model_key(
+        root,
+        path,
+        tree,
+        constructor,
+        paths_by_module,
+        trees_by_path,
+        classes,
+        class_scopes,
+        None,
+        owner_scope=constructor_scope,
+        reference_line=constructor_line,
+    )
+    if class_key is None:
+        return None
+    return _resolve_class_method_key(
+        root=root,
+        class_key=class_key,
+        method_name="__call__",
         paths_by_module=paths_by_module,
         trees_by_path=trees_by_path,
         classes=classes,
@@ -2318,6 +2477,43 @@ def _depends_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
                 if imported.name == "fastapi" or imported.name.startswith("fastapi.")
             )
     return direct, modules
+
+
+def _body_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
+    direct: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None and (
+            node.module == "fastapi" or node.module.startswith("fastapi.")
+        ):
+            direct.update(
+                imported.asname or imported.name
+                for imported in node.names
+                if imported.name == "Body"
+            )
+        elif isinstance(node, ast.Import):
+            modules.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in node.names
+                if imported.name == "fastapi" or imported.name.startswith("fastapi.")
+            )
+    return direct, modules
+
+
+def _is_body_call(
+    node: ast.Call,
+    direct_aliases: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "Body"
+        and parts[0] in module_aliases
+    )
 
 
 def _is_depends_call(
@@ -3163,6 +3359,8 @@ def _is_route_handler(
     if node.lineno in boundary_function_lines:
         return True
     for decorator in node.decorator_list:
+        if _is_http_middleware_decorator(decorator, route_owner_names):
+            return True
         call = decorator if isinstance(decorator, ast.Call) else None
         func = call.func if call is not None else decorator
         if not isinstance(func, ast.Attribute) or not (
@@ -3179,6 +3377,8 @@ def _route_handler_uses_owner(
     owner_names: set[str],
 ) -> bool:
     for decorator in node.decorator_list:
+        if _is_http_middleware_decorator(decorator, owner_names):
+            return True
         call = decorator if isinstance(decorator, ast.Call) else None
         func = call.func if call is not None else decorator
         if not isinstance(func, ast.Attribute) or not (
@@ -3188,6 +3388,34 @@ def _route_handler_uses_owner(
         if _is_route_owner_reference(func.value, owner_names):
             return True
     return False
+
+
+def _is_http_middleware_decorator(
+    decorator: ast.expr,
+    owner_names: set[str] | frozenset[str],
+) -> bool:
+    if not isinstance(decorator, ast.Call) or not isinstance(
+        decorator.func,
+        ast.Attribute,
+    ):
+        return False
+    if decorator.func.attr != "middleware" or not _is_route_owner_reference(
+        decorator.func.value,
+        owner_names,
+    ):
+        return False
+    middleware_type = next(
+        (
+            keyword.value
+            for keyword in decorator.keywords
+            if keyword.arg == "middleware_type"
+        ),
+        decorator.args[0] if decorator.args else None,
+    )
+    return bool(
+        isinstance(middleware_type, ast.Constant)
+        and middleware_type.value == "http"
+    )
 
 
 def _is_banned_wire_name(name: str) -> bool:
