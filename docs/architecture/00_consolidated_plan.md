@@ -4,7 +4,8 @@ This is the canonical, fully-corrected v2 plan, integrating the original
 proposal with everything agreed in subsequent rounds **and** all seven
 follow-up edits identified during design review.
 
-For the per-edit audit trail vs. v1, see [../CHANGELOG.md](../CHANGELOG.md).
+For the per-edit audit trail vs. v1, see
+[the archived v2 changelog](../archive/legacy-multi-agent/version2/CHANGELOG.md).
 
 ---
 
@@ -332,7 +333,8 @@ information for the candidate, not a defect to hide.
 ### B3. Tighten the existing six `.agent.md` files
 
 Edit (don't replace) each authoring `.agent.md` to add three new sections.
-Concrete overlay text is in [../templates/agent_overlays/](../templates/agent_overlays/).
+Concrete overlay text is in the
+[archived v2 overlays](../archive/legacy-multi-agent/version2/templates/agent_overlays/).
 
 - `## Context Scoping` — which `application_context.md` sections and
   which earlier-phase artifacts the agent reads vs. ignores. Forces real
@@ -369,7 +371,7 @@ Concrete overlay text is in [../templates/agent_overlays/](../templates/agent_ov
 
 `qa-auditor` and the two independent agents stay structurally as-is, but
 `qa-auditor` gains the canonical-tester role on every author server (see
-[../templates/agent_overlays/qa-auditor.overlay.md](../templates/agent_overlays/qa-auditor.overlay.md)).
+[archived qa-auditor overlay](../archive/legacy-multi-agent/version2/templates/agent_overlays/qa-auditor.overlay.md)).
 
 ### B4. Mixed-model assignment (recommended)
 
@@ -386,7 +388,8 @@ error. Suggested mapping:
 In VS Code Copilot, run each agent in a separate chat tab with a different
 model selected; co-resident advisors on a given server are simply
 additional chat tabs pointed at that server's port. Codex/Claude Code can
-declare a preferred model per agent in `agents/openai.yaml`.
+declare a preferred model in each skill's
+`agents/apex/skills/<skill>/agents/openai.yaml` adapter.
 
 **Caveat:** mixed-model setups are more sensitive to prompt drift, so the
 structured-handoff schema (item D2) becomes important.
@@ -553,7 +556,8 @@ Operational notes:
 
 ### C3. Optional 30-line scope verifier
 
-`scripts/check_scope.py` maps each changed file to its declared owner
+The archived `docs/archive/legacy-multi-agent/version2/scripts/check_scope.py`
+stub maps each changed file to its declared owner
 and fails if any agent wrote outside its allowed paths, including an
 explicit check that no advisor produced any file write. Run on demand
 or as a pre-commit hook. Useful but not required for correctness. This

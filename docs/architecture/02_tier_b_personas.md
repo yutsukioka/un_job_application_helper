@@ -5,8 +5,8 @@
 ## B1. Per-section default-lead table
 
 The canonical table is in [00_consolidated_plan.md §B1](00_consolidated_plan.md).
-A copy in a form C1/C2 prompts can quote verbatim is at
-[../templates/per_section_default_leads.md](../templates/per_section_default_leads.md).
+A copy in a form C1/C2 prompts can quote verbatim is in the
+[archived v2 template](../archive/legacy-multi-agent/version2/templates/per_section_default_leads.md).
 
 ### Override discipline
 
@@ -33,8 +33,8 @@ A copy in a form C1/C2 prompts can quote verbatim is at
 
 ## B3. The three new sections to splice into each authoring `.agent.md`
 
-Concrete overlay text per agent is in
-[../templates/agent_overlays/](../templates/agent_overlays/). This section
+Concrete overlay text per agent is in the
+[archived v2 overlays](../archive/legacy-multi-agent/version2/templates/agent_overlays/). This section
 documents the **structure** of those overlays.
 
 ### `## Context Scoping`
@@ -60,7 +60,7 @@ server but is NOT the writer. Must specify, per phase:
 | DISCUSS | one structured `discuss`, `discuss-done` (without `--next-impl`) | `discuss-done --next-impl`, file writes |
 
 `qa-auditor` gets a separate overlay
-([../templates/agent_overlays/qa-auditor.overlay.md](../templates/agent_overlays/qa-auditor.overlay.md))
+([archived qa-auditor overlay](../archive/legacy-multi-agent/version2/templates/agent_overlays/qa-auditor.overlay.md))
 spelling out its **canonical tester** role on author servers (calls
 `test-result` and `discuss-done --next-impl`) vs. its **writer** role on
 consensus servers C1/C2.
@@ -74,7 +74,7 @@ Operational notes:
 - In VS Code Copilot: each agent runs in a separate chat tab with a
   specific model selected; co-resident advisors are additional chat
   tabs pointing at the same `agent_sync` server port.
-- In Codex/Claude Code: declare the preferred model per agent in
-  `agents/openai.yaml`.
+- In Codex/Claude Code: declare the preferred model in each skill's
+  `agents/apex/skills/<skill>/agents/openai.yaml` adapter.
 - Mixed-model setups depend on D2 (structured handoff schema) for
   reliable cross-model parsing.

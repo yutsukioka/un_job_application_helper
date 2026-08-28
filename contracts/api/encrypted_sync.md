@@ -180,3 +180,11 @@ The following are explicitly out of contract:
 - relying on cloud provider encryption as a substitute for end-to-end
   encryption;
 - logging decrypted payloads for troubleshooting.
+
+## CI Guard
+
+`tests/security/test_A4_encrypted_sync_wire_guard.py` uses the static guard in
+`packages/vaultsync/vaultsync/service_contract_guard.py` to scan Python service
+route handlers and Pydantic request models. The test fails if an endpoint under
+`services/` accepts fields such as `passphrase`, `recovery_key`, `vault_key`,
+`raw_vault_key_b64`, or `unwrapped_vault_key_b64`.

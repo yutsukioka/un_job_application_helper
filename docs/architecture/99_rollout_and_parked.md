@@ -27,8 +27,8 @@ a no-op for existing users until they opt in.
 
 **Step 5 — B3 .agent.md tightening.** Splice the three new sections
 (Context Scoping, Voice & Emphasis, Advisor Mode) into the existing
-six `.agent.md` files. Concrete overlays in
-[../templates/agent_overlays/](../templates/agent_overlays/).
+six `.agent.md` files. Concrete overlays are in the
+[archived v2 templates](../archive/legacy-multi-agent/version2/templates/agent_overlays/).
 
 **Step 6 — Strategy fold pilot.** Run P0a → human gate → P0b → S1/S2/S3
 → C1 on one real vacancy. This is the smallest end-to-end proof. Each
