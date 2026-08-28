@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1295,3 +1296,108 @@ def test_A4_guard_fails_closed_for_missing_or_empty_service_roots(tmp_path: Path
 
     assert any("service root" in violation for violation in missing_violations)
     assert any("no Python service modules" in violation for violation in empty_violations)
+
+
+def test_A4_guard_uses_stable_source_order_for_reassigned_constants(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "reassigned_alias.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+ALIAS = "passphrase"
+ALIAS = "vault_key"
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    encrypted_payload: str = Field(alias=ALIAS)
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+    probe = """
+import sys
+from vaultsync.service_contract_guard import find_raw_secret_wire_contract_violations
+print("\\n".join(find_raw_secret_wire_contract_violations(sys.argv[1])))
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", probe, str(service_file.parent)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "vault_key" in completed.stdout
+
+
+def test_A4_guard_resolves_type_alias_type_request_models(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "type_alias_type.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing_extensions import TypeAliasType
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    vault_key: str
+
+RequestPayload = TypeAliasType("RequestPayload", SyncRequest)
+
+@app.post("/api/encrypted-sync")
+def sync(request: RequestPayload) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("SyncRequest.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_mapping_pydantic_root_models(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "root_models.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import RootModel
+
+app = FastAPI()
+
+class MappingRequest(RootModel[dict[str, str]]):
+    pass
+
+class ScalarRequest(RootModel[str]):
+    pass
+
+@app.post("/api/encrypted-sync/mapping")
+def mapping_sync(request: MappingRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/scalar")
+def scalar_sync(request: ScalarRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "MappingRequest" in violation and "unconstrained mapping root" in violation
+        for violation in violations
+    )
+    assert not any("ScalarRequest" in violation for violation in violations)
