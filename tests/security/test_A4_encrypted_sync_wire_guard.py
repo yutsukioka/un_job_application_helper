@@ -263,6 +263,35 @@ app.add_api_route("/api/encrypted-sync", handlers.sync, methods=["POST"])
     assert any("vault_key" in violation for violation in violations)
 
 
+def test_A4_guard_indexes_nested_service_package_roots(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    package_root = service_root / "job-api" / "job_api"
+    package_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "handlers.py").write_text(
+        """
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+    (package_root / "routes.py").write_text(
+        """
+from fastapi import FastAPI
+
+from job_api.handlers import sync
+
+app = FastAPI()
+app.add_api_route("/api/encrypted-sync", sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
 def test_A4_guard_scopes_pydantic_model_identity_to_its_module(tmp_path: Path) -> None:
     service_root = tmp_path / "services"
     service_root.mkdir()
@@ -284,6 +313,28 @@ class Request:
     )
 
     violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert violations == []
+
+
+def test_A4_guard_excludes_pydantic_private_and_class_variables(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "internal_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import ClassVar
+
+from pydantic import BaseModel, PrivateAttr
+
+class SyncRequest(BaseModel):
+    encrypted_payload: str
+    _vault_key: bytes = PrivateAttr()
+    passphrase: ClassVar[str] = "internal-only"
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert violations == []
 
@@ -388,3 +439,25 @@ async def raw_sync(request: Request) -> dict[str, bool]:
 
     assert any("vault_key" in violation for violation in violations)
     assert any("passphrase" in violation for violation in violations)
+
+
+def test_A4_guard_ignores_banned_names_in_internal_route_mappings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "internal_mapping.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync/internal")
+def internal_sync() -> dict[str, bool]:
+    settings = {"vault_key": "internal-only"}
+    return {"configured": bool(settings.get("vault_key"))}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert violations == []
