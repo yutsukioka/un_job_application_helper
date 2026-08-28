@@ -45,9 +45,13 @@ _CANONICAL_BANNED_WIRE_FIELD_NAMES = frozenset(
 
 def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[str]:
     root = Path(service_root)
+    if not root.is_dir():
+        return [f"{root}:1: configured service root does not exist or is not a directory"]
     service_paths = frozenset(
         path for path in sorted(root.rglob("*.py")) if not _skip_path(path)
     )
+    if not service_paths:
+        return [f"{root}:1: no Python service modules found under configured service root"]
     module_root = _repository_root(root)
     source_paths = frozenset(
         path
@@ -75,6 +79,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    functional_typed_dict_models = frozenset(functional_typed_dicts)
     route_owner_names = _framework_route_owner_names_by_path(
         module_root,
         parsed_modules,
@@ -109,11 +115,26 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
         boundary_functions,
-        pydantic_models | dataclass_models | typed_dict_models,
+        pydantic_models
+        | dataclass_models
+        | typed_dict_models
+        | functional_typed_dict_models,
     )
     inspected_pydantic_models = request_models & pydantic_models
     request_dataclasses = request_models & dataclass_models
     request_typed_dicts = request_models & typed_dict_models
+    request_functional_typed_dicts = request_models & functional_typed_dict_models
+    for key in sorted(request_functional_typed_dicts):
+        path, _, model_name = key
+        for field_name, line_number in _functional_typed_dict_fields(
+            functional_typed_dicts[key]
+        ):
+            if _is_banned_wire_name(field_name):
+                violations.append(
+                    f"{path}:{line_number}: TypedDict request model "
+                    f"{model_name}.{field_name} would accept raw vault secret "
+                    "material over the wire"
+                )
     for path, tree in parsed_modules:
         if not (
             path in service_paths
@@ -146,6 +167,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             ),
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             field_factory_module_names=_pydantic_module_aliases(tree),
+            wire_alias_constants=_string_constants(tree.body),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
             route_owner_names=route_owner_names.get(path, frozenset()),
@@ -172,6 +194,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         typed_dict_model_lines: frozenset[int],
         field_factory_names: frozenset[str],
         field_factory_module_names: frozenset[str],
+        wire_alias_constants: dict[str, str],
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
         route_owner_names: frozenset[str],
@@ -185,6 +208,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.typed_dict_model_lines = typed_dict_model_lines
         self.field_factory_names = field_factory_names
         self.field_factory_module_names = field_factory_module_names
+        self.wire_alias_constants = wire_alias_constants
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
         self.route_owner_names = route_owner_names
@@ -216,6 +240,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 node,
                 field_factory_names=self.field_factory_names,
                 field_factory_module_names=self.field_factory_module_names,
+                wire_alias_constants={
+                    **self.wire_alias_constants,
+                    **_string_constants(node.body),
+                },
                 exclude_private=node.lineno in self.pydantic_model_lines,
                 include_unannotated_assignments=node.lineno in self.pydantic_model_lines,
             ):
@@ -254,6 +282,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             node,
             depends_aliases=self.depends_aliases,
             depends_module_aliases=self.depends_module_aliases,
+            wire_alias_constants=self.wire_alias_constants,
         ):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
@@ -646,6 +675,75 @@ def _module_class_entries(
     return entries
 
 
+def _module_assignment_entries(
+    path: Path,
+    tree: ast.Module,
+) -> list[
+    tuple[
+        tuple[Path, int, str],
+        ast.expr,
+        tuple[int, ...],
+        ast.expr | None,
+    ]
+]:
+    entries: list[
+        tuple[
+            tuple[Path, int, str],
+            ast.expr,
+            tuple[int, ...],
+            ast.expr | None,
+        ]
+    ] = []
+
+    class Collector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: list[int] = []
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._visit_scope(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_scope(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_scope(node)
+
+        def _visit_scope(
+            self,
+            node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+        ) -> None:
+            self.scope.append(node.lineno)
+            for statement in node.body:
+                self.visit(statement)
+            self.scope.pop()
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    entries.append(
+                        (
+                            (path, node.lineno, target.id),
+                            node.value,
+                            tuple(self.scope),
+                            None,
+                        )
+                    )
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if isinstance(node.target, ast.Name) and node.value is not None:
+                entries.append(
+                    (
+                        (path, node.lineno, node.target.id),
+                        node.value,
+                        tuple(self.scope),
+                        node.annotation,
+                    )
+                )
+
+    Collector().visit(tree)
+    return entries
+
+
 def _pydantic_model_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -795,6 +893,67 @@ def _typed_dict_model_keys(
     return frozenset(model_keys)
 
 
+def _functional_typed_dict_definitions(
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> dict[tuple[Path, int, str], ast.Call]:
+    definitions: dict[tuple[Path, int, str], ast.Call] = {}
+    for path, tree in parsed_modules:
+        direct_aliases = _typing_symbol_aliases(tree, "TypedDict")
+        module_aliases = _typing_module_aliases(tree)
+        for key, value, _, _ in _module_assignment_entries(path, tree):
+            if isinstance(value, ast.Call) and _is_typed_dict_call(
+                value,
+                direct_aliases,
+                module_aliases,
+            ):
+                definitions[key] = value
+    return definitions
+
+
+def _is_typed_dict_call(
+    node: ast.Call,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "TypedDict"
+        and parts[0] in module_aliases
+    )
+
+
+def _functional_typed_dict_fields(node: ast.Call) -> list[tuple[str, int]]:
+    fields: list[tuple[str, int]] = []
+    mapping = node.args[1] if len(node.args) > 1 else None
+    if isinstance(mapping, ast.Dict):
+        fields.extend(
+            (key.value, key.lineno)
+            for key in mapping.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        )
+    fields.extend(
+        (keyword.arg, keyword.value.lineno)
+        for keyword in node.keywords
+        if keyword.arg not in {None, "total", "closed"}
+    )
+    return fields
+
+
+def _functional_typed_dict_type_roots(node: ast.Call) -> list[ast.AST]:
+    mapping = node.args[1] if len(node.args) > 1 else None
+    roots = list(mapping.values) if isinstance(mapping, ast.Dict) else []
+    roots.extend(
+        keyword.value
+        for keyword in node.keywords
+        if keyword.arg not in {None, "total", "closed"}
+    )
+    return roots
+
+
 def _typing_symbol_aliases(tree: ast.Module, symbol: str) -> frozenset[str]:
     return frozenset(
         imported.asname or imported.name
@@ -853,6 +1012,7 @@ def _model_fields(
     *,
     field_factory_names: frozenset[str],
     field_factory_module_names: frozenset[str],
+    wire_alias_constants: dict[str, str],
     exclude_private: bool,
     include_unannotated_assignments: bool,
 ) -> list[tuple[str, int]]:
@@ -870,6 +1030,7 @@ def _model_fields(
                     child.value,
                     field_factory_names=field_factory_names,
                     field_factory_module_names=field_factory_module_names,
+                    wire_alias_constants=wire_alias_constants,
                 )
             )
         elif isinstance(child, ast.Assign) and include_unannotated_assignments:
@@ -886,6 +1047,7 @@ def _model_fields(
                         child.value,
                         field_factory_names=field_factory_names,
                         field_factory_module_names=field_factory_module_names,
+                        wire_alias_constants=wire_alias_constants,
                     )
                 )
     return fields
@@ -943,6 +1105,7 @@ def _pydantic_field_aliases(
     *nodes: ast.AST | None,
     field_factory_names: frozenset[str],
     field_factory_module_names: frozenset[str],
+    wire_alias_constants: dict[str, str],
 ) -> list[tuple[str, int]]:
     aliases: list[tuple[str, int]] = []
     for root in nodes:
@@ -958,11 +1121,7 @@ def _pydantic_field_aliases(
             for keyword in node.keywords:
                 if keyword.arg not in {"alias", "validation_alias"}:
                     continue
-                aliases.extend(
-                    (value.value, value.lineno)
-                    for value in ast.walk(keyword.value)
-                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
-                )
+                aliases.extend(_wire_alias_values(keyword.value, wire_alias_constants))
     return aliases
 
 
@@ -987,6 +1146,7 @@ def _route_parameter_wire_names(
     *,
     depends_aliases: frozenset[str],
     depends_module_aliases: frozenset[str],
+    wire_alias_constants: dict[str, str],
 ) -> list[tuple[str, int]]:
     parameters = _function_arguments(node)
     defaults_by_argument = _parameter_defaults(node)
@@ -1005,6 +1165,7 @@ def _route_parameter_wire_names(
             _keyword_wire_aliases(
                 argument.annotation,
                 None if dependency_injected else default,
+                wire_alias_constants=wire_alias_constants,
             )
         )
     return wire_names
@@ -1073,7 +1234,10 @@ def _annotation_contains_mapping(annotation: ast.expr) -> bool:
     return False
 
 
-def _keyword_wire_aliases(*nodes: ast.AST | None) -> list[tuple[str, int]]:
+def _keyword_wire_aliases(
+    *nodes: ast.AST | None,
+    wire_alias_constants: dict[str, str],
+) -> list[tuple[str, int]]:
     aliases: list[tuple[str, int]] = []
     for root in nodes:
         if root is None:
@@ -1084,12 +1248,54 @@ def _keyword_wire_aliases(*nodes: ast.AST | None) -> list[tuple[str, int]]:
             for keyword in node.keywords:
                 if keyword.arg not in {"alias", "validation_alias"}:
                     continue
-                aliases.extend(
-                    (value.value, value.lineno)
-                    for value in ast.walk(keyword.value)
-                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
-                )
+                aliases.extend(_wire_alias_values(keyword.value, wire_alias_constants))
     return aliases
+
+
+def _wire_alias_values(
+    node: ast.AST,
+    constants: dict[str, str],
+) -> list[tuple[str, int]]:
+    values: list[tuple[str, int]] = []
+    for candidate in ast.walk(node):
+        if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+            values.append((candidate.value, candidate.lineno))
+        elif isinstance(candidate, ast.Name) and candidate.id in constants:
+            values.append((constants[candidate.id], candidate.lineno))
+    return values
+
+
+def _string_constants(statements: list[ast.stmt]) -> dict[str, str]:
+    assignments = [
+        statement
+        for statement in statements
+        if isinstance(statement, (ast.Assign, ast.AnnAssign))
+    ]
+    constants: dict[str, str] = {}
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            value = _constant_string_value(assignment.value, constants)
+            if value is None:
+                continue
+            targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and constants.get(target.id) != value:
+                    constants[target.id] = value
+                    changed = True
+    return constants
+
+
+def _constant_string_value(
+    node: ast.expr,
+    constants: dict[str, str],
+) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    return None
 
 
 def _programmatic_route_handler_keys(
@@ -1428,7 +1634,7 @@ def _depends_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
             direct.update(
                 imported.asname or imported.name
                 for imported in node.names
-                if imported.name == "Depends"
+                if imported.name in {"Depends", "Security"}
             )
         elif isinstance(node, ast.Import):
             modules.update(
@@ -1450,7 +1656,7 @@ def _is_depends_call(
     return bool(
         parts
         and len(parts) >= 2
-        and parts[-1] == "Depends"
+        and parts[-1] in {"Depends", "Security"}
         and parts[0] in module_aliases
     )
 
@@ -1467,6 +1673,20 @@ def _referenced_model_keys(
     function_scopes = _function_scopes(parsed_modules)
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
+    functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    model_definitions: dict[tuple[Path, int, str], ast.AST] = {
+        **classes,
+        **functional_typed_dicts,
+    }
+    model_scopes = {
+        **class_scopes,
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in functional_typed_dicts
+        },
+    }
     referenced: set[tuple[Path, int, str]] = set()
     for key in boundary_functions:
         function = functions.get(key)
@@ -1486,8 +1706,8 @@ def _referenced_model_keys(
                     candidate,
                     paths_by_module,
                     trees_by_path,
-                    classes,
-                    class_scopes,
+                    model_definitions,
+                    model_scopes,
                     None,
                     owner_scope=function_scopes.get(key, ()),
                     reference_line=argument.lineno,
@@ -1512,21 +1732,40 @@ def _model_reference_closure(
 ) -> frozenset[tuple[Path, int, str]]:
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
+    functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    model_definitions: dict[tuple[Path, int, str], ast.AST] = {
+        **classes,
+        **functional_typed_dicts,
+    }
+    model_scopes = {
+        **class_scopes,
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in functional_typed_dicts
+        },
+    }
     trees_by_path = dict(parsed_modules)
     closure = set(initial)
     pending = list(initial)
     while pending:
         key = pending.pop()
-        model = classes.get(key)
+        model = model_definitions.get(key)
         if model is None:
             continue
         path, _, _ = key
-        reference_roots: list[ast.AST] = [*model.bases]
-        reference_roots.extend(
-            child.annotation
-            for child in model.body
-            if isinstance(child, ast.AnnAssign)
-        )
+        if isinstance(model, ast.ClassDef):
+            reference_roots: list[ast.AST] = [*model.bases]
+            reference_roots.extend(
+                child.annotation
+                for child in model.body
+                if isinstance(child, ast.AnnAssign)
+            )
+        elif isinstance(model, ast.Call):
+            reference_roots = _functional_typed_dict_type_roots(model)
+        else:
+            reference_roots = []
         for reference_root in reference_roots:
             for candidate in _annotation_reference_nodes(reference_root):
                 if not isinstance(candidate, (ast.Name, ast.Attribute)):
@@ -1538,8 +1777,8 @@ def _model_reference_closure(
                     candidate,
                     paths_by_module,
                     trees_by_path,
-                    classes,
-                    class_scopes,
+                    model_definitions,
+                    model_scopes,
                     key,
                     reference_line=getattr(reference_root, "lineno", model.lineno),
                 )
@@ -1674,12 +1913,13 @@ def _resolve_model_key(
     reference: ast.AST,
     paths_by_module: dict[str, Path],
     trees_by_path: dict[Path, ast.Module],
-    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    definitions: dict[tuple[Path, int, str], ast.AST],
     scopes: dict[tuple[Path, int, str], tuple[int, ...]],
     owner_key: tuple[Path, int, str] | None,
     *,
     owner_scope: tuple[int, ...] | None = None,
     reference_line: int | None = None,
+    seen_aliases: frozenset[tuple[Path, int, str]] = frozenset(),
 ) -> tuple[Path, int, str] | None:
     target = _resolve_reference_target(
         root,
@@ -1692,35 +1932,86 @@ def _resolve_model_key(
     if target is None:
         return None
     target_path, target_name = target
-    candidates = [
-        key for key in classes if key[0] == target_path and key[2] == target_name
-    ]
-    if not candidates:
-        return None
-
     parts = _qualified_name_parts(reference) or []
     symbol_targets, _ = _import_targets(root, path, tree, paths_by_module)
     imported = target_path != path or len(parts) > 1 or (
         bool(parts) and parts[0] in symbol_targets
     )
-    if imported:
-        top_level = [key for key in candidates if not scopes[key]]
-        return min(top_level or candidates, key=lambda key: key[1])
-
     lexical_scope = owner_scope if owner_scope is not None else scopes.get(owner_key, ())
     line_number = reference_line if reference_line is not None else reference.lineno
-    visible = [
-        key
-        for key in candidates
-        if len(scopes[key]) <= len(lexical_scope)
-        and lexical_scope[: len(scopes[key])] == scopes[key]
-        and key[1] <= line_number
+    candidates = [
+        key for key in definitions if key[0] == target_path and key[2] == target_name
     ]
-    return max(
-        visible,
-        key=lambda key: (len(scopes[key]), key[1]),
-        default=None,
-    )
+    if candidates:
+        if imported:
+            top_level = [key for key in candidates if not scopes[key]]
+            return min(top_level or candidates, key=lambda key: key[1])
+        visible = [
+            key
+            for key in candidates
+            if len(scopes[key]) <= len(lexical_scope)
+            and lexical_scope[: len(scopes[key])] == scopes[key]
+            and key[1] <= line_number
+        ]
+        return max(
+            visible,
+            key=lambda key: (len(scopes[key]), key[1]),
+            default=None,
+        )
+
+    target_tree = trees_by_path.get(target_path)
+    if target_tree is None:
+        return None
+    aliases = [
+        entry
+        for entry in _module_assignment_entries(target_path, target_tree)
+        if entry[0][2] == target_name
+        and entry[0] not in seen_aliases
+        and _is_model_type_alias(entry[1], entry[3])
+        and (
+            (imported and not entry[2])
+            or (
+                not imported
+                and len(entry[2]) <= len(lexical_scope)
+                and lexical_scope[: len(entry[2])] == entry[2]
+                and entry[0][1] <= line_number
+            )
+        )
+    ]
+    aliases.sort(key=lambda entry: (len(entry[2]), entry[0][1]), reverse=True)
+    for alias_key, value, alias_scope, _ in aliases:
+        for candidate in _annotation_reference_nodes(value):
+            if not isinstance(candidate, (ast.Name, ast.Attribute, ast.Subscript)):
+                continue
+            resolved = _resolve_model_key(
+                root,
+                target_path,
+                target_tree,
+                candidate,
+                paths_by_module,
+                trees_by_path,
+                definitions,
+                scopes,
+                None,
+                owner_scope=alias_scope,
+                reference_line=alias_key[1],
+                seen_aliases=seen_aliases | {alias_key},
+            )
+            if resolved is not None:
+                return resolved
+    return None
+
+
+def _is_model_type_alias(
+    value: ast.expr,
+    annotation: ast.expr | None,
+) -> bool:
+    if annotation is not None and any(
+        _name(candidate) in {"TypeAlias", "TypeAliasType"}
+        for candidate in _annotation_reference_nodes(annotation)
+    ):
+        return True
+    return isinstance(value, (ast.Name, ast.Attribute, ast.Subscript, ast.BinOp))
 
 
 def _follow_symbol_reexports(
