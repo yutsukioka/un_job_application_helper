@@ -22,6 +22,7 @@ from vaultsync.format import (  # noqa: E402
     MAX_ARGON2ID_ITERATIONS,
     MAX_ARGON2ID_MEMORY_KIB,
     MAX_ARGON2ID_PARALLELISM,
+    MAX_VAULT_IMPORT_BYTES,
     UnsafeKDFParameters,
     deserialize_vault_metadata,
     read_vault_import_bytes,
@@ -82,6 +83,10 @@ def test_B5_argon2id_import_caps_match_supported_client_profile() -> None:
     assert MAX_ARGON2ID_MEMORY_KIB == 65_536
     assert MAX_ARGON2ID_ITERATIONS == 3
     assert MAX_ARGON2ID_PARALLELISM == 4
+
+
+def test_B5_vault_import_cap_matches_supported_cross_platform_document_limit() -> None:
+    assert MAX_VAULT_IMPORT_BYTES == 128 * 1024 * 1024
 
 
 def test_B5_vault_export_import_rejects_oversized_file_before_reading(

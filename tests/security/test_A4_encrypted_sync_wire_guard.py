@@ -207,3 +207,56 @@ app.add_api_route("/api/encrypted-sync", sync, methods=["POST"])
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_programmatic_handlers_across_modules(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "handlers.py").write_text(
+        """
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+    (service_root / "routes.py").write_text(
+        """
+from fastapi import FastAPI
+
+from .handlers import sync
+
+app = FastAPI()
+app.add_api_route("/api/encrypted-sync", sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_detects_raw_request_body_secret_keys(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "raw_request.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync/raw")
+async def raw_sync(request: Request) -> dict[str, bool]:
+    body = await request.json()
+    return {
+        "has_vault_key": bool(body["vault_key"]),
+        "has_passphrase": bool(body.get("passphrase")),
+    }
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("passphrase" in violation for violation in violations)
