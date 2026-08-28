@@ -1416,3 +1416,128 @@ def scalar_sync(request: ScalarRequest) -> dict[str, bool]:
         for violation in violations
     )
     assert not any("ScalarRequest" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_direct_request_mapping_attributes(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "request_mappings.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync/{vault_id}")
+def sync(request: Request, vault_id: str) -> dict[str, object]:
+    return {
+        "query": request.query_params["vault_key"],
+        "header": request.headers.get("passphrase"),
+        "cookie": request.cookies["recovery_key"],
+        "path": request.path_params.get("unwrapped_key"),
+    }
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    for wire_name in {"vault_key", "passphrase", "recovery_key", "unwrapped_key"}:
+        assert any(wire_name in violation for violation in violations)
+
+
+def test_A4_guard_recognizes_pydantic_dataclass_request_models(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "pydantic_dataclasses.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+import pydantic.dataclasses as pydantic_dataclasses
+from fastapi import FastAPI
+from pydantic.dataclasses import dataclass as pydantic_dataclass
+
+app = FastAPI()
+
+@pydantic_dataclass
+class DirectRequest:
+    vault_key: str
+
+@pydantic_dataclasses.dataclass
+class QualifiedRequest:
+    recovery_key: str
+
+@app.post("/api/encrypted-sync/direct")
+def direct_sync(request: DirectRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/qualified")
+def qualified_sync(request: QualifiedRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("DirectRequest.vault_key" in violation for violation in violations)
+    assert any("QualifiedRequest.recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_recognizes_create_model_request_schemas(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "created_models.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+import pydantic as pd
+from fastapi import FastAPI
+from pydantic import Field, create_model
+
+app = FastAPI()
+
+DirectRequest = create_model(
+    "DirectRequest",
+    vault_key=(str, ...),
+    encrypted_payload=(str, Field(alias="passphrase")),
+)
+QualifiedRequest = pd.create_model(
+    "QualifiedRequest",
+    recovery_key=(str, ...),
+)
+
+@app.post("/api/encrypted-sync/direct")
+def direct_sync(request: DirectRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/qualified")
+def qualified_sync(request: QualifiedRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("DirectRequest.vault_key" in violation for violation in violations)
+    assert any("DirectRequest.passphrase" in violation for violation in violations)
+    assert any("QualifiedRequest.recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_indexes_starlette_route_constructor_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "starlette_routes.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+async def sync(request: Request) -> JSONResponse:
+    return JSONResponse({"value": request.query_params["vault_key"]})
+
+app = Starlette(routes=[Route("/api/encrypted-sync", sync, methods=["POST"])])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync['vault_key']" in violation for violation in violations)
