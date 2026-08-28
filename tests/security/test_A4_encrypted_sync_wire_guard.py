@@ -358,6 +358,75 @@ class InternalState(BaseModel):
     assert violations == []
 
 
+def test_A4_guard_supports_module_qualified_pydantic_bases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "qualified_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+import pydantic as pd
+
+class SyncRequest(pd.BaseModel):
+    vault_key: str
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_only_request_bound_pydantic_models(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "internal_state.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class LocalUnlockState(BaseModel):
+    passphrase: str
+
+@app.post("/api/encrypted-sync")
+def sync(encrypted_payload: str) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert violations == []
+
+
+def test_A4_guard_detects_permissive_request_model_extras(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "permissive_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    encrypted_payload: str
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("extra" in violation for violation in violations)
+
+
 def test_A4_guard_follows_fastapi_dependency_callables(tmp_path: Path) -> None:
     service_root = tmp_path / "services"
     service_root.mkdir()
@@ -426,6 +495,62 @@ def create_app() -> FastAPI:
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_preserves_nested_function_lexical_identity(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "factories.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import Depends, FastAPI
+
+def load_secret() -> None:
+    pass
+
+def create_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.post("/api/encrypted-sync")
+    def sync(_: None = Depends(load_secret)) -> dict[str, bool]:
+        return {"ok": True}
+
+    return app
+
+def unrelated_factory() -> None:
+    def load_secret(vault_key: str) -> None:
+        pass
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert violations == []
+
+
+def test_A4_guard_ignores_non_web_decorators_with_route_method_names(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "registry.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+class Registry:
+    def get(self, name):
+        def decorate(function):
+            return function
+        return decorate
+
+registry = Registry()
+
+@registry.get("decoder")
+def decode(passphrase: str) -> str:
+    return passphrase
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert violations == []
 
 
 def test_A4_guard_detects_imported_dataclass_request_body_fields(tmp_path: Path) -> None:
@@ -558,6 +683,73 @@ def sync(request: SyncRequest) -> dict[str, bool]:
     )
 
     violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_follows_request_models_reexported_by_packages(tmp_path: Path) -> None:
+    repository_root = tmp_path / "repository"
+    service_root = repository_root / "services"
+    shared_root = repository_root / "shared_api"
+    service_root.mkdir(parents=True)
+    shared_root.mkdir()
+    (shared_root / "__init__.py").write_text(
+        "from .models import SyncRequest\n",
+        encoding="utf-8",
+    )
+    (shared_root / "models.py").write_text(
+        """
+from pydantic import BaseModel
+
+class SyncRequest(BaseModel):
+    vault_key: str
+""",
+        encoding="utf-8",
+    )
+    (service_root / "routes.py").write_text(
+        """
+from fastapi import FastAPI
+
+from shared_api import SyncRequest
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_follows_nested_pydantic_request_models(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "nested_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class SecretInput(BaseModel):
+    vault_key: str
+
+class SyncRequest(BaseModel):
+    secret: SecretInput
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("vault_key" in violation for violation in violations)
 
