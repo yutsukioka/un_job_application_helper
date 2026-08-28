@@ -6,9 +6,19 @@ import ast
 from pathlib import Path
 
 
-ROUTE_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
+ROUTE_METHODS = {
+    "get",
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "options",
+    "head",
+    "trace",
+}
 GENERIC_ROUTE_DECORATORS = {
     "api_route",
+    "exception_handler",
     "route",
     "websocket",
     "websocket_route",
@@ -16,6 +26,7 @@ GENERIC_ROUTE_DECORATORS = {
 PROGRAMMATIC_ROUTE_REGISTRARS = {
     "add_api_route",
     "add_api_websocket_route",
+    "add_exception_handler",
     "add_route",
     "add_websocket_route",
 }
@@ -146,7 +157,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
     for key in sorted(request_functional_typed_dicts):
         path, _, model_name = key
         for field_name, line_number in _functional_typed_dict_fields(
-            functional_typed_dicts[key]
+            functional_typed_dicts[key],
+            dict(parsed_modules)[path],
         ):
             if _is_banned_wire_name(field_name):
                 violations.append(
@@ -343,15 +355,16 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                     "statically approved"
                 )
             if node.lineno in self.pydantic_model_lines and (
-                validator_line := _before_model_validator_line(
+                raw_validator := _raw_model_validator(
                     node,
                     self.model_validator_names,
                     self.model_validator_module_names,
                 )
             ) is not None:
+                validator_mode, validator_line = raw_validator
                 self.violations.append(
                     f"{self.path}:{validator_line}: Pydantic request model "
-                    f"{node.name} defines a before model validator that cannot "
+                    f"{node.name} defines a {validator_mode} model validator that cannot "
                     "be statically approved"
                 )
             if node.lineno in self.mapping_root_model_lines:
@@ -375,6 +388,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                         f"{self.path}:{line_number}: {model_kind} {node.name}.{field_name} "
                         "would accept raw vault secret material over the wire"
                     )
+            for field_name, line_number in _unconstrained_mapping_model_fields(node):
+                self.violations.append(
+                    f"{self.path}:{line_number}: {model_kind} "
+                    f"{node.name}.{field_name} is an unconstrained mapping field"
+                )
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -570,6 +588,12 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 framework_class_names.add(class_node.name)
                 changed = True
 
+    factory_names = _framework_app_factory_names(
+        tree,
+        framework_class_names,
+        module_aliases,
+    )
+
     owners: set[str] = set()
     assignments = [
         node
@@ -585,12 +609,88 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 value,
                 framework_class_names,
                 module_aliases,
-            ) or (isinstance(value, ast.Name) and value.id in owners)
+            ) or _is_framework_factory_call(value, factory_names) or (
+                isinstance(value, ast.Name) and value.id in owners
+            )
             if is_owner:
                 previous_size = len(owners)
                 owners.update(targets)
                 changed = changed or len(owners) != previous_size
     return frozenset(owners)
+
+
+def _framework_app_factory_names(
+    tree: ast.Module,
+    framework_class_names: set[str],
+    module_aliases: set[str],
+) -> frozenset[str]:
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    factories: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for function in functions:
+            if function.name in factories:
+                continue
+            local_owners: set[str] = set()
+            assignments = [
+                node
+                for statement in function.body
+                for node in ast.walk(statement)
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            ]
+            local_changed = True
+            while local_changed:
+                local_changed = False
+                for assignment in assignments:
+                    targets, value = _assignment_targets_and_value(assignment)
+                    if not (
+                        _is_framework_constructor(
+                            value,
+                            framework_class_names,
+                            module_aliases,
+                        )
+                        or _is_framework_factory_call(value, factories)
+                        or (isinstance(value, ast.Name) and value.id in local_owners)
+                    ):
+                        continue
+                    previous_size = len(local_owners)
+                    local_owners.update(targets)
+                    local_changed = local_changed or len(local_owners) != previous_size
+            returns_owner = any(
+                isinstance(node, ast.Return)
+                and node.value is not None
+                and (
+                    _is_framework_constructor(
+                        node.value,
+                        framework_class_names,
+                        module_aliases,
+                    )
+                    or _is_framework_factory_call(node.value, factories)
+                    or (isinstance(node.value, ast.Name) and node.value.id in local_owners)
+                )
+                for statement in function.body
+                for node in ast.walk(statement)
+            )
+            if returns_owner:
+                factories.add(function.name)
+                changed = True
+    return frozenset(factories)
+
+
+def _is_framework_factory_call(
+    node: ast.AST,
+    factory_names: set[str] | frozenset[str],
+) -> bool:
+    return bool(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in factory_names
+    )
 
 
 def _is_framework_class_base(
@@ -782,7 +882,13 @@ def _is_route_owner_reference(
     parts = _qualified_name_parts(node)
     if not parts:
         return False
-    return parts[-1] in owner_names or ".".join(parts) in owner_names
+    qualified = ".".join(parts)
+    if parts[-1] in owner_names or qualified in owner_names:
+        return True
+    if len(parts) >= 2 and parts[-1] == "router":
+        parent = ".".join(parts[:-1])
+        return parts[-2] in owner_names or parent in owner_names
+    return False
 
 
 def _is_framework_constructor(
@@ -1426,13 +1532,17 @@ def _is_typed_dict_call(
     )
 
 
-def _functional_typed_dict_fields(node: ast.Call) -> list[tuple[str, int]]:
+def _functional_typed_dict_fields(
+    node: ast.Call,
+    tree: ast.Module,
+) -> list[tuple[str, int]]:
     fields: list[tuple[str, int]] = []
     mapping = node.args[1] if len(node.args) > 1 else None
-    if isinstance(mapping, ast.Dict):
+    resolved_mapping = _resolve_named_dict_literal(mapping, tree)
+    if resolved_mapping is not None:
         fields.extend(
             (key.value, key.lineno)
-            for key in mapping.keys
+            for key in resolved_mapping.keys
             if isinstance(key, ast.Constant) and isinstance(key.value, str)
         )
     fields.extend(
@@ -1443,15 +1553,40 @@ def _functional_typed_dict_fields(node: ast.Call) -> list[tuple[str, int]]:
     return fields
 
 
-def _functional_typed_dict_type_roots(node: ast.Call) -> list[ast.AST]:
+def _functional_typed_dict_type_roots(
+    node: ast.Call,
+    tree: ast.Module,
+) -> list[ast.AST]:
     mapping = node.args[1] if len(node.args) > 1 else None
-    roots = list(mapping.values) if isinstance(mapping, ast.Dict) else []
+    resolved_mapping = _resolve_named_dict_literal(mapping, tree)
+    roots = list(resolved_mapping.values) if resolved_mapping is not None else []
     roots.extend(
         keyword.value
         for keyword in node.keywords
         if keyword.arg not in {None, "total", "closed"}
     )
     return roots
+
+
+def _resolve_named_dict_literal(
+    node: ast.AST | None,
+    tree: ast.Module,
+) -> ast.Dict | None:
+    if isinstance(node, ast.Dict):
+        return node
+    if not isinstance(node, ast.Name):
+        return None
+    candidates = [
+        (key, value)
+        for key, value, scope, _ in _module_assignment_entries(Path("."), tree)
+        if key[2] == node.id
+        and not scope
+        and key[1] <= node.lineno
+        and isinstance(value, ast.Dict)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate[0][1])[1]
 
 
 def _typing_symbol_aliases(tree: ast.Module, symbol: str) -> frozenset[str]:
@@ -1604,11 +1739,11 @@ def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
     return None
 
 
-def _before_model_validator_line(
+def _raw_model_validator(
     node: ast.ClassDef,
     direct_aliases: frozenset[str],
     module_aliases: frozenset[str],
-) -> int | None:
+) -> tuple[str, int] | None:
     for child in node.body:
         if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -1635,9 +1770,25 @@ def _before_model_validator_line(
                 ),
                 None,
             )
-            if isinstance(mode, ast.Constant) and mode.value == "before":
-                return decorator.lineno
+            if (
+                isinstance(mode, ast.Constant)
+                and mode.value in {"before", "wrap"}
+            ):
+                return mode.value, decorator.lineno
     return None
+
+
+def _unconstrained_mapping_model_fields(
+    node: ast.ClassDef,
+) -> list[tuple[str, int]]:
+    return [
+        (child.target.id, child.annotation.lineno)
+        for child in node.body
+        if isinstance(child, ast.AnnAssign)
+        and isinstance(child.target, ast.Name)
+        and not _is_class_variable(child.annotation)
+        and _annotation_contains_mapping(child.annotation)
+    ]
 
 
 def _expression_defines_config_option(node: ast.expr, option: str) -> bool:
@@ -2002,6 +2153,7 @@ def _programmatic_route_handler_keys(
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
+            owner_key = _enclosing_function_key(path, node, functions, scopes)
             if _is_starlette_route_constructor(
                 node,
                 route_constructor_aliases,
@@ -2037,20 +2189,55 @@ def _programmatic_route_handler_keys(
                     route_owners=route_owners,
                 )
                 and node.args
-                and _is_base_http_middleware_reference(
+            ):
+                if _is_base_http_middleware_reference(
                     node.args[0],
                     middleware_aliases,
                     middleware_module_aliases,
-                )
-            ):
-                endpoint = next(
-                    (
-                        keyword.value
-                        for keyword in node.keywords
-                        if keyword.arg == "dispatch"
-                    ),
-                    None,
-                )
+                ):
+                    endpoint = next(
+                        (
+                            keyword.value
+                            for keyword in node.keywords
+                            if keyword.arg == "dispatch"
+                        ),
+                        None,
+                    )
+                else:
+                    class_key = _resolve_model_key(
+                        root,
+                        path,
+                        tree,
+                        node.args[0],
+                        paths_by_module,
+                        trees_by_path,
+                        classes,
+                        class_scopes,
+                        None,
+                        owner_scope=scopes.get(owner_key, ()),
+                        reference_line=node.lineno,
+                    )
+                    if class_key is None or not _class_inherits_base_http_middleware(
+                        root=root,
+                        class_key=class_key,
+                        paths_by_module=paths_by_module,
+                        trees_by_path=trees_by_path,
+                        classes=classes,
+                        class_scopes=class_scopes,
+                    ):
+                        continue
+                    target = _resolve_class_method_key(
+                        root=root,
+                        class_key=class_key,
+                        method_name="dispatch",
+                        paths_by_module=paths_by_module,
+                        trees_by_path=trees_by_path,
+                        classes=classes,
+                        class_scopes=class_scopes,
+                    )
+                    if target is not None:
+                        handlers.add(target)
+                    continue
             else:
                 if (
                     not isinstance(node.func, ast.Attribute)
@@ -2074,7 +2261,6 @@ def _programmatic_route_handler_keys(
                 )
             if endpoint is None:
                 continue
-            owner_key = _enclosing_function_key(path, node, functions, scopes)
             target = _resolve_bound_method_key(
                 root=root,
                 path=path,
@@ -2167,6 +2353,41 @@ def _is_base_http_middleware_reference(
         and parts[-1] == "BaseHTTPMiddleware"
         and parts[0] in module_aliases
     )
+
+
+def _class_inherits_base_http_middleware(
+    *,
+    root: Path,
+    class_key: tuple[Path, int, str],
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+) -> bool:
+    for candidate_key in _resolve_class_mro_keys(
+        root=root,
+        class_key=class_key,
+        paths_by_module=paths_by_module,
+        trees_by_path=trees_by_path,
+        classes=classes,
+        class_scopes=class_scopes,
+    ):
+        class_node = classes.get(candidate_key)
+        tree = trees_by_path.get(candidate_key[0])
+        if class_node is None or tree is None:
+            continue
+        direct_aliases = _base_http_middleware_aliases(tree)
+        module_aliases = _base_http_middleware_module_aliases(tree)
+        if any(
+            _is_base_http_middleware_reference(
+                base,
+                direct_aliases,
+                module_aliases,
+            )
+            for base in class_node.bases
+        ):
+            return True
+    return False
 
 
 def _resolve_bound_method_key(
@@ -2563,6 +2784,8 @@ def _boundary_function_keys(
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
     boundary: set[tuple[Path, int, str]] = set(programmatic_handlers)
     for key, node in functions.items():
         path = key[0]
@@ -2606,6 +2829,8 @@ def _boundary_function_keys(
                             trees_by_path,
                             functions,
                             scopes,
+                            classes,
+                            class_scopes,
                             owner_key,
                         )
                     )
@@ -2632,6 +2857,8 @@ def _boundary_function_keys(
             trees_by_path,
             functions,
             scopes,
+            classes,
+            class_scopes,
             key,
         )
         for target in discovered - boundary:
@@ -2689,6 +2916,8 @@ def _dependency_targets(
     trees_by_path: dict[Path, ast.Module],
     functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
     scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
     owner_key: tuple[Path, int, str] | None,
 ) -> set[tuple[Path, int, str]]:
     depends_aliases, fastapi_module_aliases = _depends_aliases(tree)
@@ -2713,7 +2942,29 @@ def _dependency_targets(
             )
             if dependency is None:
                 continue
-            target = _resolve_function_key(
+            target = _resolve_bound_method_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=dependency,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            ) or _resolve_callable_instance_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=dependency,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            ) or _resolve_function_key(
                 root,
                 path,
                 tree,
@@ -2921,7 +3172,10 @@ def _model_reference_closure(
                 if isinstance(child, ast.AnnAssign)
             )
         elif key in functional_typed_dicts and isinstance(model, ast.Call):
-            reference_roots = _functional_typed_dict_type_roots(model)
+            reference_roots = _functional_typed_dict_type_roots(
+                model,
+                trees_by_path[path],
+            )
         elif key in created_pydantic_models and isinstance(model, ast.Call):
             reference_roots = _pydantic_create_model_type_roots(model)
         else:
