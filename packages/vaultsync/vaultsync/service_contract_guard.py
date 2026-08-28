@@ -158,17 +158,23 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         path, _, model_name = key
         tree = dict(parsed_modules)[path]
         for config_kind, line_number in _pydantic_create_model_config_issues(
-            created_pydantic_models[key]
+            created_pydantic_models[key],
+            tree,
         ):
             if config_kind == "extra":
                 violations.append(
                     f"{path}:{line_number}: Pydantic request model {model_name} "
                     "allows arbitrary extra wire fields"
                 )
-            else:
+            elif config_kind == "alias_generator":
                 violations.append(
                     f"{path}:{line_number}: Pydantic request model {model_name} "
                     "defines an alias generator that cannot be statically approved"
+                )
+            else:
+                violations.append(
+                    f"{path}:{line_number}: Pydantic request model {model_name} "
+                    "uses configuration that cannot be statically approved"
                 )
         for field_name, line_number in _pydantic_create_model_fields(
             created_pydantic_models[key],
@@ -222,6 +228,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             ),
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             field_factory_module_names=_pydantic_module_aliases(tree),
+            model_validator_names=_pydantic_symbol_aliases(
+                tree,
+                "model_validator",
+            ),
+            model_validator_module_names=_pydantic_module_aliases(tree),
             wire_alias_constants=_string_constants(tree.body),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
@@ -260,6 +271,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         mapping_root_model_lines: frozenset[int],
         field_factory_names: frozenset[str],
         field_factory_module_names: frozenset[str],
+        model_validator_names: frozenset[str],
+        model_validator_module_names: frozenset[str],
         wire_alias_constants: dict[str, str],
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
@@ -283,6 +296,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.mapping_root_model_lines = mapping_root_model_lines
         self.field_factory_names = field_factory_names
         self.field_factory_module_names = field_factory_module_names
+        self.model_validator_names = model_validator_names
+        self.model_validator_module_names = model_validator_module_names
         self.wire_alias_constants = wire_alias_constants
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
@@ -326,6 +341,18 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                     f"{self.path}:{alias_generator_line}: Pydantic request model "
                     f"{node.name} defines an alias generator that cannot be "
                     "statically approved"
+                )
+            if node.lineno in self.pydantic_model_lines and (
+                validator_line := _before_model_validator_line(
+                    node,
+                    self.model_validator_names,
+                    self.model_validator_module_names,
+                )
+            ) is not None:
+                self.violations.append(
+                    f"{self.path}:{validator_line}: Pydantic request model "
+                    f"{node.name} defines a before model validator that cannot "
+                    "be statically approved"
                 )
             if node.lineno in self.mapping_root_model_lines:
                 self.violations.append(
@@ -1301,16 +1328,69 @@ def _pydantic_create_model_fields(
 
 def _pydantic_create_model_config_issues(
     node: ast.Call,
+    tree: ast.Module,
 ) -> list[tuple[str, int]]:
     issues: list[tuple[str, int]] = []
     for keyword in node.keywords:
         if keyword.arg != "__config__":
             continue
-        if _expression_allows_extra(keyword.value):
+        config = _resolve_module_expression(
+            keyword.value,
+            tree,
+            before_line=node.lineno,
+        )
+        if _expression_allows_extra(config):
             issues.append(("extra", keyword.value.lineno))
-        if _expression_defines_config_option(keyword.value, "alias_generator"):
+        if _expression_defines_config_option(config, "alias_generator"):
             issues.append(("alias_generator", keyword.value.lineno))
+        if not _is_inspectable_pydantic_config(config, tree):
+            issues.append(("opaque", keyword.value.lineno))
     return issues
+
+
+def _resolve_module_expression(
+    node: ast.expr,
+    tree: ast.Module,
+    *,
+    before_line: int,
+    seen: frozenset[str] = frozenset(),
+) -> ast.expr:
+    if not isinstance(node, ast.Name) or node.id in seen:
+        return node
+    candidates: list[tuple[int, ast.expr]] = []
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets, value = _assignment_targets_and_value(statement)
+        if node.id in targets and statement.lineno < before_line:
+            candidates.append((statement.lineno, value))
+    if not candidates:
+        return node
+    line, value = max(candidates, key=lambda entry: entry[0])
+    return _resolve_module_expression(
+        value,
+        tree,
+        before_line=line,
+        seen=seen | {node.id},
+    )
+
+
+def _is_inspectable_pydantic_config(node: ast.expr, tree: ast.Module) -> bool:
+    if isinstance(node, ast.Dict):
+        return True
+    if not isinstance(node, ast.Call):
+        return False
+    direct_aliases = _pydantic_symbol_aliases(tree, "ConfigDict")
+    module_aliases = _pydantic_module_aliases(tree)
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "ConfigDict"
+        and parts[0] in module_aliases
+    )
 
 
 def _pydantic_create_model_type_roots(node: ast.Call) -> list[ast.AST]:
@@ -1524,6 +1604,42 @@ def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
     return None
 
 
+def _before_model_validator_line(
+    node: ast.ClassDef,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> int | None:
+    for child in node.body:
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in child.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            if isinstance(decorator.func, ast.Name):
+                is_model_validator = decorator.func.id in direct_aliases
+            else:
+                parts = _qualified_name_parts(decorator.func)
+                is_model_validator = bool(
+                    parts
+                    and len(parts) >= 2
+                    and parts[-1] == "model_validator"
+                    and parts[0] in module_aliases
+                )
+            if not is_model_validator:
+                continue
+            mode = next(
+                (
+                    keyword.value
+                    for keyword in decorator.keywords
+                    if keyword.arg == "mode"
+                ),
+                None,
+            )
+            if isinstance(mode, ast.Constant) and mode.value == "before":
+                return decorator.lineno
+    return None
+
+
 def _expression_defines_config_option(node: ast.expr, option: str) -> bool:
     if isinstance(node, ast.Call):
         return any(keyword.arg == option for keyword in node.keywords)
@@ -1653,12 +1769,26 @@ def _unconstrained_mapping_request_parameters(
             continue
         default = defaults_by_argument.get(id(argument))
         is_mapping = _annotation_contains_mapping(argument.annotation)
-        is_explicit_untyped_body = (
-            isinstance(default, ast.Call)
+        annotation_body_marker = any(
+            isinstance(candidate, ast.Call)
             and _is_body_call(
-                default,
+                candidate,
                 set(body_aliases),
                 set(body_module_aliases),
+            )
+            for candidate in ast.walk(argument.annotation)
+        )
+        is_explicit_untyped_body = (
+            (
+                annotation_body_marker
+                or (
+                    isinstance(default, ast.Call)
+                    and _is_body_call(
+                        default,
+                        set(body_aliases),
+                        set(body_module_aliases),
+                    )
+                )
             )
             and _annotation_contains_unconstrained_type(
                 argument.annotation,
@@ -1666,6 +1796,11 @@ def _unconstrained_mapping_request_parameters(
                 unconstrained_type_module_names,
             )
         )
+        if is_explicit_untyped_body and _body_parameter_is_model_validated(
+            node,
+            argument.arg,
+        ):
+            continue
         if not is_mapping and not is_explicit_untyped_body:
             continue
         if isinstance(default, ast.Call) and _is_depends_call(
@@ -1676,6 +1811,23 @@ def _unconstrained_mapping_request_parameters(
             continue
         mappings.append((argument.arg, argument.lineno))
     return mappings
+
+
+def _body_parameter_is_model_validated(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    parameter_name: str,
+) -> bool:
+    return any(
+        isinstance(candidate, ast.Call)
+        and isinstance(candidate.func, ast.Attribute)
+        and candidate.func.attr == "model_validate"
+        and any(
+            isinstance(argument, ast.Name) and argument.id == parameter_name
+            for argument in candidate.args
+        )
+        for statement in node.body
+        for candidate in ast.walk(statement)
+    )
 
 
 def _parameter_defaults(
@@ -1754,13 +1906,23 @@ def _wire_alias_values(
     node: ast.AST,
     constants: dict[str, str],
 ) -> list[tuple[str, int]]:
-    values: list[tuple[str, int]] = []
-    for candidate in ast.walk(node):
-        if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
-            values.append((candidate.value, candidate.lineno))
-        elif isinstance(candidate, ast.Name) and candidate.id in constants:
-            values.append((constants[candidate.id], candidate.lineno))
-    return values
+    value = _constant_string_value(node, constants)
+    if value is not None:
+        return [(value, node.lineno)]
+    children: list[ast.expr] = []
+    if isinstance(node, ast.Call):
+        children.extend(node.args)
+        children.extend(keyword.value for keyword in node.keywords)
+    elif isinstance(node, (ast.List, ast.Set, ast.Tuple)):
+        children.extend(node.elts)
+    elif isinstance(node, ast.Dict):
+        children.extend(key for key in node.keys if key is not None)
+        children.extend(node.values)
+    return [
+        value
+        for child in children
+        for value in _wire_alias_values(child, constants)
+    ]
 
 
 def _string_constants(statements: list[ast.stmt]) -> dict[str, str]:
@@ -1791,6 +1953,24 @@ def _constant_string_value(
         return node.value
     if isinstance(node, ast.Name):
         return constants.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _constant_string_value(node.left, constants)
+        right = _constant_string_value(node.right, constants)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                formatted = _constant_string_value(value.value, constants)
+                if formatted is None:
+                    return None
+                parts.append(formatted)
+            else:
+                return None
+        return "".join(parts)
     return None
 
 
@@ -1817,6 +1997,8 @@ def _programmatic_route_handler_keys(
         route_owners = route_owner_names.get(path, frozenset())
         route_constructor_aliases = _starlette_route_constructor_aliases(tree)
         route_module_aliases = _starlette_route_module_aliases(tree)
+        middleware_aliases = _base_http_middleware_aliases(tree)
+        middleware_module_aliases = _base_http_middleware_module_aliases(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -1833,20 +2015,53 @@ def _programmatic_route_handler_keys(
                     ),
                     node.args[1] if len(node.args) > 1 else None,
                 )
+            elif isinstance(node.func, ast.Call) and _is_http_middleware_decorator(
+                node.func,
+                route_owners,
+            ):
+                endpoint = next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg in {"func", "handler"}
+                    ),
+                    node.args[0] if node.args else None,
+                )
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_middleware"
+                and _active_route_owner_reference(
+                    node.func.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+                and node.args
+                and _is_base_http_middleware_reference(
+                    node.args[0],
+                    middleware_aliases,
+                    middleware_module_aliases,
+                )
+            ):
+                endpoint = next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "dispatch"
+                    ),
+                    None,
+                )
             else:
                 if (
                     not isinstance(node.func, ast.Attribute)
                     or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
                 ):
                     continue
-                owner_parts = _qualified_name_parts(node.func.value)
-                if not owner_parts or not (
-                    _is_route_owner_reference(node.func.value, route_owners)
-                    and (
-                        path in service_paths
-                        or owner_parts[-1] in mounted_names
-                        or ".".join(owner_parts) in mounted_names
-                    )
+                if not _active_route_owner_reference(
+                    node.func.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
                 ):
                     continue
                 endpoint = next(
@@ -1896,6 +2111,62 @@ def _programmatic_route_handler_keys(
             if target is not None:
                 handlers.add(target)
     return frozenset(handlers)
+
+
+def _active_route_owner_reference(
+    node: ast.AST,
+    *,
+    path_in_services: bool,
+    mounted_names: set[str],
+    route_owners: frozenset[str],
+) -> bool:
+    owner_parts = _qualified_name_parts(node)
+    return bool(
+        owner_parts
+        and _is_route_owner_reference(node, route_owners)
+        and (
+            path_in_services
+            or owner_parts[-1] in mounted_names
+            or ".".join(owner_parts) in mounted_names
+        )
+    )
+
+
+def _base_http_middleware_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "starlette.middleware.base"
+        for imported in node.names
+        if imported.name == "BaseHTTPMiddleware"
+    )
+
+
+def _base_http_middleware_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name in {"starlette", "starlette.middleware.base"}
+    )
+
+
+def _is_base_http_middleware_reference(
+    node: ast.AST,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in direct_aliases
+    parts = _qualified_name_parts(node)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "BaseHTTPMiddleware"
+        and parts[0] in module_aliases
+    )
 
 
 def _resolve_bound_method_key(
