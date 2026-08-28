@@ -85,7 +85,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
     pydantic_class_models = pydantic_class_models | pydantic_root_models
     created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
     pydantic_models = pydantic_class_models | frozenset(created_pydantic_models)
-    dataclass_models = _dataclass_model_keys(parsed_modules)
+    dataclass_models = _dataclass_model_keys(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
     typed_dict_models = _typed_dict_model_keys(
         module_root,
         parsed_modules,
@@ -207,6 +211,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             wire_alias_constants=_string_constants(tree.body),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
+            websocket_type_names=_websocket_type_aliases(tree),
+            websocket_module_names=_websocket_module_aliases(tree),
             route_owner_names=route_owner_names.get(path, frozenset()),
             depends_aliases=frozenset(depends_aliases),
             depends_module_aliases=frozenset(depends_module_aliases),
@@ -235,6 +241,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         wire_alias_constants: dict[str, str],
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
+        websocket_type_names: frozenset[str],
+        websocket_module_names: frozenset[str],
         route_owner_names: frozenset[str],
         depends_aliases: frozenset[str],
         depends_module_aliases: frozenset[str],
@@ -250,6 +258,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.wire_alias_constants = wire_alias_constants
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
+        self.websocket_type_names = websocket_type_names
+        self.websocket_module_names = websocket_module_names
         self.route_owner_names = route_owner_names
         self.depends_aliases = depends_aliases
         self.depends_module_aliases = depends_module_aliases
@@ -337,6 +347,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             node,
             request_type_names=self.request_type_names,
             request_module_names=self.request_module_names,
+            websocket_type_names=self.websocket_type_names,
+            websocket_module_names=self.websocket_module_names,
         ):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
@@ -985,11 +997,17 @@ def _is_pydantic_base_reference(
 
 
 def _dataclass_model_keys(
+    root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
 ) -> frozenset[tuple[Path, int, str]]:
-    keys: set[tuple[Path, int, str]] = set()
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
+    trees_by_path = dict(parsed_modules)
+    direct_aliases_by_path: dict[Path, set[str]] = {}
+    module_aliases_by_path: dict[Path, set[str]] = {}
     for path, tree in parsed_modules:
-        direct_aliases = {
+        direct_aliases_by_path[path] = {
             imported.asname or imported.name
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
@@ -997,7 +1015,7 @@ def _dataclass_model_keys(
             for imported in node.names
             if imported.name == "dataclass"
         }
-        module_aliases = {
+        module_aliases_by_path[path] = {
             imported.asname or imported.name.split(".")[0]
             for node in ast.walk(tree)
             if isinstance(node, ast.Import)
@@ -1008,13 +1026,43 @@ def _dataclass_model_keys(
                 "pydantic.dataclasses",
             }
         }
-        for key, node, _ in _module_class_entries(path, tree):
-            if any(
-                _is_dataclass_decorator(decorator, direct_aliases, module_aliases)
+
+    model_keys: set[tuple[Path, int, str]] = set()
+    changed = True
+    while changed:
+        changed = False
+        for key, node in classes.items():
+            if key in model_keys:
+                continue
+            path, _, _ = key
+            is_model = any(
+                _is_dataclass_decorator(
+                    decorator,
+                    direct_aliases_by_path[path],
+                    module_aliases_by_path[path],
+                )
                 for decorator in node.decorator_list
-            ):
-                keys.add(key)
-    return frozenset(keys)
+            )
+            if not is_model:
+                is_model = any(
+                    _resolve_model_key(
+                        root,
+                        path,
+                        trees_by_path[path],
+                        base,
+                        paths_by_module,
+                        trees_by_path,
+                        classes,
+                        class_scopes,
+                        key,
+                    )
+                    in model_keys
+                    for base in node.bases
+                )
+            if is_model:
+                model_keys.add(key)
+                changed = True
+    return frozenset(model_keys)
 
 
 def _typed_dict_model_keys(
@@ -1564,6 +1612,8 @@ def _programmatic_route_handler_keys(
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
     handlers: set[tuple[Path, int, str]] = set()
     for path, tree in parsed_modules:
         mounted_names = {
@@ -1617,7 +1667,18 @@ def _programmatic_route_handler_keys(
             if endpoint is None:
                 continue
             owner_key = _enclosing_function_key(path, node, functions, scopes)
-            target = _resolve_function_key(
+            target = _resolve_bound_method_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=endpoint,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            ) or _resolve_function_key(
                 root,
                 path,
                 tree,
@@ -1631,6 +1692,78 @@ def _programmatic_route_handler_keys(
             if target is not None:
                 handlers.add(target)
     return frozenset(handlers)
+
+
+def _resolve_bound_method_key(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> tuple[Path, int, str] | None:
+    if not isinstance(reference, ast.Attribute):
+        return None
+
+    owner_scope = function_scopes.get(owner_key, ())
+    constructor: ast.AST | None = None
+    constructor_scope = owner_scope
+    constructor_line = reference.lineno
+    if isinstance(reference.value, ast.Call):
+        constructor = reference.value.func
+    elif isinstance(reference.value, ast.Name):
+        assignments = [
+            (key, value, scope)
+            for key, value, scope, _ in _module_assignment_entries(path, tree)
+            if key[2] == reference.value.id
+            and isinstance(value, ast.Call)
+            and len(scope) <= len(owner_scope)
+            and owner_scope[: len(scope)] == scope
+            and key[1] <= reference.lineno
+        ]
+        if assignments:
+            key, value, constructor_scope = max(
+                assignments,
+                key=lambda entry: (len(entry[2]), entry[0][1]),
+            )
+            constructor = value.func
+            constructor_line = key[1]
+    if constructor is None:
+        return None
+
+    class_key = _resolve_model_key(
+        root,
+        path,
+        tree,
+        constructor,
+        paths_by_module,
+        trees_by_path,
+        classes,
+        class_scopes,
+        None,
+        owner_scope=constructor_scope,
+        reference_line=constructor_line,
+    )
+    class_node = classes.get(class_key)
+    if class_node is None:
+        return None
+    method = next(
+        (
+            child
+            for child in class_node.body
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and child.name == reference.attr
+        ),
+        None,
+    )
+    if method is None:
+        return None
+    return (class_key[0], method.lineno, method.name)
 
 
 def _function_definitions(
@@ -2358,10 +2491,13 @@ def _route_body_wire_names(
     *,
     request_type_names: frozenset[str],
     request_module_names: frozenset[str],
+    websocket_type_names: frozenset[str],
+    websocket_module_names: frozenset[str],
 ) -> list[tuple[str, int]]:
+    arguments = _function_arguments(node)
     request_names = {
         argument.arg
-        for argument in _function_arguments(node)
+        for argument in arguments
         if argument.annotation is not None
         and _annotation_contains_request_type(
             argument.annotation,
@@ -2369,10 +2505,31 @@ def _route_body_wire_names(
             request_module_names,
         )
     }
-    if not request_names:
+    request_names.update(
+        argument.arg
+        for argument in arguments
+        if argument.annotation is None and argument.arg == "request"
+    )
+    websocket_names = {
+        argument.arg
+        for argument in arguments
+        if argument.annotation is not None
+        and _annotation_contains_websocket_type(
+            argument.annotation,
+            websocket_type_names,
+            websocket_module_names,
+        )
+    }
+    websocket_names.update(
+        argument.arg
+        for argument in arguments
+        if argument.annotation is None and argument.arg in {"socket", "websocket"}
+    )
+    if not request_names and not websocket_names:
         return []
 
     request_aliases = set(request_names)
+    websocket_aliases = set(websocket_names)
     raw_mapping_names: set[str] = set()
     assignments = [
         candidate
@@ -2389,7 +2546,16 @@ def _route_body_wire_names(
                 previous_size = len(request_aliases)
                 request_aliases.update(targets)
                 changed = changed or len(request_aliases) != previous_size
-            if _is_raw_request_mapping(value, request_aliases, raw_mapping_names):
+            if isinstance(value, ast.Name) and value.id in websocket_aliases:
+                previous_size = len(websocket_aliases)
+                websocket_aliases.update(targets)
+                changed = changed or len(websocket_aliases) != previous_size
+            if _is_raw_request_mapping(
+                value,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+            ):
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
                 changed = changed or len(raw_mapping_names) != previous_size
@@ -2416,6 +2582,7 @@ def _route_body_wire_names(
                 and _is_raw_request_mapping(
                     container,
                     request_aliases,
+                    websocket_aliases,
                     raw_mapping_names,
                 )
             ):
@@ -2445,6 +2612,28 @@ def _request_module_aliases(tree: ast.Module) -> frozenset[str]:
     )
 
 
+def _websocket_type_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"fastapi", "fastapi.websockets", "starlette.websockets"}
+        for imported in node.names
+        if imported.name == "WebSocket"
+    )
+
+
+def _websocket_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name
+        in {"fastapi", "fastapi.websockets", "starlette", "starlette.websockets"}
+    )
+
+
 def _annotation_contains_request_type(
     annotation: ast.expr,
     request_type_names: frozenset[str],
@@ -2456,6 +2645,21 @@ def _annotation_contains_request_type(
         if isinstance(candidate, ast.Attribute) and candidate.attr == "Request":
             parts = _qualified_name_parts(candidate)
             if parts and parts[0] in request_module_names:
+                return True
+    return False
+
+
+def _annotation_contains_websocket_type(
+    annotation: ast.expr,
+    websocket_type_names: frozenset[str],
+    websocket_module_names: frozenset[str],
+) -> bool:
+    for candidate in _annotation_reference_nodes(annotation):
+        if isinstance(candidate, ast.Name) and candidate.id in websocket_type_names:
+            return True
+        if isinstance(candidate, ast.Attribute) and candidate.attr == "WebSocket":
+            parts = _qualified_name_parts(candidate)
+            if parts and parts[0] in websocket_module_names:
                 return True
     return False
 
@@ -2479,14 +2683,25 @@ def _assignment_targets_and_value(
 def _is_raw_request_mapping(
     node: ast.AST,
     request_aliases: set[str],
+    websocket_aliases: set[str],
     raw_mapping_names: set[str],
 ) -> bool:
     if isinstance(node, ast.Await):
-        return _is_raw_request_mapping(node.value, request_aliases, raw_mapping_names)
+        return _is_raw_request_mapping(
+            node.value,
+            request_aliases,
+            websocket_aliases,
+            raw_mapping_names,
+        )
     if isinstance(node, ast.Name):
         return node.id in raw_mapping_names
     if isinstance(node, ast.Subscript):
-        return _is_raw_request_mapping(node.value, request_aliases, raw_mapping_names)
+        return _is_raw_request_mapping(
+            node.value,
+            request_aliases,
+            websocket_aliases,
+            raw_mapping_names,
+        )
     if (
         isinstance(node, ast.Attribute)
         and node.attr in {"cookies", "headers", "path_params", "query_params"}
@@ -2505,16 +2720,29 @@ def _is_raw_request_mapping(
         return True
     if (
         isinstance(node.func, ast.Attribute)
+        and node.func.attr == "receive_json"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in websocket_aliases
+    ):
+        return True
+    if (
+        isinstance(node.func, ast.Attribute)
         and node.func.attr in {"get", "pop", "setdefault", "copy"}
         and _is_raw_request_mapping(
             node.func.value,
             request_aliases,
+            websocket_aliases,
             raw_mapping_names,
         )
     ):
         return True
     return _name(node.func) == "dict" and any(
-        _is_raw_request_mapping(argument, request_aliases, raw_mapping_names)
+        _is_raw_request_mapping(
+            argument,
+            request_aliases,
+            websocket_aliases,
+            raw_mapping_names,
+        )
         for argument in node.args
     )
 
