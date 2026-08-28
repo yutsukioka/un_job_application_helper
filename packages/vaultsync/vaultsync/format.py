@@ -178,6 +178,19 @@ def require_vault_import_size(
         raise VaultImportTooLargeError("vault import exceeds maximum size")
 
 
+def _require_supported_argon2id_parameters(
+    memory_kib: int,
+    iterations: int,
+    parallelism: int,
+) -> None:
+    if memory_kib > MAX_ARGON2ID_MEMORY_KIB:
+        raise UnsafeKDFParameters("Argon2id memory exceeds import cap")
+    if iterations > MAX_ARGON2ID_ITERATIONS:
+        raise UnsafeKDFParameters("Argon2id iterations exceed import cap")
+    if parallelism > MAX_ARGON2ID_PARALLELISM:
+        raise UnsafeKDFParameters("Argon2id parallelism exceeds import cap")
+
+
 @dataclass(frozen=True)
 class Argon2idParams:
     salt: bytes = field(default_factory=lambda: secrets.token_bytes(16))
@@ -203,6 +216,11 @@ class Argon2idParams:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        _require_supported_argon2id_parameters(
+            self.memory_kib,
+            self.iterations,
+            self.parallelism,
+        )
         return {
             "algorithm": "Argon2id",
             "salt": _b64encode(self.salt),
@@ -219,12 +237,11 @@ class Argon2idParams:
         memory_kib = _require_int(obj.get("memory_kib"), "kdf.memory_kib")
         iterations = _require_int(obj.get("iterations"), "kdf.iterations")
         parallelism = _require_int(obj.get("parallelism"), "kdf.parallelism")
-        if memory_kib > MAX_ARGON2ID_MEMORY_KIB:
-            raise UnsafeKDFParameters("Argon2id memory exceeds import cap")
-        if iterations > MAX_ARGON2ID_ITERATIONS:
-            raise UnsafeKDFParameters("Argon2id iterations exceed import cap")
-        if parallelism > MAX_ARGON2ID_PARALLELISM:
-            raise UnsafeKDFParameters("Argon2id parallelism exceeds import cap")
+        _require_supported_argon2id_parameters(
+            memory_kib,
+            iterations,
+            parallelism,
+        )
         return cls(
             salt=_b64decode(obj.get("salt"), "kdf.salt"),
             memory_kib=memory_kib,

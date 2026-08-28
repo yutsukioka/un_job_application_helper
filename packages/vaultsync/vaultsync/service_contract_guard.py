@@ -221,6 +221,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         body_aliases, body_module_aliases = _body_aliases(tree)
         visitor = _ServiceContractVisitor(
             path,
+            module_statements=tree.body,
             pydantic_model_lines=frozenset(
                 line_number
                 for model_path, line_number, _ in inspected_pydantic_models
@@ -286,6 +287,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self,
         path: Path,
         *,
+        module_statements: list[ast.stmt],
         pydantic_model_lines: frozenset[int],
         dataclass_model_lines: frozenset[int],
         typed_dict_model_lines: frozenset[int],
@@ -312,6 +314,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         boundary_function_lines: frozenset[int],
     ) -> None:
         self.path = path
+        self.module_statements = module_statements
         self.pydantic_model_lines = pydantic_model_lines
         self.dataclass_model_lines = dataclass_model_lines
         self.typed_dict_model_lines = typed_dict_model_lines
@@ -391,6 +394,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                         **self.wire_alias_constants,
                         **_string_constants(node.body),
                     },
+                    self.module_statements,
                 ):
                     if _is_banned_wire_name(field_name):
                         self.violations.append(
@@ -721,7 +725,6 @@ def _is_framework_class_base(
         and len(parts) >= 2
         and (
             ".".join(parts) in framework_class_names
-            or parts[-1] in framework_class_names
             or (
                 parts[-1] in {"FastAPI", "APIRouter", "Starlette"}
                 and parts[0] in module_aliases
@@ -1118,7 +1121,6 @@ def _is_framework_constructor(
         and len(parts) >= 2
         and (
             ".".join(parts) in constructor_aliases
-            or parts[-1] in constructor_aliases
             or (
                 parts[-1] in {"FastAPI", "APIRouter", "Starlette"}
                 and parts[0] in module_aliases
@@ -1960,14 +1962,29 @@ def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
 def _pydantic_v1_config_field_aliases(
     node: ast.ClassDef,
     wire_alias_constants: dict[str, str],
+    module_statements: list[ast.stmt],
 ) -> list[tuple[str, int]]:
     aliases: list[tuple[str, int]] = []
+    module_mappings = _named_dict_literals(
+        module_statements,
+        before_line=node.lineno,
+    )
     for config in node.body:
         if not isinstance(config, ast.ClassDef) or config.name != "Config":
             continue
+        named_mappings = _named_dict_literals(
+            node.body,
+            before_line=config.lineno,
+            initial=module_mappings,
+        )
         for setting in config.body:
             if not isinstance(setting, (ast.Assign, ast.AnnAssign)):
                 continue
+            config_mappings = _named_dict_literals(
+                config.body,
+                before_line=setting.lineno,
+                initial=named_mappings,
+            )
             targets = (
                 setting.targets
                 if isinstance(setting, ast.Assign)
@@ -1976,9 +1993,15 @@ def _pydantic_v1_config_field_aliases(
             if not any(
                 isinstance(target, ast.Name) and target.id == "fields"
                 for target in targets
-            ) or not isinstance(setting.value, ast.Dict):
+            ):
                 continue
-            for field_config in setting.value.values:
+            field_mappings = _resolve_named_dict_alias(
+                setting.value,
+                config_mappings,
+            )
+            if field_mappings is None:
+                continue
+            for field_config in field_mappings.values:
                 if isinstance(field_config, ast.Dict):
                     for key, value in zip(
                         field_config.keys,
@@ -1998,6 +2021,46 @@ def _pydantic_v1_config_field_aliases(
                         _wire_alias_values(field_config, wire_alias_constants)
                     )
     return aliases
+
+
+def _named_dict_literals(
+    statements: list[ast.stmt],
+    *,
+    before_line: int,
+    initial: dict[str, ast.Dict] | None = None,
+) -> dict[str, ast.Dict]:
+    mappings = dict(initial or {})
+    for statement in statements:
+        if statement.lineno >= before_line or not isinstance(
+            statement,
+            (ast.Assign, ast.AnnAssign),
+        ):
+            continue
+        value = _resolve_named_dict_alias(statement.value, mappings)
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+        )
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if value is None:
+                mappings.pop(target.id, None)
+            else:
+                mappings[target.id] = value
+    return mappings
+
+
+def _resolve_named_dict_alias(
+    node: ast.expr,
+    mappings: dict[str, ast.Dict],
+) -> ast.Dict | None:
+    if isinstance(node, ast.Dict):
+        return node
+    if isinstance(node, ast.Name):
+        return mappings.get(node.id)
+    return None
 
 
 def _raw_model_validator(
@@ -2390,6 +2453,8 @@ def _string_constants_by_path(
     while changed:
         changed = False
         for path, tree in parsed_modules:
+            import_lines = _import_binding_lines(tree)
+            assignment_lines = _module_assignment_lines(tree)
             symbol_targets, module_targets = _import_targets(
                 root,
                 path,
@@ -2397,6 +2462,14 @@ def _string_constants_by_path(
                 paths_by_module,
             )
             for local_name, target in symbol_targets.items():
+                if local_name not in import_lines or assignment_lines.get(
+                    local_name,
+                    -1,
+                ) > import_lines.get(
+                    local_name,
+                    -1,
+                ):
+                    continue
                 target_path, target_name = _follow_symbol_reexports(
                     root,
                     target,
@@ -2408,6 +2481,14 @@ def _string_constants_by_path(
                     constants[path][local_name] = value
                     changed = True
             for local_parts, target_path in module_targets.items():
+                if local_parts[0] not in import_lines or assignment_lines.get(
+                    local_parts[0],
+                    -1,
+                ) > import_lines.get(
+                    local_parts[0],
+                    -1,
+                ):
+                    continue
                 for target_name, value in constants.get(target_path, {}).items():
                     if "." in target_name:
                         continue
@@ -2416,6 +2497,38 @@ def _string_constants_by_path(
                         constants[path][qualified_name] = value
                         changed = True
     return constants
+
+
+def _import_binding_lines(tree: ast.Module) -> dict[str, int]:
+    lines: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                local_name = imported.asname or imported.name.split(".")[0]
+                lines[local_name] = max(lines.get(local_name, -1), node.lineno)
+        elif isinstance(node, ast.ImportFrom):
+            for imported in node.names:
+                if imported.name == "*":
+                    continue
+                local_name = imported.asname or imported.name
+                lines[local_name] = max(lines.get(local_name, -1), node.lineno)
+    return lines
+
+
+def _module_assignment_lines(tree: ast.Module) -> dict[str, int]:
+    lines: dict[str, int] = {}
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+        )
+        for target in targets:
+            if isinstance(target, ast.Name):
+                lines[target.id] = statement.lineno
+    return lines
 
 
 def _constant_string_value(
@@ -3115,46 +3228,193 @@ def _is_scoped_route_handler(
 ) -> bool:
     for decorator in node.decorator_list:
         call = decorator if isinstance(decorator, ast.Call) else None
-        func = call.func if call is not None else decorator
-        if not isinstance(func, ast.Attribute):
-            continue
-        if func.attr == "middleware":
-            if call is None:
-                continue
-            middleware_type = next(
-                (
-                    keyword.value
-                    for keyword in call.keywords
-                    if keyword.arg == "middleware_type"
-                ),
-                call.args[0] if call is not None and call.args else None,
-            )
-            if not (
-                isinstance(middleware_type, ast.Constant)
-                and middleware_type.value == "http"
-            ):
-                continue
-        elif not (
-            func.attr in ROUTE_METHODS or func.attr in GENERIC_ROUTE_DECORATORS
-        ):
-            continue
-        if _is_visible_route_owner_reference(
-            root,
+        decorator_reference = call.func if call is not None else decorator
+        for func, func_line, func_scope in _visible_route_decorator_references(
             path,
             tree,
-            func.value,
+            decorator_reference,
             decorator.lineno,
             owner_scope,
-            route_owner_names,
-            framework_class_names,
-            factory_names,
-            paths_by_module,
-            trees_by_path,
-            factory_keys,
             frozenset(),
         ):
-            return True
+            if not isinstance(func, ast.Attribute):
+                continue
+            if func.attr == "middleware":
+                if call is None:
+                    continue
+                middleware_type = next(
+                    (
+                        keyword.value
+                        for keyword in call.keywords
+                        if keyword.arg == "middleware_type"
+                    ),
+                    call.args[0] if call is not None and call.args else None,
+                )
+                if not (
+                    isinstance(middleware_type, ast.Constant)
+                    and middleware_type.value == "http"
+                ):
+                    continue
+            elif not (
+                func.attr in ROUTE_METHODS
+                or func.attr in GENERIC_ROUTE_DECORATORS
+            ):
+                continue
+            if _is_visible_route_owner_reference(
+                root,
+                path,
+                tree,
+                func.value,
+                func_line,
+                func_scope,
+                route_owner_names,
+                framework_class_names,
+                factory_names,
+                paths_by_module,
+                trees_by_path,
+                factory_keys,
+                frozenset(),
+            ):
+                return True
     return False
+
+
+def _visible_route_decorator_references(
+    path: Path,
+    tree: ast.Module,
+    reference: ast.expr,
+    reference_line: int,
+    owner_scope: tuple[int, ...],
+    seen: frozenset[str],
+) -> list[tuple[ast.expr, int, tuple[int, ...]]]:
+    if isinstance(reference, ast.Attribute):
+        return [(reference, reference_line, owner_scope)]
+    if not isinstance(reference, ast.Name) or reference.id in seen:
+        return []
+    resolved: list[tuple[ast.expr, int, tuple[int, ...]]] = []
+    for key, value, assignment_scope in _visible_assignment_candidates(
+        path,
+        tree,
+        reference.id,
+        reference_line,
+        owner_scope,
+    ):
+        resolved.extend(
+            _visible_route_decorator_references(
+                path,
+                tree,
+                value,
+                key[1],
+                assignment_scope,
+                seen | {reference.id},
+            )
+        )
+    return resolved
+
+
+def _visible_assignment_candidates(
+    path: Path,
+    tree: ast.Module,
+    name: str,
+    reference_line: int,
+    owner_scope: tuple[int, ...],
+) -> list[tuple[tuple[Path, int, str], ast.expr, tuple[int, ...]]]:
+    assignments = [
+        (key, value, scope)
+        for key, value, scope, _ in _module_assignment_entries(path, tree)
+        if key[2] == name
+        and key[1] <= reference_line
+        and len(scope) <= len(owner_scope)
+        and owner_scope[: len(scope)] == scope
+    ]
+    if not assignments:
+        return []
+    deepest_scope = max(len(scope) for _, _, scope in assignments)
+    assignments = [
+        entry for entry in assignments if len(entry[2]) == deepest_scope
+    ]
+    conditional_lines = _conditional_assignment_lines(tree)
+    unconditional = [
+        entry for entry in assignments if entry[0][1] not in conditional_lines
+    ]
+    if not unconditional:
+        return assignments
+    latest_unconditional = max(unconditional, key=lambda entry: entry[0][1])
+    return [
+        latest_unconditional,
+        *[
+            entry
+            for entry in assignments
+            if entry[0][1] > latest_unconditional[0][1]
+            and entry[0][1] in conditional_lines
+        ],
+    ]
+
+
+def _conditional_assignment_lines(tree: ast.Module) -> frozenset[int]:
+    lines: set[int] = set()
+
+    class Collector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.conditional_depth = 0
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            if self.conditional_depth:
+                lines.add(node.lineno)
+            self.generic_visit(node)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            if self.conditional_depth:
+                lines.add(node.lineno)
+            self.generic_visit(node)
+
+        def visit_If(self, node: ast.If) -> None:
+            self._visit_conditional(node)
+
+        def visit_For(self, node: ast.For) -> None:
+            self._visit_conditional(node)
+
+        def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+            self._visit_conditional(node)
+
+        def visit_While(self, node: ast.While) -> None:
+            self._visit_conditional(node)
+
+        def visit_Try(self, node: ast.Try) -> None:
+            self._visit_conditional(node)
+
+        def visit_TryStar(self, node: ast.TryStar) -> None:
+            self._visit_conditional(node)
+
+        def visit_Match(self, node: ast.Match) -> None:
+            self._visit_conditional(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_scope(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_scope(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._visit_scope(node)
+
+        def _visit_conditional(self, node: ast.AST) -> None:
+            self.conditional_depth += 1
+            self.generic_visit(node)
+            self.conditional_depth -= 1
+
+        def _visit_scope(
+            self,
+            node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+        ) -> None:
+            previous_depth = self.conditional_depth
+            self.conditional_depth = 0
+            for statement in node.body:
+                self.visit(statement)
+            self.conditional_depth = previous_depth
+
+    Collector().visit(tree)
+    return frozenset(lines)
 
 
 def _is_visible_route_owner_reference(
@@ -3199,53 +3459,51 @@ def _is_visible_route_owner_reference(
     name = parts[0]
     if name in seen:
         return False
-    assignments = [
-        (key, value, scope)
-        for key, value, scope, _ in _module_assignment_entries(path, tree)
-        if key[2] == name
-        and key[1] <= reference_line
-        and len(scope) <= len(owner_scope)
-        and owner_scope[: len(scope)] == scope
-    ]
+    assignments = _visible_assignment_candidates(
+        path,
+        tree,
+        name,
+        reference_line,
+        owner_scope,
+    )
     if not assignments:
         return _is_route_owner_reference(reference, route_owner_names)
-    key, value, assignment_scope = max(
-        assignments,
-        key=lambda entry: (len(entry[2]), entry[0][1]),
-    )
     module_aliases = _framework_module_aliases(tree)
-    if _is_framework_constructor(
-        value,
-        framework_class_names,
-        module_aliases,
-    ) or _is_framework_factory_call(value, factory_names) or (
-        _resolved_framework_factory_call(
-            root,
-            path,
-            tree,
+    for key, value, assignment_scope in assignments:
+        if _is_framework_constructor(
             value,
-            paths_by_module,
-            trees_by_path,
-            factory_keys,
-        )
-    ):
-        return True
-    if isinstance(value, (ast.Name, ast.Attribute)):
-        return _is_visible_route_owner_reference(
-            root,
-            path,
-            tree,
-            value,
-            key[1],
-            assignment_scope,
-            route_owner_names,
             framework_class_names,
-            factory_names,
-            paths_by_module,
-            trees_by_path,
-            factory_keys,
-            seen | {name},
-        )
+            module_aliases,
+        ) or _is_framework_factory_call(value, factory_names) or (
+            _resolved_framework_factory_call(
+                root,
+                path,
+                tree,
+                value,
+                paths_by_module,
+                trees_by_path,
+                factory_keys,
+            )
+        ):
+            return True
+        if isinstance(value, (ast.Name, ast.Attribute)) and (
+            _is_visible_route_owner_reference(
+                root,
+                path,
+                tree,
+                value,
+                key[1],
+                assignment_scope,
+                route_owner_names,
+                framework_class_names,
+                factory_names,
+                paths_by_module,
+                trees_by_path,
+                factory_keys,
+                seen | {name},
+            )
+        ):
+            return True
     return False
 
 
