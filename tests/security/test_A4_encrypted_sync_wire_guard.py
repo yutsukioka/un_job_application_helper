@@ -2104,3 +2104,173 @@ async def inspect_body(request: Request, call_next):
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("inspect_body['vault_key']" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_annotated_untyped_request_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "annotated_untyped_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import Annotated, Any
+from fastapi import Body, FastAPI
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync")
+def sync(payload: Annotated[Any, Body()]) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync.payload" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_named_create_model_configuration(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "named_created_model_config.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import ConfigDict, create_model
+
+app = FastAPI()
+EXTRA_CONFIG = ConfigDict(extra="allow")
+ALIAS_CONFIG = ConfigDict(alias_generator=lambda _: "vault_key")
+ExtraRequest = create_model(
+    "ExtraRequest",
+    value=(str, ...),
+    __config__=EXTRA_CONFIG,
+)
+AliasRequest = create_model(
+    "AliasRequest",
+    value=(str, ...),
+    __config__=ALIAS_CONFIG,
+)
+
+@app.post("/api/encrypted-sync/extra")
+def extra(request: ExtraRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/alias")
+def alias(request: AliasRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "ExtraRequest" in violation and "extra wire fields" in violation
+        for violation in violations
+    )
+    assert any(
+        "AliasRequest" in violation and "alias generator" in violation
+        for violation in violations
+    )
+
+
+def test_A4_guard_discovers_programmatically_installed_http_middleware(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "programmatic_middleware.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+
+app = FastAPI()
+
+async def inspect_decorator(request: Request, call_next):
+    payload = await request.json()
+    _ = payload["vault_key"]
+    return await call_next(request)
+
+async def inspect_dispatch(request: Request, call_next):
+    payload = await request.json()
+    _ = payload["recovery_key"]
+    return await call_next(request)
+
+app.middleware("http")(inspect_decorator)
+app.add_middleware(BaseHTTPMiddleware, dispatch=inspect_dispatch)
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "inspect_decorator['vault_key']" in violation for violation in violations
+    )
+    assert any(
+        "inspect_dispatch['recovery_key']" in violation for violation in violations
+    )
+
+
+def test_A4_guard_evaluates_constant_wire_alias_expressions(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "constant_aliases.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import Body, FastAPI
+from pydantic import BaseModel, Field
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    value: str = Field(alias=f"recovery_{'key'}")
+
+@app.post("/api/encrypted-sync/model")
+def model(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/body")
+def body(payload: str = Body(alias="vault_" + "key")) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("recovery_key" in violation for violation in violations)
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_before_model_validators_on_request_models(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "before_model_validator.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, model_validator
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    value: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def translate(cls, data):
+        return {"value": data["vault_key"]}
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "SyncRequest" in violation and "before model validator" in violation
+        for violation in violations
+    )
