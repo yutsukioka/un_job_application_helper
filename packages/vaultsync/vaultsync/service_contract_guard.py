@@ -70,11 +70,17 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         paths_by_module,
     )
     dataclass_models = _dataclass_model_keys(parsed_modules)
+    route_owner_names = _framework_route_owner_names_by_path(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
     programmatic_handlers = _programmatic_route_handler_keys(
         module_root,
         parsed_modules,
         paths_by_module,
         service_paths,
+        route_owner_names,
     )
     boundary_functions = _boundary_function_keys(
         module_root,
@@ -82,6 +88,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         paths_by_module,
         programmatic_handlers,
         service_paths,
+        route_owner_names,
     )
     request_models = _referenced_model_keys(
         module_root,
@@ -103,6 +110,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             )
         ):
             continue
+        depends_aliases, depends_module_aliases = _depends_aliases(tree)
         visitor = _ServiceContractVisitor(
             path,
             pydantic_model_names=frozenset(
@@ -116,7 +124,9 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
-            route_owner_names=_framework_route_owner_names(tree),
+            route_owner_names=route_owner_names.get(path, frozenset()),
+            depends_aliases=frozenset(depends_aliases),
+            depends_module_aliases=frozenset(depends_module_aliases),
             boundary_function_lines=frozenset(
                 line_number
                 for function_path, line_number, _ in boundary_functions
@@ -139,6 +149,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
         route_owner_names: frozenset[str],
+        depends_aliases: frozenset[str],
+        depends_module_aliases: frozenset[str],
         boundary_function_lines: frozenset[int],
     ) -> None:
         self.path = path
@@ -148,6 +160,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
         self.route_owner_names = route_owner_names
+        self.depends_aliases = depends_aliases
+        self.depends_module_aliases = depends_module_aliases
         self.boundary_function_lines = boundary_function_lines
         self.violations: list[str] = []
 
@@ -193,7 +207,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             self.route_owner_names,
         ):
             return
-        for wire_name, line_number in _route_parameter_wire_names(node):
+        for wire_name, line_number in _route_parameter_wire_names(
+            node,
+            depends_aliases=self.depends_aliases,
+            depends_module_aliases=self.depends_module_aliases,
+        ):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
                     f"{self.path}:{line_number}: route parameter {node.name}.{wire_name} "
@@ -351,6 +369,47 @@ def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
                 owners.update(targets)
                 changed = changed or len(owners) != previous_size
     return frozenset(owners)
+
+
+def _framework_route_owner_names_by_path(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+) -> dict[Path, frozenset[str]]:
+    trees_by_path = dict(parsed_modules)
+    owners = {
+        path: set(_framework_route_owner_names(tree))
+        for path, tree in parsed_modules
+    }
+    changed = True
+    while changed:
+        changed = False
+        owner_keys = {
+            (path, name) for path, names in owners.items() for name in names
+        }
+        for path, tree in parsed_modules:
+            symbol_targets, _ = _import_targets(root, path, tree, paths_by_module)
+            for local_name, target in symbol_targets.items():
+                target = _follow_symbol_reexports(
+                    root,
+                    target,
+                    paths_by_module,
+                    trees_by_path,
+                )
+                if target in owner_keys and local_name not in owners[path]:
+                    owners[path].add(local_name)
+                    changed = True
+            for assignment in (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            ):
+                targets, value = _assignment_targets_and_value(assignment)
+                if isinstance(value, ast.Name) and value.id in owners[path]:
+                    previous_size = len(owners[path])
+                    owners[path].update(targets)
+                    changed = changed or len(owners[path]) != previous_size
+    return {path: frozenset(names) for path, names in owners.items()}
 
 
 def _is_framework_constructor(
@@ -640,6 +699,9 @@ def _pydantic_field_aliases(
 
 def _route_parameter_wire_names(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    depends_aliases: frozenset[str],
+    depends_module_aliases: frozenset[str],
 ) -> list[tuple[str, int]]:
     positional = [*node.args.posonlyargs, *node.args.args]
     positional_with_defaults = positional[-len(node.args.defaults) :] if node.args.defaults else []
@@ -671,11 +733,18 @@ def _route_parameter_wire_names(
 
     wire_names: list[tuple[str, int]] = []
     for argument in parameters:
-        wire_names.append((argument.arg, argument.lineno))
+        default = defaults_by_argument.get(id(argument))
+        dependency_injected = isinstance(default, ast.Call) and _is_depends_call(
+            default,
+            set(depends_aliases),
+            set(depends_module_aliases),
+        )
+        if not dependency_injected:
+            wire_names.append((argument.arg, argument.lineno))
         wire_names.extend(
             _keyword_wire_aliases(
                 argument.annotation,
-                defaults_by_argument.get(id(argument)),
+                None if dependency_injected else default,
             )
         )
     return wire_names
@@ -705,6 +774,7 @@ def _programmatic_route_handler_keys(
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
     service_paths: frozenset[Path],
+    route_owner_names: dict[Path, frozenset[str]],
 ) -> frozenset[tuple[Path, int, str]]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
@@ -713,7 +783,7 @@ def _programmatic_route_handler_keys(
     for path, tree in parsed_modules:
         if path not in service_paths:
             continue
-        route_owners = _framework_route_owner_names(tree)
+        route_owners = route_owner_names.get(path, frozenset())
         for node in ast.walk(tree):
             if (
                 not isinstance(node, ast.Call)
@@ -886,6 +956,7 @@ def _boundary_function_keys(
     paths_by_module: dict[str, Path],
     programmatic_handlers: frozenset[tuple[Path, int, str]],
     service_paths: frozenset[Path],
+    route_owner_names: dict[Path, frozenset[str]],
 ) -> frozenset[tuple[Path, int, str]]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
@@ -895,7 +966,7 @@ def _boundary_function_keys(
         if key[0] in service_paths and _is_route_handler(
             node,
             frozenset(),
-            _framework_route_owner_names(trees_by_path[key[0]]),
+            route_owner_names.get(key[0], frozenset()),
         ):
             boundary.add(key)
 
@@ -1057,7 +1128,7 @@ def _referenced_model_keys(
         for argument in _function_arguments(function):
             if argument.annotation is None:
                 continue
-            for candidate in ast.walk(argument.annotation):
+            for candidate in _annotation_reference_nodes(argument.annotation):
                 if not isinstance(candidate, (ast.Name, ast.Attribute)):
                     continue
                 target = _resolve_reference_target(
@@ -1103,7 +1174,7 @@ def _model_reference_closure(
             if isinstance(child, ast.AnnAssign)
         )
         for reference_root in reference_roots:
-            for candidate in ast.walk(reference_root):
+            for candidate in _annotation_reference_nodes(reference_root):
                 if not isinstance(candidate, (ast.Name, ast.Attribute)):
                     continue
                 target = _resolve_reference_target(
@@ -1129,6 +1200,28 @@ def _function_arguments(
     if node.args.kwarg is not None:
         arguments.append(node.args.kwarg)
     return arguments
+
+
+def _annotation_reference_nodes(annotation: ast.AST) -> list[ast.AST]:
+    nodes: list[ast.AST] = []
+    pending = [annotation]
+    seen_strings: set[str] = set()
+    while pending:
+        root = pending.pop()
+        for candidate in ast.walk(root):
+            nodes.append(candidate)
+            if (
+                isinstance(candidate, ast.Constant)
+                and isinstance(candidate.value, str)
+                and candidate.value not in seen_strings
+            ):
+                seen_strings.add(candidate.value)
+                try:
+                    parsed = ast.parse(candidate.value, mode="eval")
+                except SyntaxError:
+                    continue
+                pending.append(parsed.body)
+    return nodes
 
 
 def _module_name(root: Path, path: Path) -> str:
@@ -1332,7 +1425,7 @@ def _request_type_aliases(tree: ast.Module) -> frozenset[str]:
         imported.asname or imported.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module in {"fastapi", "starlette.requests"}
+        and node.module in {"fastapi", "fastapi.requests", "starlette.requests"}
         for imported in node.names
         if imported.name == "Request"
     )
@@ -1344,7 +1437,8 @@ def _request_module_aliases(tree: ast.Module) -> frozenset[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Import)
         for imported in node.names
-        if imported.name in {"fastapi", "starlette", "starlette.requests"}
+        if imported.name
+        in {"fastapi", "fastapi.requests", "starlette", "starlette.requests"}
     )
 
 
@@ -1353,7 +1447,7 @@ def _annotation_contains_request_type(
     request_type_names: frozenset[str],
     request_module_names: frozenset[str],
 ) -> bool:
-    for candidate in ast.walk(annotation):
+    for candidate in _annotation_reference_nodes(annotation):
         if isinstance(candidate, ast.Name) and candidate.id in request_type_names:
             return True
         if isinstance(candidate, ast.Attribute) and candidate.attr == "Request":
