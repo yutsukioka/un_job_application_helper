@@ -1160,3 +1160,138 @@ app.include_router(router)
     violations = find_raw_secret_wire_contract_violations(service_root)
 
     assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_functional_typed_dict_request_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "functional_typed_dict.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import TypedDict
+
+from fastapi import FastAPI
+
+app = FastAPI()
+
+SyncRequest = TypedDict(
+    "SyncRequest",
+    {"encrypted_payload": str, "vault_key": str},
+)
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("SyncRequest.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_follows_fastapi_security_dependencies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "security_dependency.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import Body, FastAPI, Security
+
+app = FastAPI()
+
+def load_secret(vault_key: str = Body()) -> None:
+    pass
+
+@app.post("/api/encrypted-sync")
+def sync(_: None = Security(load_secret)) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_constant_valued_wire_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "constant_aliases.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import ClassVar
+
+from fastapi import Body, FastAPI
+from pydantic import BaseModel, Field
+
+MODEL_ALIAS = "vault_key"
+ROUTE_ALIAS = "passphrase"
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    CLASS_ALIAS: ClassVar[str] = "recovery_key"
+    encrypted_payload: str = Field(alias=MODEL_ALIAS)
+    wrapped_payload: str = Field(validation_alias=CLASS_ALIAS)
+
+@app.post("/api/encrypted-sync")
+def sync(
+    request: SyncRequest,
+    encrypted_input: str = Body(alias=ROUTE_ALIAS),
+) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
+    assert any("passphrase" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_local_request_model_type_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "model_aliases.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import Annotated, TypeAlias
+
+from fastapi import Body, FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class SyncRequest(BaseModel):
+    vault_key: str
+
+RequestPayload: TypeAlias = SyncRequest
+AnnotatedPayload: TypeAlias = Annotated[SyncRequest, Body()]
+
+@app.post("/api/encrypted-sync/plain")
+def plain_sync(request: RequestPayload) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/annotated")
+def annotated_sync(request: AnnotatedPayload) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert sum("SyncRequest.vault_key" in violation for violation in violations) == 1
+
+
+def test_A4_guard_fails_closed_for_missing_or_empty_service_roots(tmp_path: Path) -> None:
+    missing_root = tmp_path / "missing-services"
+    empty_root = tmp_path / "empty-services"
+    empty_root.mkdir()
+
+    missing_violations = find_raw_secret_wire_contract_violations(missing_root)
+    empty_violations = find_raw_secret_wire_contract_violations(empty_root)
+
+    assert any("service root" in violation for violation in missing_violations)
+    assert any("no Python service modules" in violation for violation in empty_violations)
