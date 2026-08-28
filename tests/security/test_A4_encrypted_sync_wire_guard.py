@@ -104,3 +104,106 @@ class BadSyncRequest(ProjectRequest):
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("raw_vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_detects_route_parameter_wire_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "parameter_aliases.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import Annotated
+
+from fastapi import Body, FastAPI, Query
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync/aliases")
+def aliased_sync(
+    encrypted_payload: str = Body(alias="vault_key"),
+    wrapped_input: Annotated[str, Query(alias="recovery_key")] = "",
+) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_resolves_imported_project_model_base_aliases(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "models.py").write_text(
+        """
+from pydantic import BaseModel
+
+class ProjectRequest(BaseModel):
+    request_id: str
+""",
+        encoding="utf-8",
+    )
+    (service_root / "bad_api.py").write_text(
+        """
+from .models import ProjectRequest as APIModel
+
+class BadSyncRequest(APIModel):
+    raw_vault_key: str
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("raw_vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_normalizes_common_wire_name_casing_and_separators(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "wire_names.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+app = FastAPI()
+
+class BadSyncRequest(BaseModel):
+    encrypted_payload: str = Field(alias="rawVaultKey")
+
+@app.post("/api/encrypted-sync/bad")
+def bad_sync(recoveryKey: str, encrypted: str = Field(alias="vault-key")) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("rawVaultKey" in violation for violation in violations)
+    assert any("recoveryKey" in violation for violation in violations)
+    assert any("vault-key" in violation for violation in violations)
+
+
+def test_A4_guard_scans_programmatically_registered_route_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "registered_route.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": True}
+
+app.add_api_route("/api/encrypted-sync", sync, methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)

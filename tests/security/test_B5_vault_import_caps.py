@@ -78,6 +78,12 @@ def test_B5_vault_metadata_rejects_extreme_argon2id_import_params(
         deserialize_vault_metadata(_metadata_with_kdf(**override))
 
 
+def test_B5_argon2id_import_caps_match_supported_client_profile() -> None:
+    assert MAX_ARGON2ID_MEMORY_KIB == 65_536
+    assert MAX_ARGON2ID_ITERATIONS == 3
+    assert MAX_ARGON2ID_PARALLELISM == 4
+
+
 def test_B5_vault_export_import_rejects_oversized_file_before_reading(
     tmp_path: Path,
 ) -> None:
