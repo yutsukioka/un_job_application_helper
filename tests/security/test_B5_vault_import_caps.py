@@ -11,7 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 
-from vaultsync import read_atlasvault_export, read_local_store  # noqa: E402
+from vaultsync import (  # noqa: E402
+    read_atlasvault_export,
+    read_local_store,
+    write_atlasvault_export,
+    write_local_store,
+)
 from vaultsync.export import VaultImportTooLargeError  # noqa: E402
 from vaultsync.format import (  # noqa: E402
     MAX_ARGON2ID_ITERATIONS,
@@ -19,6 +24,7 @@ from vaultsync.format import (  # noqa: E402
     MAX_ARGON2ID_PARALLELISM,
     UnsafeKDFParameters,
     deserialize_vault_metadata,
+    read_vault_import_bytes,
 )
 
 
@@ -88,3 +94,53 @@ def test_B5_local_store_import_rejects_oversized_file_before_reading(tmp_path: P
 
     with pytest.raises(VaultImportTooLargeError):
         read_local_store(path, max_bytes=1)
+
+
+def test_B5_vault_import_bounds_the_bytes_read_from_one_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "growing.atlasvault"
+    path.write_bytes(b"x")
+    read_sizes: list[int] = []
+
+    class GrowingReader:
+        def __enter__(self) -> GrowingReader:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            return b"xx"
+
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: GrowingReader())
+
+    with pytest.raises(VaultImportTooLargeError):
+        read_vault_import_bytes(path, max_bytes=1)
+
+    assert read_sizes == [2]
+
+
+def test_B5_vault_writers_reject_files_the_default_readers_cannot_reopen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "vaultsync.export.serialize_vault_export_bytes",
+        lambda export: b"xx",
+    )
+    export_path = tmp_path / "oversized-export.atlasvault"
+    with pytest.raises(VaultImportTooLargeError):
+        write_atlasvault_export(object(), export_path, max_bytes=1)
+    assert not export_path.exists()
+
+    monkeypatch.setattr(
+        "vaultsync.store.serialize_local_store_bytes",
+        lambda store: b"xx",
+    )
+    store_path = tmp_path / "oversized-store.json"
+    with pytest.raises(VaultImportTooLargeError):
+        write_local_store(object(), store_path, max_bytes=1)
+    assert not store_path.exists()
