@@ -49,11 +49,18 @@ def test_A4_guard_detects_pydantic_wire_aliases(tmp_path: Path) -> None:
     service_file.parent.mkdir()
     service_file.write_text(
         """
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
+
+app = FastAPI()
 
 class AliasedSyncRequest(BaseModel):
     encrypted_payload: str = Field(alias="vault_key")
     wrapped_input: str = Field(validation_alias="recovery_key")
+
+@app.post("/api/encrypted-sync")
+def sync(request: AliasedSyncRequest) -> dict[str, bool]:
+    return {"ok": True}
 """,
         encoding="utf-8",
     )
@@ -90,13 +97,20 @@ def test_A4_guard_resolves_aliased_and_local_pydantic_bases(tmp_path: Path) -> N
     service_file.parent.mkdir()
     service_file.write_text(
         """
+from fastapi import FastAPI
 from pydantic import BaseModel as PydanticModel
+
+app = FastAPI()
 
 class ProjectRequest(PydanticModel):
     request_id: str
 
 class BadSyncRequest(ProjectRequest):
     raw_vault_key: str
+
+@app.post("/api/encrypted-sync")
+def sync(request: BadSyncRequest) -> dict[str, bool]:
+    return {"ok": True}
 """,
         encoding="utf-8",
     )
@@ -147,10 +161,18 @@ class ProjectRequest(BaseModel):
     )
     (service_root / "bad_api.py").write_text(
         """
+from fastapi import FastAPI
+
 from .models import ProjectRequest as APIModel
+
+app = FastAPI()
 
 class BadSyncRequest(APIModel):
     raw_vault_key: str
+
+@app.post("/api/encrypted-sync")
+def sync(request: BadSyncRequest) -> dict[str, bool]:
+    return {"ok": True}
 """,
         encoding="utf-8",
     )
@@ -174,7 +196,11 @@ class BadSyncRequest(BaseModel):
     encrypted_payload: str = Field(alias="rawVaultKey")
 
 @app.post("/api/encrypted-sync/bad")
-def bad_sync(recoveryKey: str, encrypted: str = Field(alias="vault-key")) -> dict[str, bool]:
+def bad_sync(
+    request: BadSyncRequest,
+    recoveryKey: str,
+    encrypted: str = Field(alias="vault-key"),
+) -> dict[str, bool]:
     return {"ok": True}
 """,
         encoding="utf-8",
@@ -363,10 +389,17 @@ def test_A4_guard_supports_module_qualified_pydantic_bases(tmp_path: Path) -> No
     service_file.parent.mkdir()
     service_file.write_text(
         """
+from fastapi import FastAPI
 import pydantic as pd
+
+app = FastAPI()
 
 class SyncRequest(pd.BaseModel):
     vault_key: str
+
+@app.post("/api/encrypted-sync")
+def sync(request: SyncRequest) -> dict[str, bool]:
+    return {"ok": True}
 """,
         encoding="utf-8",
     )

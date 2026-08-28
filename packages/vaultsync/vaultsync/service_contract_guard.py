@@ -83,36 +83,24 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         programmatic_handlers,
         service_paths,
     )
-    request_pydantic_models = _referenced_model_keys(
+    request_models = _referenced_model_keys(
         module_root,
         parsed_modules,
         paths_by_module,
         boundary_functions,
-        pydantic_models,
+        pydantic_models | dataclass_models,
     )
-    service_pydantic_models = frozenset(
-        key for key in pydantic_models if key[0] in service_paths
-    )
-    inspected_pydantic_models = _model_base_closure(
-        module_root,
-        parsed_modules,
-        paths_by_module,
-        service_pydantic_models | request_pydantic_models,
-        pydantic_models,
-    )
-    request_dataclasses = _referenced_model_keys(
-        module_root,
-        parsed_modules,
-        paths_by_module,
-        boundary_functions,
-        dataclass_models,
-    )
+    inspected_pydantic_models = request_models & pydantic_models
+    request_dataclasses = request_models & dataclass_models
     for path, tree in parsed_modules:
         if not (
             path in service_paths
             or any(model_path == path for model_path, _ in inspected_pydantic_models)
             or any(model_path == path for model_path, _ in request_dataclasses)
-            or any(function_path == path for function_path, _ in boundary_functions)
+            or any(
+                function_path == path
+                for function_path, _, _ in boundary_functions
+            )
         ):
             continue
         visitor = _ServiceContractVisitor(
@@ -128,8 +116,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
-            boundary_function_names=frozenset(
-                name for function_path, name in boundary_functions if function_path == path
+            route_owner_names=_framework_route_owner_names(tree),
+            boundary_function_lines=frozenset(
+                line_number
+                for function_path, line_number, _ in boundary_functions
+                if function_path == path
             ),
         )
         visitor.visit(tree)
@@ -147,7 +138,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         field_factory_names: frozenset[str],
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
-        boundary_function_names: frozenset[str],
+        route_owner_names: frozenset[str],
+        boundary_function_lines: frozenset[int],
     ) -> None:
         self.path = path
         self.pydantic_model_names = pydantic_model_names
@@ -155,7 +147,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.field_factory_names = field_factory_names
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
-        self.boundary_function_names = boundary_function_names
+        self.route_owner_names = route_owner_names
+        self.boundary_function_lines = boundary_function_lines
         self.violations: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -165,6 +158,13 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 if node.name in self.pydantic_model_names
                 else "dataclass request model"
             )
+            if node.name in self.pydantic_model_names and (
+                extra_line := _permissive_model_extra_line(node)
+            ) is not None:
+                self.violations.append(
+                    f"{self.path}:{extra_line}: Pydantic request model {node.name} "
+                    "allows arbitrary extra wire fields"
+                )
             for field_name, line_number in _model_fields(
                 node,
                 field_factory_names=self.field_factory_names,
@@ -187,7 +187,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _visit_route_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        if not _is_route_handler(node, self.boundary_function_names):
+        if not _is_route_handler(
+            node,
+            self.boundary_function_lines,
+            self.route_owner_names,
+        ):
             return
         for wire_name, line_number in _route_parameter_wire_names(node):
             if _is_banned_wire_name(wire_name):
@@ -301,6 +305,72 @@ def _pydantic_module_aliases(tree: ast.Module) -> frozenset[str]:
     )
 
 
+def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
+    constructor_aliases: set[str] = set()
+    module_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None and (
+            node.module == "fastapi"
+            or node.module.startswith("fastapi.")
+            or node.module == "starlette"
+            or node.module.startswith("starlette.")
+        ):
+            constructor_aliases.update(
+                imported.asname or imported.name
+                for imported in node.names
+                if imported.name in {"FastAPI", "APIRouter", "Starlette"}
+            )
+        elif isinstance(node, ast.Import):
+            module_aliases.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in node.names
+                if imported.name == "fastapi"
+                or imported.name.startswith("fastapi.")
+                or imported.name == "starlette"
+                or imported.name.startswith("starlette.")
+            )
+
+    owners: set[str] = set()
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            targets, value = _assignment_targets_and_value(assignment)
+            is_owner = _is_framework_constructor(
+                value,
+                constructor_aliases,
+                module_aliases,
+            ) or (isinstance(value, ast.Name) and value.id in owners)
+            if is_owner:
+                previous_size = len(owners)
+                owners.update(targets)
+                changed = changed or len(owners) != previous_size
+    return frozenset(owners)
+
+
+def _is_framework_constructor(
+    node: ast.expr,
+    constructor_aliases: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Name):
+        return node.func.id in constructor_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] in {"FastAPI", "APIRouter", "Starlette"}
+        and parts[0] in module_aliases
+    )
+
+
 def _paths_by_module(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -385,6 +455,7 @@ def _pydantic_model_keys(
                     trees_by_path[path],
                     base,
                     paths_by_module,
+                    trees_by_path,
                 )
                 if target in model_keys:
                     is_model = True
@@ -497,6 +568,49 @@ def _model_fields(
     return fields
 
 
+def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
+    for child in node.body:
+        if isinstance(child, (ast.Assign, ast.AnnAssign)):
+            targets = child.targets if isinstance(child, ast.Assign) else [child.target]
+            if any(isinstance(target, ast.Name) and target.id == "model_config" for target in targets):
+                if _expression_allows_extra(child.value):
+                    return child.lineno
+        if isinstance(child, ast.ClassDef) and child.name == "Config":
+            for setting in child.body:
+                if not isinstance(setting, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = setting.targets if isinstance(setting, ast.Assign) else [setting.target]
+                if any(isinstance(target, ast.Name) and target.id == "extra" for target in targets):
+                    if _is_allow_value(setting.value):
+                        return setting.lineno
+    return None
+
+
+def _expression_allows_extra(node: ast.expr) -> bool:
+    if isinstance(node, ast.Call):
+        return any(
+            keyword.arg == "extra" and _is_allow_value(keyword.value)
+            for keyword in node.keywords
+        )
+    if isinstance(node, ast.Dict):
+        return any(
+            isinstance(key, ast.Constant)
+            and key.value == "extra"
+            and _is_allow_value(value)
+            for key, value in zip(node.keys, node.values, strict=True)
+            if key is not None
+        )
+    return False
+
+
+def _is_allow_value(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.casefold() == "allow"
+    ) or (isinstance(node, ast.Attribute) and node.attr.casefold() == "allow")
+
+
 def _is_class_variable(annotation: ast.expr) -> bool:
     candidate = annotation.value if isinstance(annotation, ast.Subscript) else annotation
     return _name(candidate) == "ClassVar"
@@ -591,12 +705,15 @@ def _programmatic_route_handler_keys(
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
     service_paths: frozenset[Path],
-) -> frozenset[tuple[Path, str]]:
+) -> frozenset[tuple[Path, int, str]]:
+    trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
-    handlers: set[tuple[Path, str]] = set()
+    scopes = _function_scopes(parsed_modules)
+    handlers: set[tuple[Path, int, str]] = set()
     for path, tree in parsed_modules:
         if path not in service_paths:
             continue
+        route_owners = _framework_route_owner_names(tree)
         for node in ast.walk(tree):
             if (
                 not isinstance(node, ast.Call)
@@ -604,47 +721,182 @@ def _programmatic_route_handler_keys(
                 or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
             ):
                 continue
+            owner_parts = _qualified_name_parts(node.func.value)
+            if not owner_parts or owner_parts[-1] not in route_owners:
+                continue
             endpoint = next(
                 (keyword.value for keyword in node.keywords if keyword.arg == "endpoint"),
                 node.args[1] if len(node.args) > 1 else None,
             )
             if endpoint is None:
                 continue
-            target = _resolve_reference_target(
+            owner_key = _enclosing_function_key(path, node, functions, scopes)
+            target = _resolve_function_key(
                 root,
                 path,
                 tree,
                 endpoint,
                 paths_by_module,
+                trees_by_path,
+                functions,
+                scopes,
+                owner_key,
             )
-            if target in functions:
+            if target is not None:
                 handlers.add(target)
     return frozenset(handlers)
 
 
 def _function_definitions(
     parsed_modules: list[tuple[Path, ast.Module]],
-) -> dict[tuple[Path, str], ast.FunctionDef | ast.AsyncFunctionDef]:
+) -> dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef]:
     return {
-        (path, node.name): node
+        key: node
         for path, tree in parsed_modules
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for key, node, _ in _module_function_entries(path, tree)
     }
+
+
+def _function_scopes(
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> dict[tuple[Path, int, str], tuple[int, ...]]:
+    return {
+        key: scope
+        for path, tree in parsed_modules
+        for key, _, scope in _module_function_entries(path, tree)
+    }
+
+
+def _module_function_entries(
+    path: Path,
+    tree: ast.Module,
+) -> list[
+    tuple[
+        tuple[Path, int, str],
+        ast.FunctionDef | ast.AsyncFunctionDef,
+        tuple[int, ...],
+    ]
+]:
+    entries: list[
+        tuple[
+            tuple[Path, int, str],
+            ast.FunctionDef | ast.AsyncFunctionDef,
+            tuple[int, ...],
+        ]
+    ] = []
+
+    class Collector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: list[int] = []
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_function(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_function(node)
+
+        def _visit_function(
+            self,
+            node: ast.FunctionDef | ast.AsyncFunctionDef,
+        ) -> None:
+            key = (path, node.lineno, node.name)
+            entries.append((key, node, tuple(self.scope)))
+            self.scope.append(node.lineno)
+            for statement in node.body:
+                self.visit(statement)
+            self.scope.pop()
+
+    Collector().visit(tree)
+    return entries
+
+
+def _enclosing_function_key(
+    path: Path,
+    node: ast.AST,
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+) -> tuple[Path, int, str] | None:
+    candidates = [
+        key
+        for key, function in functions.items()
+        if key[0] == path
+        and function.lineno <= node.lineno <= (function.end_lineno or function.lineno)
+    ]
+    return max(candidates, key=lambda key: (len(scopes[key]), key[1]), default=None)
+
+
+def _resolve_function_key(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> tuple[Path, int, str] | None:
+    target = _resolve_reference_target(
+        root,
+        path,
+        tree,
+        reference,
+        paths_by_module,
+        trees_by_path,
+    )
+    if target is None:
+        return None
+    target_path, target_name = target
+    candidates = [
+        key for key in functions if key[0] == target_path and key[2] == target_name
+    ]
+    if not candidates:
+        return None
+
+    parts = _qualified_name_parts(reference) or []
+    symbol_targets, _ = _import_targets(root, path, tree, paths_by_module)
+    imported = target_path != path or len(parts) > 1 or (
+        bool(parts) and parts[0] in symbol_targets
+    )
+    if imported:
+        top_level = [key for key in candidates if not scopes[key]]
+        return min(top_level or candidates, key=lambda key: key[1])
+
+    owner_scope = scopes.get(owner_key, ())
+    visible = [
+        key
+        for key in candidates
+        if len(scopes[key]) <= len(owner_scope)
+        and owner_scope[: len(scopes[key])] == scopes[key]
+        and key[1] <= reference.lineno
+    ]
+    return max(
+        visible,
+        key=lambda key: (len(scopes[key]), key[1]),
+        default=None,
+    )
 
 
 def _boundary_function_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
-    programmatic_handlers: frozenset[tuple[Path, str]],
+    programmatic_handlers: frozenset[tuple[Path, int, str]],
     service_paths: frozenset[Path],
-) -> frozenset[tuple[Path, str]]:
+) -> frozenset[tuple[Path, int, str]]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
-    boundary: set[tuple[Path, str]] = set(programmatic_handlers)
+    scopes = _function_scopes(parsed_modules)
+    boundary: set[tuple[Path, int, str]] = set(programmatic_handlers)
     for key, node in functions.items():
-        if key[0] in service_paths and _is_route_handler(node, frozenset()):
+        if key[0] in service_paths and _is_route_handler(
+            node,
+            frozenset(),
+            _framework_route_owner_names(trees_by_path[key[0]]),
+        ):
             boundary.add(key)
 
     for path, tree in parsed_modules:
@@ -657,6 +909,7 @@ def _boundary_function_keys(
         ):
             for keyword in call.keywords:
                 if keyword.arg == "dependencies":
+                    owner_key = _enclosing_function_key(path, call, functions, scopes)
                     boundary.update(
                         _dependency_targets(
                             root,
@@ -664,7 +917,10 @@ def _boundary_function_keys(
                             tree,
                             (keyword.value,),
                             paths_by_module,
+                            trees_by_path,
                             functions,
+                            scopes,
+                            owner_key,
                         )
                     )
 
@@ -674,7 +930,7 @@ def _boundary_function_keys(
         function = functions.get(key)
         if function is None:
             continue
-        path, _ = key
+        path, _, _ = key
         dependency_nodes: list[ast.AST] = [
             *function.decorator_list,
             *function.args.defaults,
@@ -687,7 +943,10 @@ def _boundary_function_keys(
             trees_by_path[path],
             dependency_nodes,
             paths_by_module,
+            trees_by_path,
             functions,
+            scopes,
+            key,
         )
         for target in discovered - boundary:
             boundary.add(target)
@@ -701,10 +960,13 @@ def _dependency_targets(
     tree: ast.Module,
     nodes: object,
     paths_by_module: dict[str, Path],
-    functions: dict[tuple[Path, str], ast.FunctionDef | ast.AsyncFunctionDef],
-) -> set[tuple[Path, str]]:
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> set[tuple[Path, int, str]]:
     depends_aliases, fastapi_module_aliases = _depends_aliases(tree)
-    targets: set[tuple[Path, str]] = set()
+    targets: set[tuple[Path, int, str]] = set()
     for root_node in nodes if isinstance(nodes, (list, tuple)) else (nodes,):
         if not isinstance(root_node, ast.AST):
             continue
@@ -725,14 +987,18 @@ def _dependency_targets(
             )
             if dependency is None:
                 continue
-            target = _resolve_reference_target(
+            target = _resolve_function_key(
                 root,
                 path,
                 tree,
                 dependency,
                 paths_by_module,
+                trees_by_path,
+                functions,
+                scopes,
+                owner_key,
             )
-            if target in functions:
+            if target is not None:
                 targets.add(target)
     return targets
 
@@ -777,7 +1043,7 @@ def _referenced_model_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
-    boundary_functions: frozenset[tuple[Path, str]],
+    boundary_functions: frozenset[tuple[Path, int, str]],
     model_keys: frozenset[tuple[Path, str]],
 ) -> frozenset[tuple[Path, str]]:
     trees_by_path = dict(parsed_modules)
@@ -787,7 +1053,7 @@ def _referenced_model_keys(
         function = functions.get(key)
         if function is None:
             continue
-        path, _ = key
+        path, _, _ = key
         for argument in _function_arguments(function):
             if argument.annotation is None:
                 continue
@@ -800,10 +1066,11 @@ def _referenced_model_keys(
                     trees_by_path[path],
                     candidate,
                     paths_by_module,
+                    trees_by_path,
                 )
                 if target in model_keys:
                     referenced.add(target)
-    return _model_base_closure(
+    return _model_reference_closure(
         root,
         parsed_modules,
         paths_by_module,
@@ -812,7 +1079,7 @@ def _referenced_model_keys(
     )
 
 
-def _model_base_closure(
+def _model_reference_closure(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
@@ -829,17 +1096,27 @@ def _model_base_closure(
         if model is None:
             continue
         path, _ = key
-        for base in model.bases:
-            target = _resolve_reference_target(
-                root,
-                path,
-                trees_by_path[path],
-                base,
-                paths_by_module,
-            )
-            if target in model_keys and target not in closure:
-                closure.add(target)
-                pending.append(target)
+        reference_roots: list[ast.AST] = [*model.bases]
+        reference_roots.extend(
+            child.annotation
+            for child in model.body
+            if isinstance(child, ast.AnnAssign)
+        )
+        for reference_root in reference_roots:
+            for candidate in ast.walk(reference_root):
+                if not isinstance(candidate, (ast.Name, ast.Attribute)):
+                    continue
+                target = _resolve_reference_target(
+                    root,
+                    path,
+                    trees_by_path[path],
+                    candidate,
+                    paths_by_module,
+                    trees_by_path,
+                )
+                if target in model_keys and target not in closure:
+                    closure.add(target)
+                    pending.append(target)
     return frozenset(closure)
 
 
@@ -918,17 +1195,55 @@ def _resolve_reference_target(
     tree: ast.Module,
     node: ast.AST,
     paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module] | None = None,
 ) -> tuple[Path, str] | None:
     parts = _qualified_name_parts(node)
     if not parts:
         return None
     symbol_targets, module_targets = _import_targets(root, path, tree, paths_by_module)
     if len(parts) == 1:
-        return symbol_targets.get(parts[0], (path, parts[0]))
-    module_path = module_targets.get(tuple(parts[:-1]))
-    if module_path is not None:
-        return module_path, parts[-1]
-    return None
+        target = symbol_targets.get(parts[0], (path, parts[0]))
+    else:
+        module_path = module_targets.get(tuple(parts[:-1]))
+        target = (module_path, parts[-1]) if module_path is not None else None
+    if target is None or trees_by_path is None:
+        return target
+    return _follow_symbol_reexports(
+        root,
+        target,
+        paths_by_module,
+        trees_by_path,
+    )
+
+
+def _follow_symbol_reexports(
+    root: Path,
+    target: tuple[Path, str],
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+) -> tuple[Path, str]:
+    seen: set[tuple[Path, str]] = set()
+    while target not in seen:
+        seen.add(target)
+        target_path, target_name = target
+        tree = trees_by_path.get(target_path)
+        if tree is None or any(
+            isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == target_name
+            for node in tree.body
+        ):
+            return target
+        symbol_targets, _ = _import_targets(
+            root,
+            target_path,
+            tree,
+            paths_by_module,
+        )
+        next_target = symbol_targets.get(target_name)
+        if next_target is None:
+            return target
+        target = next_target
+    return target
 
 
 def _qualified_name_parts(node: ast.AST) -> list[str] | None:
@@ -1102,16 +1417,20 @@ def _is_raw_request_mapping(
 
 def _is_route_handler(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
-    programmatic_route_handlers: frozenset[str],
+    boundary_function_lines: frozenset[int],
+    route_owner_names: frozenset[str],
 ) -> bool:
-    if node.name in programmatic_route_handlers:
+    if node.lineno in boundary_function_lines:
         return True
     for decorator in node.decorator_list:
         call = decorator if isinstance(decorator, ast.Call) else None
         func = call.func if call is not None else decorator
-        if isinstance(func, ast.Attribute) and (
+        if not isinstance(func, ast.Attribute) or not (
             func.attr in ROUTE_METHODS or func.attr in GENERIC_ROUTE_DECORATORS
         ):
+            continue
+        owner_parts = _qualified_name_parts(func.value)
+        if owner_parts and owner_parts[-1] in route_owner_names:
             return True
     return False
 
