@@ -3238,3 +3238,129 @@ async def sync(request: Request) -> dict[str, bool]:
 
     assert any("vault_key" in violation for violation in violations)
     assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_dependency_override_callables(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "dependency_overrides.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+def safe_dependency() -> bool:
+    return True
+
+def secret_dependency(vault_key: str) -> bool:
+    return bool(vault_key)
+
+@app.post("/api/encrypted-sync")
+def sync(allowed: bool = Depends(safe_dependency)) -> dict[str, bool]:
+    return {"ok": allowed}
+
+app.dependency_overrides[safe_dependency] = secret_dependency
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("secret_dependency.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_follows_reexported_websocket_types(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "__init__.py").write_text("", encoding="utf-8")
+    (service_root / "socket_types.py").write_text(
+        "from fastapi import WebSocket\n",
+        encoding="utf-8",
+    )
+    (service_root / "api.py").write_text(
+        """
+from fastapi import FastAPI
+
+from services.socket_types import WebSocket
+
+app = FastAPI()
+
+@app.websocket("/api/encrypted-sync/socket")
+async def sync(socket: WebSocket) -> None:
+    payload = await socket.receive_json()
+    _ = payload["vault_key"]
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_root)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_tracks_alternate_raw_body_decoders(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "alternate_decoder.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+import orjson
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync")
+async def sync(request: Request) -> dict[str, bool]:
+    payload = orjson.loads(await request.body())
+    return {"ok": bool(payload["vault_key"])}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_starlette_endpoint_classes(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "class_endpoint.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from starlette.endpoints import HTTPEndpoint
+from starlette.routing import Route
+
+class SyncEndpoint(HTTPEndpoint):
+    async def post(self, request):
+        payload = await request.json()
+        return payload["vault_key"]
+
+routes = [Route("/api/encrypted-sync", SyncEndpoint)]
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_inline_lambda_route_handlers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "lambda_handler.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+app.add_api_route(
+    "/api/encrypted-sync",
+    lambda vault_key: vault_key,
+    methods=["POST"],
+)
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("lambda.vault_key" in violation for violation in violations)
