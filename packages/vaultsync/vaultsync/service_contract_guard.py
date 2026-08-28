@@ -1394,6 +1394,9 @@ def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
 
 
 def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
+    for keyword in node.keywords:
+        if keyword.arg == "alias_generator":
+            return keyword.value.lineno
     for child in node.body:
         if isinstance(child, (ast.Assign, ast.AnnAssign)):
             targets = child.targets if isinstance(child, ast.Assign) else [child.target]
@@ -1826,53 +1829,111 @@ def _resolve_class_method_key(
     trees_by_path: dict[Path, ast.Module],
     classes: dict[tuple[Path, int, str], ast.ClassDef],
     class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
-    seen: frozenset[tuple[Path, int, str]] = frozenset(),
 ) -> tuple[Path, int, str] | None:
-    if class_key in seen:
-        return None
+    for candidate_key in _resolve_class_mro_keys(
+        root=root,
+        class_key=class_key,
+        paths_by_module=paths_by_module,
+        trees_by_path=trees_by_path,
+        classes=classes,
+        class_scopes=class_scopes,
+    ):
+        class_node = classes.get(candidate_key)
+        if class_node is None:
+            continue
+        direct_method = next(
+            (
+                child
+                for child in class_node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == method_name
+            ),
+            None,
+        )
+        if direct_method is not None:
+            return (candidate_key[0], direct_method.lineno, direct_method.name)
+    return None
+
+
+def _resolve_class_mro_keys(
+    *,
+    root: Path,
+    class_key: tuple[Path, int, str],
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    active: frozenset[tuple[Path, int, str]] = frozenset(),
+) -> tuple[tuple[Path, int, str], ...]:
+    if class_key in active:
+        return (class_key,)
     class_node = classes.get(class_key)
     if class_node is None:
-        return None
-    direct_method = next(
-        (
-            child
-            for child in class_node.body
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and child.name == method_name
-        ),
-        None,
-    )
-    if direct_method is not None:
-        return (class_key[0], direct_method.lineno, direct_method.name)
+        return (class_key,)
 
     path = class_key[0]
-    for base in class_node.bases:
-        base_key = _resolve_model_key(
-            root,
-            path,
-            trees_by_path[path],
-            base,
-            paths_by_module,
-            trees_by_path,
-            classes,
-            class_scopes,
-            class_key,
+    base_keys = [
+        base_key
+        for base in class_node.bases
+        if (
+            base_key := _resolve_model_key(
+                root,
+                path,
+                trees_by_path[path],
+                base,
+                paths_by_module,
+                trees_by_path,
+                classes,
+                class_scopes,
+                class_key,
+            )
         )
-        if base_key is None:
-            continue
-        method_key = _resolve_class_method_key(
-            root=root,
-            class_key=base_key,
-            method_name=method_name,
-            paths_by_module=paths_by_module,
-            trees_by_path=trees_by_path,
-            classes=classes,
-            class_scopes=class_scopes,
-            seen=seen | {class_key},
+        is not None
+    ]
+    sequences = [
+        list(
+            _resolve_class_mro_keys(
+                root=root,
+                class_key=base_key,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                active=active | {class_key},
+            )
         )
-        if method_key is not None:
-            return method_key
-    return None
+        for base_key in base_keys
+    ]
+    sequences.append(list(base_keys))
+
+    merged: list[tuple[Path, int, str]] = []
+    while any(sequences):
+        candidate = next(
+            (
+                sequence[0]
+                for sequence in sequences
+                if sequence
+                and not any(
+                    sequence[0] in other[1:]
+                    for other in sequences
+                    if other
+                )
+            ),
+            None,
+        )
+        if candidate is None:
+            for sequence in sequences:
+                for remaining in sequence:
+                    if remaining not in merged:
+                        merged.append(remaining)
+            break
+        if candidate not in merged:
+            merged.append(candidate)
+        for sequence in sequences:
+            if sequence and sequence[0] == candidate:
+                sequence.pop(0)
+
+    return (class_key, *merged)
 
 
 def _function_definitions(
@@ -2047,7 +2108,11 @@ def _boundary_function_keys(
             if isinstance(node, ast.Call)
         ):
             for keyword in call.keywords:
-                if keyword.arg == "dependencies":
+                if keyword.arg == "dependencies" and _is_framework_dependency_call(
+                    call,
+                    tree,
+                    route_owner_names.get(path, frozenset()),
+                ):
                     owner_key = _enclosing_function_key(path, call, functions, scopes)
                     boundary.update(
                         _dependency_targets(
@@ -2091,6 +2156,46 @@ def _boundary_function_keys(
             boundary.add(target)
             pending.append(target)
     return frozenset(boundary)
+
+
+def _is_framework_dependency_call(
+    call: ast.Call,
+    tree: ast.Module,
+    route_owner_names: frozenset[str],
+) -> bool:
+    constructor_aliases: set[str] = set()
+    module_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None and (
+            node.module == "fastapi"
+            or node.module.startswith("fastapi.")
+            or node.module == "starlette"
+            or node.module.startswith("starlette.")
+        ):
+            constructor_aliases.update(
+                imported.asname or imported.name
+                for imported in node.names
+                if imported.name in {"FastAPI", "APIRouter", "Starlette"}
+            )
+        elif isinstance(node, ast.Import):
+            module_aliases.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in node.names
+                if imported.name == "fastapi"
+                or imported.name.startswith("fastapi.")
+                or imported.name == "starlette"
+                or imported.name.startswith("starlette.")
+            )
+    if _is_framework_constructor(call, constructor_aliases, module_aliases):
+        return True
+    if not isinstance(call.func, ast.Attribute):
+        return False
+    return call.func.attr in (
+        ROUTE_METHODS
+        | GENERIC_ROUTE_DECORATORS
+        | PROGRAMMATIC_ROUTE_REGISTRARS
+        | {"include_router"}
+    ) and _is_route_owner_reference(call.func.value, route_owner_names)
 
 
 def _dependency_targets(

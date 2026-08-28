@@ -193,12 +193,6 @@ class Argon2idParams:
         parallelism = _require_int(self.parallelism, "kdf.parallelism")
         if memory_kib <= 0 or iterations <= 0 or parallelism <= 0:
             raise VaultFormatError("Argon2id parameters must be positive")
-        if self.memory_kib > MAX_ARGON2ID_MEMORY_KIB:
-            raise UnsafeKDFParameters("Argon2id memory exceeds import cap")
-        if self.iterations > MAX_ARGON2ID_ITERATIONS:
-            raise UnsafeKDFParameters("Argon2id iterations exceed import cap")
-        if self.parallelism > MAX_ARGON2ID_PARALLELISM:
-            raise UnsafeKDFParameters("Argon2id parallelism exceeds import cap")
 
     def with_salt(self, salt: bytes) -> Argon2idParams:
         return Argon2idParams(
@@ -222,11 +216,20 @@ class Argon2idParams:
         obj = _require_mapping(data, "kdf")
         if obj.get("algorithm") != "Argon2id":
             raise VaultFormatError("unsupported key-wrap KDF")
+        memory_kib = _require_int(obj.get("memory_kib"), "kdf.memory_kib")
+        iterations = _require_int(obj.get("iterations"), "kdf.iterations")
+        parallelism = _require_int(obj.get("parallelism"), "kdf.parallelism")
+        if memory_kib > MAX_ARGON2ID_MEMORY_KIB:
+            raise UnsafeKDFParameters("Argon2id memory exceeds import cap")
+        if iterations > MAX_ARGON2ID_ITERATIONS:
+            raise UnsafeKDFParameters("Argon2id iterations exceed import cap")
+        if parallelism > MAX_ARGON2ID_PARALLELISM:
+            raise UnsafeKDFParameters("Argon2id parallelism exceeds import cap")
         return cls(
             salt=_b64decode(obj.get("salt"), "kdf.salt"),
-            memory_kib=_require_int(obj.get("memory_kib"), "kdf.memory_kib"),
-            iterations=_require_int(obj.get("iterations"), "kdf.iterations"),
-            parallelism=_require_int(obj.get("parallelism"), "kdf.parallelism"),
+            memory_kib=memory_kib,
+            iterations=iterations,
+            parallelism=parallelism,
         )
 
 
