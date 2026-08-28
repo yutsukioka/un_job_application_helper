@@ -245,6 +245,10 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 "model_validator",
             ),
             model_validator_module_names=_pydantic_module_aliases(tree),
+            root_validator_names=_pydantic_symbol_aliases(
+                tree,
+                "root_validator",
+            ),
             wire_alias_constants=_string_constants(tree.body),
             request_type_names=_request_type_aliases(tree),
             request_module_names=_request_module_aliases(tree),
@@ -285,6 +289,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         field_factory_module_names: frozenset[str],
         model_validator_names: frozenset[str],
         model_validator_module_names: frozenset[str],
+        root_validator_names: frozenset[str],
         wire_alias_constants: dict[str, str],
         request_type_names: frozenset[str],
         request_module_names: frozenset[str],
@@ -310,6 +315,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.field_factory_module_names = field_factory_module_names
         self.model_validator_names = model_validator_names
         self.model_validator_module_names = model_validator_module_names
+        self.root_validator_names = root_validator_names
         self.wire_alias_constants = wire_alias_constants
         self.request_type_names = request_type_names
         self.request_module_names = request_module_names
@@ -359,12 +365,13 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                     node,
                     self.model_validator_names,
                     self.model_validator_module_names,
+                    self.root_validator_names,
                 )
             ) is not None:
-                validator_mode, validator_line = raw_validator
+                validator_kind, validator_line = raw_validator
                 self.violations.append(
                     f"{self.path}:{validator_line}: Pydantic request model "
-                    f"{node.name} defines a {validator_mode} model validator that cannot "
+                    f"{node.name} defines a {validator_kind} that cannot "
                     "be statically approved"
                 )
             if node.lineno in self.mapping_root_model_lines:
@@ -442,6 +449,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             websocket_module_names=self.websocket_module_names,
             json_loads_names=self.json_loads_names,
             json_module_names=self.json_module_names,
+            wire_key_constants={
+                **self.wire_alias_constants,
+                **_string_constants(node.body),
+            },
         ):
             if _is_banned_wire_name(wire_name):
                 self.violations.append(
@@ -545,48 +556,8 @@ def _pydantic_module_aliases(tree: ast.Module) -> frozenset[str]:
 
 
 def _framework_route_owner_names(tree: ast.Module) -> frozenset[str]:
-    constructor_aliases: set[str] = set()
-    module_aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module is not None and (
-            node.module == "fastapi"
-            or node.module.startswith("fastapi.")
-            or node.module == "starlette"
-            or node.module.startswith("starlette.")
-        ):
-            constructor_aliases.update(
-                imported.asname or imported.name
-                for imported in node.names
-                if imported.name in {"FastAPI", "APIRouter", "Starlette"}
-            )
-        elif isinstance(node, ast.Import):
-            module_aliases.update(
-                imported.asname or imported.name.split(".")[0]
-                for imported in node.names
-                if imported.name == "fastapi"
-                or imported.name.startswith("fastapi.")
-                or imported.name == "starlette"
-                or imported.name.startswith("starlette.")
-            )
-
-    framework_class_names = set(constructor_aliases)
-    class_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
-    changed = True
-    while changed:
-        changed = False
-        for class_node in class_nodes:
-            if class_node.name in framework_class_names:
-                continue
-            if any(
-                _is_framework_class_base(
-                    base,
-                    framework_class_names,
-                    module_aliases,
-                )
-                for base in class_node.bases
-            ):
-                framework_class_names.add(class_node.name)
-                changed = True
+    _, module_aliases = _framework_constructor_imports(tree)
+    framework_class_names = _framework_class_names(tree)
 
     factory_names = _framework_app_factory_names(
         tree,
@@ -636,11 +607,11 @@ def _framework_app_factory_names(
         for function in functions:
             if function.name in factories:
                 continue
+            lexical_nodes = _lexical_body_nodes(function.body)
             local_owners: set[str] = set()
             assignments = [
                 node
-                for statement in function.body
-                for node in ast.walk(statement)
+                for node in lexical_nodes
                 if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
             ]
             local_changed = True
@@ -673,13 +644,38 @@ def _framework_app_factory_names(
                     or _is_framework_factory_call(node.value, factories)
                     or (isinstance(node.value, ast.Name) and node.value.id in local_owners)
                 )
-                for statement in function.body
-                for node in ast.walk(statement)
+                for node in lexical_nodes
             )
             if returns_owner:
                 factories.add(function.name)
                 changed = True
     return frozenset(factories)
+
+
+def _lexical_body_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
+    nodes: list[ast.AST] = []
+
+    class Collector(ast.NodeVisitor):
+        def generic_visit(self, node: ast.AST) -> None:
+            nodes.append(node)
+            super().generic_visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+    collector = Collector()
+    for statement in statements:
+        collector.visit(statement)
+    return nodes
 
 
 def _is_framework_factory_call(
@@ -759,6 +755,15 @@ def _framework_route_owner_names_by_path(
         path: set(_framework_route_owner_names(tree))
         for path, tree in parsed_modules
     }
+    factory_keys = {
+        (path, name)
+        for path, tree in parsed_modules
+        for name in _framework_app_factory_names(
+            tree,
+            _framework_class_names(tree),
+            _framework_module_aliases(tree),
+        )
+    }
     changed = True
     while changed:
         changed = False
@@ -796,11 +801,104 @@ def _framework_route_owner_names_by_path(
                 if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
             ):
                 targets, value = _assignment_targets_and_value(assignment)
-                if _is_route_owner_reference(value, owners[path]):
+                if _is_route_owner_reference(
+                    value,
+                    owners[path],
+                ) or _resolved_framework_factory_call(
+                    root,
+                    path,
+                    tree,
+                    value,
+                    paths_by_module,
+                    trees_by_path,
+                    factory_keys,
+                ):
                     previous_size = len(owners[path])
                     owners[path].update(targets)
                     changed = changed or len(owners[path]) != previous_size
     return {path: frozenset(names) for path, names in owners.items()}
+
+
+def _framework_class_names(tree: ast.Module) -> set[str]:
+    constructor_aliases, module_aliases = _framework_constructor_imports(tree)
+    class_names = set(constructor_aliases)
+    class_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    changed = True
+    while changed:
+        changed = False
+        for class_node in class_nodes:
+            if class_node.name in class_names:
+                continue
+            if any(
+                _is_framework_class_base(base, class_names, module_aliases)
+                for base in class_node.bases
+            ):
+                class_names.add(class_node.name)
+                changed = True
+    return class_names
+
+
+def _framework_module_aliases(tree: ast.Module) -> set[str]:
+    return _framework_constructor_imports(tree)[1]
+
+
+def _framework_constructor_imports(tree: ast.Module) -> tuple[set[str], set[str]]:
+    constructor_aliases: set[str] = set()
+    module_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None and (
+            node.module == "fastapi"
+            or node.module.startswith("fastapi.")
+            or node.module == "starlette"
+            or node.module.startswith("starlette.")
+        ):
+            constructor_aliases.update(
+                imported.asname or imported.name
+                for imported in node.names
+                if imported.name in {"FastAPI", "APIRouter", "Starlette"}
+            )
+        elif isinstance(node, ast.Import):
+            module_aliases.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in node.names
+                if imported.name == "fastapi"
+                or imported.name.startswith("fastapi.")
+                or imported.name == "starlette"
+                or imported.name.startswith("starlette.")
+            )
+    return constructor_aliases, module_aliases
+
+
+def _resolved_framework_factory_call(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    node: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    factory_keys: set[tuple[Path, str]],
+) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    target = _resolve_reference_target(
+        root,
+        path,
+        tree,
+        node.func,
+        paths_by_module,
+        trees_by_path,
+    )
+    if target is None:
+        return False
+    return (
+        _follow_symbol_reexports(
+            root,
+            target,
+            paths_by_module,
+            trees_by_path,
+        )
+        in factory_keys
+    )
 
 
 def _mounted_route_owner_keys(
@@ -1743,6 +1841,7 @@ def _raw_model_validator(
     node: ast.ClassDef,
     direct_aliases: frozenset[str],
     module_aliases: frozenset[str],
+    root_direct_aliases: frozenset[str],
 ) -> tuple[str, int] | None:
     for child in node.body:
         if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1752,6 +1851,7 @@ def _raw_model_validator(
                 continue
             if isinstance(decorator.func, ast.Name):
                 is_model_validator = decorator.func.id in direct_aliases
+                is_root_validator = decorator.func.id in root_direct_aliases
             else:
                 parts = _qualified_name_parts(decorator.func)
                 is_model_validator = bool(
@@ -1760,7 +1860,25 @@ def _raw_model_validator(
                     and parts[-1] == "model_validator"
                     and parts[0] in module_aliases
                 )
-            if not is_model_validator:
+                is_root_validator = bool(
+                    parts
+                    and len(parts) >= 2
+                    and parts[-1] == "root_validator"
+                    and parts[0] in module_aliases
+                )
+            if not is_model_validator and not is_root_validator:
+                continue
+            if is_root_validator:
+                pre = next(
+                    (
+                        keyword.value
+                        for keyword in decorator.keywords
+                        if keyword.arg == "pre"
+                    ),
+                    None,
+                )
+                if isinstance(pre, ast.Constant) and pre.value is True:
+                    return "pre root validator", decorator.lineno
                 continue
             mode = next(
                 (
@@ -1774,7 +1892,7 @@ def _raw_model_validator(
                 isinstance(mode, ast.Constant)
                 and mode.value in {"before", "wrap"}
             ):
-                return mode.value, decorator.lineno
+                return f"{mode.value} model validator", decorator.lineno
     return None
 
 
@@ -2682,7 +2800,10 @@ def _module_function_entries(
             self.scope: list[int] = []
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            return
+            self.scope.append(node.lineno)
+            for statement in node.body:
+                self.visit(statement)
+            self.scope.pop()
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             self._visit_function(node)
@@ -3482,6 +3603,7 @@ def _route_body_wire_names(
     websocket_module_names: frozenset[str],
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
+    wire_key_constants: dict[str, str],
 ) -> list[tuple[str, int]]:
     arguments = _function_arguments(node)
     request_names = {
@@ -3587,9 +3709,9 @@ def _route_body_wire_names(
                 container = candidate.func.value
             else:
                 continue
+            wire_key = _constant_string_value(key, wire_key_constants)
             if (
-                isinstance(key, ast.Constant)
-                and isinstance(key.value, str)
+                wire_key is not None
                 and _is_raw_request_mapping(
                     container,
                     request_aliases,
@@ -3601,7 +3723,7 @@ def _route_body_wire_names(
                     json_module_names,
                 )
             ):
-                wire_names.append((key.value, key.lineno))
+                wire_names.append((wire_key, key.lineno))
     return wire_names
 
 
