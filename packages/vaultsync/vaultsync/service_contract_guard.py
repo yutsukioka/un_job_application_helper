@@ -45,44 +45,82 @@ _CANONICAL_BANNED_WIRE_FIELD_NAMES = frozenset(
 
 def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[str]:
     root = Path(service_root)
-    violations: list[str] = []
-    parsed_modules: list[tuple[Path, ast.Module]] = []
-    for path in sorted(root.rglob("*.py")):
-        if _skip_path(path):
-            continue
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except SyntaxError as exc:
-            violations.append(f"{path}:{exc.lineno or 1}: cannot parse service module")
-            continue
-        parsed_modules.append((path, tree))
+    service_paths = frozenset(
+        path for path in sorted(root.rglob("*.py")) if not _skip_path(path)
+    )
+    module_root = _repository_root(root)
+    source_paths = frozenset(
+        path
+        for path in module_root.rglob("*.py")
+        if path in service_paths or not _skip_repository_source_path(module_root, path)
+    )
+    paths_by_module = _paths_by_module(
+        module_root,
+        [(path, ast.Module(body=[], type_ignores=[])) for path in source_paths],
+    )
+    parsed_modules, violations = _parse_import_closure(
+        module_root,
+        service_paths,
+        paths_by_module,
+    )
 
-    paths_by_module = _paths_by_module(root, parsed_modules)
-    pydantic_models = _pydantic_model_keys(root, parsed_modules, paths_by_module)
-    dataclass_models = _dataclass_model_keys(parsed_modules)
-    programmatic_handlers = _programmatic_route_handler_keys(
-        root,
+    pydantic_models = _pydantic_model_keys(
+        module_root,
         parsed_modules,
         paths_by_module,
     )
+    dataclass_models = _dataclass_model_keys(parsed_modules)
+    programmatic_handlers = _programmatic_route_handler_keys(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+        service_paths,
+    )
     boundary_functions = _boundary_function_keys(
-        root,
+        module_root,
         parsed_modules,
         paths_by_module,
         programmatic_handlers,
+        service_paths,
     )
-    request_dataclasses = _referenced_dataclass_model_keys(
-        root,
+    request_pydantic_models = _referenced_model_keys(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+        boundary_functions,
+        pydantic_models,
+    )
+    service_pydantic_models = frozenset(
+        key for key in pydantic_models if key[0] in service_paths
+    )
+    inspected_pydantic_models = _model_base_closure(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+        service_pydantic_models | request_pydantic_models,
+        pydantic_models,
+    )
+    request_dataclasses = _referenced_model_keys(
+        module_root,
         parsed_modules,
         paths_by_module,
         boundary_functions,
         dataclass_models,
     )
     for path, tree in parsed_modules:
+        if not (
+            path in service_paths
+            or any(model_path == path for model_path, _ in inspected_pydantic_models)
+            or any(model_path == path for model_path, _ in request_dataclasses)
+            or any(function_path == path for function_path, _ in boundary_functions)
+        ):
+            continue
         visitor = _ServiceContractVisitor(
             path,
             pydantic_model_names=frozenset(
-                name for model_path, name in pydantic_models if model_path == path
+                name
+                for model_path, name in inspected_pydantic_models
+                if model_path == path
             ),
             dataclass_model_names=frozenset(
                 name for model_path, name in request_dataclasses if model_path == path
@@ -131,6 +169,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 node,
                 field_factory_names=self.field_factory_names,
                 exclude_private=node.name in self.pydantic_model_names,
+                include_unannotated_assignments=node.name in self.pydantic_model_names,
             ):
                 if _is_banned_wire_name(field_name):
                     self.violations.append(
@@ -172,8 +211,73 @@ def _skip_path(path: Path) -> bool:
     return any(part in {".venv", "__pycache__", ".pytest_cache", ".ruff_cache"} for part in path.parts)
 
 
+def _repository_root(service_root: Path) -> Path:
+    for candidate in (service_root, *service_root.parents):
+        if (candidate / ".git").exists():
+            return candidate
+        if candidate.name == "services":
+            return candidate.parent
+    return service_root.parent
+
+
+def _skip_repository_source_path(root: Path, path: Path) -> bool:
+    relative_parts = path.relative_to(root).parts
+    return any(
+        part in {
+            ".git",
+            ".venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            "private",
+            "tests",
+        }
+        or part.startswith(".")
+        for part in relative_parts
+    )
+
+
+def _parse_import_closure(
+    module_root: Path,
+    service_paths: frozenset[Path],
+    paths_by_module: dict[str, Path],
+) -> tuple[list[tuple[Path, ast.Module]], list[str]]:
+    parsed: dict[Path, ast.Module] = {}
+    violations: list[str] = []
+    pending = list(sorted(service_paths, reverse=True))
+    queued = set(pending)
+    source_paths = frozenset(paths_by_module.values())
+    while pending:
+        path = pending.pop()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            line_number = exc.lineno if isinstance(exc, SyntaxError) else 1
+            violations.append(f"{path}:{line_number or 1}: cannot parse service module")
+            continue
+        parsed[path] = tree
+        symbol_targets, module_targets = _import_targets(
+            module_root,
+            path,
+            tree,
+            paths_by_module,
+        )
+        imported_paths = {
+            target_path for target_path, _ in symbol_targets.values()
+        } | set(module_targets.values())
+        for imported_path in sorted(imported_paths, reverse=True):
+            if (
+                imported_path in source_paths
+                and imported_path not in parsed
+                and imported_path not in queued
+            ):
+                pending.append(imported_path)
+                queued.add(imported_path)
+    return sorted(parsed.items()), violations
+
+
 def _pydantic_symbol_aliases(tree: ast.Module, symbol: str) -> frozenset[str]:
-    aliases = {symbol}
+    aliases: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
@@ -185,6 +289,16 @@ def _pydantic_symbol_aliases(tree: ast.Module, symbol: str) -> frozenset[str]:
             if imported.name == symbol:
                 aliases.add(imported.asname or imported.name)
     return frozenset(aliases)
+
+
+def _pydantic_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name == "pydantic" or imported.name.startswith("pydantic.")
+    )
 
 
 def _paths_by_module(
@@ -244,6 +358,9 @@ def _pydantic_model_keys(
         path: _pydantic_symbol_aliases(tree, "BaseModel")
         for path, tree in parsed_modules
     }
+    module_aliases = {
+        path: _pydantic_module_aliases(tree) for path, tree in parsed_modules
+    }
 
     model_keys: set[tuple[Path, str]] = set()
     changed = True
@@ -255,7 +372,11 @@ def _pydantic_model_keys(
             path, _ = key
             is_model = False
             for base in node.bases:
-                if _name(base) in base_aliases[path]:
+                if _is_pydantic_base_reference(
+                    base,
+                    base_aliases[path],
+                    module_aliases[path],
+                ):
                     is_model = True
                     break
                 target = _resolve_reference_target(
@@ -272,6 +393,22 @@ def _pydantic_model_keys(
                 model_keys.add(key)
                 changed = True
     return frozenset(model_keys)
+
+
+def _is_pydantic_base_reference(
+    base: ast.expr,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(base, ast.Name):
+        return base.id in direct_aliases
+    parts = _qualified_name_parts(base)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "BaseModel"
+        and parts[0] in module_aliases
+    )
 
 
 def _dataclass_model_keys(
@@ -325,6 +462,7 @@ def _model_fields(
     *,
     field_factory_names: frozenset[str],
     exclude_private: bool,
+    include_unannotated_assignments: bool,
 ) -> list[tuple[str, int]]:
     fields: list[tuple[str, int]] = []
     for child in node.body:
@@ -341,7 +479,7 @@ def _model_fields(
                     field_factory_names=field_factory_names,
                 )
             )
-        elif isinstance(child, ast.Assign):
+        elif isinstance(child, ast.Assign) and include_unannotated_assignments:
             has_field_target = False
             for target in child.targets:
                 if isinstance(target, ast.Name) and not (
@@ -452,10 +590,13 @@ def _programmatic_route_handler_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
+    service_paths: frozenset[Path],
 ) -> frozenset[tuple[Path, str]]:
     functions = _function_definitions(parsed_modules)
     handlers: set[tuple[Path, str]] = set()
     for path, tree in parsed_modules:
+        if path not in service_paths:
+            continue
         for node in ast.walk(tree):
             if (
                 not isinstance(node, ast.Call)
@@ -487,7 +628,7 @@ def _function_definitions(
     return {
         (path, node.name): node
         for path, tree in parsed_modules
-        for node in tree.body
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
@@ -497,15 +638,18 @@ def _boundary_function_keys(
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
     programmatic_handlers: frozenset[tuple[Path, str]],
+    service_paths: frozenset[Path],
 ) -> frozenset[tuple[Path, str]]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     boundary: set[tuple[Path, str]] = set(programmatic_handlers)
     for key, node in functions.items():
-        if _is_route_handler(node, frozenset()):
+        if key[0] in service_paths and _is_route_handler(node, frozenset()):
             boundary.add(key)
 
     for path, tree in parsed_modules:
+        if path not in service_paths:
+            continue
         for call in (
             node
             for node in ast.walk(tree)
@@ -629,12 +773,12 @@ def _is_depends_call(
     )
 
 
-def _referenced_dataclass_model_keys(
+def _referenced_model_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
     boundary_functions: frozenset[tuple[Path, str]],
-    dataclass_models: frozenset[tuple[Path, str]],
+    model_keys: frozenset[tuple[Path, str]],
 ) -> frozenset[tuple[Path, str]]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
@@ -657,9 +801,46 @@ def _referenced_dataclass_model_keys(
                     candidate,
                     paths_by_module,
                 )
-                if target in dataclass_models:
+                if target in model_keys:
                     referenced.add(target)
-    return frozenset(referenced)
+    return _model_base_closure(
+        root,
+        parsed_modules,
+        paths_by_module,
+        frozenset(referenced),
+        model_keys,
+    )
+
+
+def _model_base_closure(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+    initial: frozenset[tuple[Path, str]],
+    model_keys: frozenset[tuple[Path, str]],
+) -> frozenset[tuple[Path, str]]:
+    classes = _class_definitions(parsed_modules)
+    trees_by_path = dict(parsed_modules)
+    closure = set(initial)
+    pending = list(initial)
+    while pending:
+        key = pending.pop()
+        model = classes.get(key)
+        if model is None:
+            continue
+        path, _ = key
+        for base in model.bases:
+            target = _resolve_reference_target(
+                root,
+                path,
+                trees_by_path[path],
+                base,
+                paths_by_module,
+            )
+            if target in model_keys and target not in closure:
+                closure.add(target)
+                pending.append(target)
+    return frozenset(closure)
 
 
 def _function_arguments(
@@ -898,7 +1079,7 @@ def _is_raw_request_mapping(
         return False
     if (
         isinstance(node.func, ast.Attribute)
-        and node.func.attr == "json"
+        and node.func.attr in {"json", "form"}
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id in request_aliases
     ):
