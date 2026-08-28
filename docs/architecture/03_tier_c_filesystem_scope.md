@@ -121,23 +121,23 @@ write_scope:
 
 | Field | Mechanically enforced? |
 |---|---|
-| `allowed_paths` | YES — by the archived v2 `docs/archive/legacy-multi-agent/version2/scripts/check_scope.py` stub |
-| `forbidden_paths` | YES — by the archived v2 `docs/archive/legacy-multi-agent/version2/scripts/check_scope.py` stub |
+| `allowed_paths` | NO — the archived v2 `check_scope.py` is a `NotImplementedError` stub |
+| `forbidden_paths` | NO — the archived v2 `check_scope.py` is a `NotImplementedError` stub |
 | `allowed_messages` | NO — prompt-level convention only |
 | `forbidden_actions` | NO — prompt-level convention only |
 | `message_prefix_required` | NO — prompt-level convention only |
 | `allowed_phase_actions` | NO — prompt-level convention only |
 
-The non-mechanically-enforced fields are still useful: they appear in
+These non-mechanically-enforced fields are still useful: they appear in
 the agent prompt and in the `_discussion/disagreement_log.md` audit
 trail, but stock `agent_sync` itself does not gate on them.
 
-## C3. Optional `check_scope.py` verifier
+## C3. Archived `check_scope.py` placeholder
 
 Stub in the
 [archived v2 scope checker](../archive/legacy-multi-agent/version2/scripts/check_scope.py).
 
-### Expectations
+### Intended expectations (not implemented)
 
 - Reads `topology/server_manifest.yaml` to learn each server's writer
   and allowed paths.

@@ -13,6 +13,12 @@ GENERIC_ROUTE_DECORATORS = {
     "websocket",
     "websocket_route",
 }
+PROGRAMMATIC_ROUTE_REGISTRARS = {
+    "add_api_route",
+    "add_api_websocket_route",
+    "add_route",
+    "add_websocket_route",
+}
 BANNED_WIRE_FIELD_NAMES = frozenset(
     {
         "passphrase",
@@ -30,6 +36,10 @@ BANNED_WIRE_FIELD_NAMES = frozenset(
         "plaintext_vault_key",
         "plaintext_vault_key_b64",
     }
+)
+_CANONICAL_BANNED_WIRE_FIELD_NAMES = frozenset(
+    "".join(character for character in name.casefold() if character.isalnum())
+    for name in BANNED_WIRE_FIELD_NAMES
 )
 
 
@@ -53,6 +63,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             path,
             model_names=model_names,
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
+            programmatic_route_handlers=_programmatic_route_handlers(tree),
         )
         visitor.visit(tree)
         violations.extend(visitor.violations)
@@ -66,10 +77,12 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         *,
         model_names: frozenset[str],
         field_factory_names: frozenset[str],
+        programmatic_route_handlers: frozenset[str],
     ) -> None:
         self.path = path
         self.model_names = model_names
         self.field_factory_names = field_factory_names
+        self.programmatic_route_handlers = programmatic_route_handlers
         self.violations: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -94,12 +107,12 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _visit_route_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        if not _is_route_handler(node):
+        if not _is_route_handler(node, self.programmatic_route_handlers):
             return
-        for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
-            if _is_banned_wire_name(arg.arg):
+        for wire_name, line_number in _route_parameter_wire_names(node):
+            if _is_banned_wire_name(wire_name):
                 self.violations.append(
-                    f"{self.path}:{arg.lineno}: route parameter {node.name}.{arg.arg} "
+                    f"{self.path}:{line_number}: route parameter {node.name}.{wire_name} "
                     "would accept raw vault secret material over the wire"
                 )
 
@@ -126,11 +139,12 @@ def _pydantic_symbol_aliases(tree: ast.Module, symbol: str) -> frozenset[str]:
 def _pydantic_model_names(
     parsed_modules: list[tuple[Path, ast.Module]],
 ) -> frozenset[str]:
-    classes: list[tuple[ast.ClassDef, frozenset[str]]] = []
+    classes: list[tuple[ast.ClassDef, frozenset[str], dict[str, str]]] = []
     for _, tree in parsed_modules:
         base_aliases = _pydantic_symbol_aliases(tree, "BaseModel")
+        imported_symbols = _imported_symbol_aliases(tree)
         classes.extend(
-            (node, base_aliases)
+            (node, base_aliases, imported_symbols)
             for node in ast.walk(tree)
             if isinstance(node, ast.ClassDef)
         )
@@ -139,16 +153,29 @@ def _pydantic_model_names(
     changed = True
     while changed:
         changed = False
-        for node, base_aliases in classes:
+        for node, base_aliases, imported_symbols in classes:
             if node.name in model_names:
                 continue
-            if any(
-                _name(base) in base_aliases or _name(base) in model_names
-                for base in node.bases
+            base_names = [_name(base) for base in node.bases]
+            if any(base_name in base_aliases for base_name in base_names) or any(
+                imported_symbols.get(base_name, base_name) in model_names
+                for base_name in base_names
+                if base_name is not None
             ):
                 model_names.add(node.name)
                 changed = True
     return frozenset(model_names)
+
+
+def _imported_symbol_aliases(tree: ast.Module) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for imported in node.names:
+            if imported.name != "*":
+                aliases[imported.asname or imported.name] = imported.name
+    return aliases
 
 
 def _model_fields(
@@ -202,7 +229,92 @@ def _pydantic_field_aliases(
     return aliases
 
 
-def _is_route_handler(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _route_parameter_wire_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, int]]:
+    positional = [*node.args.posonlyargs, *node.args.args]
+    positional_with_defaults = positional[-len(node.args.defaults) :] if node.args.defaults else []
+    defaults_by_argument = {
+        id(argument): default
+        for argument, default in zip(
+            positional_with_defaults,
+            node.args.defaults,
+            strict=True,
+        )
+    }
+    defaults_by_argument.update(
+        {
+            id(argument): default
+            for argument, default in zip(
+                node.args.kwonlyargs,
+                node.args.kw_defaults,
+                strict=True,
+            )
+            if default is not None
+        }
+    )
+
+    parameters = [*positional, *node.args.kwonlyargs]
+    if node.args.vararg is not None:
+        parameters.append(node.args.vararg)
+    if node.args.kwarg is not None:
+        parameters.append(node.args.kwarg)
+
+    wire_names: list[tuple[str, int]] = []
+    for argument in parameters:
+        wire_names.append((argument.arg, argument.lineno))
+        wire_names.extend(
+            _keyword_wire_aliases(
+                argument.annotation,
+                defaults_by_argument.get(id(argument)),
+            )
+        )
+    return wire_names
+
+
+def _keyword_wire_aliases(*nodes: ast.AST | None) -> list[tuple[str, int]]:
+    aliases: list[tuple[str, int]] = []
+    for root in nodes:
+        if root is None:
+            continue
+        for node in ast.walk(root):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg not in {"alias", "validation_alias"}:
+                    continue
+                aliases.extend(
+                    (value.value, value.lineno)
+                    for value in ast.walk(keyword.value)
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                )
+    return aliases
+
+
+def _programmatic_route_handlers(tree: ast.Module) -> frozenset[str]:
+    handlers: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Attribute)
+            or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
+        ):
+            continue
+        endpoint = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "endpoint"),
+            node.args[1] if len(node.args) > 1 else None,
+        )
+        if endpoint is not None and (handler_name := _name(endpoint)) is not None:
+            handlers.add(handler_name)
+    return frozenset(handlers)
+
+
+def _is_route_handler(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    programmatic_route_handlers: frozenset[str],
+) -> bool:
+    if node.name in programmatic_route_handlers:
+        return True
     for decorator in node.decorator_list:
         call = decorator if isinstance(decorator, ast.Call) else None
         func = call.func if call is not None else decorator
@@ -214,7 +326,8 @@ def _is_route_handler(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 def _is_banned_wire_name(name: str) -> bool:
-    return name.strip("_").casefold() in BANNED_WIRE_FIELD_NAMES
+    canonical_name = "".join(character for character in name.casefold() if character.isalnum())
+    return canonical_name in _CANONICAL_BANNED_WIRE_FIELD_NAMES
 
 
 def _name(node: ast.AST) -> str | None:
