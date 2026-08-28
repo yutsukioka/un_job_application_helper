@@ -1955,3 +1955,152 @@ def sync(request: SyncRequest) -> dict[str, bool]:
         "SyncRequest" in violation and "extra wire fields" in violation
         for violation in violations
     )
+
+
+def test_A4_guard_rejects_permissive_create_model_configuration(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "created_model_config.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from pydantic import ConfigDict, create_model
+
+app = FastAPI()
+
+ExtraRequest = create_model(
+    "ExtraRequest",
+    value=(str, ...),
+    __config__=ConfigDict(extra="allow"),
+)
+AliasRequest = create_model(
+    "AliasRequest",
+    value=(str, ...),
+    __config__=ConfigDict(alias_generator=lambda _: "vault_key"),
+)
+
+@app.post("/api/encrypted-sync/extra")
+def extra(request: ExtraRequest) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/alias")
+def alias(request: AliasRequest) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any(
+        "ExtraRequest" in violation and "extra wire fields" in violation
+        for violation in violations
+    )
+    assert any(
+        "AliasRequest" in violation and "alias generator" in violation
+        for violation in violations
+    )
+
+
+def test_A4_guard_resolves_callable_object_route_endpoints(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "callable_endpoint.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+
+app = FastAPI()
+
+class SyncEndpoint:
+    def __call__(self, vault_key: str) -> dict[str, bool]:
+        return {"ok": True}
+
+app.add_api_route("/api/encrypted-sync", SyncEndpoint(), methods=["POST"])
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("__call__.vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_untyped_explicit_request_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "untyped_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from typing import Any
+from fastapi import Body, FastAPI
+
+app = FastAPI()
+
+@app.post("/api/encrypted-sync/any")
+def any_body(payload: Any = Body()) -> dict[str, bool]:
+    return {"ok": True}
+
+@app.post("/api/encrypted-sync/object")
+def object_body(payload: object = Body()) -> dict[str, bool]:
+    return {"ok": True}
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("any_body.payload" in violation for violation in violations)
+    assert any("object_body.payload" in violation for violation in violations)
+
+
+def test_A4_guard_indexes_fastapi_route_constructors(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "fastapi_route_constructor.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI
+from fastapi.routing import APIRoute, APIWebSocketRoute
+
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": True}
+
+def socket(recovery_key: str) -> None:
+    return None
+
+app = FastAPI(
+    routes=[
+        APIRoute("/api/encrypted-sync", sync, methods=["POST"]),
+        APIWebSocketRoute("/api/encrypted-sync/socket", socket),
+    ]
+)
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("sync.vault_key" in violation for violation in violations)
+    assert any("socket.recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_inspects_http_middleware_request_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "http_middleware.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        """
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.middleware("http")
+async def inspect_body(request: Request, call_next):
+    payload = await request.json()
+    _ = payload["vault_key"]
+    return await call_next(request)
+""",
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("inspect_body['vault_key']" in violation for violation in violations)
