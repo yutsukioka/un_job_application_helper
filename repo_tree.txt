@@ -1,0 +1,1135 @@
+.
+├── .github
+│   ├── agents
+│   │   ├── ats-format-lead.agent.md
+│   │   ├── independent-panel-evaluator.agent.md
+│   │   ├── independent-shortlisting-redteam.agent.md
+│   │   ├── qa-auditor.agent.md
+│   │   ├── screening-lead.agent.md
+│   │   └── technical-lead.agent.md
+│   ├── hooks
+│   │   ├── block_questions.py
+│   │   ├── block_stop.py
+│   │   └── check_messages.py
+│   ├── workflows
+│   │   ├── atlasvault-cross-platform-security.yml
+│   │   ├── atlasvault-platform-integration.yml
+│   │   └── ci.yml
+│   └── copilot-instructions.md
+├── agents
+│   └── apex
+│       ├── prompts
+│       │   ├── v2
+│       │   │   ├── templates
+│       │   │   │   └── per_section_default_leads.md
+│       │   │   ├── C1-qa-auditor.writer.prompt.md
+│       │   │   ├── C2-qa-auditor.writer.prompt.md
+│       │   │   ├── D1-screening-lead.writer.prompt.md
+│       │   │   ├── D2-technical-lead.writer.prompt.md
+│       │   │   ├── D3-ats-format-lead.writer.prompt.md
+│       │   │   ├── E1-independent-panel-evaluator.writer.prompt.md
+│       │   │   ├── E2-independent-shortlisting-redteam.writer.prompt.md
+│       │   │   ├── P0a-screening-lead.writer.prompt.md
+│       │   │   ├── P0b-technical-lead.writer.prompt.md
+│       │   │   ├── R1-screening-lead.writer.prompt.md
+│       │   │   ├── R2-qa-auditor.writer.prompt.md
+│       │   │   ├── README.md
+│       │   │   ├── S1-screening-lead.writer.prompt.md
+│       │   │   ├── S2-technical-lead.writer.prompt.md
+│       │   │   ├── S3-ats-format-lead.writer.prompt.md
+│       │   │   ├── _advisor.template.prompt.md
+│       │   │   └── _canonical-tester.template.prompt.md
+│       │   ├── 00-update_application_context.md
+│       │   ├── 01-screening-lead.prompt.md
+│       │   ├── 02-technical-lead.prompt.md
+│       │   ├── 03-ats-format-lead.prompt.md
+│       │   ├── 04-qa-auditor.prompt.md
+│       │   ├── 05-independent-panel-evaluator.prompt.md
+│       │   ├── 06-independent-shortlisting-redteam.prompt.md
+│       │   └── apex-single.prompt.md
+│       ├── scripts
+│       │   ├── check_draft_diversity.py
+│       │   ├── launch_v2_servers.sh
+│       │   ├── prepare_d_writer_scaffold.py
+│       │   ├── prepare_independent_eval_input.py
+│       │   ├── start_agent_sync_server.py
+│       │   ├── validate_advisor_notes.py
+│       │   └── write_run_manifest.py
+│       ├── skills
+│       │   ├── agent-execution-tracer
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── agent-functionality-tester
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── agent-reasoning-auditor
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── agent-test-suite
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-agent-sync-protocol
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-application-audit
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-build-context-pack
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-bullet-enhancer
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-candidate-evidence-bank
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-ccog-resolver
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   ├── scripts
+│       │   │   │   ├── extract_ccog_pdf.py
+│       │   │   │   └── resolve_ccog.py
+│       │   │   └── SKILL.md
+│       │   ├── apex-coaching-reflection
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-cover-letter-pointers
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-cross-doc-consistency
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-admin-profile
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-admin-profile-dra-split
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-admin-profile-ra-split
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-competency-mapping
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-cover-letter
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-cv
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-motivation-statement
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-generate-qualification-answers
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-guardrails
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-headline-summary
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-impression-tips
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-jd-core-requirements
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-jd-keyword-bank
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-keyword-insertion-map
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-orchestrator-report
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-output-lint
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-progression-metric-ledger
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-star-story-blueprints
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-user-feedback-revision
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── apex-uvp-statement
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── capel-fit
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   ├── scripts
+│       │   │   │   ├── charcount.py
+│       │   │   │   ├── fit_entry.py
+│       │   │   │   └── normalize_text.py
+│       │   │   └── SKILL.md
+│       │   ├── deterministic-skill-router
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── evidence-ranking-engine
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── place-holder-checker
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── prompt-repair-engine
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── skill-confidence-scorer
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   ├── skill-failure-analyzer
+│       │   │   ├── agents
+│       │   │   │   └── openai.yaml
+│       │   │   └── SKILL.md
+│       │   └── term-extractor
+│       │       ├── agents
+│       │       │   └── openai.yaml
+│       │       └── SKILL.md
+│       ├── topology
+│       │   ├── runbook.md
+│       │   └── server_manifest.yaml
+│       ├── README.md
+│       ├── requirements.txt
+│       └── runtime_profiles.yaml
+├── apps
+│   ├── apple
+│   │   ├── AtlasIOSHost
+│   │   │   ├── AtlasIOSHost
+│   │   │   │   ├── Assets.xcassets
+│   │   │   │   │   ├── AccentColor.colorset
+│   │   │   │   │   │   └── Contents.json
+│   │   │   │   │   ├── AppIcon.appiconset
+│   │   │   │   │   │   └── Contents.json
+│   │   │   │   │   └── Contents.json
+│   │   │   │   ├── AtlasIOSHostApp.swift
+│   │   │   │   └── ContentView.swift
+│   │   │   ├── AtlasIOSHost.xcodeproj
+│   │   │   │   ├── project.xcworkspace
+│   │   │   │   │   └── contents.xcworkspacedata
+│   │   │   │   └── project.pbxproj
+│   │   │   └── Info.plist
+│   │   ├── Design
+│   │   │   └── AppIcon
+│   │   │       └── Atlas.icns
+│   │   ├── PreviewHost
+│   │   │   ├── Sources
+│   │   │   │   ├── AtlasIconExport
+│   │   │   │   │   └── AtlasIconExport.swift
+│   │   │   │   └── AtlasPreviewApp
+│   │   │   │       └── AtlasPreviewApp.swift
+│   │   │   └── Package.swift
+│   │   ├── Sources
+│   │   │   └── AtlasUI
+│   │   │       ├── ATSDetailFormatter.swift
+│   │   │       ├── ATSDetailSectionView.swift
+│   │   │       ├── AtlasAPIClient.swift
+│   │   │       ├── AtlasAppIcon.swift
+│   │   │       ├── AtlasComponents.swift
+│   │   │       ├── AtlasExplicitUnlockView.swift
+│   │   │       ├── AtlasExplicitUnlockViewState.swift
+│   │   │       ├── AtlasIOSAppEntryIntegrationPlan.swift
+│   │   │       ├── AtlasIOSAppProcessOwner.swift
+│   │   │       ├── AtlasIOSIntegratedAppRootView.swift
+│   │   │       ├── AtlasIOSLifecycleAggregation.swift
+│   │   │       ├── AtlasIOSProcessLifecycleEventSource.swift
+│   │   │       ├── AtlasKeychainDeviceIdentityStore.swift
+│   │   │       ├── AtlasKeychainVaultKeyStore.swift
+│   │   │       ├── AtlasLocalCache.swift
+│   │   │       ├── AtlasLocalVaultCreation.swift
+│   │   │       ├── AtlasLocalVaultCreationView.swift
+│   │   │       ├── AtlasLockedPublicShellModel.swift
+│   │   │       ├── AtlasLockedPublicShellView.swift
+│   │   │       ├── AtlasLockedShellUnlockFlowState.swift
+│   │   │       ├── AtlasLockedShellUnlockFlowView.swift
+│   │   │       ├── AtlasModels.swift
+│   │   │       ├── AtlasPublicJobAPIAdapter.swift
+│   │   │       ├── AtlasPublicSnapshotRestorer.swift
+│   │   │       ├── AtlasReferenceCaptureView.swift
+│   │   │       ├── AtlasSearchFilters.swift
+│   │   │       ├── AtlasTheme.swift
+│   │   │       ├── AtlasVaultActivationController.swift
+│   │   │       ├── AtlasVaultAtomicStoreWriter.swift
+│   │   │       ├── AtlasVaultDeviceIdentity.swift
+│   │   │       ├── AtlasVaultDirectoryPreparer.swift
+│   │   │       ├── AtlasVaultEncryptedExport.swift
+│   │   │       ├── AtlasVaultFileURLPolicy.swift
+│   │   │       ├── AtlasVaultKeyDelivery.swift
+│   │   │       ├── AtlasVaultKeyStore.swift
+│   │   │       ├── AtlasVaultLifecycleCoordinator.swift
+│   │   │       ├── AtlasVaultLocalStore.swift
+│   │   │       ├── AtlasVaultLocalStoreMerger.swift
+│   │   │       ├── AtlasVaultObservablePresentationAdapter.swift
+│   │   │       ├── AtlasVaultPairingFoundation.swift
+│   │   │       ├── AtlasVaultPairingTransaction.swift
+│   │   │       ├── AtlasVaultPairingView.swift
+│   │   │       ├── AtlasVaultPathLocator.swift
+│   │   │       ├── AtlasVaultPayloads.swift
+│   │   │       ├── AtlasVaultPersistenceCoordinator.swift
+│   │   │       ├── AtlasVaultPresentationAdapter.swift
+│   │   │       ├── AtlasVaultPrivateStateStore.swift
+│   │   │       ├── AtlasVaultProductionCompositionHarness.swift
+│   │   │       ├── AtlasVaultProductionHost.swift
+│   │   │       ├── AtlasVaultProductionHostContracts.swift
+│   │   │       ├── AtlasVaultProductionHostFactory.swift
+│   │   │       ├── AtlasVaultProductionPresentationOwner.swift
+│   │   │       ├── AtlasVaultProductionPresentationPipeline.swift
+│   │   │       ├── AtlasVaultProductionRootView.swift
+│   │   │       ├── AtlasVaultRecordCrypto.swift
+│   │   │       ├── AtlasVaultRecordHydrator.swift
+│   │   │       ├── AtlasVaultRecordSaver.swift
+│   │   │       ├── AtlasVaultRecoveryExport.swift
+│   │   │       ├── AtlasVaultRecoveryExportView.swift
+│   │   │       ├── AtlasVaultRecoveryImport.swift
+│   │   │       ├── AtlasVaultRecoveryImportView.swift
+│   │   │       ├── AtlasVaultRecoveryKey.swift
+│   │   │       ├── AtlasVaultRecoveryUnlockProvider.swift
+│   │   │       ├── AtlasVaultRootDirectoryProvider.swift
+│   │   │       ├── AtlasVaultRuntimeComposition.swift
+│   │   │       ├── AtlasVaultRuntimeFacade.swift
+│   │   │       ├── AtlasVaultSavedSearchFeature.swift
+│   │   │       ├── AtlasVaultSavedSearchView.swift
+│   │   │       ├── AtlasVaultSelectionRegistry.swift
+│   │   │       ├── AtlasVaultTrustedDeviceRegistry.swift
+│   │   │       ├── AtlasVaultUnlockCapability.swift
+│   │   │       ├── AtlasVaultUnlockPresentationController.swift
+│   │   │       ├── AtlasVaultUnlockRequestCoordinator.swift
+│   │   │       ├── AtlasVaultWrappedKeyModels.swift
+│   │   │       ├── JobDetailView.swift
+│   │   │       ├── JobResultRow.swift
+│   │   │       ├── SearchScreen.swift
+│   │   │       └── SearchViewModel.swift
+│   │   ├── Tests
+│   │   │   └── AtlasUITests
+│   │   │       ├── ATSDetailFormatterTests.swift
+│   │   │       ├── AtlasAPIClientTests.swift
+│   │   │       ├── AtlasExplicitUnlockViewTests.swift
+│   │   │       ├── AtlasIOSAppEntryIntegrationPlanTests.swift
+│   │   │       ├── AtlasIOSAppProcessOwnerTests.swift
+│   │   │       ├── AtlasIOSFlutterEncryptedInteroperabilityTests.swift
+│   │   │       ├── AtlasIOSHostAppIntegrationTests.swift
+│   │   │       ├── AtlasIOSIntegratedAppRootViewTests.swift
+│   │   │       ├── AtlasIOSLifecycleAggregationTests.swift
+│   │   │       ├── AtlasIOSLocalVaultCreationEndToEndTests.swift
+│   │   │       ├── AtlasIOSPrivateSavedSearchEndToEndTests.swift
+│   │   │       ├── AtlasIOSProcessLifecycleEventSourceTests.swift
+│   │   │       ├── AtlasIOSRecoveryExportEndToEndTests.swift
+│   │   │       ├── AtlasIOSRecoveryImportEndToEndTests.swift
+│   │   │       ├── AtlasKeychainVaultKeyStoreTests.swift
+│   │   │       ├── AtlasLocalVaultCreationTests.swift
+│   │   │       ├── AtlasLocalVaultCreationViewTests.swift
+│   │   │       ├── AtlasLockedPublicShellTests.swift
+│   │   │       ├── AtlasLockedShellUnlockFlowTests.swift
+│   │   │       ├── AtlasPublicLocalSnapshotTests.swift
+│   │   │       ├── AtlasVaultActivationControllerTests.swift
+│   │   │       ├── AtlasVaultAtomicStoreWriterTests.swift
+│   │   │       ├── AtlasVaultCompatibilityVectorTests.swift
+│   │   │       ├── AtlasVaultCrossPlatformTrustedPairingTests.swift
+│   │   │       ├── AtlasVaultCryptoVectorTests.swift
+│   │   │       ├── AtlasVaultDeviceIdentityTests.swift
+│   │   │       ├── AtlasVaultDirectoryPreparerTests.swift
+│   │   │       ├── AtlasVaultEncryptedExportTests.swift
+│   │   │       ├── AtlasVaultFilesystemPipelineTests.swift
+│   │   │       ├── AtlasVaultKeyDeliveryTests.swift
+│   │   │       ├── AtlasVaultKeyStoreTests.swift
+│   │   │       ├── AtlasVaultLifecycleCoordinatorTests.swift
+│   │   │       ├── AtlasVaultLocalStoreMergerTests.swift
+│   │   │       ├── AtlasVaultLocalStoreTests.swift
+│   │   │       ├── AtlasVaultObservablePresentationAdapterTests.swift
+│   │   │       ├── AtlasVaultPairingFoundationTests.swift
+│   │   │       ├── AtlasVaultPairingTransactionTests.swift
+│   │   │       ├── AtlasVaultPairingViewTests.swift
+│   │   │       ├── AtlasVaultPathLocatorTests.swift
+│   │   │       ├── AtlasVaultPayloadTests.swift
+│   │   │       ├── AtlasVaultPersistenceCoordinatorAtomicSaveTests.swift
+│   │   │       ├── AtlasVaultPersistenceCoordinatorSaveTests.swift
+│   │   │       ├── AtlasVaultPersistenceCoordinatorTests.swift
+│   │   │       ├── AtlasVaultPresentationAdapterTests.swift
+│   │   │       ├── AtlasVaultPrivateStateStoreTests.swift
+│   │   │       ├── AtlasVaultProductionAdaptersTests.swift
+│   │   │       ├── AtlasVaultProductionCompositionHarnessTests.swift
+│   │   │       ├── AtlasVaultProductionHostFactoryTests.swift
+│   │   │       ├── AtlasVaultProductionHostTests.swift
+│   │   │       ├── AtlasVaultProductionPresentationOwnerTests.swift
+│   │   │       ├── AtlasVaultProductionRootViewTests.swift
+│   │   │       ├── AtlasVaultRecordCryptoTests.swift
+│   │   │       ├── AtlasVaultRecordHydratorTests.swift
+│   │   │       ├── AtlasVaultRecordSaverTests.swift
+│   │   │       ├── AtlasVaultRecoveryExportTests.swift
+│   │   │       ├── AtlasVaultRecoveryExportViewTests.swift
+│   │   │       ├── AtlasVaultRecoveryImportTests.swift
+│   │   │       ├── AtlasVaultRecoveryImportViewTests.swift
+│   │   │       ├── AtlasVaultRecoveryKeyTests.swift
+│   │   │       ├── AtlasVaultRecoveryUnlockProviderTests.swift
+│   │   │       ├── AtlasVaultRootDirectoryProviderTests.swift
+│   │   │       ├── AtlasVaultRuntimeCompositionTests.swift
+│   │   │       ├── AtlasVaultRuntimeFacadeTests.swift
+│   │   │       ├── AtlasVaultRuntimeSaveFailureContainmentTests.swift
+│   │   │       ├── AtlasVaultSavedSearchFeatureTests.swift
+│   │   │       ├── AtlasVaultSavedSearchViewTests.swift
+│   │   │       ├── AtlasVaultTestFileSystemSupport.swift
+│   │   │       ├── AtlasVaultTestHost.swift
+│   │   │       ├── AtlasVaultTestHostIntegrationTests.swift
+│   │   │       ├── AtlasVaultTrustedDeviceRegistryTests.swift
+│   │   │       ├── AtlasVaultUnlockCapabilityTests.swift
+│   │   │       ├── AtlasVaultUnlockPresentationControllerTests.swift
+│   │   │       ├── AtlasVaultUnlockRequestCoordinatorTests.swift
+│   │   │       └── AtlasVaultWrappedKeyVectorTests.swift
+│   │   ├── .gitignore
+│   │   ├── Package.swift
+│   │   └── README.md
+│   └── atlas_flutter
+│       ├── android
+│       │   ├── app
+│       │   │   ├── src
+│       │   │   │   ├── debug
+│       │   │   │   │   ├── res
+│       │   │   │   │   │   └── xml
+│       │   │   │   │   │       └── network_security_config.xml
+│       │   │   │   │   └── AndroidManifest.xml
+│       │   │   │   ├── main
+│       │   │   │   │   ├── kotlin
+│       │   │   │   │   │   └── com
+│       │   │   │   │   │       └── yutsukioka
+│       │   │   │   │   │           └── jobagg
+│       │   │   │   │   │               └── atlas
+│       │   │   │   │   │                   ├── AtlasVaultAndroidStorage.kt
+│       │   │   │   │   │                   └── MainActivity.kt
+│       │   │   │   │   ├── res
+│       │   │   │   │   │   ├── drawable
+│       │   │   │   │   │   │   └── launch_background.xml
+│       │   │   │   │   │   ├── drawable-v21
+│       │   │   │   │   │   │   └── launch_background.xml
+│       │   │   │   │   │   ├── mipmap-hdpi
+│       │   │   │   │   │   ├── mipmap-mdpi
+│       │   │   │   │   │   ├── mipmap-xhdpi
+│       │   │   │   │   │   ├── mipmap-xxhdpi
+│       │   │   │   │   │   ├── mipmap-xxxhdpi
+│       │   │   │   │   │   ├── values
+│       │   │   │   │   │   │   └── styles.xml
+│       │   │   │   │   │   ├── values-night
+│       │   │   │   │   │   │   └── styles.xml
+│       │   │   │   │   │   └── xml
+│       │   │   │   │   │       └── network_security_config.xml
+│       │   │   │   │   └── AndroidManifest.xml
+│       │   │   │   └── profile
+│       │   │   │       ├── res
+│       │   │   │       │   └── xml
+│       │   │   │       │       └── network_security_config.xml
+│       │   │   │       └── AndroidManifest.xml
+│       │   │   └── build.gradle.kts
+│       │   ├── gradle
+│       │   │   └── wrapper
+│       │   │       └── gradle-wrapper.properties
+│       │   ├── .gitignore
+│       │   ├── build.gradle.kts
+│       │   ├── gradle.properties
+│       │   └── settings.gradle.kts
+│       ├── docs
+│       │   └── loop
+│       │       ├── screenshots
+│       │       │   ├── detail-formatter-20260703
+│       │       │   ├── filter-cache-icons-20260703
+│       │       │   ├── filter-cache-icons-emulator-20260703
+│       │       │   ├── filter-cache-icons-emulator-20260703-current
+│       │       │   ├── ios-android-filter-side-by-side-20260703
+│       │       │   ├── ios-android-primary-side-by-side-20260703
+│       │       │   ├── ios-reference
+│       │       │   │   ├── iteration-7
+│       │       │   │   └── iteration-8
+│       │       │   ├── ios-simulator-expanded-20260703
+│       │       │   ├── ios-simulator-filter-sections-20260703
+│       │       │   ├── ios-simulator-reference-20260703
+│       │       │   ├── iteration-2
+│       │       │   ├── iteration-5
+│       │       │   ├── iteration-6
+│       │       │   ├── iteration-7
+│       │       │   ├── iteration-8
+│       │       │   ├── physical-pixel-20260703
+│       │       │   ├── physical-pixel-20260704
+│       │       │   └── source-badge-parity-20260703
+│       │       ├── ANDROID_SEARCH_UI_AUDIT.md
+│       │       ├── COMPLETION_AUDIT.md
+│       │       ├── IOS_ANDROID_VISUAL_REVIEW.md
+│       │       ├── NEXT_SLICE.md
+│       │       ├── PARITY_MATRIX.md
+│       │       ├── PHYSICAL_PIXEL_VERIFICATION.md
+│       │       └── PR_COMMENT_LATEST.md
+│       ├── integration_test
+│       │   ├── app_smoke_test.dart
+│       │   ├── atlas_vault_android_device_identity_integration_test.dart
+│       │   ├── atlas_vault_android_interoperability_integration_test.dart
+│       │   ├── atlas_vault_android_interoperability_recovery_test.dart
+│       │   ├── atlas_vault_android_plaintext_migration_integration_test.dart
+│       │   ├── atlas_vault_android_plaintext_migration_recovery_test.dart
+│       │   ├── atlas_vault_android_private_state_integration_test.dart
+│       │   ├── atlas_vault_android_storage_integration_test.dart
+│       │   ├── atlas_vault_android_trusted_pairing_integration_test.dart
+│       │   ├── atlas_vault_windows_device_identity_integration_test.dart
+│       │   ├── atlas_vault_windows_interoperability_integration_test.dart
+│       │   ├── atlas_vault_windows_interoperability_recovery_test.dart
+│       │   ├── atlas_vault_windows_plaintext_migration_integration_test.dart
+│       │   ├── atlas_vault_windows_plaintext_migration_recovery_test.dart
+│       │   ├── atlas_vault_windows_private_state_integration_test.dart
+│       │   ├── atlas_vault_windows_storage_integration_test.dart
+│       │   └── atlas_vault_windows_trusted_pairing_integration_test.dart
+│       ├── ios
+│       │   ├── Flutter
+│       │   │   ├── AppFrameworkInfo.plist
+│       │   │   ├── Debug.xcconfig
+│       │   │   └── Release.xcconfig
+│       │   ├── Runner
+│       │   │   ├── Assets.xcassets
+│       │   │   │   ├── AppIcon.appiconset
+│       │   │   │   │   └── Contents.json
+│       │   │   │   └── LaunchImage.imageset
+│       │   │   │       ├── Contents.json
+│       │   │   │       └── README.md
+│       │   │   ├── Base.lproj
+│       │   │   │   ├── LaunchScreen.storyboard
+│       │   │   │   └── Main.storyboard
+│       │   │   ├── AppDelegate.swift
+│       │   │   ├── Info.plist
+│       │   │   ├── Runner-Bridging-Header.h
+│       │   │   └── SceneDelegate.swift
+│       │   ├── Runner.xcodeproj
+│       │   │   ├── project.xcworkspace
+│       │   │   │   ├── xcshareddata
+│       │   │   │   │   ├── IDEWorkspaceChecks.plist
+│       │   │   │   │   └── WorkspaceSettings.xcsettings
+│       │   │   │   └── contents.xcworkspacedata
+│       │   │   ├── xcshareddata
+│       │   │   │   └── xcschemes
+│       │   │   │       └── Runner.xcscheme
+│       │   │   └── project.pbxproj
+│       │   ├── Runner.xcworkspace
+│       │   │   ├── xcshareddata
+│       │   │   │   ├── IDEWorkspaceChecks.plist
+│       │   │   │   └── WorkspaceSettings.xcsettings
+│       │   │   └── contents.xcworkspacedata
+│       │   ├── RunnerTests
+│       │   │   └── RunnerTests.swift
+│       │   └── .gitignore
+│       ├── lib
+│       │   ├── features
+│       │   │   └── app_shell
+│       │   │       ├── atlas_app.dart
+│       │   │       └── atlas_cache_location.dart
+│       │   ├── src
+│       │   │   ├── atlas_vault
+│       │   │   │   ├── android_storage.dart
+│       │   │   │   ├── canonical_json.dart
+│       │   │   │   ├── crypto.dart
+│       │   │   │   ├── device_identity.dart
+│       │   │   │   ├── export.dart
+│       │   │   │   ├── interoperability.dart
+│       │   │   │   ├── interoperability_view.dart
+│       │   │   │   ├── key_delivery.dart
+│       │   │   │   ├── local_store_io.dart
+│       │   │   │   ├── models.dart
+│       │   │   │   ├── pairing.dart
+│       │   │   │   ├── pairing_transaction.dart
+│       │   │   │   ├── pairing_view.dart
+│       │   │   │   ├── payloads.dart
+│       │   │   │   ├── plaintext_migration.dart
+│       │   │   │   ├── plaintext_migration_view.dart
+│       │   │   │   ├── private_state_runtime.dart
+│       │   │   │   ├── recovery.dart
+│       │   │   │   ├── strict_values.dart
+│       │   │   │   ├── trusted_devices.dart
+│       │   │   │   └── windows_storage.dart
+│       │   │   └── cache_file_replacement.dart
+│       │   ├── atlas.dart
+│       │   ├── atlas_vault.dart
+│       │   ├── atlas_vault_android.dart
+│       │   ├── atlas_vault_windows.dart
+│       │   └── main.dart
+│       ├── macos
+│       │   ├── Flutter
+│       │   │   ├── Flutter-Debug.xcconfig
+│       │   │   ├── Flutter-Release.xcconfig
+│       │   │   └── GeneratedPluginRegistrant.swift
+│       │   ├── Runner
+│       │   │   ├── Assets.xcassets
+│       │   │   │   └── AppIcon.appiconset
+│       │   │   │       └── Contents.json
+│       │   │   ├── Base.lproj
+│       │   │   │   └── MainMenu.xib
+│       │   │   ├── Configs
+│       │   │   │   ├── AppInfo.xcconfig
+│       │   │   │   ├── Debug.xcconfig
+│       │   │   │   ├── Release.xcconfig
+│       │   │   │   └── Warnings.xcconfig
+│       │   │   ├── AppDelegate.swift
+│       │   │   ├── DebugProfile.entitlements
+│       │   │   ├── Info.plist
+│       │   │   ├── MainFlutterWindow.swift
+│       │   │   └── Release.entitlements
+│       │   ├── Runner.xcodeproj
+│       │   │   ├── project.xcworkspace
+│       │   │   │   └── xcshareddata
+│       │   │   │       └── IDEWorkspaceChecks.plist
+│       │   │   ├── xcshareddata
+│       │   │   │   └── xcschemes
+│       │   │   │       └── Runner.xcscheme
+│       │   │   └── project.pbxproj
+│       │   ├── Runner.xcworkspace
+│       │   │   ├── xcshareddata
+│       │   │   │   └── IDEWorkspaceChecks.plist
+│       │   │   └── contents.xcworkspacedata
+│       │   ├── RunnerTests
+│       │   │   └── RunnerTests.swift
+│       │   └── .gitignore
+│       ├── test
+│       │   ├── goldens
+│       │   │   └── android
+│       │   ├── support
+│       │   │   ├── atlas_vault_android_fakes.dart
+│       │   │   ├── atlas_vault_pairing_fakes.dart
+│       │   │   ├── atlas_vault_vector_loader.dart
+│       │   │   └── atlas_vault_windows_fakes.dart
+│       │   ├── android_launcher_icon_test.dart
+│       │   ├── android_network_config_test.dart
+│       │   ├── atlas_api_client_test.dart
+│       │   ├── atlas_cache_location_test.dart
+│       │   ├── atlas_detail_formatter_test.dart
+│       │   ├── atlas_domain_coverage_test.dart
+│       │   ├── atlas_filters_test.dart
+│       │   ├── atlas_local_cache_test.dart
+│       │   ├── atlas_search_controller_test.dart
+│       │   ├── atlas_settings_panel_test.dart
+│       │   ├── atlas_vault_android_public_api_test.dart
+│       │   ├── atlas_vault_android_storage_test.dart
+│       │   ├── atlas_vault_crypto_vectors_test.dart
+│       │   ├── atlas_vault_device_identity_test.dart
+│       │   ├── atlas_vault_interoperability_test.dart
+│       │   ├── atlas_vault_interoperability_view_test.dart
+│       │   ├── atlas_vault_key_delivery_test.dart
+│       │   ├── atlas_vault_key_wrap_vectors_test.dart
+│       │   ├── atlas_vault_local_store_io_test.dart
+│       │   ├── atlas_vault_local_store_test.dart
+│       │   ├── atlas_vault_pairing_test.dart
+│       │   ├── atlas_vault_pairing_transaction_test.dart
+│       │   ├── atlas_vault_pairing_view_test.dart
+│       │   ├── atlas_vault_payload_vectors_test.dart
+│       │   ├── atlas_vault_plaintext_migration_test.dart
+│       │   ├── atlas_vault_plaintext_migration_view_test.dart
+│       │   ├── atlas_vault_private_state_runtime_test.dart
+│       │   ├── atlas_vault_public_api_test.dart
+│       │   ├── atlas_vault_recovery_export_vectors_test.dart
+│       │   ├── atlas_vault_strict_validation_test.dart
+│       │   ├── atlas_vault_trusted_devices_test.dart
+│       │   ├── atlas_vault_windows_interoperability_test.dart
+│       │   ├── atlas_vault_windows_local_store_test.dart
+│       │   ├── atlas_vault_windows_private_state_runtime_test.dart
+│       │   ├── atlas_vault_windows_public_api_test.dart
+│       │   ├── atlas_vault_windows_runner_source_test.dart
+│       │   ├── atlas_vault_windows_storage_test.dart
+│       │   ├── search_golden_test.dart
+│       │   ├── tab_golden_test.dart
+│       │   └── widget_test.dart
+│       ├── web
+│       │   ├── icons
+│       │   ├── index.html
+│       │   └── manifest.json
+│       ├── windows
+│       │   ├── flutter
+│       │   │   ├── CMakeLists.txt
+│       │   │   ├── generated_plugin_registrant.cc
+│       │   │   ├── generated_plugin_registrant.h
+│       │   │   └── generated_plugins.cmake
+│       │   ├── runner
+│       │   │   ├── resources
+│       │   │   │   └── app_icon.ico
+│       │   │   ├── CMakeLists.txt
+│       │   │   ├── Runner.rc
+│       │   │   ├── atlas_vault_windows_storage.cpp
+│       │   │   ├── atlas_vault_windows_storage.h
+│       │   │   ├── flutter_window.cpp
+│       │   │   ├── flutter_window.h
+│       │   │   ├── main.cpp
+│       │   │   ├── resource.h
+│       │   │   ├── runner.exe.manifest
+│       │   │   ├── utils.cpp
+│       │   │   ├── utils.h
+│       │   │   ├── win32_window.cpp
+│       │   │   └── win32_window.h
+│       │   ├── .gitignore
+│       │   └── CMakeLists.txt
+│       ├── .gitignore
+│       ├── .metadata
+│       ├── PR_REPORT.md
+│       ├── README.md
+│       ├── analysis_options.yaml
+│       ├── pubspec.lock
+│       └── pubspec.yaml
+├── contracts
+│   ├── agents
+│   │   └── runtime_config.schema.json
+│   ├── api
+│   │   ├── README.md
+│   │   └── encrypted_sync.md
+│   ├── sync
+│   │   ├── test_vectors
+│   │   │   ├── README.md
+│   │   │   ├── atlasvault_crypto_vectors_v1.json
+│   │   │   ├── atlasvault_device_identity_pairing_vectors_v1.json
+│   │   │   ├── atlasvault_ios_flutter_interop_vectors_v1.json
+│   │   │   ├── atlasvault_key_wrap_vectors_v1.json
+│   │   │   ├── atlasvault_payload_vectors_v1.json
+│   │   │   ├── atlasvault_recovery_export_vectors_v2.json
+│   │   │   ├── atlasvault_trusted_pairing_delivery_vectors_v1.json
+│   │   │   └── atlasvault_windows_interop_vectors_v1.json
+│   │   ├── device_identity.md
+│   │   ├── encrypted_vault.md
+│   │   ├── pairing_transcript.md
+│   │   ├── pairing_transport.md
+│   │   ├── trusted_device_registry.md
+│   │   └── vault_key_delivery.md
+│   └── metric_ledger_contract.md
+├── docs
+│   ├── architecture
+│   │   ├── 00_consolidated_plan.md
+│   │   ├── 01_tier_a_ensemble_workflow.md
+│   │   ├── 02_tier_b_personas.md
+│   │   ├── 03_tier_c_filesystem_scope.md
+│   │   ├── 04_tier_d_runtime_gates.md
+│   │   ├── 05_tier_e_integrity_guardians.md
+│   │   ├── 06_tier_f_self_improvement.md
+│   │   ├── 07_tier_g_safety_budgets.md
+│   │   ├── 99_rollout_and_parked.md
+│   │   ├── atlas_storage_retention_policy.md
+│   │   ├── atlasvault_cross_platform_security_ci.md
+│   │   ├── atlasvault_runtime_save_failure_containment.md
+│   │   ├── atomic_private_state_compare_delete.md
+│   │   ├── encrypted_multi_device_sync.md
+│   │   ├── phase2_local_encrypted_vault_integration.md
+│   │   ├── phase2c_apple_vault_model_mapping.md
+│   │   ├── phase2d10_vault_path_selection_design.md
+│   │   ├── phase2d11_vault_path_locator.md
+│   │   ├── phase2d12_directory_creation_policy.md
+│   │   ├── phase2d13_directory_preparer.md
+│   │   ├── phase2d14_filesystem_pipeline_tests.md
+│   │   ├── phase2d15_vault_session_filesystem_pipeline_design.md
+│   │   ├── phase2d16_persistence_coordinator_mocks.md
+│   │   ├── phase2d17_record_hydration_design.md
+│   │   ├── phase2d18_record_hydrator_vectors.md
+│   │   ├── phase2d19_save_after_hydration_design.md
+│   │   ├── phase2d20_record_saver_vectors.md
+│   │   ├── phase2d21_persistence_coordinator_save_design.md
+│   │   ├── phase2d22_local_store_merger.md
+│   │   ├── phase2d23_atomic_local_store_writer_design.md
+│   │   ├── phase2d24_atomic_store_writer.md
+│   │   ├── phase2d25_atomic_coordinator_save.md
+│   │   ├── phase2d26_application_support_root_provider_design.md
+│   │   ├── phase2d27_application_support_root_provider.md
+│   │   ├── phase2d28_runtime_composition_root_design.md
+│   │   ├── phase2d29_runtime_composition_factory.md
+│   │   ├── phase2d30_runtime_activation_lifecycle_design.md
+│   │   ├── phase2d31_runtime_activation_controller.md
+│   │   ├── phase2d32_private_state_store_design.md
+│   │   ├── phase2d33_private_state_store.md
+│   │   ├── phase2d34_runtime_facade_design.md
+│   │   ├── phase2d35_runtime_facade.md
+│   │   ├── phase2d36_application_lifecycle_design.md
+│   │   ├── phase2d37_lifecycle_coordinator.md
+│   │   ├── phase2d38_swiftui_presentation_boundary_design.md
+│   │   ├── phase2d39_presentation_adapter_design.md
+│   │   ├── phase2d3_swift_cryptokit_feasibility.md
+│   │   ├── phase2d40_presentation_adapter.md
+│   │   ├── phase2d41_unlock_input_handling_design.md
+│   │   ├── phase2d42_unlock_request_coordinator.md
+│   │   ├── phase2d43_swiftui_integration_readiness.md
+│   │   ├── phase2d44_observable_presentation_adapter.md
+│   │   ├── phase2d45_app_host_composition_design.md
+│   │   ├── phase2d46_test_host_integration.md
+│   │   ├── phase2d47_public_locked_shell.md
+│   │   ├── phase2d48_explicit_unlock_ui_design.md
+│   │   ├── phase2d49_unlock_capability_vectors.md
+│   │   ├── phase2d4_bidirectional_crypto_vectors.md
+│   │   ├── phase2d50_unlock_presentation_controller.md
+│   │   ├── phase2d51_explicit_unlock_panel.md
+│   │   ├── phase2d52_locked_shell_unlock_flow.md
+│   │   ├── phase2d53_production_app_host_composition_design.md
+│   │   ├── phase2d54_runtime_neutral_production_host_contract.md
+│   │   ├── phase2d55_concrete_public_adapters_and_vault_selection.md
+│   │   ├── phase2d56_runtime_neutral_production_host.md
+│   │   ├── phase2d57_mainactor_owner_and_composition_harness.md
+│   │   ├── phase2d58_ios_lifecycle_and_entry_integration.md
+│   │   ├── phase2d59_ios_app_entry_integration.md
+│   │   ├── phase2d5_swift_record_crypto_helpers.md
+│   │   ├── phase2d60_local_vault_creation_and_selection.md
+│   │   ├── phase2d61_recovery_wrap_and_encrypted_export.md
+│   │   ├── phase2d62_encrypted_import_and_recovery_unlock.md
+│   │   ├── phase2d63_private_saved_search_journey.md
+│   │   ├── phase2d64_saved_search_execution_and_edit.md
+│   │   ├── phase2d6_keychain_vault_unlock_design.md
+│   │   ├── phase2d7_keychain_abstraction_mocks.md
+│   │   ├── phase2d8_keychain_secitem_adapter.md
+│   │   ├── phase2d9_swift_local_vault_store_helpers.md
+│   │   ├── phase2e1_dart_atlasvault_compatibility_foundation.md
+│   │   ├── phase2e2_android_secure_key_and_encrypted_store.md
+│   │   ├── phase2e3_flutter_plaintext_private_state_migration.md
+│   │   ├── phase2e4_ios_flutter_encrypted_interoperability.md
+│   │   ├── phase2e5_windows_secure_key_and_encrypted_store.md
+│   │   ├── phase2e6_windows_plaintext_private_state_migration.md
+│   │   ├── phase2e7_windows_encrypted_interoperability.md
+│   │   ├── phase2f1_device_identity_and_pairing_foundation.md
+│   │   ├── phase2f2_trusted_device_pairing_and_key_delivery.md
+│   │   └── secure_local_api_launch.md
+│   ├── archive
+│   │   ├── legacy-multi-agent
+│   │   │   ├── version1
+│   │   │   │   ├── canonical
+│   │   │   │   │   └── multi-agent-v1-spec.md
+│   │   │   │   ├── runbooks
+│   │   │   │   │   ├── document-fold.md
+│   │   │   │   │   ├── launch-order.md
+│   │   │   │   │   └── strategy-fold.md
+│   │   │   │   ├── specs
+│   │   │   │   │   ├── advisor-export-contract.md
+│   │   │   │   │   ├── deferred-items.md
+│   │   │   │   │   ├── phase-rules.md
+│   │   │   │   │   ├── run-mode-and-budgets.md
+│   │   │   │   │   └── server-topology.md
+│   │   │   │   ├── templates
+│   │   │   │   │   ├── advisor-notes.template.md
+│   │   │   │   │   ├── qa-round-summary.template.md
+│   │   │   │   │   └── server-manifest.template.yaml
+│   │   │   │   ├── validators
+│   │   │   │   │   └── README.md
+│   │   │   │   └── README.md
+│   │   │   └── version2
+│   │   │       ├── scripts
+│   │   │       │   └── check_scope.py
+│   │   │       ├── spec
+│   │   │       │   ├── 00_consolidated_plan.md
+│   │   │       │   ├── 01_tier_a_ensemble_workflow.md
+│   │   │       │   ├── 02_tier_b_personas.md
+│   │   │       │   ├── 03_tier_c_filesystem_scope.md
+│   │   │       │   ├── 04_tier_d_runtime_gates.md
+│   │   │       │   ├── 05_tier_e_integrity_guardians.md
+│   │   │       │   ├── 06_tier_f_self_improvement.md
+│   │   │       │   ├── 07_tier_g_safety_budgets.md
+│   │   │       │   └── 99_rollout_and_parked.md
+│   │   │       ├── templates
+│   │   │       │   ├── agent_overlays
+│   │   │       │   │   ├── ats-format-lead.overlay.md
+│   │   │       │   │   ├── qa-auditor.overlay.md
+│   │   │       │   │   ├── screening-lead.overlay.md
+│   │   │       │   │   └── technical-lead.overlay.md
+│   │   │       │   ├── application_context.fragments.md
+│   │   │       │   └── per_section_default_leads.md
+│   │   │       ├── topology
+│   │   │       │   ├── runbook.md
+│   │   │       │   └── server_manifest.yaml
+│   │   │       ├── CHANGELOG.md
+│   │   │       └── README.md
+│   │   └── root-notes
+│   │       ├── README_revised_2026-05-06.md
+│   │       └── change_log.md
+│   ├── security
+│   │   ├── atlasvault_multi_device_threat_model.md
+│   │   └── local_api_private_endpoint_security.md
+│   ├── repo-structure.md
+│   └── windows_parallels_flutter_environment_audit.md
+├── packages
+│   ├── jobagg
+│   │   ├── config
+│   │   │   ├── taxonomies
+│   │   │   │   ├── capability_tags.yaml
+│   │   │   │   ├── ccog_large_medium.yaml
+│   │   │   │   ├── contract_groups.yaml
+│   │   │   │   ├── location_regions.yaml
+│   │   │   │   ├── mandate_crosswalk.yaml
+│   │   │   │   ├── organization_aliases.yaml
+│   │   │   │   ├── seniority_groups.yaml
+│   │   │   │   ├── source_native_to_mandate.yaml
+│   │   │   │   └── un_job_networks.yaml
+│   │   │   ├── organizations.yaml
+│   │   │   └── robots_policy.yaml
+│   │   ├── docs
+│   │   │   ├── ats_detail_display_examples
+│   │   │   │   ├── README.md
+│   │   │   │   ├── avature.md
+│   │   │   │   ├── csod.md
+│   │   │   │   ├── custom_html.md
+│   │   │   │   ├── eu_careers_static.md
+│   │   │   │   ├── icddrb_custom_html.md
+│   │   │   │   ├── imo_api.md
+│   │   │   │   ├── inspira.md
+│   │   │   │   ├── itlos_static_html.md
+│   │   │   │   ├── opcw_talentsoft_candidatespace.md
+│   │   │   │   ├── oracle_hcm.md
+│   │   │   │   ├── osce_custom_html.md
+│   │   │   │   ├── pageup.md
+│   │   │   │   ├── peoplesoft.md
+│   │   │   │   ├── smartrecruiters.md
+│   │   │   │   ├── successfactors_legacy.md
+│   │   │   │   ├── successfactors_rmk.md
+│   │   │   │   ├── taleo.md
+│   │   │   │   ├── unssc_drupal_custom.md
+│   │   │   │   ├── unu_recruitee.md
+│   │   │   │   ├── unv.md
+│   │   │   │   └── workday.md
+│   │   │   ├── ats_detail_display_real_examples
+│   │   │   │   ├── README.md
+│   │   │   │   ├── avature.md
+│   │   │   │   ├── csod.md
+│   │   │   │   ├── custom_html.md
+│   │   │   │   ├── eu_careers_static.md
+│   │   │   │   ├── icddrb_custom_html.md
+│   │   │   │   ├── imo_api.md
+│   │   │   │   ├── inspira.md
+│   │   │   │   ├── oracle_hcm.md
+│   │   │   │   ├── osce_custom_html.md
+│   │   │   │   ├── pageup.md
+│   │   │   │   ├── smartrecruiters.md
+│   │   │   │   ├── successfactors_legacy.md
+│   │   │   │   ├── successfactors_rmk.md
+│   │   │   │   ├── taleo.md
+│   │   │   │   ├── unu_recruitee.md
+│   │   │   │   ├── unv.md
+│   │   │   │   └── workday.md
+│   │   │   ├── atlas_design_system.md
+│   │   │   ├── ats_detail_display_research.md
+│   │   │   ├── current_sources_and_database_schema.md
+│   │   │   ├── fetching_list_and_detail_mechanism.md
+│   │   │   ├── filter_usage.md
+│   │   │   ├── ios_macos_search_app_spec.md
+│   │   │   └── search_taxonomy.md
+│   │   ├── jobagg
+│   │   │   ├── adapters
+│   │   │   │   ├── avature.py
+│   │   │   │   ├── base.py
+│   │   │   │   ├── csod.py
+│   │   │   │   ├── custom_html.py
+│   │   │   │   ├── icddrb.py
+│   │   │   │   ├── icims.py
+│   │   │   │   ├── imo.py
+│   │   │   │   ├── inspira.py
+│   │   │   │   ├── oracle_hcm.py
+│   │   │   │   ├── pageup.py
+│   │   │   │   ├── peoplesoft.py
+│   │   │   │   ├── playwright_discovery.py
+│   │   │   │   ├── smartrecruiters.py
+│   │   │   │   ├── static_html.py
+│   │   │   │   ├── successfactors_rmk.py
+│   │   │   │   ├── taleo.py
+│   │   │   │   ├── unv.py
+│   │   │   │   ├── usajobs.py
+│   │   │   │   ├── workable.py
+│   │   │   │   └── workday.py
+│   │   │   ├── classification
+│   │   │   │   ├── classifiers
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   ├── ccog.py
+│   │   │   │   │   ├── contract.py
+│   │   │   │   │   ├── grade.py
+│   │   │   │   │   ├── location.py
+│   │   │   │   │   ├── modality.py
+│   │   │   │   │   ├── national_scope.py
+│   │   │   │   │   └── unv.py
+│   │   │   │   ├── extractors
+│   │   │   │   │   ├── __init__.py
+│   │   │   │   │   └── base.py
+│   │   │   │   ├── rules
+│   │   │   │   │   ├── taxonomies
+│   │   │   │   │   │   ├── capability_tags.yaml
+│   │   │   │   │   │   ├── ccog_large_medium.yaml
+│   │   │   │   │   │   ├── contract_groups.yaml
+│   │   │   │   │   │   ├── location_regions.yaml
+│   │   │   │   │   │   ├── mandate_crosswalk.yaml
+│   │   │   │   │   │   ├── organization_aliases.yaml
+│   │   │   │   │   │   ├── seniority_groups.yaml
+│   │   │   │   │   │   ├── source_native_to_mandate.yaml
+│   │   │   │   │   │   └── un_job_networks.yaml
+│   │   │   │   │   ├── adb_grade.csv
+│   │   │   │   │   ├── adb_grade.json
+│   │   │   │   │   ├── ccog_aliases.yaml
+│   │   │   │   │   ├── ccog_codes.yaml
+│   │   │   │   │   ├── ccog_reference.yaml
+│   │   │   │   │   ├── ccog_source_mappings.yaml
+│   │   │   │   │   ├── contract_rules.yaml
+│   │   │   │   │   ├── country_regions.yaml
+│   │   │   │   │   ├── grade_mapping_table.csv
+│   │   │   │   │   ├── grade_mapping_table.json
+│   │   │   │   │   ├── grade_rules.yaml
+│   │   │   │   │   └── unv_category_rules.yaml
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── audit.py
+│   │   │   │   ├── grade_mapping.py
+│   │   │   │   ├── locations.py
+│   │   │   │   ├── models.py
+│   │   │   │   ├── pipeline.py
+│   │   │   │   ├── rules.py
+│   │   │   │   └── taxonomy.py
+│   │   │   ├── filters
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── explain.py
+│   │   │   │   ├── facets.py
+│   │   │   │   ├── normalization.py
+│   │   │   │   ├── query.py
+│   │   │   │   ├── saved_searches.py
+│   │   │   │   └── schemas.py
+│   │   │   ├── observability
+│   │   │   │   ├── logging.py
+│   │   │   │   └── metrics.py
+│   │   │   ├── pipelines
+│   │   │   │   ├── bundles.py
+│   │   │   │   ├── change_detection.py
+│   │   │   │   ├── consolidation.py
+│   │   │   │   ├── exports.py
+│   │   │   │   └── sync_source.py
+│   │   │   ├── __init__.py
+│   │   │   ├── atomic_json_store.py
+│   │   │   ├── convert_pdf_to_markdown_markitdown.py
+│   │   │   ├── db.py
+│   │   │   ├── detail_quality.py
+│   │   │   ├── hashing.py
+│   │   │   ├── http.py
+│   │   │   ├── models.py
+│   │   │   ├── normalize.py
+│   │   │   ├── ops_check.py
+│   │   │   ├── robots.py
+│   │   │   ├── scheduler.py
+│   │   │   ├── scoring.py
+│   │   │   └── utils.py
+│   │   ├── scripts
+│   │   │   └── build_ccog_reference.py
+│   │   ├── tests
+│   │   │   ├── fixtures
+│   │   │   │   ├── ipu
+│   │   │   │   │   ├── current_empty_2026_05.html
+│   │   │   │   │   └── synthetic_one_vacancy.html
+│   │   │   │   └── oracle
+│   │   │   │       ├── cx1_undp_hosted_agencies_detail.json
+│   │   │   │       ├── cx1_undp_hosted_agencies_list.json
+│   │   │   │       └── cx2003_unfpa_list.json
+│   │   │   ├── test_additional_adapters.py
+│   │   │   ├── test_atomic_saved_search_store.py
+│   │   │   ├── test_browser_cookie_assist.py
+│   │   │   ├── test_build_ccog_reference.py
+│   │   │   ├── test_bundles.py
+│   │   │   ├── test_change_detection.py
+│   │   │   ├── test_classification.py
+│   │   │   ├── test_config_consistency.py
+│   │   │   ├── test_db.py
+│   │   │   ├── test_detail_quality.py
+│   │   │   ├── test_http.py
+│   │   │   ├── test_inspira.py
+│   │   │   ├── test_ops_check.py
+│   │   │   ├── test_p1_improvements.py
+│   │   │   ├── test_pageup.py
+│   │   │   ├── test_search.py
+│   │   │   ├── test_sync_source.py
+│   │   │   ├── test_taleo.py
+│   │   │   └── test_workday.py
+│   │   ├── .gitignore
+│   │   ├── README.md
+│   │   └── pyproject.toml
+│   └── vaultsync
+│       ├── tests
+│       │   ├── test_crypto_vectors.py
+│       │   ├── test_device_identity_vectors.py
+│       │   ├── test_key_delivery_vectors.py
+│       │   ├── test_key_wrap_vectors.py
+│       │   ├── test_pairing_artifact_vectors.py
+│       │   ├── test_pairing_vectors.py
+│       │   ├── test_payload_vectors.py
+│       │   ├── test_recovery_export_vectors.py
+│       │   ├── test_trusted_device_vectors.py
+│       │   ├── test_vault_crypto.py
+│       │   ├── test_vault_export.py
+│       │   ├── test_vault_format.py
+│       │   ├── test_vault_migration.py
+│       │   └── test_vault_store.py
+│       ├── vaultsync
+│       │   ├── __init__.py
+│       │   ├── crypto.py
+│       │   ├── device_identity.py
+│       │   ├── export.py
+│       │   ├── format.py
+│       │   ├── key_delivery.py
+│       │   ├── migration.py
+│       │   ├── pairing.py
+│       │   ├── pairing_artifacts.py
+│       │   ├── records.py
+│       │   ├── store.py
+│       │   └── trusted_devices.py
+│       └── pyproject.toml
+├── scripts
+│   └── ci
+│       ├── atlasvault_flutter.sh
+│       ├── atlasvault_python.sh
+│       ├── atlasvault_swift.sh
+│       └── atlasvault_windows.ps1
+├── services
+│   └── job-api
+│       ├── job_api
+│       │   ├── __init__.py
+│       │   ├── app.py
+│       │   ├── auth.py
+│       │   ├── config.py
+│       │   ├── launcher.py
+│       │   ├── models.py
+│       │   ├── private_access.py
+│       │   └── tracker.py
+│       ├── README.md
+│       └── pyproject.toml
+├── templates
+│   ├── AGENTS.template.md
+│   └── application_context.template.md
+├── tests
+│   ├── test_apex_v2_scripts.py
+│   ├── test_job_api_contract.py
+│   ├── test_job_api_private_access.py
+│   └── test_repo_hygiene.py
+├── .gitignore
+├── AGENTS.md
+├── LICENSE
+├── README.md
+└── repo_tree.txt
+
+269 directories, 864 files
