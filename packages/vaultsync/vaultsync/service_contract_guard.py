@@ -88,6 +88,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    websocket_type_names = _websocket_type_names_by_path(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
 
     pydantic_class_models = _pydantic_model_keys(
         module_root,
@@ -131,7 +136,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         service_paths,
         route_owner_names,
     )
-    programmatic_handlers = _programmatic_route_handler_keys(
+    programmatic_handlers, programmatic_lambdas = _programmatic_route_handler_keys(
         module_root,
         parsed_modules,
         paths_by_module,
@@ -139,6 +144,22 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         route_owner_names,
         mounted_route_owners,
     )
+    for path, handler in programmatic_lambdas:
+        depends_aliases, depends_module_aliases = _depends_aliases(
+            dict(parsed_modules)[path]
+        )
+        for wire_name, line_number in _route_parameter_wire_names(
+            handler,
+            depends_aliases=frozenset(depends_aliases),
+            depends_module_aliases=frozenset(depends_module_aliases),
+            wire_alias_constants=wire_alias_constants[path],
+        ):
+            if _is_banned_wire_name(wire_name):
+                violations.append(
+                    f"{path}:{line_number}: route parameter "
+                    f"lambda.{wire_name} would accept raw vault secret "
+                    "material over the wire"
+                )
     boundary_functions = _boundary_function_keys(
         module_root,
         parsed_modules,
@@ -279,7 +300,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             wire_alias_constants=wire_alias_constants[path],
             request_type_names=request_type_names[path],
             request_module_names=_request_module_aliases(tree),
-            websocket_type_names=_websocket_type_aliases(tree),
+            websocket_type_names=websocket_type_names[path],
             websocket_module_names=_websocket_module_aliases(tree),
             json_loads_names=_json_loads_aliases(tree),
             json_module_names=_json_module_aliases(tree),
@@ -2461,7 +2482,7 @@ def _is_pydantic_field_call(
 
 
 def _route_parameter_wire_names(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
     *,
     depends_aliases: frozenset[str],
     depends_module_aliases: frozenset[str],
@@ -2586,7 +2607,7 @@ def _body_parameter_is_model_validated(
 
 
 def _parameter_defaults(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
 ) -> dict[int, ast.expr]:
     positional = [*node.args.posonlyargs, *node.args.args]
     positional_with_defaults = positional[-len(node.args.defaults) :] if node.args.defaults else []
@@ -2878,13 +2899,17 @@ def _programmatic_route_handler_keys(
     service_paths: frozenset[Path],
     route_owner_names: dict[Path, frozenset[str]],
     mounted_route_owners: frozenset[tuple[Path, str]],
-) -> frozenset[tuple[Path, int, str]]:
+) -> tuple[
+    frozenset[tuple[Path, int, str]],
+    tuple[tuple[Path, ast.Lambda], ...],
+]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
     handlers: set[tuple[Path, int, str]] = set()
+    lambda_handlers: list[tuple[Path, ast.Lambda]] = []
     for path, tree in parsed_modules:
         mounted_names = {
             name for owner_path, name in mounted_route_owners if owner_path == path
@@ -2900,11 +2925,12 @@ def _programmatic_route_handler_keys(
             if not isinstance(node, ast.Call):
                 continue
             owner_key = _enclosing_function_key(path, node, functions, scopes)
-            if _is_starlette_route_constructor(
+            is_route_constructor = _is_starlette_route_constructor(
                 node,
                 route_constructor_aliases,
                 route_module_aliases,
-            ):
+            )
+            if is_route_constructor:
                 endpoint = next(
                     (
                         keyword.value
@@ -3007,6 +3033,59 @@ def _programmatic_route_handler_keys(
                 )
             if endpoint is None:
                 continue
+            if isinstance(endpoint, ast.Lambda):
+                lambda_handlers.append((path, endpoint))
+                continue
+            if is_route_constructor:
+                class_key = _resolve_model_key(
+                    root,
+                    path,
+                    tree,
+                    endpoint,
+                    paths_by_module,
+                    trees_by_path,
+                    classes,
+                    class_scopes,
+                    owner_key,
+                    owner_scope=scopes.get(owner_key, ()),
+                    reference_line=endpoint.lineno,
+                )
+                if class_key is not None and _class_inherits_starlette_endpoint(
+                    root=root,
+                    class_key=class_key,
+                    paths_by_module=paths_by_module,
+                    trees_by_path=trees_by_path,
+                    classes=classes,
+                    class_scopes=class_scopes,
+                ):
+                    class_handlers = {
+                        target
+                        for method_name in (
+                            ROUTE_METHODS
+                            | {
+                                "__call__",
+                                "dispatch",
+                                "on_connect",
+                                "on_disconnect",
+                                "on_receive",
+                            }
+                        )
+                        if (
+                            target := _resolve_class_method_key(
+                                root=root,
+                                class_key=class_key,
+                                method_name=method_name,
+                                paths_by_module=paths_by_module,
+                                trees_by_path=trees_by_path,
+                                classes=classes,
+                                class_scopes=class_scopes,
+                            )
+                        )
+                        is not None
+                    }
+                    if class_handlers:
+                        handlers.update(class_handlers)
+                        continue
             target = _resolve_bound_method_key(
                 root=root,
                 path=path,
@@ -3042,7 +3121,7 @@ def _programmatic_route_handler_keys(
             )
             if target is not None:
                 handlers.add(target)
-    return frozenset(handlers)
+    return frozenset(handlers), tuple(lambda_handlers)
 
 
 def _active_route_owner_reference(
@@ -3126,6 +3205,78 @@ def _class_inherits_base_http_middleware(
         module_aliases = _base_http_middleware_module_aliases(tree)
         if any(
             _is_base_http_middleware_reference(
+                base,
+                direct_aliases,
+                module_aliases,
+            )
+            for base in class_node.bases
+        ):
+            return True
+    return False
+
+
+def _starlette_endpoint_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "starlette.endpoints"
+        for imported in node.names
+        if imported.name in {"HTTPEndpoint", "WebSocketEndpoint"}
+    )
+
+
+def _starlette_endpoint_module_aliases(tree: ast.Module) -> frozenset[str]:
+    return frozenset(
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name in {"starlette", "starlette.endpoints"}
+    )
+
+
+def _is_starlette_endpoint_reference(
+    node: ast.AST,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in direct_aliases
+    parts = _qualified_name_parts(node)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] in {"HTTPEndpoint", "WebSocketEndpoint"}
+        and parts[0] in module_aliases
+    )
+
+
+def _class_inherits_starlette_endpoint(
+    *,
+    root: Path,
+    class_key: tuple[Path, int, str],
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+) -> bool:
+    for candidate_key in _resolve_class_mro_keys(
+        root=root,
+        class_key=class_key,
+        paths_by_module=paths_by_module,
+        trees_by_path=trees_by_path,
+        classes=classes,
+        class_scopes=class_scopes,
+    ):
+        class_node = classes.get(candidate_key)
+        tree = trees_by_path.get(candidate_key[0])
+        if class_node is None or tree is None:
+            continue
+        direct_aliases = _starlette_endpoint_aliases(tree)
+        module_aliases = _starlette_endpoint_module_aliases(tree)
+        if any(
+            _is_starlette_endpoint_reference(
                 base,
                 direct_aliases,
                 module_aliases,
@@ -3876,6 +4027,10 @@ def _boundary_function_keys(
             owner_path == path for owner_path, _ in mounted_route_owners
         ):
             continue
+        mounted_names = {
+            name for owner_path, name in mounted_route_owners if owner_path == path
+        }
+        route_owners = route_owner_names.get(path, frozenset())
         for call in (
             node
             for node in ast.walk(tree)
@@ -3903,6 +4058,74 @@ def _boundary_function_keys(
                             owner_key,
                         )
                     )
+        for assignment in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+        ):
+            targets = (
+                assignment.targets
+                if isinstance(assignment, ast.Assign)
+                else (assignment.target,)
+            )
+            if not any(
+                _is_framework_dependency_override_target(
+                    target,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+                for target in targets
+            ):
+                continue
+            owner_key = _enclosing_function_key(path, assignment, functions, scopes)
+            replacement = assignment.value
+            target = _resolve_bound_method_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=replacement,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            ) or _resolve_callable_instance_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=replacement,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            ) or _resolve_function_key(
+                root,
+                path,
+                tree,
+                replacement,
+                paths_by_module,
+                trees_by_path,
+                functions,
+                scopes,
+                owner_key,
+            ) or _resolve_dependency_class_init_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=replacement,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
+            )
+            if target is not None:
+                boundary.add(target)
 
     pending = list(boundary)
     while pending:
@@ -3974,6 +4197,26 @@ def _is_framework_dependency_call(
         | PROGRAMMATIC_ROUTE_REGISTRARS
         | {"include_router"}
     ) and _is_route_owner_reference(call.func.value, route_owner_names)
+
+
+def _is_framework_dependency_override_target(
+    node: ast.AST,
+    *,
+    path_in_services: bool,
+    mounted_names: set[str],
+    route_owners: frozenset[str],
+) -> bool:
+    return bool(
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "dependency_overrides"
+        and _active_route_owner_reference(
+            node.value.value,
+            path_in_services=path_in_services,
+            mounted_names=mounted_names,
+            route_owners=route_owners,
+        )
+    )
 
 
 def _dependency_targets(
@@ -4433,7 +4676,7 @@ def _model_reference_closure(
 
 
 def _function_arguments(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
 ) -> list[ast.arg]:
     arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
     if node.args.vararg is not None:
@@ -4883,6 +5126,53 @@ def _request_type_names_by_path(
     return {path: frozenset(path_names) for path, path_names in names.items()}
 
 
+def _websocket_type_names_by_path(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+) -> dict[Path, frozenset[str]]:
+    trees_by_path = dict(parsed_modules)
+    names = {
+        path: set(_websocket_type_aliases(tree))
+        for path, tree in parsed_modules
+    }
+    changed = True
+    while changed:
+        changed = False
+        type_keys = {
+            (path, name)
+            for path, path_names in names.items()
+            for name in path_names
+            if "." not in name
+        }
+        for path, tree in parsed_modules:
+            symbol_targets, module_targets = _import_targets(
+                root,
+                path,
+                tree,
+                paths_by_module,
+            )
+            for local_name, target in symbol_targets.items():
+                resolved = _follow_symbol_reexports(
+                    root,
+                    target,
+                    paths_by_module,
+                    trees_by_path,
+                )
+                if resolved in type_keys and local_name not in names[path]:
+                    names[path].add(local_name)
+                    changed = True
+            for local_parts, target_path in module_targets.items():
+                for target_name in names.get(target_path, set()):
+                    if "." in target_name:
+                        continue
+                    qualified = ".".join((*local_parts, target_name))
+                    if qualified not in names[path]:
+                        names[path].add(qualified)
+                        changed = True
+    return {path: frozenset(path_names) for path, path_names in names.items()}
+
+
 def _request_type_aliases(tree: ast.Module) -> frozenset[str]:
     return frozenset(
         imported.asname or imported.name
@@ -4931,7 +5221,7 @@ def _json_loads_aliases(tree: ast.Module) -> frozenset[str]:
     return frozenset(
         imported.asname or imported.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "json"
+        if isinstance(node, ast.ImportFrom)
         for imported in node.names
         if imported.name == "loads"
     )
@@ -4961,6 +5251,17 @@ def _is_json_loads_call(
         and parts[-1] == "loads"
         and parts[0] in module_aliases
     )
+
+
+def _is_raw_body_decoder_call(
+    node: ast.Call,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> bool:
+    if _is_json_loads_call(node, direct_aliases, module_aliases):
+        return True
+    parts = _qualified_name_parts(node.func)
+    return bool(parts and len(parts) >= 2 and parts[-1] == "loads")
 
 
 def _annotation_contains_request_type(
@@ -5059,7 +5360,7 @@ def _is_raw_request_mapping(
         and node.func.value.id in request_aliases
     ):
         return True
-    if _is_json_loads_call(node, json_loads_names, json_module_names):
+    if _is_raw_body_decoder_call(node, json_loads_names, json_module_names):
         return any(
             _is_request_body_value(
                 argument,
