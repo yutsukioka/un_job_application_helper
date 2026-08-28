@@ -83,6 +83,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    request_type_names = _request_type_names_by_path(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
 
     pydantic_class_models = _pydantic_model_keys(
         module_root,
@@ -106,6 +111,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    pydantic_dataclass_models = _pydantic_dataclass_model_keys(parsed_modules)
     typed_dict_models = _typed_dict_model_keys(
         module_root,
         parsed_modules,
@@ -193,18 +199,25 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                     f"{path}:{line_number}: Pydantic request model {model_name} "
                     "uses configuration that cannot be statically approved"
                 )
-        for field_name, line_number in _pydantic_create_model_fields(
+        create_model_fields, opaque_field_lines = _pydantic_create_model_fields(
             created_pydantic_models[key],
+            tree=tree,
             field_factory_names=_pydantic_symbol_aliases(tree, "Field"),
             field_factory_module_names=_pydantic_module_aliases(tree),
             wire_alias_constants=wire_alias_constants[path],
-        ):
+        )
+        for field_name, line_number in create_model_fields:
             if _is_banned_wire_name(field_name):
                 violations.append(
                     f"{path}:{line_number}: Pydantic model "
                     f"{model_name}.{field_name} would accept raw vault secret "
                     "material over the wire"
                 )
+        for line_number in opaque_field_lines:
+            violations.append(
+                f"{path}:{line_number}: Pydantic request model {model_name} "
+                "uses unpacked fields that cannot be statically approved"
+            )
     for path, tree in parsed_modules:
         if not (
             path in service_paths
@@ -221,6 +234,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         body_aliases, body_module_aliases = _body_aliases(tree)
         visitor = _ServiceContractVisitor(
             path,
+            module_tree=tree,
             module_statements=tree.body,
             pydantic_model_lines=frozenset(
                 line_number
@@ -230,6 +244,13 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             dataclass_model_lines=frozenset(
                 line_number
                 for model_path, line_number, _ in request_dataclasses
+                if model_path == path
+            ),
+            pydantic_dataclass_model_lines=frozenset(
+                line_number
+                for model_path, line_number, _ in (
+                    request_dataclasses & pydantic_dataclass_models
+                )
                 if model_path == path
             ),
             typed_dict_model_lines=frozenset(
@@ -256,7 +277,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 "root_validator",
             ),
             wire_alias_constants=wire_alias_constants[path],
-            request_type_names=_request_type_aliases(tree),
+            request_type_names=request_type_names[path],
             request_module_names=_request_module_aliases(tree),
             websocket_type_names=_websocket_type_aliases(tree),
             websocket_module_names=_websocket_module_aliases(tree),
@@ -287,9 +308,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self,
         path: Path,
         *,
+        module_tree: ast.Module,
         module_statements: list[ast.stmt],
         pydantic_model_lines: frozenset[int],
         dataclass_model_lines: frozenset[int],
+        pydantic_dataclass_model_lines: frozenset[int],
         typed_dict_model_lines: frozenset[int],
         mapping_root_model_lines: frozenset[int],
         field_factory_names: frozenset[str],
@@ -314,9 +337,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         boundary_function_lines: frozenset[int],
     ) -> None:
         self.path = path
+        self.module_tree = module_tree
         self.module_statements = module_statements
         self.pydantic_model_lines = pydantic_model_lines
         self.dataclass_model_lines = dataclass_model_lines
+        self.pydantic_dataclass_model_lines = pydantic_dataclass_model_lines
         self.typed_dict_model_lines = typed_dict_model_lines
         self.mapping_root_model_lines = mapping_root_model_lines
         self.field_factory_names = field_factory_names
@@ -354,14 +379,20 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             else:
                 model_kind = "TypedDict request model"
             if node.lineno in self.pydantic_model_lines and (
-                extra_line := _permissive_model_extra_line(node)
+                extra_line := _permissive_model_extra_line(
+                    node,
+                    self.module_tree,
+                )
             ) is not None:
                 self.violations.append(
                     f"{self.path}:{extra_line}: Pydantic request model {node.name} "
                     "allows arbitrary extra wire fields"
                 )
             if node.lineno in self.pydantic_model_lines and (
-                alias_generator_line := _model_alias_generator_line(node)
+                alias_generator_line := _model_alias_generator_line(
+                    node,
+                    self.module_tree,
+                )
             ) is not None:
                 self.violations.append(
                     f"{self.path}:{alias_generator_line}: Pydantic request model "
@@ -381,6 +412,16 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                     f"{self.path}:{validator_line}: Pydantic request model "
                     f"{node.name} defines a {validator_kind} that cannot "
                     "be statically approved"
+                )
+            if node.lineno in self.pydantic_dataclass_model_lines and (
+                extra_line := _pydantic_dataclass_extra_line(
+                    node,
+                    self.module_tree,
+                )
+            ) is not None:
+                self.violations.append(
+                    f"{self.path}:{extra_line}: Pydantic dataclass request model "
+                    f"{node.name} allows arbitrary extra wire fields"
                 )
             if node.lineno in self.mapping_root_model_lines:
                 self.violations.append(
@@ -1519,6 +1560,20 @@ def _dataclass_model_keys(
     return frozenset(model_keys)
 
 
+def _pydantic_dataclass_model_keys(
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> frozenset[tuple[Path, int, str]]:
+    return frozenset(
+        key
+        for path, tree in parsed_modules
+        for key, node, _ in _module_class_entries(path, tree)
+        if any(
+            _is_pydantic_dataclass_decorator(decorator, tree)
+            for decorator in node.decorator_list
+        )
+    )
+
+
 def _typed_dict_model_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -1624,11 +1679,13 @@ def _is_pydantic_create_model_call(
 def _pydantic_create_model_fields(
     node: ast.Call,
     *,
+    tree: ast.Module,
     field_factory_names: frozenset[str],
     field_factory_module_names: frozenset[str],
     wire_alias_constants: dict[str, str],
-) -> list[tuple[str, int]]:
+) -> tuple[list[tuple[str, int]], list[int]]:
     fields: list[tuple[str, int]] = []
+    opaque_lines: list[int] = []
     reserved = {
         "__base__",
         "__cls_kwargs__",
@@ -1638,7 +1695,26 @@ def _pydantic_create_model_fields(
         "__validators__",
     }
     for keyword in node.keywords:
-        if keyword.arg is None or keyword.arg in reserved:
+        if keyword.arg is None:
+            unpacked = _resolve_module_expression(
+                keyword.value,
+                tree,
+                before_line=node.lineno,
+            )
+            unpacked_fields, unpacked_opaque = _pydantic_create_model_mapping_fields(
+                unpacked,
+                tree=tree,
+                before_line=keyword.value.lineno,
+                reserved=reserved,
+                field_factory_names=field_factory_names,
+                field_factory_module_names=field_factory_module_names,
+                wire_alias_constants=wire_alias_constants,
+            )
+            fields.extend(unpacked_fields)
+            if unpacked_opaque:
+                opaque_lines.append(keyword.value.lineno)
+            continue
+        if keyword.arg in reserved:
             continue
         fields.append((keyword.arg, keyword.value.lineno))
         fields.extend(
@@ -1649,7 +1725,60 @@ def _pydantic_create_model_fields(
                 wire_alias_constants=wire_alias_constants,
             )
         )
-    return fields
+    return fields, opaque_lines
+
+
+def _pydantic_create_model_mapping_fields(
+    node: ast.expr,
+    *,
+    tree: ast.Module,
+    before_line: int,
+    reserved: set[str],
+    field_factory_names: frozenset[str],
+    field_factory_module_names: frozenset[str],
+    wire_alias_constants: dict[str, str],
+) -> tuple[list[tuple[str, int]], bool]:
+    resolved = _resolve_module_expression(
+        node,
+        tree,
+        before_line=before_line,
+    )
+    if not isinstance(resolved, ast.Dict):
+        return [], True
+    fields: list[tuple[str, int]] = []
+    opaque = False
+    for key, value in zip(resolved.keys, resolved.values, strict=True):
+        if key is None:
+            nested, nested_opaque = _pydantic_create_model_mapping_fields(
+                value,
+                tree=tree,
+                before_line=value.lineno,
+                reserved=reserved,
+                field_factory_names=field_factory_names,
+                field_factory_module_names=field_factory_module_names,
+                wire_alias_constants=wire_alias_constants,
+            )
+            fields.extend(nested)
+            opaque = opaque or nested_opaque
+            continue
+        if not (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+        ):
+            opaque = True
+            continue
+        if key.value in reserved:
+            continue
+        fields.append((key.value, key.lineno))
+        fields.extend(
+            _pydantic_field_aliases(
+                value,
+                field_factory_names=field_factory_names,
+                field_factory_module_names=field_factory_module_names,
+                wire_alias_constants=wire_alias_constants,
+            )
+        )
+    return fields, opaque
 
 
 def _pydantic_create_model_config_issues(
@@ -1863,6 +1992,37 @@ def _is_dataclass_decorator(
     )
 
 
+def _is_pydantic_dataclass_decorator(
+    decorator: ast.expr,
+    tree: ast.Module,
+) -> bool:
+    candidate = decorator.func if isinstance(decorator, ast.Call) else decorator
+    direct_aliases = {
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "pydantic.dataclasses"
+        for imported in node.names
+        if imported.name == "dataclass"
+    }
+    module_aliases = {
+        imported.asname or imported.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name in {"pydantic", "pydantic.dataclasses"}
+    }
+    if isinstance(candidate, ast.Name):
+        return candidate.id in direct_aliases
+    parts = _qualified_name_parts(candidate)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "dataclass"
+        and parts[0] in module_aliases
+    )
+
+
 def _model_fields(
     node: ast.ClassDef,
     *,
@@ -1909,7 +2069,10 @@ def _model_fields(
     return fields
 
 
-def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
+def _permissive_model_extra_line(
+    node: ast.ClassDef,
+    module_tree: ast.Module,
+) -> int | None:
     for keyword in node.keywords:
         if keyword.arg == "extra" and _is_allow_value(keyword.value):
             return keyword.value.lineno
@@ -1917,7 +2080,13 @@ def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
         if isinstance(child, (ast.Assign, ast.AnnAssign)):
             targets = child.targets if isinstance(child, ast.Assign) else [child.target]
             if any(isinstance(target, ast.Name) and target.id == "model_config" for target in targets):
-                if _expression_allows_extra(child.value):
+                config = _resolve_class_or_module_expression(
+                    child.value,
+                    node,
+                    module_tree,
+                    before_line=child.lineno,
+                )
+                if _expression_allows_extra(config):
                     return child.lineno
         if isinstance(child, ast.ClassDef) and child.name == "Config":
             for setting in child.body:
@@ -1930,7 +2099,10 @@ def _permissive_model_extra_line(node: ast.ClassDef) -> int | None:
     return None
 
 
-def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
+def _model_alias_generator_line(
+    node: ast.ClassDef,
+    module_tree: ast.Module,
+) -> int | None:
     for keyword in node.keywords:
         if keyword.arg == "alias_generator":
             return keyword.value.lineno
@@ -1940,8 +2112,15 @@ def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
             if any(
                 isinstance(target, ast.Name) and target.id == "model_config"
                 for target in targets
-            ) and _expression_defines_config_option(child.value, "alias_generator"):
-                return child.lineno
+            ):
+                config = _resolve_class_or_module_expression(
+                    child.value,
+                    node,
+                    module_tree,
+                    before_line=child.lineno,
+                )
+                if _expression_defines_config_option(config, "alias_generator"):
+                    return child.lineno
         if isinstance(child, ast.ClassDef) and child.name == "Config":
             for setting in child.body:
                 if not isinstance(setting, (ast.Assign, ast.AnnAssign)):
@@ -1956,6 +2135,70 @@ def _model_alias_generator_line(node: ast.ClassDef) -> int | None:
                     for target in targets
                 ):
                     return setting.lineno
+    return None
+
+
+def _resolve_class_or_module_expression(
+    expression: ast.expr,
+    class_node: ast.ClassDef,
+    module_tree: ast.Module,
+    *,
+    before_line: int,
+    seen: frozenset[str] = frozenset(),
+) -> ast.expr:
+    if not isinstance(expression, ast.Name) or expression.id in seen:
+        return expression
+    candidates: list[tuple[int, ast.expr]] = []
+    for statement in class_node.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets, value = _assignment_targets_and_value(statement)
+        if expression.id in targets and statement.lineno < before_line:
+            candidates.append((statement.lineno, value))
+    if candidates:
+        line, value = max(candidates, key=lambda entry: entry[0])
+        return _resolve_class_or_module_expression(
+            value,
+            class_node,
+            module_tree,
+            before_line=line,
+            seen=seen | {expression.id},
+        )
+    return _resolve_module_expression(
+        expression,
+        module_tree,
+        before_line=class_node.lineno,
+        seen=seen,
+    )
+
+
+def _pydantic_dataclass_extra_line(
+    node: ast.ClassDef,
+    module_tree: ast.Module,
+) -> int | None:
+    for decorator in node.decorator_list:
+        if not (
+            isinstance(decorator, ast.Call)
+            and _is_pydantic_dataclass_decorator(decorator, module_tree)
+        ):
+            continue
+        config = next(
+            (
+                keyword.value
+                for keyword in decorator.keywords
+                if keyword.arg == "config"
+            ),
+            None,
+        )
+        if config is None:
+            continue
+        resolved = _resolve_module_expression(
+            config,
+            module_tree,
+            before_line=node.lineno,
+        )
+        if _expression_allows_extra(resolved):
+            return config.lineno
     return None
 
 
@@ -2312,16 +2555,33 @@ def _body_parameter_is_model_validated(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     parameter_name: str,
 ) -> bool:
-    return any(
-        isinstance(candidate, ast.Call)
-        and isinstance(candidate.func, ast.Attribute)
-        and candidate.func.attr == "model_validate"
-        and any(
-            isinstance(argument, ast.Name) and argument.id == parameter_name
-            for argument in candidate.args
-        )
+    parameter_uses = [
+        candidate
         for statement in node.body
         for candidate in ast.walk(statement)
+        if isinstance(candidate, ast.Name)
+        and isinstance(candidate.ctx, ast.Load)
+        and candidate.id == parameter_name
+    ]
+    validated_uses = {
+        id(argument)
+        for statement in node.body
+        for candidate in ast.walk(statement)
+        if isinstance(candidate, ast.Call)
+        and isinstance(candidate.func, ast.Attribute)
+        and candidate.func.attr == "model_validate"
+        for argument in [
+            *candidate.args,
+            *(
+                keyword.value
+                for keyword in candidate.keywords
+                if keyword.arg in {"obj", "object"}
+            ),
+        ]
+        if isinstance(argument, ast.Name) and argument.id == parameter_name
+    }
+    return bool(validated_uses) and all(
+        id(parameter_use) in validated_uses for parameter_use in parameter_uses
     )
 
 
@@ -2353,15 +2613,63 @@ def _parameter_defaults(
 
 
 def _annotation_contains_mapping(annotation: ast.expr) -> bool:
+    pending: list[ast.AST] = [annotation]
+    seen_strings: set[str] = set()
+    while pending:
+        candidate = pending.pop()
+        if isinstance(candidate, ast.Subscript) and _is_mapping_type_reference(
+            candidate.value
+        ):
+            return not _mapping_key_excludes_banned_names(candidate.slice)
+        if _is_mapping_type_reference(candidate):
+            return True
+        if (
+            isinstance(candidate, ast.Constant)
+            and isinstance(candidate.value, str)
+            and candidate.value not in seen_strings
+        ):
+            seen_strings.add(candidate.value)
+            try:
+                pending.append(ast.parse(candidate.value, mode="eval").body)
+            except SyntaxError:
+                pass
+        pending.extend(ast.iter_child_nodes(candidate))
+    return False
+
+
+def _is_mapping_type_reference(node: ast.AST) -> bool:
     mapping_names = {"dict", "Dict", "Mapping", "MutableMapping"}
     module_names = {"typing", "collections", "collections.abc"}
-    for candidate in _annotation_reference_nodes(annotation):
-        parts = _qualified_name_parts(candidate)
-        if not parts or parts[-1] not in mapping_names:
-            continue
-        if len(parts) == 1 or ".".join(parts[:-1]) in module_names:
-            return True
-    return False
+    parts = _qualified_name_parts(node)
+    return bool(
+        parts
+        and parts[-1] in mapping_names
+        and (len(parts) == 1 or ".".join(parts[:-1]) in module_names)
+    )
+
+
+def _mapping_key_excludes_banned_names(slice_node: ast.expr) -> bool:
+    key_annotation = (
+        slice_node.elts[0]
+        if isinstance(slice_node, ast.Tuple) and slice_node.elts
+        else slice_node
+    )
+    if not isinstance(key_annotation, ast.Subscript):
+        return False
+    parts = _qualified_name_parts(key_annotation.value)
+    if not parts or parts[-1] != "Literal":
+        return False
+    literal_values = (
+        key_annotation.slice.elts
+        if isinstance(key_annotation.slice, ast.Tuple)
+        else [key_annotation.slice]
+    )
+    return bool(literal_values) and all(
+        isinstance(value, ast.Constant)
+        and isinstance(value.value, str)
+        and not _is_banned_wire_name(value.value)
+        for value in literal_values
+    )
 
 
 def _annotation_contains_unconstrained_type(
@@ -3694,6 +4002,12 @@ def _dependency_targets(
     for root_node in expanded_nodes:
         if not isinstance(root_node, ast.AST):
             continue
+        inferred_dependencies = _inferred_annotated_dependencies(
+            root_node,
+            tree,
+            depends_aliases,
+            fastapi_module_aliases,
+        )
         for candidate in ast.walk(root_node):
             if not isinstance(candidate, ast.Call) or not _is_depends_call(
                 candidate,
@@ -3709,6 +4023,8 @@ def _dependency_targets(
                 ),
                 candidate.args[0] if candidate.args else None,
             )
+            if dependency is None:
+                dependency = inferred_dependencies.get(id(candidate))
             if dependency is None:
                 continue
             target = _resolve_bound_method_key(
@@ -3743,10 +4059,112 @@ def _dependency_targets(
                 functions,
                 scopes,
                 owner_key,
+            ) or _resolve_dependency_class_init_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=dependency,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=owner_key,
             )
             if target is not None:
                 targets.add(target)
     return targets
+
+
+def _inferred_annotated_dependencies(
+    root_node: ast.AST,
+    tree: ast.Module,
+    depends_aliases: set[str],
+    fastapi_module_aliases: set[str],
+) -> dict[int, ast.expr]:
+    annotated_aliases = _typing_symbol_aliases(tree, "Annotated")
+    typing_module_aliases = _typing_module_aliases(tree)
+    inferred: dict[int, ast.expr] = {}
+    for annotation in ast.walk(root_node):
+        if not isinstance(annotation, ast.Subscript):
+            continue
+        if isinstance(annotation.value, ast.Name):
+            is_annotated = annotation.value.id in annotated_aliases
+        else:
+            parts = _qualified_name_parts(annotation.value)
+            is_annotated = bool(
+                parts
+                and len(parts) >= 2
+                and parts[-1] == "Annotated"
+                and parts[0] in typing_module_aliases
+            )
+        if not is_annotated:
+            continue
+        elements = (
+            list(annotation.slice.elts)
+            if isinstance(annotation.slice, ast.Tuple)
+            else [annotation.slice]
+        )
+        if len(elements) < 2:
+            continue
+        dependency_type = elements[0]
+        for metadata in elements[1:]:
+            for candidate in ast.walk(metadata):
+                if not (
+                    isinstance(candidate, ast.Call)
+                    and _is_depends_call(
+                        candidate,
+                        depends_aliases,
+                        fastapi_module_aliases,
+                    )
+                ):
+                    continue
+                explicit = bool(candidate.args) or any(
+                    keyword.arg == "dependency"
+                    for keyword in candidate.keywords
+                )
+                if not explicit:
+                    inferred[id(candidate)] = dependency_type
+    return inferred
+
+
+def _resolve_dependency_class_init_key(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> tuple[Path, int, str] | None:
+    class_key = _resolve_model_key(
+        root,
+        path,
+        tree,
+        reference,
+        paths_by_module,
+        trees_by_path,
+        classes,
+        class_scopes,
+        owner_key,
+        owner_scope=function_scopes.get(owner_key, ()),
+        reference_line=reference.lineno,
+    )
+    if class_key is None:
+        return None
+    return _resolve_class_method_key(
+        root=root,
+        class_key=class_key,
+        method_name="__init__",
+        paths_by_module=paths_by_module,
+        trees_by_path=trees_by_path,
+        classes=classes,
+        class_scopes=class_scopes,
+    )
 
 
 def _expanded_dependency_nodes(
@@ -4393,7 +4811,7 @@ def _route_body_wire_names(
             elif (
                 isinstance(candidate, ast.Call)
                 and isinstance(candidate.func, ast.Attribute)
-                and candidate.func.attr in {"get", "pop", "setdefault"}
+                and candidate.func.attr in {"get", "getlist", "pop", "setdefault"}
                 and candidate.args
             ):
                 key = candidate.args[0]
@@ -4416,6 +4834,53 @@ def _route_body_wire_names(
             ):
                 wire_names.append((wire_key, key.lineno))
     return wire_names
+
+
+def _request_type_names_by_path(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+) -> dict[Path, frozenset[str]]:
+    trees_by_path = dict(parsed_modules)
+    names = {
+        path: set(_request_type_aliases(tree))
+        for path, tree in parsed_modules
+    }
+    changed = True
+    while changed:
+        changed = False
+        type_keys = {
+            (path, name)
+            for path, path_names in names.items()
+            for name in path_names
+            if "." not in name
+        }
+        for path, tree in parsed_modules:
+            symbol_targets, module_targets = _import_targets(
+                root,
+                path,
+                tree,
+                paths_by_module,
+            )
+            for local_name, target in symbol_targets.items():
+                resolved = _follow_symbol_reexports(
+                    root,
+                    target,
+                    paths_by_module,
+                    trees_by_path,
+                )
+                if resolved in type_keys and local_name not in names[path]:
+                    names[path].add(local_name)
+                    changed = True
+            for local_parts, target_path in module_targets.items():
+                for target_name in names.get(target_path, set()):
+                    if "." in target_name:
+                        continue
+                    qualified = ".".join((*local_parts, target_name))
+                    if qualified not in names[path]:
+                        names[path].add(qualified)
+                        changed = True
+    return {path: frozenset(path_names) for path, path_names in names.items()}
 
 
 def _request_type_aliases(tree: ast.Module) -> frozenset[str]:
