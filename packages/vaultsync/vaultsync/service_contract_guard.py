@@ -379,6 +379,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         websocket_type_names,
         route_owner_names,
         programmatic_positional_request_handlers,
+        raw_mapping_helpers,
     )
     request_models = _referenced_model_keys(
         module_root,
@@ -570,6 +571,26 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 for (function_path, line_number, _), flow in request_body_flows.items()
                 if function_path == path
             },
+            delegated_raw_mapping_names={
+                line_number: flow[2]
+                for (function_path, line_number, _), flow in request_body_flows.items()
+                if function_path == path
+            },
+            delegated_request_body_names={
+                line_number: flow[3]
+                for (function_path, line_number, _), flow in request_body_flows.items()
+                if function_path == path
+            },
+            delegated_websocket_text_names={
+                line_number: flow[4]
+                for (function_path, line_number, _), flow in request_body_flows.items()
+                if function_path == path
+            },
+            delegated_scope_mapping_names={
+                line_number: flow[5]
+                for (function_path, line_number, _), flow in request_body_flows.items()
+                if function_path == path
+            },
         )
         visitor.visit(tree)
         violations.extend(visitor.violations)
@@ -613,6 +634,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         included_boundary_parameters: dict[int, frozenset[str]],
         delegated_request_names: dict[int, frozenset[str]],
         delegated_websocket_names: dict[int, frozenset[str]],
+        delegated_raw_mapping_names: dict[int, frozenset[str]],
+        delegated_request_body_names: dict[int, frozenset[str]],
+        delegated_websocket_text_names: dict[int, frozenset[str]],
+        delegated_scope_mapping_names: dict[int, frozenset[str]],
     ) -> None:
         self.path = path
         self.module_tree = module_tree
@@ -652,6 +677,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.included_boundary_parameters = included_boundary_parameters
         self.delegated_request_names = delegated_request_names
         self.delegated_websocket_names = delegated_websocket_names
+        self.delegated_raw_mapping_names = delegated_raw_mapping_names
+        self.delegated_request_body_names = delegated_request_body_names
+        self.delegated_websocket_text_names = delegated_websocket_text_names
+        self.delegated_scope_mapping_names = delegated_scope_mapping_names
         self.violations: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -787,7 +816,32 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             node.lineno,
             frozenset(),
         )
-        if not is_boundary and not delegated_request_names and not delegated_websocket_names:
+        delegated_raw_mapping_names = self.delegated_raw_mapping_names.get(
+            node.lineno,
+            frozenset(),
+        )
+        delegated_request_body_names = self.delegated_request_body_names.get(
+            node.lineno,
+            frozenset(),
+        )
+        delegated_websocket_text_names = self.delegated_websocket_text_names.get(
+            node.lineno,
+            frozenset(),
+        )
+        delegated_scope_mapping_names = self.delegated_scope_mapping_names.get(
+            node.lineno,
+            frozenset(),
+        )
+        if not is_boundary and not any(
+            (
+                delegated_request_names,
+                delegated_websocket_names,
+                delegated_raw_mapping_names,
+                delegated_request_body_names,
+                delegated_websocket_text_names,
+                delegated_scope_mapping_names,
+            )
+        ):
             return
         if is_boundary:
             if _has_unapproved_route_decorator(node, self.route_owner_names):
@@ -837,6 +891,10 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             local_helper_functions=self.local_helper_functions,
             initial_request_names=delegated_request_names,
             initial_websocket_names=delegated_websocket_names,
+            initial_raw_mapping_names=delegated_raw_mapping_names,
+            initial_request_body_names=delegated_request_body_names,
+            initial_websocket_text_names=delegated_websocket_text_names,
+            initial_scope_mapping_names=delegated_scope_mapping_names,
             wire_key_constants={
                 **self.wire_alias_constants,
                 **_string_constants(node.body),
@@ -5938,16 +5996,30 @@ def _request_body_flow_names(
     websocket_type_names: dict[Path, frozenset[str]],
     route_owner_names: dict[Path, frozenset[str]],
     programmatic_positional_request_handlers: frozenset[tuple[Path, int, str]],
+    raw_mapping_helpers: dict[
+        Path,
+        dict[str, tuple[tuple[str, ...], frozenset[str]]],
+    ],
 ) -> dict[
     tuple[Path, int, str],
-    tuple[frozenset[str], frozenset[str]],
+    tuple[
+        frozenset[str],
+        frozenset[str],
+        frozenset[str],
+        frozenset[str],
+        frozenset[str],
+        frozenset[str],
+    ],
 ]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
-    flows: dict[tuple[Path, int, str], tuple[set[str], set[str]]] = {}
+    flows: dict[
+        tuple[Path, int, str],
+        tuple[set[str], set[str], set[str], set[str], set[str], set[str]],
+    ] = {}
     for key in boundary_functions:
         function = functions.get(key)
         if function is None:
@@ -5995,13 +6067,34 @@ def _request_body_flow_names(
                 route_owner_names.get(path, frozenset()),
             )
         )
-        if request_names or websocket_names:
-            flows[key] = (request_names, websocket_names)
+        body_aliases, body_module_aliases = _body_aliases(trees_by_path[path])
+        request_body_names = _explicit_body_parameter_names(
+            function,
+            frozenset(body_aliases),
+            frozenset(body_module_aliases),
+        )
+        if request_names or websocket_names or request_body_names:
+            flows[key] = (
+                request_names,
+                websocket_names,
+                set(),
+                request_body_names,
+                set(),
+                set(),
+            )
 
     changed = True
     while changed:
         changed = False
-        for key, (request_names, websocket_names) in list(flows.items()):
+        for key, flow in list(flows.items()):
+            (
+                request_names,
+                websocket_names,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                scope_mapping_names,
+            ) = flow
             function = functions[key]
             path = key[0]
             for call in (
@@ -6010,15 +6103,30 @@ def _request_body_flow_names(
                 for candidate in ast.walk(statement)
                 if isinstance(candidate, ast.Call)
             ):
-                request_aliases = _local_name_aliases(
-                    function,
-                    request_names,
-                    before_line=call.lineno,
+                body_aliases, body_module_aliases = _body_aliases(
+                    trees_by_path[path]
                 )
-                websocket_aliases = _local_name_aliases(
+                (
+                    request_aliases,
+                    websocket_aliases,
+                    active_raw_mapping_names,
+                    active_request_body_names,
+                    active_websocket_text_names,
+                    active_scope_mapping_names,
+                ) = _route_provenance_before(
                     function,
-                    websocket_names,
-                    before_line=call.lineno,
+                    line_number=call.lineno + 1,
+                    request_names=request_names,
+                    websocket_names=websocket_names,
+                    initial_raw_mapping_names=frozenset(raw_mapping_names),
+                    initial_request_body_names=frozenset(request_body_names),
+                    initial_websocket_text_names=frozenset(websocket_text_names),
+                    initial_scope_mapping_names=frozenset(scope_mapping_names),
+                    body_aliases=frozenset(body_aliases),
+                    body_module_aliases=frozenset(body_module_aliases),
+                    json_loads_names=_json_loads_aliases(trees_by_path[path]),
+                    json_module_names=_json_module_aliases(trees_by_path[path]),
+                    raw_mapping_helpers=raw_mapping_helpers[path],
                 )
                 target = _resolve_bound_method_key(
                     root=root,
@@ -6057,36 +6165,88 @@ def _request_body_flow_names(
                 }
                 propagated_requests: set[str] = set()
                 propagated_websockets: set[str] = set()
+                propagated_raw_mappings: set[str] = set()
+                propagated_request_bodies: set[str] = set()
+                propagated_websocket_text: set[str] = set()
+                propagated_scope_mappings: set[str] = set()
+
+                def propagate(parameter: ast.arg, argument: ast.expr) -> None:
+                    if _is_name_reference(argument, request_aliases):
+                        propagated_requests.add(parameter.arg)
+                    if _is_name_reference(argument, websocket_aliases):
+                        propagated_websockets.add(parameter.arg)
+                    if _is_raw_request_mapping(
+                        argument,
+                        request_aliases,
+                        websocket_aliases,
+                        active_raw_mapping_names,
+                        active_request_body_names,
+                        active_websocket_text_names,
+                        _json_loads_aliases(trees_by_path[path]),
+                        _json_module_aliases(trees_by_path[path]),
+                        active_scope_mapping_names,
+                    ):
+                        propagated_raw_mappings.add(parameter.arg)
+                    if _is_request_body_value(
+                        argument,
+                        request_aliases,
+                        active_request_body_names,
+                        active_scope_mapping_names,
+                    ):
+                        propagated_request_bodies.add(parameter.arg)
+                    if _is_websocket_text_value(
+                        argument,
+                        websocket_aliases,
+                        active_websocket_text_names,
+                    ):
+                        propagated_websocket_text.add(parameter.arg)
+                    if _is_request_scope_reference(
+                        argument,
+                        request_aliases,
+                        websocket_aliases,
+                        active_scope_mapping_names,
+                    ):
+                        propagated_scope_mappings.add(parameter.arg)
+
                 for parameter, argument in zip(
                     parameters,
                     call.args,
                     strict=False,
                 ):
-                    if _is_name_reference(argument, request_aliases):
-                        propagated_requests.add(parameter.arg)
-                    if _is_name_reference(argument, websocket_aliases):
-                        propagated_websockets.add(parameter.arg)
+                    propagate(parameter, argument)
                 for keyword in call.keywords:
                     parameter = parameters_by_name.get(keyword.arg or "")
                     if parameter is None:
                         continue
-                    if _is_name_reference(keyword.value, request_aliases):
-                        propagated_requests.add(parameter.arg)
-                    if _is_name_reference(keyword.value, websocket_aliases):
-                        propagated_websockets.add(parameter.arg)
-                if not propagated_requests and not propagated_websockets:
+                    propagate(parameter, keyword.value)
+                if not any(
+                    (
+                        propagated_requests,
+                        propagated_websockets,
+                        propagated_raw_mappings,
+                        propagated_request_bodies,
+                        propagated_websocket_text,
+                        propagated_scope_mappings,
+                    )
+                ):
                     continue
-                target_flow = flows.setdefault(target, (set(), set()))
-                before = (len(target_flow[0]), len(target_flow[1]))
+                target_flow = flows.setdefault(
+                    target,
+                    (set(), set(), set(), set(), set(), set()),
+                )
+                before = tuple(len(names) for names in target_flow)
                 target_flow[0].update(propagated_requests)
                 target_flow[1].update(propagated_websockets)
-                changed = changed or before != (
-                    len(target_flow[0]),
-                    len(target_flow[1]),
+                target_flow[2].update(propagated_raw_mappings)
+                target_flow[3].update(propagated_request_bodies)
+                target_flow[4].update(propagated_websocket_text)
+                target_flow[5].update(propagated_scope_mappings)
+                changed = changed or before != tuple(
+                    len(names) for names in target_flow
                 )
     return {
-        key: (frozenset(requests), frozenset(websockets))
-        for key, (requests, websockets) in flows.items()
+        key: tuple(frozenset(names) for names in flow)
+        for key, flow in flows.items()
     }
 
 
@@ -7215,6 +7375,151 @@ def _qualified_name_parts(node: ast.AST) -> list[str] | None:
     return None
 
 
+def _route_provenance_before(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    line_number: int,
+    request_names: set[str],
+    websocket_names: set[str],
+    initial_raw_mapping_names: frozenset[str],
+    initial_request_body_names: frozenset[str],
+    initial_websocket_text_names: frozenset[str],
+    initial_scope_mapping_names: frozenset[str],
+    body_aliases: frozenset[str],
+    body_module_aliases: frozenset[str],
+    json_loads_names: frozenset[str],
+    json_module_names: frozenset[str],
+    raw_mapping_helpers: dict[str, tuple[tuple[str, ...], frozenset[str]]],
+) -> tuple[set[str], set[str], set[str], set[str], set[str], set[str]]:
+    active_requests = set(request_names)
+    active_websockets = set(websocket_names)
+    active_raw_mappings = set(initial_raw_mapping_names)
+    if node.name == "on_receive":
+        parameters = [
+            argument
+            for argument in _function_arguments(node)
+            if argument.arg not in {"self", "cls"}
+        ]
+        for index, parameter in enumerate(parameters[:-1]):
+            if parameter.arg in active_websockets:
+                active_raw_mappings.add(parameters[index + 1].arg)
+    active_request_bodies = _explicit_body_parameter_names(
+        node,
+        body_aliases,
+        body_module_aliases,
+    ) | set(initial_request_body_names)
+    active_websocket_text = set(initial_websocket_text_names)
+    active_scope_mappings = set(initial_scope_mapping_names)
+    lexical_nodes = _lexical_body_nodes(node.body)
+    assignments = sorted(
+        (
+            candidate
+            for candidate in lexical_nodes
+            if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            and candidate.lineno < line_number
+        ),
+        key=lambda candidate: candidate.lineno,
+    )
+    conditional_assignment_lines = _conditional_assignment_lines(
+        ast.Module(body=node.body, type_ignores=[])
+    )
+    for assignment in assignments:
+        targets, value = _assignment_targets_and_value(assignment)
+        is_scope = _is_request_scope_reference(
+            value,
+            active_requests,
+            active_websockets,
+            active_scope_mappings,
+        )
+        is_request = _is_name_reference(value, active_requests)
+        is_websocket = _is_name_reference(value, active_websockets)
+        is_websocket_text = _is_websocket_text_value(
+            value,
+            active_websockets,
+            active_websocket_text,
+        )
+        is_request_body = _is_request_body_value(
+            value,
+            active_requests,
+            active_request_bodies,
+            active_scope_mappings,
+        )
+        is_raw_mapping = _is_raw_request_mapping(
+            value,
+            active_requests,
+            active_websockets,
+            active_raw_mappings,
+            active_request_bodies,
+            active_websocket_text,
+            json_loads_names,
+            json_module_names,
+            active_scope_mappings,
+        ) or _call_returns_raw_mapping(
+            value,
+            active_requests,
+            active_websockets,
+            active_raw_mappings,
+            active_request_bodies,
+            active_websocket_text,
+            json_loads_names,
+            json_module_names,
+            raw_mapping_helpers,
+            active_scope_mappings,
+        )
+        if assignment.lineno not in conditional_assignment_lines:
+            for names in (
+                active_requests,
+                active_websockets,
+                active_raw_mappings,
+                active_request_bodies,
+                active_websocket_text,
+                active_scope_mappings,
+            ):
+                names.difference_update(targets)
+        if is_scope:
+            active_scope_mappings.update(targets)
+        if is_request:
+            active_requests.update(targets)
+        if is_websocket:
+            active_websockets.update(targets)
+        if is_websocket_text:
+            active_websocket_text.update(targets)
+        if is_request_body:
+            active_request_bodies.update(targets)
+        if is_raw_mapping:
+            active_raw_mappings.update(targets)
+    for loop in (
+        candidate
+        for candidate in lexical_nodes
+        if isinstance(candidate, (ast.For, ast.AsyncFor, ast.comprehension))
+        and (
+            isinstance(candidate, ast.comprehension)
+            or candidate.lineno < line_number
+        )
+    ):
+        source = loop.iter
+        if not (
+            isinstance(source, ast.Call)
+            and isinstance(source.func, ast.Attribute)
+            and isinstance(source.func.value, ast.Name)
+            and source.func.value.id in active_websockets
+        ):
+            continue
+        targets = _assignment_target_names(loop.target)
+        if source.func.attr == "iter_json":
+            active_raw_mappings.update(targets)
+        elif source.func.attr in {"iter_bytes", "iter_text"}:
+            active_websocket_text.update(targets)
+    return (
+        active_requests,
+        active_websockets,
+        active_raw_mappings,
+        active_request_bodies,
+        active_websocket_text,
+        active_scope_mappings,
+    )
+
+
 def _route_body_wire_names(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
@@ -7423,113 +7728,48 @@ def _route_body_wire_names(
             container = candidate.func.value
         else:
             continue
+        (
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
+            active_scope_mapping_names,
+        ) = _route_provenance_before(
+            node,
+            line_number=candidate.lineno + 1,
+            request_names=request_names,
+            websocket_names=websocket_names,
+            initial_raw_mapping_names=initial_raw_mapping_names,
+            initial_request_body_names=initial_request_body_names,
+            initial_websocket_text_names=initial_websocket_text_names,
+            initial_scope_mapping_names=initial_scope_mapping_names,
+            body_aliases=body_aliases,
+            body_module_aliases=body_module_aliases,
+            json_loads_names=json_loads_names,
+            json_module_names=json_module_names,
+            raw_mapping_helpers=raw_mapping_helpers,
+        )
         if _is_raw_request_mapping(
             container,
-            request_aliases,
-            websocket_aliases,
-            raw_mapping_names,
-            request_body_names,
-            websocket_text_names,
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
             json_loads_names,
             json_module_names,
-            scope_mapping_names,
+            active_scope_mapping_names,
         ):
+            wire_name = _constant_string_value(key, wire_key_constants)
+            if wire_name is None and isinstance(key, ast.Constant):
+                continue
             wire_names.append(
                 (
-                    _constant_string_value(key, wire_key_constants)
-                    or _DYNAMIC_REQUEST_MAPPING_KEY,
+                    wire_name or _DYNAMIC_REQUEST_MAPPING_KEY,
                     key.lineno,
                 )
             )
-    conditional_assignment_lines = _conditional_assignment_lines(
-        ast.Module(body=node.body, type_ignores=[])
-    )
-
-    def provenance_before(
-        line_number: int,
-    ) -> tuple[set[str], set[str], set[str], set[str], set[str], set[str]]:
-        active_requests = set(request_names)
-        active_websockets = set(websocket_names)
-        active_raw_mappings = set(initial_raw_mapping_names)
-        active_request_bodies = set(explicit_body_names) | set(initial_request_body_names)
-        active_websocket_text = set(initial_websocket_text_names)
-        active_scope_mappings = set(initial_scope_mapping_names)
-        for assignment in sorted(assignments, key=lambda candidate: candidate.lineno):
-            if assignment.lineno >= line_number:
-                continue
-            targets, value = _assignment_targets_and_value(assignment)
-            is_scope = _is_request_scope_reference(
-                value,
-                active_requests,
-                active_websockets,
-                active_scope_mappings,
-            )
-            is_request = _is_name_reference(value, active_requests)
-            is_websocket = _is_name_reference(value, active_websockets)
-            is_websocket_text = _is_websocket_text_value(
-                value,
-                active_websockets,
-                active_websocket_text,
-            )
-            is_request_body = _is_request_body_value(
-                value,
-                active_requests,
-                active_request_bodies,
-                active_scope_mappings,
-            )
-            is_raw_mapping = _is_raw_request_mapping(
-                value,
-                active_requests,
-                active_websockets,
-                active_raw_mappings,
-                active_request_bodies,
-                active_websocket_text,
-                json_loads_names,
-                json_module_names,
-                active_scope_mappings,
-            ) or _call_returns_raw_mapping(
-                value,
-                active_requests,
-                active_websockets,
-                active_raw_mappings,
-                active_request_bodies,
-                active_websocket_text,
-                json_loads_names,
-                json_module_names,
-                raw_mapping_helpers,
-                active_scope_mappings,
-            )
-            if assignment.lineno not in conditional_assignment_lines:
-                for names in (
-                    active_requests,
-                    active_websockets,
-                    active_raw_mappings,
-                    active_request_bodies,
-                    active_websocket_text,
-                    active_scope_mappings,
-                ):
-                    names.difference_update(targets)
-            if is_scope:
-                active_scope_mappings.update(targets)
-            if is_request:
-                active_requests.update(targets)
-            if is_websocket:
-                active_websockets.update(targets)
-            if is_websocket_text:
-                active_websocket_text.update(targets)
-            if is_request_body:
-                active_request_bodies.update(targets)
-            if is_raw_mapping:
-                active_raw_mappings.update(targets)
-        return (
-            active_requests,
-            active_websockets,
-            active_raw_mappings,
-            active_request_bodies,
-            active_websocket_text,
-            active_scope_mappings,
-        )
-
     active_helper_lines = visited_helper_lines | {node.lineno}
     for call in (
         candidate
@@ -7546,7 +7786,21 @@ def _route_body_wire_names(
             call_request_body_names,
             call_websocket_text_names,
             call_scope_mapping_names,
-        ) = provenance_before(call.lineno)
+        ) = _route_provenance_before(
+            node,
+            line_number=call.lineno + 1,
+            request_names=request_names,
+            websocket_names=websocket_names,
+            initial_raw_mapping_names=initial_raw_mapping_names,
+            initial_request_body_names=initial_request_body_names,
+            initial_websocket_text_names=initial_websocket_text_names,
+            initial_scope_mapping_names=initial_scope_mapping_names,
+            body_aliases=body_aliases,
+            body_module_aliases=body_module_aliases,
+            json_loads_names=json_loads_names,
+            json_module_names=json_module_names,
+            raw_mapping_helpers=raw_mapping_helpers,
+        )
         parameters = _function_arguments(helper)
         parameters_by_name = {parameter.arg: parameter for parameter in parameters}
         propagated_requests: set[str] = set()
@@ -7922,7 +8176,7 @@ def _json_loads_aliases(tree: ast.Module) -> frozenset[str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
         for imported in node.names
-        if imported.name == "loads"
+        if imported.name in {"load", "loads", "parse_qs", "parse_qsl", "safe_load"}
     )
 
 
@@ -7962,7 +8216,7 @@ def _is_raw_body_decoder_call(
     parts = _qualified_name_parts(node.func)
     return bool(
         parts
-        and parts[-1] in {"loads", "parse_qs", "parse_qsl"}
+        and parts[-1] in {"load", "loads", "parse_qs", "parse_qsl", "safe_load"}
     )
 
 
