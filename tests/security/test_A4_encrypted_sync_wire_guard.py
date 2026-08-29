@@ -5451,3 +5451,75 @@ app = Starlette(exception_handlers={Exception: handle})
         "vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_propagates_parsed_payloads_into_imported_helpers(
+    tmp_path: Path,
+) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "handlers.py").write_text(
+        '''
+def consume(payload):
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+    (service_root / "routes.py").write_text(
+        '''
+from fastapi import FastAPI, Request
+from .handlers import consume
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    return consume(payload)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_root)
+    )
+
+
+def test_A4_guard_invalidates_reassigned_parsed_payloads(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "reassigned_payload.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    payload = {"vault_key": "server-owned"}
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_tracks_non_json_request_body_decoders(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "yaml_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import yaml
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = yaml.safe_load(await request.body())
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
