@@ -690,7 +690,71 @@ Future<AtlasVaultSignedVaultKeyDelivery> createAtlasVaultKeyDelivery({
   required Uint8List transcriptSha256,
   required AtlasVaultPairingBootstrap bootstrap,
   required Uint8List vaultKey,
+  required String deliveryId,
+  required int keyEpoch,
+  required String expiresAt,
+}) async {
+  try {
+    return _createAtlasVaultKeyDelivery(
+      inviter: inviter,
+      keyRequest: keyRequest,
+      transcriptSha256: transcriptSha256,
+      bootstrap: bootstrap,
+      vaultKey: vaultKey,
+      inviterEphemeralPrivateKey: await X25519().newKeyPair(),
+      nonce: Uint8List.fromList(AesGcm.with256bits().newNonce()),
+      deliveryId: deliveryId,
+      keyEpoch: keyEpoch,
+      expiresAt: expiresAt,
+    );
+  } catch (_) {
+    throw const AtlasVaultKeyDeliveryException();
+  }
+}
+
+Future<AtlasVaultSignedVaultKeyDelivery> createAtlasVaultKeyDeliveryForTesting({
+  required AtlasVaultDeviceIdentity inviter,
+  required AtlasVaultSignedPairingKeyRequest keyRequest,
+  required Uint8List transcriptSha256,
+  required AtlasVaultPairingBootstrap bootstrap,
+  required Uint8List vaultKey,
   required Uint8List inviterEphemeralPrivateKey,
+  required Uint8List nonce,
+  required String deliveryId,
+  required int keyEpoch,
+  required String expiresAt,
+}) async {
+  Uint8List? ephemeralPrivateKey;
+  try {
+    ephemeralPrivateKey = _copyExact(inviterEphemeralPrivateKey, _keyLength);
+    return _createAtlasVaultKeyDelivery(
+      inviter: inviter,
+      keyRequest: keyRequest,
+      transcriptSha256: transcriptSha256,
+      bootstrap: bootstrap,
+      vaultKey: vaultKey,
+      inviterEphemeralPrivateKey: await X25519().newKeyPairFromSeed(
+        ephemeralPrivateKey,
+      ),
+      nonce: nonce,
+      deliveryId: deliveryId,
+      keyEpoch: keyEpoch,
+      expiresAt: expiresAt,
+    );
+  } catch (_) {
+    throw const AtlasVaultKeyDeliveryException();
+  } finally {
+    atlasVaultWipeBytesInternal(ephemeralPrivateKey);
+  }
+}
+
+Future<AtlasVaultSignedVaultKeyDelivery> _createAtlasVaultKeyDelivery({
+  required AtlasVaultDeviceIdentity inviter,
+  required AtlasVaultSignedPairingKeyRequest keyRequest,
+  required Uint8List transcriptSha256,
+  required AtlasVaultPairingBootstrap bootstrap,
+  required Uint8List vaultKey,
+  required SimpleKeyPair inviterEphemeralPrivateKey,
   required Uint8List nonce,
   required String deliveryId,
   required int keyEpoch,
@@ -698,7 +762,6 @@ Future<AtlasVaultSignedVaultKeyDelivery> createAtlasVaultKeyDelivery({
 }) async {
   Uint8List? shared;
   Uint8List? deliveryKey;
-  Uint8List? ephemeralPrivateKey;
   Uint8List? vaultKeyCopy;
   try {
     final transcript = _copyExact(transcriptSha256, _keyLength);
@@ -714,8 +777,7 @@ Future<AtlasVaultSignedVaultKeyDelivery> createAtlasVaultKeyDelivery({
       _requestSignatureDomain,
       request.canonicalBytes(),
     );
-    ephemeralPrivateKey = _copyExact(inviterEphemeralPrivateKey, _keyLength);
-    final privateKey = await X25519().newKeyPairFromSeed(ephemeralPrivateKey);
+    final privateKey = inviterEphemeralPrivateKey;
     final publicKey = await privateKey.extractPublicKey();
     final secret = await X25519().sharedSecretKey(
       keyPair: privateKey,
@@ -769,7 +831,6 @@ Future<AtlasVaultSignedVaultKeyDelivery> createAtlasVaultKeyDelivery({
   } finally {
     atlasVaultWipeBytesInternal(shared);
     atlasVaultWipeBytesInternal(deliveryKey);
-    atlasVaultWipeBytesInternal(ephemeralPrivateKey);
     atlasVaultWipeBytesInternal(vaultKeyCopy);
   }
 }

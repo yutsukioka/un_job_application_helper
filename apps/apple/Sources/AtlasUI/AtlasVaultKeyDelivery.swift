@@ -1006,7 +1006,63 @@ public enum AtlasVaultKeyDelivery {
         transcriptSHA256: Data,
         bootstrap: AtlasVaultPairingBootstrap,
         vaultKey: Data,
+        deliveryID: String,
+        keyEpoch: Int,
+        expiresAt: String
+    ) throws -> AtlasVaultSignedVaultKeyDelivery {
+        do {
+            return try createDeliveryInternal(
+                inviter: inviter,
+                keyRequest: keyRequest,
+                transcriptSHA256: transcriptSHA256,
+                bootstrap: bootstrap,
+                vaultKey: vaultKey,
+                inviterEphemeralPrivateKey: Curve25519.KeyAgreement.PrivateKey(),
+                nonce: Data(AES.GCM.Nonce()),
+                deliveryID: deliveryID,
+                keyEpoch: keyEpoch,
+                expiresAt: expiresAt
+            )
+        } catch { throw AtlasVaultKeyDeliveryValidation.fail() }
+    }
+
+    static func createDeliveryForTesting(
+        inviter: AtlasVaultDeviceIdentity,
+        keyRequest: AtlasVaultSignedPairingKeyRequest,
+        transcriptSHA256: Data,
+        bootstrap: AtlasVaultPairingBootstrap,
+        vaultKey: Data,
         inviterEphemeralPrivateKey: Data,
+        nonce: Data,
+        deliveryID: String,
+        keyEpoch: Int,
+        expiresAt: String
+    ) throws -> AtlasVaultSignedVaultKeyDelivery {
+        do {
+            return try createDeliveryInternal(
+                inviter: inviter,
+                keyRequest: keyRequest,
+                transcriptSHA256: transcriptSHA256,
+                bootstrap: bootstrap,
+                vaultKey: vaultKey,
+                inviterEphemeralPrivateKey: try Curve25519.KeyAgreement.PrivateKey(
+                    rawRepresentation: inviterEphemeralPrivateKey
+                ),
+                nonce: nonce,
+                deliveryID: deliveryID,
+                keyEpoch: keyEpoch,
+                expiresAt: expiresAt
+            )
+        } catch { throw AtlasVaultKeyDeliveryValidation.fail() }
+    }
+
+    private static func createDeliveryInternal(
+        inviter: AtlasVaultDeviceIdentity,
+        keyRequest: AtlasVaultSignedPairingKeyRequest,
+        transcriptSHA256: Data,
+        bootstrap: AtlasVaultPairingBootstrap,
+        vaultKey: Data,
+        inviterEphemeralPrivateKey: Curve25519.KeyAgreement.PrivateKey,
         nonce: Data,
         deliveryID: String,
         keyEpoch: Int,
@@ -1016,7 +1072,6 @@ public enum AtlasVaultKeyDelivery {
             guard
                 transcriptSHA256.count == AtlasVaultKeyDeliveryValidation.keyLength,
                 vaultKey.count == AtlasVaultKeyDeliveryValidation.keyLength,
-                inviterEphemeralPrivateKey.count == AtlasVaultKeyDeliveryValidation.keyLength,
                 keyRequest.request.transcriptSHA256
                     == AtlasVaultDeviceIdentityValidation.lowercaseHex(transcriptSHA256),
                 keyRequest.request.inviterDeviceID == inviter.deviceID,
@@ -1028,9 +1083,7 @@ public enum AtlasVaultKeyDelivery {
                 domain: AtlasVaultKeyDeliveryValidation.requestSignatureDomain,
                 payload: keyRequest.request.canonicalData()
             )
-            let privateKey = try Curve25519.KeyAgreement.PrivateKey(
-                rawRepresentation: inviterEphemeralPrivateKey
-            )
+            let privateKey = inviterEphemeralPrivateKey
             let remote = try Curve25519.KeyAgreement.PublicKey(
                 rawRepresentation: keyRequest.request.inviteeEphemeralPublicKey
             )

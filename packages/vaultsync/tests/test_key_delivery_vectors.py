@@ -241,9 +241,12 @@ def _production_delivery(delivery_id: str) -> SignedVaultKeyDelivery:
     )
 
 
-def _delivery_entropy(delivery: SignedVaultKeyDelivery) -> tuple[bytes, bytes]:
-    value = delivery.delivery
-    return value.inviter_ephemeral_public_key, value.nonce
+def _delivery_nonce(delivery: SignedVaultKeyDelivery) -> bytes:
+    return delivery.delivery.nonce
+
+
+def _delivery_ephemeral_public_key(delivery: SignedVaultKeyDelivery) -> bytes:
+    return delivery.delivery.inviter_ephemeral_public_key
 
 
 def test_production_delivery_api_owns_ephemeral_key_and_nonce() -> None:
@@ -254,19 +257,21 @@ def test_production_delivery_api_owns_ephemeral_key_and_nonce() -> None:
 
 def test_production_delivery_revision_stress_and_crash_retry_use_unique_entropy() -> None:
     delivery_id = str(uuid.UUID(int=1))
-    pairs = {
-        _delivery_entropy(_production_delivery(delivery_id))
-        for _ in range(96)
-    }
-    assert len(pairs) == 96
+    deliveries = [_production_delivery(delivery_id) for _ in range(96)]
+    assert len({_delivery_nonce(value) for value in deliveries}) == 96
+    assert len({_delivery_ephemeral_public_key(value) for value in deliveries}) == 96
 
     abandoned = _production_delivery(delivery_id)
     recovered = _production_delivery(delivery_id)
-    assert _delivery_entropy(abandoned) != _delivery_entropy(recovered)
+    assert _delivery_nonce(abandoned) != _delivery_nonce(recovered)
+    assert _delivery_ephemeral_public_key(abandoned) != _delivery_ephemeral_public_key(
+        recovered
+    )
 
 
 def test_production_delivery_concurrency_uses_unique_entropy() -> None:
     delivery_id = str(uuid.UUID(int=2))
     with ThreadPoolExecutor(max_workers=8) as pool:
         deliveries = list(pool.map(_production_delivery, [delivery_id] * 48))
-    assert len({_delivery_entropy(value) for value in deliveries}) == 48
+    assert len({_delivery_nonce(value) for value in deliveries}) == 48
+    assert len({_delivery_ephemeral_public_key(value) for value in deliveries}) == 48

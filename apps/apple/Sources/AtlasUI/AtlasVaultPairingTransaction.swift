@@ -1821,8 +1821,6 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 vaultMetadata: metadata,
                 records: active.store.records
             )
-            var deliverySecret = try self.environment.randomBytes(32)
-            defer { Self.wipe(&deliverySecret) }
             guard await self.environment.authorizeKeyRelease() else {
                 throw AtlasVaultPairingTransactionError.unavailable
             }
@@ -1848,8 +1846,6 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 transcriptSHA256: transcript,
                 bootstrap: bootstrap,
                 vaultKey: vaultKey,
-                inviterEphemeralPrivateKey: deliverySecret,
-                nonce: try self.environment.randomBytes(12),
                 deliveryID: self.environment.uuid(),
                 keyEpoch: confirmed.keyEpoch ?? 1,
                 expiresAt: acceptance.signedKeyRequest.request.expiresAt

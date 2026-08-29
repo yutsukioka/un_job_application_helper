@@ -137,7 +137,9 @@ void main() {
       'record-\u{1F512}',
       'record-\nline',
     ]) {
-      final bootstrap = atlasVaultObject(root['bootstrap']);
+      final bootstrap = <String, Object?>{
+        ...atlasVaultObject(root['bootstrap']),
+      };
       final records = <Object?>[
         for (final record in atlasVaultList(bootstrap['records']))
           <String, Object?>{...atlasVaultObject(record)},
@@ -186,15 +188,23 @@ void main() {
   test(
     'production delivery owns entropy across revision stress and crash retry',
     () async {
-      final pairs = <String>{};
-      for (var index = 0; index < 96; index += 1) {
-        pairs.add(_deliveryEntropy(await _productionDelivery(root)));
-      }
-      expect(pairs, hasLength(96));
+      final deliveries = <AtlasVaultSignedVaultKeyDelivery>[
+        for (var index = 0; index < 96; index += 1)
+          await _productionDelivery(root),
+      ];
+      expect(deliveries.map(_deliveryNonce).toSet(), hasLength(96));
+      expect(
+        deliveries.map(_deliveryEphemeralPublicKey).toSet(),
+        hasLength(96),
+      );
 
       final abandoned = await _productionDelivery(root);
       final recovered = await _productionDelivery(root);
-      expect(_deliveryEntropy(recovered), isNot(_deliveryEntropy(abandoned)));
+      expect(_deliveryNonce(recovered), isNot(_deliveryNonce(abandoned)));
+      expect(
+        _deliveryEphemeralPublicKey(recovered),
+        isNot(_deliveryEphemeralPublicKey(abandoned)),
+      );
     },
   );
 
@@ -204,7 +214,8 @@ void main() {
         for (var index = 0; index < 48; index += 1) _productionDelivery(root),
       ],
     );
-    expect(deliveries.map(_deliveryEntropy).toSet(), hasLength(48));
+    expect(deliveries.map(_deliveryNonce).toSet(), hasLength(48));
+    expect(deliveries.map(_deliveryEphemeralPublicKey).toSet(), hasLength(48));
   });
 }
 
@@ -227,9 +238,11 @@ Future<AtlasVaultSignedVaultKeyDelivery> _productionDelivery(
   );
 }
 
-String _deliveryEntropy(AtlasVaultSignedVaultKeyDelivery delivery) =>
-    '${base64Encode(delivery.delivery.inviterEphemeralPublicKey)}:'
-    '${base64Encode(delivery.delivery.nonce)}';
+String _deliveryNonce(AtlasVaultSignedVaultKeyDelivery delivery) =>
+    base64Encode(delivery.delivery.nonce);
+
+String _deliveryEphemeralPublicKey(AtlasVaultSignedVaultKeyDelivery delivery) =>
+    base64Encode(delivery.delivery.inviterEphemeralPublicKey);
 
 Future<AtlasVaultDeviceIdentity> _identity(
   Map<String, Object?> root,

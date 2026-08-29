@@ -184,17 +184,25 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         throws
     {
         let root = try loadRoot()
-        var pairs = Set<String>()
+        var nonces = Set<String>()
+        var publicKeys = Set<String>()
         for _ in 0..<96 {
-            pairs.insert(try deliveryEntropy(productionDelivery(root)))
+            let delivery = try productionDelivery(root)
+            nonces.insert(deliveryNonce(delivery))
+            publicKeys.insert(deliveryEphemeralPublicKey(delivery))
         }
-        XCTAssertEqual(pairs.count, 96)
+        XCTAssertEqual(nonces.count, 96)
+        XCTAssertEqual(publicKeys.count, 96)
 
         let abandoned = try productionDelivery(root)
         let recovered = try productionDelivery(root)
         XCTAssertNotEqual(
-            try deliveryEntropy(abandoned),
-            try deliveryEntropy(recovered)
+            deliveryNonce(abandoned),
+            deliveryNonce(recovered)
+        )
+        XCTAssertNotEqual(
+            deliveryEphemeralPublicKey(abandoned),
+            deliveryEphemeralPublicKey(recovered)
         )
     }
 
@@ -215,7 +223,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         let keyEpoch = try integer(root["vault_key_epoch"])
         let expiresAt = try string(root["delivery_expires_at"])
 
-        let pairs = try await withThrowingTaskGroup(
+        let nonces = try await withThrowingTaskGroup(
             of: String.self,
             returning: [String].self
         ) { group in
@@ -231,10 +239,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
                         keyEpoch: keyEpoch,
                         expiresAt: expiresAt
                     )
-                    return delivery.delivery.inviterEphemeralPublicKey
-                        .base64EncodedString()
-                        + ":"
-                        + delivery.delivery.nonce.base64EncodedString()
+                    return delivery.delivery.nonce.base64EncodedString()
                 }
             }
             var values: [String] = []
@@ -243,7 +248,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
             }
             return values
         }
-        XCTAssertEqual(Set(pairs).count, 48)
+        XCTAssertEqual(Set(nonces).count, 48)
     }
 
     func testWrongEphemeralKeyAndExpiryFailWithRedactedErrors() throws {
@@ -317,12 +322,16 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         )
     }
 
-    private func deliveryEntropy(
+    private func deliveryNonce(
         _ delivery: AtlasVaultSignedVaultKeyDelivery
-    ) throws -> String {
+    ) -> String {
+        delivery.delivery.nonce.base64EncodedString()
+    }
+
+    private func deliveryEphemeralPublicKey(
+        _ delivery: AtlasVaultSignedVaultKeyDelivery
+    ) -> String {
         delivery.delivery.inviterEphemeralPublicKey.base64EncodedString()
-            + ":"
-            + delivery.delivery.nonce.base64EncodedString()
     }
 
     private func dictionary(_ value: Any?) throws -> [String: Any] {
