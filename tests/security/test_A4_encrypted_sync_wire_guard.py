@@ -6013,3 +6013,56 @@ def request_route(injected=Depends(get_request)):
 
     assert any("vault_key" in violation for violation in violations)
     assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_propagates_dependency_yield_provenance(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "dependency_yield_provenance.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI, Request
+app = FastAPI()
+async def get_payload(request: Request):
+    yield await request.json()
+@app.post("/payload")
+async def payload_route(payload=Depends(get_payload)):
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(
+            service_file.parent
+        )
+    )
+
+
+def test_A4_guard_tracks_uploaded_file_collection_elements(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "uploaded_file_collections.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, UploadFile
+app = FastAPI()
+@app.post("/indexed")
+async def indexed(payloads: list[UploadFile]):
+    return payloads[0].headers["vault_key"]
+@app.post("/iterated")
+async def iterated(payloads: list[UploadFile]):
+    for payload in payloads:
+        return payload.headers["recovery_key"]
+    return None
+''',
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
