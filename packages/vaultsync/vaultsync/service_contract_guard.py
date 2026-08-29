@@ -2065,6 +2065,8 @@ def _asgi_callable_uses_unapproved_input(
                     header_names,
                 ):
                     key_value = _constant_string_value(key, {})
+                    if key_value is None and isinstance(key, ast.Constant):
+                        continue
                     if key_value is None or _is_banned_wire_name(key_value):
                         return True
                 if not isinstance(candidate, ast.Call):
@@ -6210,13 +6212,30 @@ def _request_body_flow_names(
                 )
                 target_reference = call.func
                 positional_arguments = call.args
+                keyword_arguments = call.keywords
                 if (
                     isinstance(call.func, ast.Attribute)
                     and call.func.attr == "add_task"
-                    and call.args
                 ):
-                    target_reference = call.args[0]
-                    positional_arguments = call.args[1:]
+                    if call.args:
+                        target_reference = call.args[0]
+                        positional_arguments = call.args[1:]
+                    else:
+                        callback_keyword = next(
+                            (
+                                keyword
+                                for keyword in call.keywords
+                                if keyword.arg == "func"
+                            ),
+                            None,
+                        )
+                        if callback_keyword is not None:
+                            target_reference = callback_keyword.value
+                            keyword_arguments = [
+                                keyword
+                                for keyword in call.keywords
+                                if keyword is not callback_keyword
+                            ]
                 target = _resolve_bound_method_key(
                     root=root,
                     path=path,
@@ -6303,7 +6322,7 @@ def _request_body_flow_names(
                     strict=False,
                 ):
                     propagate(parameter, argument)
-                for keyword in call.keywords:
+                for keyword in keyword_arguments:
                     parameter = parameters_by_name.get(keyword.arg or "")
                     if parameter is None:
                         continue
@@ -7106,7 +7125,8 @@ def _referenced_model_keys(
             for candidate in ast.walk(statement)
             if isinstance(candidate, ast.Call)
             and isinstance(candidate.func, ast.Attribute)
-            and candidate.func.attr in {"model_validate", "parse_obj"}
+            and candidate.func.attr
+            in {"model_validate", "model_validate_json", "parse_obj", "parse_raw"}
         ):
             inputs = [
                 *call.args,
@@ -7140,20 +7160,37 @@ def _referenced_model_keys(
                 json_module_names=_json_module_aliases(trees_by_path[path]),
                 raw_mapping_helpers=raw_mapping_helpers[path],
             )
-            if not any(
-                _is_raw_request_mapping(
-                    candidate,
-                    request_aliases,
-                    websocket_aliases,
-                    raw_mapping_names,
-                    request_body_names,
-                    websocket_text_names,
-                    _json_loads_aliases(trees_by_path[path]),
-                    _json_module_aliases(trees_by_path[path]),
-                    scope_mapping_names,
+            if call.func.attr in {"model_validate_json", "parse_raw"}:
+                request_derived = any(
+                    _is_request_body_value(
+                        candidate,
+                        request_aliases,
+                        request_body_names,
+                        scope_mapping_names,
+                    )
+                    or _is_websocket_text_value(
+                        candidate,
+                        websocket_aliases,
+                        websocket_text_names,
+                    )
+                    for candidate in inputs
                 )
-                for candidate in inputs
-            ):
+            else:
+                request_derived = any(
+                    _is_raw_request_mapping(
+                        candidate,
+                        request_aliases,
+                        websocket_aliases,
+                        raw_mapping_names,
+                        request_body_names,
+                        websocket_text_names,
+                        _json_loads_aliases(trees_by_path[path]),
+                        _json_module_aliases(trees_by_path[path]),
+                        scope_mapping_names,
+                    )
+                    for candidate in inputs
+                )
+            if not request_derived:
                 continue
             target = _resolve_model_key(
                 root,
