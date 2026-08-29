@@ -4317,3 +4317,113 @@ async def errors(req, exc):
 
     assert any("vault_key" in violation for violation in violations)
     assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_preserves_receivers_for_class_qualified_helper_calls(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "unbound_request_helper.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+class Parser:
+    async def parse(self, inbound):
+        return await inbound.json()
+parser = Parser()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await Parser.parse(parser, request)
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_resolves_aliased_functional_dataclass_fields(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "aliased_functional_dataclass.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from dataclasses import dataclass, make_dataclass
+from fastapi import FastAPI
+app = FastAPI()
+@dataclass
+class SecretInput:
+    vault_key: str
+NESTED = ("payload", SecretInput)
+Payload = make_dataclass("Payload", [NESTED])
+@app.post("/sync")
+def sync(payload: Payload): return bool(payload)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "SecretInput.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_programmatic_exception_handler_requests(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "registered_exception_handler.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+async def errors(req, exc):
+    _ = req.query_params["vault_key"]
+    return {"ok": False}
+app.add_exception_handler(404, errors)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_unwraps_partial_dependency_callables(tmp_path: Path) -> None:
+    bad_root = tmp_path / "bad" / "services"
+    bad_root.mkdir(parents=True)
+    (bad_root / "partial_dependency.py").write_text(
+        '''
+from functools import partial
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def secret(prefix, vault_key): return prefix + vault_key
+@app.get("/sync")
+def sync(value=Depends(partial(secret, "prefix"))): return bool(value)
+''',
+        encoding="utf-8",
+    )
+    safe_root = tmp_path / "safe" / "services"
+    safe_root.mkdir(parents=True)
+    (safe_root / "partial_dependency.py").write_text(
+        '''
+from functools import partial
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def secret(vault_key): return bool(vault_key)
+@app.get("/sync")
+def sync(value=Depends(partial(secret, "internal"))): return bool(value)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(bad_root)
+    )
+    assert find_raw_secret_wire_contract_violations(safe_root) == []
