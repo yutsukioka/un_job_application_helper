@@ -6066,3 +6066,139 @@ async def iterated(payloads: list[UploadFile]):
 
     assert any("vault_key" in violation for violation in violations)
     assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_propagates_dependency_yield_from_elements(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "dependency_yield_from.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI, Request
+app = FastAPI()
+def get_payload(request: Request):
+    yield from [request.query_params]
+@app.get("/payload")
+def payload_route(payload=Depends(get_payload)):
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(
+            service_file.parent
+        )
+    )
+
+
+def test_A4_guard_tracks_uploaded_file_iterator_adapters(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "uploaded_file_iterators.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, UploadFile
+app = FastAPI()
+@app.post("/enumerated")
+async def enumerated(payloads: list[UploadFile]):
+    for _, payload in enumerate(payloads):
+        return payload.headers["vault_key"]
+    return None
+@app.post("/reversed")
+async def reversed_payloads(payloads: list[UploadFile]):
+    for payload in reversed(payloads):
+        return payload.headers["recovery_key"]
+    return None
+''',
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_preserves_request_mapping_union_provenance(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "request_mapping_union.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/left")
+async def left(request: Request):
+    payload = await request.json()
+    copied = payload | {"mode": "sync"}
+    return copied["vault_key"]
+@app.post("/right")
+async def right(request: Request):
+    payload = await request.json()
+    copied = {"mode": "sync"} | payload
+    return copied["recovery_key"]
+''',
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_rejects_request_mapping_helper_keyword_expansion(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "request_keyword_expansion.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+def consume(vault_key=None):
+    return vault_key
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    return consume(**payload)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "dynamic request mapping key" in violation
+        for violation in find_raw_secret_wire_contract_violations(
+            service_file.parent
+        )
+    )
+
+
+def test_A4_guard_tracks_async_context_manager_form_bindings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "async_form_context.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    async with request.form() as form:
+        return form["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(
+            service_file.parent
+        )
+    )
