@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from string import Formatter
 
 
 ROUTE_METHODS = {
@@ -107,6 +108,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    raw_mapping_helpers = _raw_mapping_helper_summaries_by_path(
+        module_root,
+        parsed_modules,
+        paths_by_module,
+    )
 
     pydantic_class_models = _pydantic_model_keys(
         module_root,
@@ -149,6 +155,15 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         paths_by_module,
         service_paths,
         route_owner_names,
+    )
+    violations.extend(
+        _route_template_wire_violations(
+            parsed_modules,
+            service_paths,
+            route_owner_names,
+            mounted_route_owners,
+            wire_alias_constants,
+        )
     )
     violations.extend(
         _unresolved_mounted_asgi_violations(
@@ -217,6 +232,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             json_loads_names=_json_loads_aliases(dict(parsed_modules)[path]),
             json_module_names=_json_module_aliases(dict(parsed_modules)[path]),
             wire_key_constants=wire_alias_constants[path],
+            raw_mapping_helpers=raw_mapping_helpers[path],
         ):
             if _is_banned_wire_name(wire_name):
                 violations.append(
@@ -424,6 +440,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             websocket_module_names=_websocket_module_aliases(tree),
             json_loads_names=_json_loads_aliases(tree),
             json_module_names=_json_module_aliases(tree),
+            raw_mapping_helpers=raw_mapping_helpers[path],
             route_owner_names=route_owner_names.get(path, frozenset()),
             depends_aliases=frozenset(depends_aliases),
             depends_module_aliases=frozenset(depends_module_aliases),
@@ -479,6 +496,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         websocket_module_names: frozenset[str],
         json_loads_names: frozenset[str],
         json_module_names: frozenset[str],
+        raw_mapping_helpers: dict[str, tuple[tuple[str, ...], frozenset[str]]],
         route_owner_names: frozenset[str],
         depends_aliases: frozenset[str],
         depends_module_aliases: frozenset[str],
@@ -511,6 +529,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.websocket_module_names = websocket_module_names
         self.json_loads_names = json_loads_names
         self.json_module_names = json_module_names
+        self.raw_mapping_helpers = raw_mapping_helpers
         self.route_owner_names = route_owner_names
         self.depends_aliases = depends_aliases
         self.depends_module_aliases = depends_module_aliases
@@ -697,6 +716,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             websocket_module_names=self.websocket_module_names,
             json_loads_names=self.json_loads_names,
             json_module_names=self.json_module_names,
+            raw_mapping_helpers=self.raw_mapping_helpers,
             initial_request_names=delegated_request_names,
             initial_websocket_names=delegated_websocket_names,
             wire_key_constants={
@@ -1369,6 +1389,82 @@ def _unresolved_mounted_asgi_violations(
     return violations
 
 
+def _route_template_wire_violations(
+    parsed_modules: list[tuple[Path, ast.Module]],
+    service_paths: frozenset[Path],
+    route_owner_names: dict[Path, frozenset[str]],
+    mounted_route_owners: frozenset[tuple[Path, str]],
+    wire_alias_constants: dict[Path, dict[str, str]],
+) -> list[str]:
+    violations: list[str] = []
+    path_decorators = ROUTE_METHODS | {
+        "api_route",
+        "route",
+        "websocket",
+        "websocket_route",
+    }
+    path_registrars = PROGRAMMATIC_ROUTE_REGISTRARS - {"add_exception_handler"}
+    for path, tree in parsed_modules:
+        mounted_names = {
+            name for owner_path, name in mounted_route_owners if owner_path == path
+        }
+        if path not in service_paths and not mounted_names:
+            continue
+        route_owners = route_owner_names.get(path, frozenset())
+        route_constructor_aliases = _starlette_route_constructor_aliases(tree)
+        route_module_aliases = _starlette_route_module_aliases(tree)
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            template_node: ast.expr | None = None
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr in path_decorators | path_registrars
+                and _active_route_owner_reference(
+                    call.func.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+            ):
+                template_node = next(
+                    (keyword.value for keyword in call.keywords if keyword.arg == "path"),
+                    call.args[0] if call.args else None,
+                )
+            elif _is_starlette_route_constructor(
+                call,
+                route_constructor_aliases,
+                route_module_aliases,
+            ):
+                template_node = next(
+                    (keyword.value for keyword in call.keywords if keyword.arg == "path"),
+                    call.args[0] if call.args else None,
+                )
+            if template_node is None:
+                continue
+            template = _constant_string_value(
+                template_node,
+                wire_alias_constants[path],
+            )
+            if template is None:
+                continue
+            try:
+                fields = [
+                    field_name
+                    for _, field_name, _, _ in Formatter().parse(template)
+                    if field_name is not None
+                ]
+            except ValueError:
+                continue
+            for field_name in fields:
+                normalized = field_name.split(".", 1)[0].split("[", 1)[0]
+                if _is_banned_wire_name(normalized):
+                    violations.append(
+                        f"{path}:{template_node.lineno}: route template field "
+                        f"{normalized} would accept raw vault secret material over "
+                        "the wire"
+                    )
+    return violations
+
+
 def _unapproved_asgi_middleware_violations(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -1448,7 +1544,12 @@ def _unapproved_asgi_middleware_violations(
                 else None
             )
             if call_key is not None and not _asgi_callable_uses_unapproved_input(
-                functions[call_key]
+                root,
+                call_key,
+                paths_by_module,
+                trees_by_path,
+                functions,
+                function_scopes,
             ):
                 continue
             violations.append(
@@ -1489,85 +1590,160 @@ def _is_framework_middleware_reference(node: ast.AST, tree: ast.Module) -> bool:
 
 
 def _asgi_callable_uses_unapproved_input(
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    root: Path,
+    initial_key: tuple[Path, int, str],
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
 ) -> bool:
-    arguments = _function_arguments(function)
-    scope_names = {
-        argument.arg
-        for argument in arguments
-        if argument.arg == "scope"
-        or (
-            argument.annotation is not None
-            and (_qualified_name_parts(argument.annotation) or [None])[-1] == "Scope"
+    initial_function = functions[initial_key]
+    initial_arguments = _function_arguments(initial_function)
+    pending = [
+        (
+            initial_key,
+            frozenset(
+                argument.arg
+                for argument in initial_arguments
+                if argument.arg == "scope"
+                or (
+                    argument.annotation is not None
+                    and (_qualified_name_parts(argument.annotation) or [None])[-1]
+                    == "Scope"
+                )
+            ),
+            frozenset(
+                argument.arg
+                for argument in initial_arguments
+                if argument.arg == "receive"
+                or (
+                    argument.annotation is not None
+                    and (_qualified_name_parts(argument.annotation) or [None])[-1]
+                    == "Receive"
+                )
+            ),
         )
-    }
-    receive_names = {
-        argument.arg
-        for argument in arguments
-        if argument.arg == "receive"
-        or (
-            argument.annotation is not None
-            and (_qualified_name_parts(argument.annotation) or [None])[-1]
-            == "Receive"
-        )
-    }
-    assignments = [
-        candidate
-        for statement in function.body
-        for candidate in ast.walk(statement)
-        if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
     ]
-    changed = True
-    while changed:
-        changed = False
-        for assignment in assignments:
-            targets, value = _assignment_targets_and_value(assignment)
-            if _is_name_reference(value, scope_names):
-                before = len(scope_names)
-                scope_names.update(targets)
-                changed = changed or len(scope_names) != before
-            if _is_name_reference(value, receive_names):
-                before = len(receive_names)
-                receive_names.update(targets)
-                changed = changed or len(receive_names) != before
+    seen: set[tuple[tuple[Path, int, str], frozenset[str], frozenset[str]]] = set()
+    while pending:
+        function_key, initial_scopes, initial_receives = pending.pop()
+        state = (function_key, initial_scopes, initial_receives)
+        if state in seen:
+            continue
+        seen.add(state)
+        function = functions[function_key]
+        scope_names = set(initial_scopes)
+        receive_names = set(initial_receives)
+        assignments = [
+            candidate
+            for statement in function.body
+            for candidate in ast.walk(statement)
+            if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+        ]
+        changed = True
+        while changed:
+            changed = False
+            for assignment in assignments:
+                targets, value = _assignment_targets_and_value(assignment)
+                if _is_name_reference(value, scope_names):
+                    before = len(scope_names)
+                    scope_names.update(targets)
+                    changed = changed or len(scope_names) != before
+                if _is_name_reference(value, receive_names):
+                    before = len(receive_names)
+                    receive_names.update(targets)
+                    changed = changed or len(receive_names) != before
 
-    for statement in function.body:
-        for candidate in ast.walk(statement):
-            if (
-                isinstance(candidate, ast.Constant)
-                and isinstance(candidate.value, str)
-                and _is_banned_wire_name(candidate.value)
-            ):
-                return True
-            if isinstance(candidate, ast.Subscript):
-                container = candidate.value
-                key = candidate.slice
-            elif (
-                isinstance(candidate, ast.Call)
-                and isinstance(candidate.func, ast.Attribute)
-                and candidate.func.attr in {"get", "getlist", "pop", "setdefault"}
-                and candidate.args
-            ):
-                container = candidate.func.value
-                key = candidate.args[0]
-            else:
-                container = None
-                key = None
-            if container is not None and key is not None and _is_name_reference(
-                container,
-                scope_names,
-            ):
-                key_value = _constant_string_value(key, {})
-                if key_value == "query_string" or (
-                    key_value is not None and _is_banned_wire_name(key_value)
+        path = function_key[0]
+        tree = trees_by_path[path]
+        for statement in function.body:
+            for candidate in ast.walk(statement):
+                if (
+                    isinstance(candidate, ast.Constant)
+                    and isinstance(candidate.value, str)
+                    and _is_banned_wire_name(candidate.value)
                 ):
                     return True
-            if (
-                isinstance(candidate, ast.Call)
-                and _is_name_reference(candidate.func, receive_names)
-            ):
-                return True
+                if isinstance(candidate, ast.Subscript):
+                    container = candidate.value
+                    key = candidate.slice
+                elif (
+                    isinstance(candidate, ast.Call)
+                    and isinstance(candidate.func, ast.Attribute)
+                    and candidate.func.attr in {"get", "getlist", "pop", "setdefault"}
+                    and candidate.args
+                ):
+                    container = candidate.func.value
+                    key = candidate.args[0]
+                else:
+                    container = None
+                    key = None
+                if container is not None and key is not None and _is_name_reference(
+                    container,
+                    scope_names,
+                ):
+                    key_value = _constant_string_value(key, {})
+                    if key_value == "query_string" or (
+                        key_value is not None and _is_banned_wire_name(key_value)
+                    ):
+                        return True
+                if not isinstance(candidate, ast.Call):
+                    continue
+                if _is_name_reference(candidate.func, receive_names):
+                    return True
+                target = _resolve_function_key(
+                    root,
+                    path,
+                    tree,
+                    candidate.func,
+                    paths_by_module,
+                    trees_by_path,
+                    functions,
+                    function_scopes,
+                    function_key,
+                )
+                if target is None:
+                    continue
+                target_arguments = _function_arguments(functions[target])
+                propagated_scopes = _bound_tracked_parameter_names(
+                    candidate,
+                    target_arguments,
+                    scope_names,
+                )
+                propagated_receives = _bound_tracked_parameter_names(
+                    candidate,
+                    target_arguments,
+                    receive_names,
+                )
+                if propagated_scopes or propagated_receives:
+                    pending.append(
+                        (
+                            target,
+                            frozenset(propagated_scopes),
+                            frozenset(propagated_receives),
+                        )
+                    )
     return False
+
+
+def _bound_tracked_parameter_names(
+    call: ast.Call,
+    parameters: list[ast.arg],
+    tracked_names: set[str],
+) -> set[str]:
+    bound = {
+        parameter.arg
+        for parameter, argument in zip(parameters, call.args)
+        if _is_name_reference(argument, tracked_names)
+    }
+    parameters_by_name = {parameter.arg: parameter for parameter in parameters}
+    bound.update(
+        parameters_by_name[keyword.arg].arg
+        for keyword in call.keywords
+        if keyword.arg in parameters_by_name
+        and _is_name_reference(keyword.value, tracked_names)
+    )
+    return bound
 
 
 def _is_route_owner_reference(
@@ -5817,6 +5993,10 @@ def _route_body_wire_names(
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
     wire_key_constants: dict[str, str],
+    raw_mapping_helpers: dict[
+        str,
+        tuple[tuple[str, ...], frozenset[str]],
+    ],
     initial_request_names: frozenset[str] = frozenset(),
     initial_websocket_names: frozenset[str] = frozenset(),
 ) -> list[tuple[str, int]]:
@@ -5909,10 +6089,16 @@ def _route_body_wire_names(
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
                 changed = changed or len(raw_mapping_names) != previous_size
-            if _call_receives_tracked_input(
+            if _call_returns_raw_mapping(
                 value,
                 request_aliases,
                 websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+                raw_mapping_helpers,
             ):
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
@@ -6373,20 +6559,260 @@ def _is_raw_request_mapping(
     )
 
 
-def _call_receives_tracked_input(
+def _raw_mapping_helper_summaries_by_path(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+) -> dict[Path, dict[str, tuple[tuple[str, ...], frozenset[str]]]]:
+    trees_by_path = dict(parsed_modules)
+    functions = _function_definitions(parsed_modules)
+    function_scopes = _function_scopes(parsed_modules)
+    summaries: dict[tuple[Path, int, str], frozenset[str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        visible = _visible_raw_mapping_helper_summaries(
+            root,
+            parsed_modules,
+            paths_by_module,
+            functions,
+            function_scopes,
+            summaries,
+        )
+        for key, function in functions.items():
+            path = key[0]
+            raw_parameters = _raw_mapping_return_parameters(
+                function,
+                visible[path],
+                _json_loads_aliases(trees_by_path[path]),
+                _json_module_aliases(trees_by_path[path]),
+            )
+            if summaries.get(key) != raw_parameters:
+                summaries[key] = raw_parameters
+                changed = True
+    return _visible_raw_mapping_helper_summaries(
+        root,
+        parsed_modules,
+        paths_by_module,
+        functions,
+        function_scopes,
+        summaries,
+    )
+
+
+def _visible_raw_mapping_helper_summaries(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    summaries: dict[tuple[Path, int, str], frozenset[str]],
+) -> dict[Path, dict[str, tuple[tuple[str, ...], frozenset[str]]]]:
+    trees_by_path = dict(parsed_modules)
+    visible: dict[Path, dict[str, tuple[tuple[str, ...], frozenset[str]]]] = {
+        path: {} for path, _ in parsed_modules
+    }
+
+    def add(path: Path, name: str, key: tuple[Path, int, str]) -> None:
+        raw_parameters = summaries.get(key)
+        if not raw_parameters:
+            return
+        visible[path][name] = (
+            tuple(argument.arg for argument in _function_arguments(functions[key])),
+            raw_parameters,
+        )
+
+    for key in sorted(functions):
+        add(key[0], key[2], key)
+    for path, tree in parsed_modules:
+        symbol_targets, module_targets = _import_targets(
+            root,
+            path,
+            tree,
+            paths_by_module,
+        )
+        for local_name, target in symbol_targets.items():
+            target_path, target_name = _follow_symbol_reexports(
+                root,
+                target,
+                paths_by_module,
+                trees_by_path,
+            )
+            candidates = [
+                key
+                for key in functions
+                if key[0] == target_path
+                and key[2] == target_name
+                and not function_scopes[key]
+            ]
+            if candidates:
+                add(path, local_name, min(candidates, key=lambda key: key[1]))
+        for local_parts, target_path in module_targets.items():
+            for key in sorted(functions):
+                if key[0] == target_path and not function_scopes[key]:
+                    add(path, ".".join((*local_parts, key[2])), key)
+    changed = True
+    while changed:
+        changed = False
+        for path, tree in parsed_modules:
+            for key, value, _, _ in _module_assignment_entries(path, tree):
+                parts = _qualified_name_parts(value)
+                source = visible[path].get(".".join(parts)) if parts else None
+                if source is not None and visible[path].get(key[2]) != source:
+                    visible[path][key[2]] = source
+                    changed = True
+    return visible
+
+
+def _raw_mapping_return_parameters(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    raw_mapping_helpers: dict[str, tuple[tuple[str, ...], frozenset[str]]],
+    json_loads_names: frozenset[str],
+    json_module_names: frozenset[str],
+) -> frozenset[str]:
+    raw_parameters: set[str] = set()
+    assignments = [
+        candidate
+        for statement in function.body
+        for candidate in ast.walk(statement)
+        if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+    ]
+    returns = [
+        candidate
+        for candidate in _lexical_body_nodes(function.body)
+        if isinstance(candidate, ast.Return) and candidate.value is not None
+    ]
+    for source in _function_arguments(function):
+        request_aliases = {source.arg}
+        websocket_aliases = {source.arg}
+        raw_mapping_names: set[str] = set()
+        request_body_names: set[str] = set()
+        websocket_text_names: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for assignment in assignments:
+                targets, value = _assignment_targets_and_value(assignment)
+                if _is_name_reference(value, request_aliases):
+                    before = len(request_aliases)
+                    request_aliases.update(targets)
+                    changed = changed or len(request_aliases) != before
+                if _is_name_reference(value, websocket_aliases):
+                    before = len(websocket_aliases)
+                    websocket_aliases.update(targets)
+                    changed = changed or len(websocket_aliases) != before
+                if _is_request_body_value(value, request_aliases, request_body_names):
+                    before = len(request_body_names)
+                    request_body_names.update(targets)
+                    changed = changed or len(request_body_names) != before
+                if _is_websocket_text_value(
+                    value,
+                    websocket_aliases,
+                    websocket_text_names,
+                ):
+                    before = len(websocket_text_names)
+                    websocket_text_names.update(targets)
+                    changed = changed or len(websocket_text_names) != before
+                if _is_raw_request_mapping(
+                    value,
+                    request_aliases,
+                    websocket_aliases,
+                    raw_mapping_names,
+                    request_body_names,
+                    websocket_text_names,
+                    json_loads_names,
+                    json_module_names,
+                ) or _call_returns_raw_mapping(
+                    value,
+                    request_aliases,
+                    websocket_aliases,
+                    raw_mapping_names,
+                    request_body_names,
+                    websocket_text_names,
+                    json_loads_names,
+                    json_module_names,
+                    raw_mapping_helpers,
+                ):
+                    before = len(raw_mapping_names)
+                    raw_mapping_names.update(targets)
+                    changed = changed or len(raw_mapping_names) != before
+        if any(
+            _is_raw_request_mapping(
+                returned.value,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+            )
+            or _call_returns_raw_mapping(
+                returned.value,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+                raw_mapping_helpers,
+            )
+            for returned in returns
+        ):
+            raw_parameters.add(source.arg)
+    return frozenset(raw_parameters)
+
+
+def _call_returns_raw_mapping(
     node: ast.AST,
     request_aliases: set[str],
     websocket_aliases: set[str],
+    raw_mapping_names: set[str],
+    request_body_names: set[str],
+    websocket_text_names: set[str],
+    json_loads_names: frozenset[str],
+    json_module_names: frozenset[str],
+    raw_mapping_helpers: dict[str, tuple[tuple[str, ...], frozenset[str]]],
 ) -> bool:
     while isinstance(node, ast.Await):
         node = node.value
     if not isinstance(node, ast.Call):
         return False
-    tracked_names = request_aliases | websocket_aliases
+    parts = _qualified_name_parts(node.func)
+    if not parts:
+        return False
+    summary = raw_mapping_helpers.get(".".join(parts))
+    if summary is None:
+        summary = raw_mapping_helpers.get(parts[-1])
+    if summary is None:
+        return False
+    parameters, raw_parameters = summary
+
+    def is_raw(argument: ast.AST) -> bool:
+        return _is_name_reference(
+            argument,
+            request_aliases | websocket_aliases,
+        ) or _is_raw_request_mapping(
+            argument,
+            request_aliases,
+            websocket_aliases,
+            raw_mapping_names,
+            request_body_names,
+            websocket_text_names,
+            json_loads_names,
+            json_module_names,
+        )
+
+    if any(
+        parameter in raw_parameters and is_raw(argument)
+        for parameter, argument in zip(parameters, node.args)
+    ):
+        return True
     return any(
-        _is_name_reference(argument, tracked_names) for argument in node.args
-    ) or any(
-        _is_name_reference(keyword.value, tracked_names) for keyword in node.keywords
+        keyword.arg in raw_parameters and is_raw(keyword.value)
+        for keyword in node.keywords
+        if keyword.arg is not None
     )
 
 
@@ -6487,8 +6913,10 @@ def _has_unapproved_route_decorator(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     route_owner_names: frozenset[str],
 ) -> bool:
+    route_registration_seen = False
     for decorator in node.decorator_list:
         if _is_http_middleware_decorator(decorator, route_owner_names):
+            route_registration_seen = True
             continue
         call = decorator if isinstance(decorator, ast.Call) else None
         func = call.func if call is not None else decorator
@@ -6497,9 +6925,13 @@ def _has_unapproved_route_decorator(
             and func.attr in ROUTE_METHODS | GENERIC_ROUTE_DECORATORS
             and _is_route_owner_reference(func.value, route_owner_names)
         ):
+            route_registration_seen = True
             continue
-        return True
-    return False
+        if route_registration_seen:
+            return True
+    if route_registration_seen:
+        return False
+    return bool(node.decorator_list)
 
 
 def _route_handler_uses_owner(
