@@ -9,6 +9,7 @@
 #include <roapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Security.Credentials.UI.h>
 
 #include <algorithm>

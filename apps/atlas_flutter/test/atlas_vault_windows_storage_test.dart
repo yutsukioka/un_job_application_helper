@@ -68,12 +68,17 @@ void main() {
     final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
 
     expect(source, contains('UserConsentVerifier'));
+    expect(source, contains('#include <winrt/Windows.Foundation.h>'));
     expect(source, contains('CheckAvailabilityAsync'));
     expect(source, contains('RequestVerificationAsync'));
     expect(source, contains('UserConsentVerificationResult::Verified'));
     expect(source, contains('"authorizePairingKeyRelease"'));
     expect(cmake, contains('"runtimeobject.lib"'));
     expect(cmake, contains('"windowsapp.lib"'));
+    expect(
+      cmake,
+      contains('"_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"'),
+    );
   });
 
   test('encrypted-document save uses exact bounded path-free call', () async {
