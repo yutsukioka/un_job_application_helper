@@ -1416,7 +1416,8 @@ final class AtlasVaultRecoveryImportTests: XCTestCase {
         for required in [
             "com.atlasvault.recovery-import",
             "pending-v1",
-            "128 * 1_024 * 1_024",
+            "AtlasVaultProtectedStateBounds",
+            ".maximumImportedEncryptedStateByteCount",
             "overwrite: false",
             "createVaultKey",
             "createSelection",
