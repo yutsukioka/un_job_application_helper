@@ -805,21 +805,19 @@ void main() {
     );
   });
 
-  test('monotonic deadline rejects a stale offer after rollback', () async {
-    final journey = await _PairingJourney.create(vector);
-    addTearDown(journey.stop);
-    await journey.inviter.createPairingOffer();
-    await journey.inviter.savePairingOffer();
-    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 4);
-    journey.clock.elapsed = const Duration(minutes: 11);
-
-    final result = await journey.invitee.importPairingOffer();
-
-    expect(
-      result.disposition,
-      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+  test('monotonic deadline rejects a stale offer at presentation', () {
+    final deadline = AtlasVaultPairingMonotonicDeadline(
+      wallTime: DateTime.utc(2026, 8, 15, 10, 5),
+      monotonicTime: Duration.zero,
     );
-    expect(journey.inviteeTransactions.value, isNull);
+    expect(
+      () => deadline.present(
+        expiresAt: DateTime.utc(2026, 8, 15, 10, 15),
+        currentTime: DateTime.utc(2026, 8, 15, 10, 4),
+        monotonicTime: const Duration(minutes: 11),
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
   });
 
   test(

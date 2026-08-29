@@ -1072,6 +1072,78 @@ public struct AtlasVaultPairingActiveVault: Sendable {
     }
 }
 
+public struct AtlasVaultPairingMonotonicDeadline: Sendable {
+    private static let maximumLifetime: TimeInterval = 600
+
+    private let anchorWallTime: String
+    private let anchorMonotonicTime: TimeInterval
+    private var expiresAt: Date?
+    private var deadline: TimeInterval?
+
+    public init(wallTime: String, monotonicTime: TimeInterval) {
+        anchorWallTime = wallTime
+        anchorMonotonicTime = monotonicTime
+    }
+
+    public mutating func present(
+        expiresAt: String,
+        currentTime: String,
+        monotonicTime: TimeInterval
+    ) throws {
+        let (effective, monotonic) = try effectiveTime(
+            currentTime: currentTime,
+            monotonicTime: monotonicTime
+        )
+        let expires = try AtlasVaultPairingValidation.date(expiresAt)
+        let remaining = expires.timeIntervalSince(effective)
+        guard remaining > 0 else {
+            throw AtlasVaultPairingError.verificationFailed
+        }
+        self.expiresAt = expires
+        deadline = monotonic + min(remaining, Self.maximumLifetime)
+    }
+
+    public func requireLive(
+        currentTime: String,
+        monotonicTime: TimeInterval
+    ) throws {
+        guard let expiresAt, let deadline else {
+            throw AtlasVaultPairingError.verificationFailed
+        }
+        let (effective, monotonic) = try effectiveTime(
+            currentTime: currentTime,
+            monotonicTime: monotonicTime
+        )
+        guard effective < expiresAt, monotonic < deadline else {
+            throw AtlasVaultPairingError.verificationFailed
+        }
+    }
+
+    public mutating func clear() {
+        expiresAt = nil
+        deadline = nil
+    }
+
+    private func effectiveTime(
+        currentTime: String,
+        monotonicTime: TimeInterval
+    ) throws -> (Date, TimeInterval) {
+        guard monotonicTime.isFinite,
+              anchorMonotonicTime.isFinite,
+              monotonicTime >= anchorMonotonicTime,
+              anchorMonotonicTime >= 0
+        else {
+            throw AtlasVaultPairingError.verificationFailed
+        }
+        let anchor = try AtlasVaultPairingValidation.date(anchorWallTime)
+        let wall = try AtlasVaultPairingValidation.date(currentTime)
+        let monotonicWall = anchor.addingTimeInterval(
+            monotonicTime - anchorMonotonicTime
+        )
+        return (max(wall, monotonicWall), monotonicTime)
+    }
+}
+
 public struct AtlasVaultTrustedPairingEnvironment: Sendable {
     public let loadIdentity:
         @Sendable () async throws -> AtlasVaultDeviceIdentity?
@@ -1142,6 +1214,7 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
     public let authorizeSensitiveMutation: @Sendable () async -> Bool
     public let uuid: @Sendable () -> String
     public let timestamp: @Sendable () -> String
+    public let monotonicTime: @Sendable () -> TimeInterval
     public let randomBytes: @Sendable (Int) throws -> Data
 
     public init(
@@ -1231,6 +1304,9 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
         timestamp: @escaping @Sendable () -> String = {
             AtlasVaultTrustedPairingCoordinator.currentTimestamp()
         },
+        monotonicTime: @escaping @Sendable () -> TimeInterval = {
+            ProcessInfo.processInfo.systemUptime
+        },
         randomBytes: @escaping @Sendable (Int) throws -> Data = { count in
             guard count > 0 else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
@@ -1280,6 +1356,7 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
         self.authorizeSensitiveMutation = authorizeSensitiveMutation
         self.uuid = uuid
         self.timestamp = timestamp
+        self.monotonicTime = monotonicTime
         self.randomBytes = randomBytes
     }
 }
@@ -1294,9 +1371,11 @@ public actor AtlasVaultTrustedPairingCoordinator:
         operation: () async throws -> AtlasVaultTrustedPairingResult
     )?
     private var stopped = false
+    private var pairingDeadline: AtlasVaultPairingMonotonicDeadline?
 
     public init(environment: AtlasVaultTrustedPairingEnvironment) {
         self.environment = environment
+        pairingDeadline = nil
     }
 
     public func inspect() async -> AtlasVaultTrustedPairingResult {
@@ -1342,6 +1421,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
             let expires = try Self.timestamp(
                 adding: 600,
                 to: issued
+            )
+            try self.presentPairingDeadline(
+                expiresAt: expires,
+                currentTime: issued
             )
             let offer = try AtlasVaultPairingFoundation.createOffer(
                 inviter: identity,
@@ -1491,6 +1574,10 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 signedOffer,
                 currentTime: now
             )
+            try self.presentPairingDeadline(
+                expiresAt: offer.expiresAt,
+                currentTime: now
+            )
             guard offer.inviter.descriptor.deviceID != identity.deviceID else {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
@@ -1589,6 +1676,9 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 transaction: transaction
             )
             let offer = try offerArtifact.signedOffer()
+            try self.requireLivePairingDeadline(
+                expiresAt: offer.offer.expiresAt
+            )
             let payload = try artifact.acceptancePayload()
             let transcript = try AtlasVaultPairingFoundation.transcriptSHA256(
                 offer: offer,
@@ -1658,6 +1748,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 guard transaction.stage == .acceptanceSaved else {
                     return self.fixed(.failed, pending: true)
                 }
+                try await self.requireLivePairingDeadline(for: transaction)
                 let confirmed = try await self.advance(
                     transaction,
                     to: .sasConfirmed
@@ -1673,6 +1764,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
                   let active = try await self.environment.activeVault(),
                   active.vaultID == transaction.vaultID
             else { return self.fixed(.unavailable, pending: true) }
+            try await self.requireLivePairingDeadline(for: transaction)
             let acceptanceArtifact = try await self.requireArtifact(
                 .acceptance,
                 transaction: transaction
@@ -2775,6 +2867,58 @@ public actor AtlasVaultTrustedPairingCoordinator:
         return values.sorted { $0.kind.sortIndex < $1.kind.sortIndex }
     }
 
+    private func presentPairingDeadline(
+        expiresAt: String,
+        currentTime: String
+    ) throws {
+        let monotonic = environment.monotonicTime()
+        if pairingDeadline == nil {
+            pairingDeadline = AtlasVaultPairingMonotonicDeadline(
+                wallTime: currentTime,
+                monotonicTime: monotonic
+            )
+        }
+        try pairingDeadline?.present(
+            expiresAt: expiresAt,
+            currentTime: currentTime,
+            monotonicTime: monotonic
+        )
+    }
+
+    private func requireLivePairingDeadline(expiresAt: String) throws {
+        let currentTime = environment.timestamp()
+        let monotonicTime = environment.monotonicTime()
+        if pairingDeadline == nil {
+            var replacement = AtlasVaultPairingMonotonicDeadline(
+                wallTime: currentTime,
+                monotonicTime: monotonicTime
+            )
+            try replacement.present(
+                expiresAt: expiresAt,
+                currentTime: currentTime,
+                monotonicTime: monotonicTime
+            )
+            pairingDeadline = replacement
+            return
+        }
+        try pairingDeadline?.requireLive(
+            currentTime: currentTime,
+            monotonicTime: monotonicTime
+        )
+    }
+
+    private func requireLivePairingDeadline(
+        for transaction: AtlasVaultPairingTransaction
+    ) async throws {
+        let offerArtifact = try await requireArtifact(
+            .offer,
+            transaction: transaction
+        )
+        try requireLivePairingDeadline(
+            expiresAt: offerArtifact.signedOffer().offer.expiresAt
+        )
+    }
+
     private func clearTransaction(
         _ transaction: AtlasVaultPairingTransaction
     ) async throws {
@@ -2798,6 +2942,7 @@ public actor AtlasVaultTrustedPairingCoordinator:
         guard try await environment.loadTransaction() == nil else {
             throw AtlasVaultPairingTransactionError.unavailable
         }
+        pairingDeadline = nil
     }
 
     private func completeInviteeSASConfirmation(

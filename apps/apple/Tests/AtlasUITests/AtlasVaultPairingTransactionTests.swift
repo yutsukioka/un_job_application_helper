@@ -265,50 +265,57 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         )
     }
 
-    func testMonotonicDeadlineRejectsStaleOfferAfterRollback() async throws {
-        let journey = try makeJourney()
-        let offerReady = await journey.inviter.createPairingOffer()
-        XCTAssertEqual(offerReady.disposition, .offerReady)
-        let offer = try await journey.inviter.artifactToSave(.offer)
-        _ = await journey.inviter.pairingArtifactSaveFinished(
-            .offer,
-            committed: true
+    func testMonotonicDeadlineRejectsStaleOfferAtPresentation() throws {
+        var deadline = AtlasVaultPairingMonotonicDeadline(
+            wallTime: "2026-08-15T12:00:00Z",
+            monotonicTime: 0
         )
-        journey.clock.set("2026-08-15T11:59:00Z")
-        journey.clock.advanceMonotonic(by: 660)
 
-        let result = await journey.invitee.importPairingOffer(offer)
-        let transaction = await journey.inviteeState.loadTransaction()
-
-        XCTAssertEqual(result.disposition, .recoveryRequired)
-        XCTAssertNil(transaction)
+        XCTAssertThrowsError(
+            try deadline.present(
+                expiresAt: "2026-08-15T12:10:00Z",
+                currentTime: "2026-08-15T11:59:00Z",
+                monotonicTime: 601
+            )
+        )
     }
 
-    func testMonotonicDeadlineRejectsStaleAcceptanceAfterRollback()
-        async throws
-    {
-        let journey = try makeJourney()
-        let acceptance = try await prepareAcceptance(journey)
-        journey.clock.set("2026-08-15T11:59:00Z")
-        journey.clock.advanceMonotonic(by: 660)
+    func testMonotonicDeadlineRejectsStaleAcceptanceAfterRollback() throws {
+        var deadline = AtlasVaultPairingMonotonicDeadline(
+            wallTime: "2026-08-15T12:00:00Z",
+            monotonicTime: 0
+        )
+        try deadline.present(
+            expiresAt: "2026-08-15T12:10:00Z",
+            currentTime: "2026-08-15T12:00:00Z",
+            monotonicTime: 0
+        )
 
-        let result = await journey.inviter.importPairingAcceptance(acceptance)
-        let transaction = await journey.inviterState.loadTransaction()
-
-        XCTAssertEqual(result.disposition, .recoveryRequired)
-        XCTAssertEqual(transaction?.stage, .offerSaved)
+        XCTAssertThrowsError(
+            try deadline.requireLive(
+                currentTime: "2026-08-15T11:59:00Z",
+                monotonicTime: 600
+            )
+        )
     }
 
-    func testMonotonicDeadlineBlocksDelayedInviterKeyRelease() async throws {
-        let journey = try makeJourney()
-        try await exchangeAcceptance(journey)
-        journey.clock.advanceMonotonic(by: 600)
+    func testMonotonicDeadlineBlocksDelayedInviterKeyRelease() throws {
+        var deadline = AtlasVaultPairingMonotonicDeadline(
+            wallTime: "2026-08-15T12:00:00Z",
+            monotonicTime: 40
+        )
+        try deadline.present(
+            expiresAt: "2026-08-15T12:10:00Z",
+            currentTime: "2026-08-15T12:00:00Z",
+            monotonicTime: 40
+        )
 
-        let result = await journey.inviter.confirmCodesMatch()
-        let delivery = await journey.inviterState.loadArtifact(.delivery)
-
-        XCTAssertEqual(result.disposition, .recoveryRequired)
-        XCTAssertNil(delivery)
+        XCTAssertThrowsError(
+            try deadline.requireLive(
+                currentTime: "2026-08-15T12:00:00Z",
+                monotonicTime: 640
+            )
+        )
     }
 
     func testExpiredAppleDeliveryCannotBeMarkedSaved() async throws {

@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import struct
 import uuid
 from dataclasses import dataclass
@@ -501,6 +502,75 @@ class InMemoryPairingReplayGuard:
             return "accepted"
 
 
+class PairingMonotonicDeadline:
+    """Process-local deadline for an interactively presented pairing offer."""
+
+    def __init__(self, *, wall_time: str, monotonic_time: float) -> None:
+        self._anchor_wall = _time(wall_time)
+        self._anchor_monotonic = self._monotonic(monotonic_time)
+        self._expires: datetime | None = None
+        self._deadline: float | None = None
+
+    @staticmethod
+    def _monotonic(value: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise _invalid_pairing()
+        result = float(value)
+        if not math.isfinite(result) or result < 0:
+            raise _invalid_pairing()
+        return result
+
+    def _effective_time(
+        self,
+        *,
+        current_time: str,
+        monotonic_time: float,
+    ) -> tuple[datetime, float]:
+        monotonic = self._monotonic(monotonic_time)
+        elapsed = monotonic - self._anchor_monotonic
+        if elapsed < 0:
+            raise _invalid_pairing()
+        monotonic_wall = self._anchor_wall + timedelta(seconds=elapsed)
+        wall = _time(current_time)
+        return max(wall, monotonic_wall), monotonic
+
+    def present(
+        self,
+        *,
+        expires_at: str,
+        current_time: str,
+        monotonic_time: float,
+    ) -> None:
+        effective, monotonic = self._effective_time(
+            current_time=current_time,
+            monotonic_time=monotonic_time,
+        )
+        expires = _time(expires_at)
+        remaining = (expires - effective).total_seconds()
+        if remaining <= 0:
+            raise _invalid_pairing()
+        self._expires = expires
+        self._deadline = monotonic + min(
+            remaining,
+            PAIRING_MAX_LIFETIME_SECONDS,
+        )
+
+    def require_live(
+        self,
+        *,
+        current_time: str,
+        monotonic_time: float,
+    ) -> None:
+        if self._expires is None or self._deadline is None:
+            raise _invalid_pairing()
+        effective, monotonic = self._effective_time(
+            current_time=current_time,
+            monotonic_time=monotonic_time,
+        )
+        if effective >= self._expires or monotonic >= self._deadline:
+            raise _invalid_pairing()
+
+
 def _verify_offer_signature(signed_offer: SignedPairingOffer) -> None:
     try:
         descriptor = verify_signed_device_descriptor(
@@ -592,10 +662,20 @@ def verify_pairing_offer(
     signed_offer: SignedPairingOffer,
     *,
     current_time: str,
+    deadline: PairingMonotonicDeadline | None = None,
+    monotonic_time: float | None = None,
 ) -> PairingOffer:
     try:
         _verify_offer_signature(signed_offer)
         _verify_offer_time(signed_offer.offer, current_time)
+        if (deadline is None) != (monotonic_time is None):
+            raise _invalid_pairing()
+        if deadline is not None and monotonic_time is not None:
+            deadline.present(
+                expires_at=signed_offer.offer.expires_at,
+                current_time=current_time,
+                monotonic_time=monotonic_time,
+            )
         return signed_offer.offer
     except Exception as exc:
         raise _invalid_pairing() from exc
@@ -608,9 +688,16 @@ def create_pairing_acceptance(
     nonce: bytes,
     accepted_at: str,
     current_time: str,
+    deadline: PairingMonotonicDeadline | None = None,
+    monotonic_time: float | None = None,
 ) -> SignedPairingAcceptance:
     try:
-        offer = verify_pairing_offer(signed_offer, current_time=current_time)
+        offer = verify_pairing_offer(
+            signed_offer,
+            current_time=current_time,
+            deadline=deadline,
+            monotonic_time=monotonic_time,
+        )
         acceptance = PairingAcceptance(
             offer_id=offer.offer_id,
             offer_sha256=signed_offer.sha256_hex(),
@@ -728,11 +815,18 @@ def verify_pairing_transcript(
     proofs: PairingProofs,
     current_time: str,
     replay_guard: PairingReplayGuard,
+    deadline: PairingMonotonicDeadline | None = None,
+    monotonic_time: float | None = None,
 ) -> PairingSession:
     try:
         if replay_guard is None:
             raise _invalid_pairing()
-        verify_pairing_offer(signed_offer, current_time=current_time)
+        verify_pairing_offer(
+            signed_offer,
+            current_time=current_time,
+            deadline=deadline,
+            monotonic_time=monotonic_time,
+        )
         _verify_acceptance_signature(signed_acceptance)
         _verify_acceptance_relation(signed_offer, signed_acceptance)
         transcript = pairing_transcript_sha256(
