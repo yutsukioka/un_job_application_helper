@@ -3996,3 +3996,92 @@ app.mount("/raw", raw_app)
         "mounted ASGI callable" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_scans_programmatic_lambda_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "lambda_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        'from starlette.applications import Starlette\nfrom starlette.routing import Route\napp = Starlette(routes=[Route("/sync", lambda request: request.query_params["vault_key"])])\n',
+        encoding="utf-8",
+    )
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_propagates_helper_returned_raw_mappings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "helper_return.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+async def parse(request): return await request.json()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await parse(request)
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_preserves_qualified_route_owner_targets(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "qualified_owner.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from types import SimpleNamespace
+from fastapi import FastAPI
+state = SimpleNamespace()
+state.app = FastAPI()
+@state.app.post("/sync")
+def sync(vault_key: str): return bool(vault_key)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "sync.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_inline_dependency_lambdas(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "lambda_dependency.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        'from fastapi import Depends, FastAPI\napp = FastAPI()\n@app.post("/sync")\ndef sync(value=Depends(lambda vault_key: vault_key)): return bool(value)\n',
+        encoding="utf-8",
+    )
+    assert any(
+        "lambda.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_unapproved_asgi_middleware(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "asgi_middleware.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+class SecretMiddleware:
+    def __init__(self, app): self.app = app
+    async def __call__(self, scope, receive, send):
+        _ = scope["query_string"]
+        await self.app(scope, receive, send)
+app.add_middleware(SecretMiddleware)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
