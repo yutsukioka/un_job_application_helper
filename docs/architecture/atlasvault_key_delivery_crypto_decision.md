@@ -1,12 +1,12 @@
 # AtlasVault Key-Delivery Cryptographic Decision And Migration Plan
 
-Status: **DRAFT - OUTCOME PENDING MAINTAINER RATIFICATION**
+Status: **RATIFIED - OPTION B**
 
 Decision key: `P3-C09-T22`
 
 ## Decision To Record
 
-The maintainer must choose one outcome from
+The maintainer considered the two outcomes in
 [`atlasvault_key_delivery_crypto_options.md`](atlasvault_key_delivery_crypto_options.md):
 
 - **A - RFC 9180 HPKE:** replace the version-1 custom KEM/KDF/AEAD composition
@@ -15,8 +15,11 @@ The maintainer must choose one outcome from
   production entropy injection, and make independent cryptographic review a
   release-blocking P3 condition.
 
-No outcome is selected by this draft. The current version-1 contract remains
-normative until a logged maintainer decision ratifies A or B.
+Decision D047 selects **B - reviewed preservation**. The current version-1
+contract remains normative, C10-C12 make no wire-format change, and the
+existing vectors are retained. Outcome A remains the fallback if independent
+review finds a valid weakness that cannot be corrected safely within the
+ratified version-1 construction.
 
 ## Invariants For Either Outcome
 
@@ -71,9 +74,9 @@ define current/retained epoch selection, a usable multi-epoch key ring,
 crash-safe migration, recovery, and older-epoch rejection. C09 does not assign
 new epoch semantics or advance an epoch.
 
-## Outcome A Plan: RFC 9180 HPKE
+## Outcome A Fallback Plan: RFC 9180 HPKE
 
-If A is ratified, C10 and later P3 chunks must:
+If T22 is reopened and A is later ratified, the replacement work must:
 
 1. Specify a version-2 envelope with explicit HPKE mode and ciphersuite IDs.
 2. Start from the candidate Base-mode suite
@@ -103,9 +106,9 @@ artifacts can be emitted, rollback may disable new pairing but must not silently
 emit version 1 to a transaction that selected version 2. A corrective release
 must either retain a safe version-2 reader or require explicit transaction reset.
 
-## Outcome B Plan: Reviewed Version-1 Preservation
+## Governing Outcome B Plan: Reviewed Version-1 Preservation
 
-If B is ratified, C10 and later P3 chunks must:
+Under D047, C10 and later P3 chunks must:
 
 1. Keep the current version-1 canonical envelope and algorithm identifiers
    unchanged unless an independent-review finding requires a version bump.
@@ -143,17 +146,18 @@ security-critical blocks rollback to an affected implementation.
   and
 - one P3 gate PR at C12 with reviewed/merged tree identity.
 
-## Ratification Record Template
+## Ratification Record
 
 | Field | Value |
 |---|---|
-| Decision | `A - RFC 9180 HPKE` or `B - reviewed version-1 preservation` |
-| Date | pending |
-| Maintainer | pending |
-| Rationale | pending |
-| Compatibility path | Outcome A or Outcome B plan above |
-| Independent-review condition | pending |
-| Evidence | C09 evidence IDs plus maintainer ratification |
+| Decision | `B - reviewed version-1 preservation` |
+| Date | 2026-08-29 |
+| Maintainer | `yutsukioka` |
+| Rationale | Preserve near-term delivery because the Dart HPKE lift and version-2 migration are infeasible in the current milestone; retain the already interoperable version-1 format under release-blocking independent review. |
+| Compatibility path | Governing Outcome B plan above; no wire-format change in C10-C12 and existing vectors retained. |
+| Independent-review condition | Reviewer `UNASSIGNED`; name before T28, complete review and resolve all valid findings before C12 merge and any production release. C10, C11, and P7 construction changes are included. |
+| Reopen condition | Any valid construction weakness reopens T22 for Outcome A. |
+| Evidence | D046, D047, and E-C09-001 through E-C09-005. |
 
-Until this table is completed by a logged maintainer decision, C09 remains
-awaiting authorization and C10 must not execute.
+C09 is complete under D047. C10 may proceed under the Outcome B constraints,
+but no C10 implementation is part of this decision-record update.

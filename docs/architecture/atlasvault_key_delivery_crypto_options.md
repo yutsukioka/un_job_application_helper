@@ -1,21 +1,22 @@
 # AtlasVault Key-Delivery Cryptographic Options
 
-Status: **PENDING MAINTAINER RATIFICATION**
+Status: **RATIFIED: OPTION B - REVIEWED VERSION-1 PRESERVATION**
 
 Baseline: `638eafeba38e03fa943d2a6b366fff76af1c3d31`
 
 ## Decision Scope
 
-P3/C09 must choose the cryptographic envelope used to deliver an existing
+P3/C09 compared the cryptographic envelopes available to deliver an existing
 32-byte AtlasVault vault key during explicit trusted-device onboarding:
 
 - **Option A:** adopt RFC 9180 Hybrid Public Key Encryption (HPKE).
 - **Option B:** preserve the current construction, conditional on independent
   cryptographic review and resolution of every valid finding.
 
-This document makes a technical recommendation but does not select either
-option. It changes no contract, wire format, dependency, or implementation.
-The maintainer's ratification is the authority for C10.
+Decision D047 selects Option B. This document records the comparison that led
+to that choice and changes no contract, wire format, dependency, or
+implementation. Option A remains the required reconsideration path if the
+independent review identifies a valid weakness in the version-1 construction.
 
 ## Verified Current Construction
 
@@ -192,9 +193,19 @@ is funded as a P3 gate and C10 first removes caller-selected production entropy.
 Its lower migration cost is real, but it does not reduce the custom protocol's
 review burden.
 
-This recommendation is not a decision. C10 must not start until the maintainer
-ratifies exactly one option and the decision record names the chosen migration
-path.
+### Maintainer Disposition
+
+Decision D047 ratifies Option B because the near-term delivery constraint does
+not permit the Dart HPKE implementation and version-2 migration work required
+for Option A. The existing interoperable version-1 construction is preserved,
+with no wire-format change in C10-C12 and with the existing vectors retained.
+
+This is conditional rather than a cryptographic-clean claim. The independent
+reviewer is currently **UNASSIGNED** and must be named before T28. The complete
+construction review and resolution of every valid finding are required before
+the C12 merge and any production release. C10 nonce ownership, C11 epoch work,
+and later P7 rotation changes are in the same review scope. A valid weakness
+reopens T22 for Option A.
 
 ## Primary References
 
@@ -204,9 +215,11 @@ path.
 - [Dart cryptography 2.9.0 API](https://pub.dev/documentation/cryptography/latest/)
 - [`contracts/sync/vault_key_delivery.md`](../../contracts/sync/vault_key_delivery.md)
 
-## Ratification Required
+## Ratification
 
 - [ ] **A - Adopt RFC 9180 HPKE.**
-- [ ] **B - Preserve version 1 under independent cryptographic review.**
+- [x] **B - Preserve version 1 under independent cryptographic review.**
 
-Exactly one box may be selected in a maintainer decision before C10.
+Ratified by maintainer decision D047 on 2026-08-29. Independent reviewer:
+**UNASSIGNED; must be named before T28**. Review completion is a release and
+C12 gate.

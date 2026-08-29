@@ -520,10 +520,13 @@ generate fresh inviter ephemeral private keys and 12-byte AEAD nonces, while
 the lower-level Python, Dart, and Swift primitives accept deterministic values
 from callers so fixed cross-language vectors can be reproduced.
 
-C09 changes no algorithm or wire format. It identifies two permissible paths:
-adopt RFC 9180 HPKE, or preserve the current construction only after
-independent cryptographic review. The maintainer must ratify one path before
-C10 changes production cryptographic APIs.
+C09 changes no algorithm or wire format. Decision D047 selects preservation of
+the version-1 construction under release-blocking independent cryptographic
+review. C10-C12 retain the existing wire format and vectors. The independent
+reviewer is not yet assigned; that assignment is required before T28, and the
+review plus resolution of every valid finding is required before the C12 gate
+or any production release. A valid construction weakness reopens T22 for RFC
+9180 HPKE adoption rather than permitting an undocumented version-1 change.
 
 ## 79. Nonce Misuse
 
@@ -536,11 +539,11 @@ both ephemeral private key and nonce, so a future production caller could
 repeat both and catastrophically reuse the AES-GCM key/nonce pair.
 
 C10 must separate deterministic test/vector injection from production entry
-points and make production randomness internal. If HPKE is selected, the HPKE
-context owns its base nonce and sequence number; callers still must not reuse a
-sender context or inject encapsulation randomness. If the current construction
-is preserved, production code must generate the ephemeral key and nonce inside
-the sealing boundary and expose no caller-selected nonce parameter.
+points and make production randomness internal. Under the selected version-1
+preservation path, production code must generate the ephemeral key and nonce
+inside the sealing boundary and expose no caller-selected nonce parameter. The
+existing deterministic vectors remain unchanged and available only through an
+explicit test/vector boundary.
 
 ## 80. Custom Key-Delivery Composition
 
@@ -554,9 +557,11 @@ burden that primitive-level test coverage cannot discharge.
 RFC 9180 standardizes KEM, key schedule, AEAD nonce derivation, domain
 separation, and encodings for HPKE. Adoption would reduce bespoke-composition
 surface but would not supply replay protection, recipient-compromise forward
-secrecy, trusted-device authorization, or revocation. Preserving the current
-construction is acceptable only if an independent reviewer evaluates the
-complete construction and all valid findings are resolved before the P3 gate.
+secrecy, trusted-device authorization, or revocation. Decision D047 preserves
+the current construction subject to a release-blocking independent review of
+the complete composition. The reviewer must be named before T28, and all valid
+findings must be resolved before the P3 gate and any production release. Until
+then, this decision is not a claim of independent cryptographic approval.
 
 ## 81. Key Epochs
 
@@ -590,14 +595,16 @@ compromise.
 
 ## 83. P3 Decision Requirements
 
-Before implementation continues, the maintainer must ratify exactly one C09
-option and record its compatibility consequences. Regardless of outcome, P3
-must retain strict transcript and peer binding, fresh step-up authorization,
-fail-closed parsing, cross-language vectors, explicit version negotiation with
-no silent downgrade, production-owned entropy, epoch binding, and independent
-review evidence required by the chosen path.
+Decision D047 ratifies reviewed preservation of the version-1 construction.
+P3 must retain strict transcript and peer binding, fresh step-up authorization,
+fail-closed parsing, the existing cross-language vectors, explicit version
+handling with no silent downgrade, production-owned entropy, epoch binding,
+and release-blocking independent review evidence. The reviewer remains
+unassigned and must be named before T28. Review completion and resolution of
+all valid findings are required before the C12 merge and any production
+release; a valid construction weakness reopens T22 for RFC 9180 HPKE.
 
-The pending recommendation is in
+The comparison and historical recommendation are in
 [`atlasvault_key_delivery_crypto_options.md`](../architecture/atlasvault_key_delivery_crypto_options.md).
-The outcome-neutral compatibility plan is in
+The ratified compatibility plan is in
 [`atlasvault_key_delivery_crypto_decision.md`](../architecture/atlasvault_key_delivery_crypto_decision.md).
