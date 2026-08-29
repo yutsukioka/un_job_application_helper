@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 from vaultsync import (  # noqa: E402
     AtlasVaultExport,
     LocalVaultStore,
+    deserialize_local_store,
+    deserialize_vault_export,
     read_atlasvault_export,
     read_local_store,
     write_atlasvault_export,
@@ -226,3 +228,10 @@ def test_B5_vault_writers_reject_unreadable_argon2id_metadata(
     with pytest.raises(UnsafeKDFParameters):
         write_local_store(LocalVaultStore.new(metadata), store_path)
     assert not store_path.exists()
+
+
+def test_B5_public_byte_deserializers_enforce_import_size_caps() -> None:
+    for deserializer in (deserialize_vault_export, deserialize_local_store):
+        for serialized in (b"{}", bytearray(b"{}"), "{}"):
+            with pytest.raises(VaultImportTooLargeError):
+                deserializer(serialized, max_bytes=1)

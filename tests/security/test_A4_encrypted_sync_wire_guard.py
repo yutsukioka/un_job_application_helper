@@ -5134,3 +5134,153 @@ def sync(conn: HTTPConnection):
         "vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_allows_safe_positional_framework_middleware_options(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "gzip_middleware.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+from starlette.middleware.gzip import GZipMiddleware
+app = FastAPI()
+app.add_middleware(GZipMiddleware, 1000)
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_filters_server_scope_aliases_and_mapping_accessors(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "scope_state_aliases.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.get("/sync")
+def sync(request: Request):
+    scope = request.scope
+    direct_state = request.scope.get("state", {})
+    aliased_state = scope.get("state", {})
+    return direct_state["vault_key"], aliased_state["recovery_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_tracks_decoded_scope_query_strings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "scope_query_string.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from urllib.parse import parse_qs
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.get("/sync")
+def sync(request: Request):
+    payload = parse_qs(request.scope["query_string"].decode())
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_unresolved_route_templates(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "dynamic_route_template.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import os
+from fastapi import FastAPI
+app = FastAPI()
+PREFIX = os.getenv("API_PREFIX", "/{vault_key}")
+@app.get(PREFIX)
+def sync():
+    return {"ok": True}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "route template" in violation and "statically approved" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_resolves_dependency_factories(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "dependency_factory.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def secret(vault_key: str):
+    return bool(vault_key)
+def select_dependency():
+    return secret
+@app.get("/sync")
+def sync(value=Depends(select_dependency())):
+    return {"ok": value}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_keeps_nested_function_provenance_lexically_scoped(
+    tmp_path: Path,
+) -> None:
+    safe_root = tmp_path / "safe" / "services"
+    safe_root.mkdir(parents=True)
+    (safe_root / "nested_shadow.py").write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    def internal_value():
+        payload = {"vault_key": "server-owned"}
+        return payload["vault_key"]
+    return internal_value()
+''',
+        encoding="utf-8",
+    )
+    bad_root = tmp_path / "bad" / "services"
+    bad_root.mkdir(parents=True)
+    (bad_root / "nested_capture.py").write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    def captured_value():
+        return payload["vault_key"]
+    return captured_value()
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(safe_root) == []
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(bad_root)
+    )
