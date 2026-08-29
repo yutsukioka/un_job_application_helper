@@ -89,6 +89,32 @@ exactly. Python fixed signatures remain the deterministic vector instances;
 fresh CryptoKit signatures need only verify, consistent with the device
 identity contract.
 
+## Fresh Inviter Authorization
+
+SAS confirmation does not itself authorize release of the vault key. After the
+signed key request, transcript, peer identities, expiry, and active vault have
+been validated, the inviter must obtain a new platform user-verification result
+for that delivery attempt. The authorization call occurs immediately before
+the runtime exposes a temporary vault-key copy to delivery encryption.
+
+The Python delivery primitive remains a platform-neutral cryptographic
+conformance function and does not itself satisfy this user-authorization
+boundary. The Dart coordinator requires an asynchronous
+`authorizeKeyRelease(vaultId)` callback, and the Swift environment requires an
+asynchronous `authorizeKeyRelease()` callback. Production Apple, Android, and
+Windows composition binds those callbacks to a fresh operating-system
+authentication prompt. Test composition may inject a deterministic callback,
+but absence of a callback or any unavailable, cancelled, failed, stale, or
+exceptional result denies release.
+
+Authorization is single-use and attempt-local. It is not cached in pairing
+state, cannot be inferred from an unlocked vault or active lifecycle state, and
+cannot be reused after a denial, cancellation, retry, lifecycle transition, or
+process restart. A retry must invoke the platform authenticator again. Denial
+must occur before key copy, delivery construction, delivery persistence, or
+transport, while leaving the existing pairing transaction recoverable and
+allowing its ordinary cancel/reset path.
+
 ## Acknowledgement
 
 After store-first, key-second, selection-third installation and runtime
@@ -150,5 +176,6 @@ single pairing transaction. These limits do not alter any wire format.
 
 This contract has no backend, ongoing synchronization, existing-vault merge,
 revocation, or key rotation. Key epoch is authenticated but not advanced by
-Phase 2F-2. Explicit inviter step-up authorization remains tracked in issue
-#101 and blocks a production multi-device-readiness claim.
+Phase 2F-2. Fresh inviter step-up authorization is implemented as issue #101
+production hardening; the remaining deferred work still blocks a production
+multi-device-readiness claim.
