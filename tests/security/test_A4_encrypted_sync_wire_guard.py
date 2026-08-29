@@ -4085,3 +4085,88 @@ app.add_middleware(SecretMiddleware)
         "ASGI middleware" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_propagates_asgi_receive_into_helpers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "asgi_receive_helper.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+async def parse(receive):
+    payload = await receive()
+    return payload["vault_key"]
+class SecretMiddleware:
+    def __init__(self, app): self.app = app
+    async def __call__(self, scope, receive, send):
+        _ = await parse(receive)
+        await self.app(scope, receive, send)
+app.add_middleware(SecretMiddleware)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_propagates_only_request_derived_helper_returns(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "safe_helper_return.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+def build_context(request):
+    _ = request.url.path
+    return {"vault_key": "internal-only"}
+@app.post("/sync")
+async def sync(request: Request):
+    context = build_context(request)
+    return context["vault_key"]
+''',
+        encoding="utf-8",
+    )
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_allows_decorators_applied_after_route_registration(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "post_registration_decorator.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+def audit(function): return function
+@audit
+@app.get("/health")
+def health(): return {"ok": True}
+''',
+        encoding="utf-8",
+    )
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_rejects_route_template_secret_placeholders(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "route_templates.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.get("/sync/{vault_key}")
+def decorated(request: Request): return request.url.path
+def programmatic(request: Request): return request.url.path
+app.add_api_route("/other/{recovery_key:path}", programmatic)
+''',
+        encoding="utf-8",
+    )
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
