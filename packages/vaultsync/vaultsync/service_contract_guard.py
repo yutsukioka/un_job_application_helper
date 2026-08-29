@@ -2022,6 +2022,7 @@ def _asgi_callable_uses_unapproved_input(
                 )
             ),
             frozenset(),
+            frozenset(),
         )
     ]
     seen: set[
@@ -2030,11 +2031,24 @@ def _asgi_callable_uses_unapproved_input(
             frozenset[str],
             frozenset[str],
             frozenset[str],
+            frozenset[str],
         ]
     ] = set()
     while pending:
-        function_key, initial_scopes, initial_receives, initial_headers = pending.pop()
-        state = (function_key, initial_scopes, initial_receives, initial_headers)
+        (
+            function_key,
+            initial_scopes,
+            initial_receives,
+            initial_headers,
+            initial_client_mappings,
+        ) = pending.pop()
+        state = (
+            function_key,
+            initial_scopes,
+            initial_receives,
+            initial_headers,
+            initial_client_mappings,
+        )
         if state in seen:
             continue
         seen.add(state)
@@ -2042,6 +2056,7 @@ def _asgi_callable_uses_unapproved_input(
         scope_names = set(initial_scopes)
         receive_names = set(initial_receives)
         header_names = set(initial_headers)
+        client_mapping_names = set(initial_client_mappings)
         assignments = [
             candidate
             for statement in function.body
@@ -2065,6 +2080,14 @@ def _asgi_callable_uses_unapproved_input(
                     before = len(header_names)
                     header_names.update(targets)
                     changed = changed or len(header_names) != before
+                if _is_asgi_client_mapping_value(
+                    value,
+                    scope_names,
+                    client_mapping_names,
+                ):
+                    before = len(client_mapping_names)
+                    client_mapping_names.update(targets)
+                    changed = changed or len(client_mapping_names) != before
 
         path = function_key[0]
         tree = trees_by_path[path]
@@ -2098,6 +2121,15 @@ def _asgi_callable_uses_unapproved_input(
                     header_names,
                 ):
                     key_value = _asgi_header_key_value(key)
+                    if key_value is None and isinstance(key, ast.Constant):
+                        continue
+                    if key_value is None or _is_banned_wire_name(key_value):
+                        return True
+                if container is not None and key is not None and _is_name_reference(
+                    container,
+                    client_mapping_names,
+                ):
+                    key_value = _constant_string_value(key, {})
                     if key_value is None and isinstance(key, ast.Constant):
                         continue
                     if key_value is None or _is_banned_wire_name(key_value):
@@ -2146,13 +2178,24 @@ def _asgi_callable_uses_unapproved_input(
                     target_arguments,
                     header_names,
                 )
-                if propagated_scopes or propagated_receives or propagated_headers:
+                propagated_client_mappings = _bound_tracked_parameter_names(
+                    candidate,
+                    target_arguments,
+                    client_mapping_names,
+                )
+                if (
+                    propagated_scopes
+                    or propagated_receives
+                    or propagated_headers
+                    or propagated_client_mappings
+                ):
                     pending.append(
                         (
                             target,
                             frozenset(propagated_scopes),
                             frozenset(propagated_receives),
                             frozenset(propagated_headers),
+                            frozenset(propagated_client_mappings),
                         )
                     )
     return False
@@ -2223,6 +2266,45 @@ def _asgi_header_key_value(node: ast.expr) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
         return node.value.decode("latin-1")
     return None
+
+
+def _is_asgi_client_mapping_value(
+    node: ast.AST,
+    scope_names: set[str],
+    mapping_names: set[str],
+) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in mapping_names
+    if isinstance(node, ast.Subscript) and _is_name_reference(
+        node.value,
+        scope_names,
+    ):
+        return _constant_string_value(node.slice, {}) == "path_params"
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "pop", "setdefault"}
+        and _is_name_reference(node.func.value, scope_names)
+    ):
+        return bool(
+            node.args and _constant_string_value(node.args[0], {}) == "path_params"
+        )
+    if not isinstance(node, ast.Call):
+        return False
+    parts = _qualified_name_parts(node.func) or []
+    if not parts or parts[-1] not in {
+        "dict",
+        "MultiDict",
+        "ImmutableMultiDict",
+    }:
+        return False
+    return any(
+        _is_asgi_client_mapping_value(value, scope_names, mapping_names)
+        for value in [
+            *node.args,
+            *(keyword.value for keyword in node.keywords),
+        ]
+    )
 
 
 def _bound_tracked_parameter_names(
@@ -6008,6 +6090,33 @@ def _boundary_function_keys(
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
         ):
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr in {"append", "extend"}
+                and _is_active_router_dependencies_reference(
+                    call.func.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+            ):
+                owner_key = _enclosing_function_key(path, call, functions, scopes)
+                boundary.update(
+                    _dependency_targets(
+                        root,
+                        path,
+                        tree,
+                        (*call.args, *(keyword.value for keyword in call.keywords)),
+                        paths_by_module,
+                        trees_by_path,
+                        functions,
+                        scopes,
+                        classes,
+                        class_scopes,
+                        owner_key,
+                        partial_parameter_filters=partial_dependency_parameters,
+                    )
+                )
             for keyword in call.keywords:
                 if keyword.arg == "dependencies" and _is_framework_dependency_call(
                     call,
@@ -6059,6 +6168,32 @@ def _boundary_function_keys(
                 if isinstance(assignment, ast.Assign)
                 else (assignment.target,)
             )
+            owner_key = _enclosing_function_key(path, assignment, functions, scopes)
+            if any(
+                _is_active_router_dependencies_reference(
+                    target,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+                for target in targets
+            ):
+                boundary.update(
+                    _dependency_targets(
+                        root,
+                        path,
+                        tree,
+                        (assignment.value,),
+                        paths_by_module,
+                        trees_by_path,
+                        functions,
+                        scopes,
+                        classes,
+                        class_scopes,
+                        owner_key,
+                        partial_parameter_filters=partial_dependency_parameters,
+                    )
+                )
             replacements = [
                 replacement
                 for target in targets
@@ -6073,7 +6208,6 @@ def _boundary_function_keys(
             ]
             if not replacements:
                 continue
-            owner_key = _enclosing_function_key(path, assignment, functions, scopes)
             for replacement in replacements:
                 target = dependency_replacement_target(
                     path,
@@ -6207,15 +6341,130 @@ def _request_body_flow_names(
             frozenset(body_aliases),
             frozenset(body_module_aliases),
         )
-        if request_names or websocket_names or request_body_names:
-            flows[key] = (
-                request_names,
-                websocket_names,
-                set(),
-                request_body_names,
-                set(),
-                set(),
+        flows[key] = (
+            request_names,
+            websocket_names,
+            set(),
+            request_body_names,
+            set(),
+            set(),
+        )
+
+    dependency_parameter_targets: list[
+        tuple[tuple[Path, int, str], str, frozenset[tuple[Path, int, str]]]
+    ] = []
+    for key in boundary_functions:
+        function = functions.get(key)
+        if function is None:
+            continue
+        path = key[0]
+        defaults = _parameter_defaults(function)
+        for argument in _function_arguments(function):
+            roots = tuple(
+                root_node
+                for root_node in (
+                    argument.annotation,
+                    defaults.get(id(argument)),
+                )
+                if root_node is not None
             )
+            if not roots:
+                continue
+            targets = _dependency_targets(
+                root,
+                path,
+                trees_by_path[path],
+                roots,
+                paths_by_module,
+                trees_by_path,
+                functions,
+                scopes,
+                classes,
+                class_scopes,
+                key,
+                partial_parameter_filters={},
+            )
+            if targets:
+                dependency_parameter_targets.append(
+                    (key, argument.arg, frozenset(targets))
+                )
+
+    def returned_provenance(
+        key: tuple[Path, int, str],
+    ) -> tuple[bool, bool, bool, bool, bool, bool]:
+        flow = flows.get(key)
+        function = functions.get(key)
+        if flow is None or function is None:
+            return (False, False, False, False, False, False)
+        path = key[0]
+        body_aliases, body_module_aliases = _body_aliases(trees_by_path[path])
+        result = [False, False, False, False, False, False]
+        for return_node in (
+            candidate
+            for candidate in _lexical_body_nodes(function.body)
+            if isinstance(candidate, ast.Return) and candidate.value is not None
+        ):
+            (
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                scope_mapping_names,
+            ) = _route_provenance_before(
+                function,
+                line_number=return_node.lineno + 1,
+                request_names=flow[0],
+                websocket_names=flow[1],
+                initial_raw_mapping_names=frozenset(flow[2]),
+                initial_request_body_names=frozenset(flow[3]),
+                initial_websocket_text_names=frozenset(flow[4]),
+                initial_scope_mapping_names=frozenset(flow[5]),
+                body_aliases=frozenset(body_aliases),
+                body_module_aliases=frozenset(body_module_aliases),
+                json_loads_names=_json_loads_aliases(trees_by_path[path]),
+                json_module_names=_json_module_aliases(trees_by_path[path]),
+                raw_mapping_helpers=raw_mapping_helpers[path],
+            )
+            value = return_node.value
+            result[0] = result[0] or _is_name_reference(value, request_aliases)
+            result[1] = result[1] or _is_name_reference(value, websocket_aliases)
+            result[2] = result[2] or _is_raw_request_mapping(
+                value,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                _json_loads_aliases(trees_by_path[path]),
+                _json_module_aliases(trees_by_path[path]),
+                scope_mapping_names,
+            )
+            result[3] = result[3] or _is_request_body_value(
+                value,
+                request_aliases,
+                request_body_names,
+                scope_mapping_names,
+            )
+            result[4] = result[4] or _is_websocket_text_value(
+                value,
+                websocket_aliases,
+                websocket_text_names,
+            )
+            result[5] = result[5] or _is_request_scope_reference(
+                value,
+                request_aliases,
+                websocket_aliases,
+                scope_mapping_names,
+            )
+        return (
+            result[0],
+            result[1],
+            result[2],
+            result[3],
+            result[4],
+            result[5],
+        )
 
     changed = True
     while changed:
@@ -6404,6 +6653,18 @@ def _request_body_flow_names(
                 changed = changed or before != tuple(
                     len(names) for names in target_flow
                 )
+        for key, parameter_name, dependency_targets in dependency_parameter_targets:
+            target_flow = flows[key]
+            before = tuple(len(names) for names in target_flow)
+            for dependency_target in dependency_targets:
+                for index, is_provenance in enumerate(
+                    returned_provenance(dependency_target)
+                ):
+                    if is_provenance:
+                        target_flow[index].add(parameter_name)
+            changed = changed or before != tuple(
+                len(names) for names in target_flow
+            )
     return {
         key: tuple(frozenset(names) for names in flow)
         for key, flow in flows.items()
@@ -6512,6 +6773,27 @@ def _is_framework_dependency_override_target(
     )
 
 
+def _is_active_router_dependencies_reference(
+    node: ast.AST,
+    *,
+    path_in_services: bool,
+    mounted_names: set[str],
+    route_owners: frozenset[str],
+) -> bool:
+    return bool(
+        isinstance(node, ast.Attribute)
+        and node.attr == "dependencies"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "router"
+        and _active_route_owner_reference(
+            node.value.value,
+            path_in_services=path_in_services,
+            mounted_names=mounted_names,
+            route_owners=route_owners,
+        )
+    )
+
+
 def _dependency_override_mapping_values(
     node: ast.expr,
     *,
@@ -6526,6 +6808,13 @@ def _dependency_override_mapping_values(
             tree,
             before_line=line_number,
         )
+        if (
+            isinstance(resolved, ast.Call)
+            and (_qualified_name_parts(resolved.func) or [None])[-1] == "dict"
+        ):
+            for argument in resolved.args:
+                add_mapping_values(argument, resolved.lineno)
+            return
         if not isinstance(resolved, ast.Dict):
             return
         for key, replacement in zip(
@@ -7056,18 +7345,23 @@ def _body_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module is not None and (
-            node.module == "fastapi" or node.module.startswith("fastapi.")
+            node.module == "fastapi"
+            or node.module.startswith("fastapi.")
+            or node.module == "starlette.datastructures"
         ):
             direct.update(
                 imported.asname or imported.name
                 for imported in node.names
-                if imported.name in {"Body", "File", "Form"}
+                if imported.name in {"Body", "File", "Form", "UploadFile"}
             )
         elif isinstance(node, ast.Import):
             modules.update(
                 imported.asname or imported.name.split(".")[0]
                 for imported in node.names
-                if imported.name == "fastapi" or imported.name.startswith("fastapi.")
+                if imported.name == "fastapi"
+                or imported.name.startswith("fastapi.")
+                or imported.name == "starlette"
+                or imported.name.startswith("starlette.")
             )
     return direct, modules
 
@@ -7097,6 +7391,22 @@ def _explicit_body_parameter_names(
     names: set[str] = set()
     for argument in _function_arguments(node):
         roots = [argument.annotation, defaults.get(id(argument))]
+        annotation_is_upload_file = bool(
+            argument.annotation is not None
+            and any(
+                (
+                    isinstance(candidate, ast.Name)
+                    and candidate.id in direct_aliases
+                )
+                or (
+                    isinstance(candidate, ast.Attribute)
+                    and candidate.attr == "UploadFile"
+                    and (_qualified_name_parts(candidate) or [None])[0]
+                    in module_aliases
+                )
+                for candidate in _annotation_reference_nodes(argument.annotation)
+            )
+        )
         if any(
             isinstance(candidate, ast.Call)
             and _is_body_call(
@@ -7107,7 +7417,7 @@ def _explicit_body_parameter_names(
             for root in roots
             if root is not None
             for candidate in ast.walk(root)
-        ):
+        ) or annotation_is_upload_file:
             names.add(argument.arg)
     return names
 
@@ -8743,6 +9053,19 @@ def _is_request_scope_reference(
 ) -> bool:
     if isinstance(node, ast.Name):
         return node.id in scope_mapping_names
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "copy"
+        and not node.args
+        and not node.keywords
+    ):
+        return _is_request_scope_reference(
+            node.func.value,
+            request_aliases,
+            websocket_aliases,
+            scope_mapping_names,
+        )
     return bool(
         isinstance(node, ast.Attribute)
         and node.attr == "scope"
@@ -8857,6 +9180,13 @@ def _is_raw_request_mapping(
         and node.value.id in request_aliases | websocket_aliases
     ):
         return True
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr == "headers"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in request_body_names
+    ):
+        return True
     if not isinstance(node, ast.Call):
         return False
     if (
@@ -8899,7 +9229,7 @@ def _is_raw_request_mapping(
         )
     ):
         if node.func.attr == "copy":
-            return False
+            return True
         scope_key = (
             _constant_string_value(node.args[0], {}) if node.args else None
         )
