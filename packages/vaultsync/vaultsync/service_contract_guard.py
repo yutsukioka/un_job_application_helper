@@ -54,6 +54,22 @@ _CANONICAL_BANNED_WIRE_FIELD_NAMES = frozenset(
     for name in BANNED_WIRE_FIELD_NAMES
 )
 _DYNAMIC_REQUEST_MAPPING_KEY = "<dynamic request mapping key>"
+_CLIENT_CONTROLLED_SCOPE_KEYS = frozenset(
+    {
+        "client",
+        "headers",
+        "http_version",
+        "method",
+        "path",
+        "path_params",
+        "query_string",
+        "raw_path",
+        "root_path",
+        "scheme",
+        "server",
+        "subprotocols",
+    }
+)
 
 
 def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[str]:
@@ -1675,6 +1691,11 @@ def _unapproved_asgi_middleware_violations(
                 reference_line=call.lineno,
             )
             if _is_framework_middleware_reference(middleware, tree):
+                for argument in call.args[1:]:
+                    violations.append(
+                        f"{path}:{argument.lineno}: framework middleware positional "
+                        "option cannot be statically approved as a request boundary"
+                    )
                 for keyword in call.keywords:
                     if keyword.arg not in {"backend", "dispatch", "on_error"}:
                         continue
@@ -6798,7 +6819,7 @@ def _route_body_wire_names(
         candidate
         for statement in node.body
         for candidate in ast.walk(statement)
-        if isinstance(candidate, (ast.For, ast.AsyncFor))
+        if isinstance(candidate, (ast.For, ast.AsyncFor, ast.comprehension))
     ]
     changed = True
     while changed:
@@ -7085,7 +7106,7 @@ def _request_type_aliases(tree: ast.Module) -> frozenset[str]:
         if isinstance(node, ast.ImportFrom)
         and node.module in {"fastapi", "fastapi.requests", "starlette.requests"}
         for imported in node.names
-        if imported.name == "Request"
+        if imported.name in {"HTTPConnection", "Request"}
     )
 
 
@@ -7180,7 +7201,10 @@ def _annotation_contains_request_type(
     for candidate in _annotation_reference_nodes(annotation):
         if isinstance(candidate, ast.Name) and candidate.id in request_type_names:
             return True
-        if isinstance(candidate, ast.Attribute) and candidate.attr == "Request":
+        if (
+            isinstance(candidate, ast.Attribute)
+            and candidate.attr in {"HTTPConnection", "Request"}
+        ):
             parts = _qualified_name_parts(candidate)
             if parts and parts[0] in request_module_names:
                 return True
@@ -7234,6 +7258,19 @@ def _assignment_target_names(node: ast.AST) -> set[str]:
     return set()
 
 
+def _is_request_scope_reference(
+    node: ast.AST,
+    request_aliases: set[str],
+    websocket_aliases: set[str],
+) -> bool:
+    return bool(
+        isinstance(node, ast.Attribute)
+        and node.attr == "scope"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in request_aliases | websocket_aliases
+    )
+
+
 def _is_raw_request_mapping(
     node: ast.AST,
     request_aliases: set[str],
@@ -7258,6 +7295,13 @@ def _is_raw_request_mapping(
     if isinstance(node, ast.Name):
         return node.id in raw_mapping_names
     if isinstance(node, ast.Subscript):
+        if _is_request_scope_reference(
+            node.value,
+            request_aliases,
+            websocket_aliases,
+        ):
+            scope_key = _constant_string_value(node.slice, {})
+            return scope_key is None or scope_key in _CLIENT_CONTROLLED_SCOPE_KEYS
         return _is_raw_request_mapping(
             node.value,
             request_aliases,
@@ -7695,6 +7739,17 @@ def _is_request_body_value(
             )
             for generator in node.generators
         )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "getlist", "pop", "setdefault"}
+        and _is_request_body_value(
+            node.func.value,
+            request_aliases,
+            request_body_names,
+        )
+    ):
+        return True
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
