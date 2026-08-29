@@ -191,6 +191,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         programmatic_handlers,
         programmatic_lambdas,
         partial_programmatic_handlers,
+        programmatic_positional_request_handlers,
     ) = _programmatic_route_handler_keys(
         module_root,
         parsed_modules,
@@ -287,7 +288,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                     f"{target[2]}.{wire_name} would accept raw vault secret "
                     "material over the wire"
                 )
-    boundary_functions = _boundary_function_keys(
+    boundary_functions, partial_dependency_parameters = _boundary_function_keys(
         module_root,
         parsed_modules,
         paths_by_module,
@@ -304,6 +305,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         request_type_names,
         websocket_type_names,
         route_owner_names,
+        programmatic_positional_request_handlers,
     )
     request_models = _referenced_model_keys(
         module_root,
@@ -478,6 +480,13 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 for function_path, line_number, _ in boundary_functions
                 if function_path == path
             ),
+            included_boundary_parameters={
+                line_number: included
+                for (function_path, line_number, _), included in (
+                    partial_dependency_parameters.items()
+                )
+                if function_path == path
+            },
             delegated_request_names={
                 line_number: flow[0]
                 for (function_path, line_number, _), flow in request_body_flows.items()
@@ -528,6 +537,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         unconstrained_type_names: frozenset[str],
         unconstrained_type_module_names: frozenset[str],
         boundary_function_lines: frozenset[int],
+        included_boundary_parameters: dict[int, frozenset[str]],
         delegated_request_names: dict[int, frozenset[str]],
         delegated_websocket_names: dict[int, frozenset[str]],
     ) -> None:
@@ -561,6 +571,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.unconstrained_type_names = unconstrained_type_names
         self.unconstrained_type_module_names = unconstrained_type_module_names
         self.boundary_function_lines = boundary_function_lines
+        self.included_boundary_parameters = included_boundary_parameters
         self.delegated_request_names = delegated_request_names
         self.delegated_websocket_names = delegated_websocket_names
         self.violations: list[str] = []
@@ -724,6 +735,9 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 depends_aliases=self.depends_aliases,
                 depends_module_aliases=self.depends_module_aliases,
                 wire_alias_constants=self.wire_alias_constants,
+                included_parameter_names=self.included_boundary_parameters.get(
+                    node.lineno
+                ),
             ):
                 if _is_banned_wire_name(wire_name):
                     self.violations.append(
@@ -1812,6 +1826,7 @@ def _bound_call_parameter_arguments(
     if (
         isinstance(call.func, ast.Attribute)
         and positional_parameters
+        and len(call.args) < len(positional_parameters)
         and (
             positional_parameters[0].arg
             if isinstance(positional_parameters[0], ast.arg)
@@ -2466,11 +2481,19 @@ def _functional_dataclass_type_roots(
     )
     if not isinstance(resolved, (ast.List, ast.Tuple)):
         return []
-    return [
-        element.elts[1]
-        for element in resolved.elts
-        if isinstance(element, (ast.List, ast.Tuple)) and len(element.elts) > 1
-    ]
+    roots: list[ast.AST] = []
+    for element in resolved.elts:
+        resolved_element = _resolve_module_expression(
+            element,
+            tree,
+            before_line=element.lineno,
+        )
+        if (
+            isinstance(resolved_element, (ast.List, ast.Tuple))
+            and len(resolved_element.elts) > 1
+        ):
+            roots.append(resolved_element.elts[1])
+    return roots
 
 
 def _pydantic_create_model_definitions(
@@ -3785,6 +3808,7 @@ def _programmatic_route_handler_keys(
     frozenset[tuple[Path, int, str]],
     tuple[tuple[Path, ast.Lambda], ...],
     tuple[tuple[tuple[Path, int, str], frozenset[str]], ...],
+    frozenset[tuple[Path, int, str]],
 ]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
@@ -3796,6 +3820,7 @@ def _programmatic_route_handler_keys(
     partial_handlers: list[
         tuple[tuple[Path, int, str], frozenset[str]]
     ] = []
+    positional_request_handlers: set[tuple[Path, int, str]] = set()
     for path, tree in parsed_modules:
         mounted_names = {
             name for owner_path, name in mounted_route_owners if owner_path == path
@@ -3811,6 +3836,7 @@ def _programmatic_route_handler_keys(
             if not isinstance(node, ast.Call):
                 continue
             owner_key = _enclosing_function_key(path, node, functions, scopes)
+            positional_request_handler = False
             is_route_constructor = _is_starlette_route_constructor(
                 node,
                 route_constructor_aliases,
@@ -3914,6 +3940,9 @@ def _programmatic_route_handler_keys(
                     route_owners=route_owners,
                 ):
                     continue
+                positional_request_handler = (
+                    node.func.attr == "add_exception_handler"
+                )
                 endpoint = next(
                     (
                         keyword.value
@@ -4026,7 +4055,14 @@ def _programmatic_route_handler_keys(
             )
             if target is not None:
                 handlers.add(target)
-    return frozenset(handlers), tuple(lambda_handlers), tuple(partial_handlers)
+                if positional_request_handler:
+                    positional_request_handlers.add(target)
+    return (
+        frozenset(handlers),
+        tuple(lambda_handlers),
+        tuple(partial_handlers),
+        frozenset(positional_request_handlers),
+    )
 
 
 def _resolve_partial_route_handler(
@@ -4994,7 +5030,10 @@ def _boundary_function_keys(
     service_paths: frozenset[Path],
     route_owner_names: dict[Path, frozenset[str]],
     mounted_route_owners: frozenset[tuple[Path, str]],
-) -> frozenset[tuple[Path, int, str]]:
+) -> tuple[
+    frozenset[tuple[Path, int, str]],
+    dict[tuple[Path, int, str], frozenset[str]],
+]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
@@ -5019,6 +5058,9 @@ def _boundary_function_keys(
         for name in names
     }
     boundary: set[tuple[Path, int, str]] = set(programmatic_handlers)
+    partial_dependency_parameters: dict[
+        tuple[Path, int, str], frozenset[str]
+    ] = {}
     for key, node in functions.items():
         path = key[0]
         mounted_names = {
@@ -5041,6 +5083,8 @@ def _boundary_function_keys(
             or _route_handler_uses_owner(node, mounted_names)
         ):
             boundary.add(key)
+
+    direct_boundary = frozenset(boundary)
 
     for path, tree in parsed_modules:
         if path not in service_paths and not any(
@@ -5076,6 +5120,7 @@ def _boundary_function_keys(
                             classes,
                             class_scopes,
                             owner_key,
+                            partial_parameter_filters=partial_dependency_parameters,
                         )
                     )
         for assignment in (
@@ -5172,11 +5217,16 @@ def _boundary_function_keys(
             classes,
             class_scopes,
             key,
+            partial_parameter_filters=partial_dependency_parameters,
         )
         for target in discovered - boundary:
             boundary.add(target)
             pending.append(target)
-    return frozenset(boundary)
+    return frozenset(boundary), {
+        key: included
+        for key, included in partial_dependency_parameters.items()
+        if key in boundary and key not in direct_boundary
+    }
 
 
 def _request_body_flow_names(
@@ -5187,6 +5237,7 @@ def _request_body_flow_names(
     request_type_names: dict[Path, frozenset[str]],
     websocket_type_names: dict[Path, frozenset[str]],
     route_owner_names: dict[Path, frozenset[str]],
+    programmatic_positional_request_handlers: frozenset[tuple[Path, int, str]],
 ) -> dict[
     tuple[Path, int, str],
     tuple[frozenset[str], frozenset[str]],
@@ -5219,6 +5270,7 @@ def _request_body_flow_names(
             _framework_positional_request_names(
                 function,
                 route_owner_names.get(path, frozenset()),
+                registered=key in programmatic_positional_request_handlers,
             )
         )
         websocket_names = {
@@ -5447,6 +5499,9 @@ def _dependency_targets(
     class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
     owner_key: tuple[Path, int, str] | None,
     seen_imported_bindings: frozenset[tuple[Path, str]] = frozenset(),
+    partial_parameter_filters: dict[
+        tuple[Path, int, str], frozenset[str]
+    ] | None = None,
 ) -> set[tuple[Path, int, str]]:
     depends_aliases, fastapi_module_aliases = _depends_aliases(tree)
     targets: set[tuple[Path, int, str]] = set()
@@ -5508,6 +5563,7 @@ def _dependency_targets(
                     class_scopes,
                     None,
                     seen_imported_bindings | {binding},
+                    partial_parameter_filters=partial_parameter_filters,
                 )
             )
     for root_node in expanded_nodes:
@@ -5538,7 +5594,27 @@ def _dependency_targets(
                 dependency = inferred_dependencies.get(id(candidate))
             if dependency is None:
                 continue
-            target = _resolve_bound_method_key(
+            partial_handler = _resolve_partial_route_handler(
+                root=root,
+                path=path,
+                tree=tree,
+                endpoint=dependency,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                functions=functions,
+                scopes=scopes,
+                owner_key=owner_key,
+            )
+            if partial_handler is not None and partial_parameter_filters is not None:
+                partial_target, remaining_parameters = partial_handler
+                previous = partial_parameter_filters.get(partial_target)
+                partial_parameter_filters[partial_target] = (
+                    remaining_parameters
+                    if previous is None
+                    else previous | remaining_parameters
+                )
+            target = partial_handler[0] if partial_handler is not None else None
+            target = target or _resolve_bound_method_key(
                 root=root,
                 path=path,
                 tree=tree,
@@ -7249,8 +7325,10 @@ def _is_http_middleware_decorator(
 def _framework_positional_request_names(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     owner_names: frozenset[str],
+    *,
+    registered: bool = False,
 ) -> frozenset[str]:
-    is_positional_request_callback = False
+    is_positional_request_callback = registered
     for decorator in node.decorator_list:
         if _is_http_middleware_decorator(decorator, owner_names):
             is_positional_request_callback = True
