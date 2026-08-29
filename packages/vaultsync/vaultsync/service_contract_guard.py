@@ -386,6 +386,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
         boundary_functions,
+        request_body_flows,
+        raw_mapping_helpers,
         pydantic_models
         | dataclass_models
         | functional_dataclass_models
@@ -1986,18 +1988,27 @@ def _asgi_callable_uses_unapproved_input(
                     == "Receive"
                 )
             ),
+            frozenset(),
         )
     ]
-    seen: set[tuple[tuple[Path, int, str], frozenset[str], frozenset[str]]] = set()
+    seen: set[
+        tuple[
+            tuple[Path, int, str],
+            frozenset[str],
+            frozenset[str],
+            frozenset[str],
+        ]
+    ] = set()
     while pending:
-        function_key, initial_scopes, initial_receives = pending.pop()
-        state = (function_key, initial_scopes, initial_receives)
+        function_key, initial_scopes, initial_receives, initial_headers = pending.pop()
+        state = (function_key, initial_scopes, initial_receives, initial_headers)
         if state in seen:
             continue
         seen.add(state)
         function = functions[function_key]
         scope_names = set(initial_scopes)
         receive_names = set(initial_receives)
+        header_names = set(initial_headers)
         assignments = [
             candidate
             for statement in function.body
@@ -2017,6 +2028,10 @@ def _asgi_callable_uses_unapproved_input(
                     before = len(receive_names)
                     receive_names.update(targets)
                     changed = changed or len(receive_names) != before
+                if _is_asgi_header_value(value, scope_names, header_names):
+                    before = len(header_names)
+                    header_names.update(targets)
+                    changed = changed or len(header_names) != before
 
         path = function_key[0]
         tree = trees_by_path[path]
@@ -2044,6 +2059,13 @@ def _asgi_callable_uses_unapproved_input(
                     if key_value == "query_string" or (
                         key_value is not None and _is_banned_wire_name(key_value)
                     ):
+                        return True
+                if container is not None and key is not None and _is_name_reference(
+                    container,
+                    header_names,
+                ):
+                    key_value = _constant_string_value(key, {})
+                    if key_value is None or _is_banned_wire_name(key_value):
                         return True
                 if not isinstance(candidate, ast.Call):
                     continue
@@ -2084,15 +2106,73 @@ def _asgi_callable_uses_unapproved_input(
                     target_arguments,
                     receive_names,
                 )
-                if propagated_scopes or propagated_receives:
+                propagated_headers = _bound_tracked_parameter_names(
+                    candidate,
+                    target_arguments,
+                    header_names,
+                )
+                if propagated_scopes or propagated_receives or propagated_headers:
                     pending.append(
                         (
                             target,
                             frozenset(propagated_scopes),
                             frozenset(propagated_receives),
+                            frozenset(propagated_headers),
                         )
                     )
     return False
+
+
+def _is_asgi_header_value(
+    node: ast.AST,
+    scope_names: set[str],
+    header_names: set[str],
+) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in header_names
+    if isinstance(node, ast.Subscript) and _is_name_reference(
+        node.value,
+        scope_names,
+    ):
+        return _constant_string_value(node.slice, {}) == "headers"
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "pop", "setdefault"}
+        and _is_name_reference(node.func.value, scope_names)
+    ):
+        return bool(
+            node.args and _constant_string_value(node.args[0], {}) == "headers"
+        )
+    if isinstance(node, (ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        return any(
+            _is_asgi_header_value(generator.iter, scope_names, header_names)
+            for generator in node.generators
+        )
+    if isinstance(node, ast.Dict):
+        return any(
+            key is None and _is_asgi_header_value(value, scope_names, header_names)
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
+    if not isinstance(node, ast.Call):
+        return False
+    parts = _qualified_name_parts(node.func) or []
+    if not parts or parts[-1] not in {
+        "dict",
+        "Headers",
+        "list",
+        "MutableHeaders",
+        "set",
+        "tuple",
+    }:
+        return False
+    return any(
+        _is_asgi_header_value(value, scope_names, header_names)
+        for value in [
+            *node.args,
+            *(keyword.value for keyword in node.keywords),
+        ]
+    )
 
 
 def _bound_tracked_parameter_names(
@@ -6128,11 +6208,20 @@ def _request_body_flow_names(
                     json_module_names=_json_module_aliases(trees_by_path[path]),
                     raw_mapping_helpers=raw_mapping_helpers[path],
                 )
+                target_reference = call.func
+                positional_arguments = call.args
+                if (
+                    isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "add_task"
+                    and call.args
+                ):
+                    target_reference = call.args[0]
+                    positional_arguments = call.args[1:]
                 target = _resolve_bound_method_key(
                     root=root,
                     path=path,
                     tree=trees_by_path[path],
-                    reference=call.func,
+                    reference=target_reference,
                     paths_by_module=paths_by_module,
                     trees_by_path=trees_by_path,
                     classes=classes,
@@ -6143,7 +6232,7 @@ def _request_body_flow_names(
                     root,
                     path,
                     trees_by_path[path],
-                    call.func,
+                    target_reference,
                     paths_by_module,
                     trees_by_path,
                     functions,
@@ -6210,7 +6299,7 @@ def _request_body_flow_names(
 
                 for parameter, argument in zip(
                     parameters,
-                    call.args,
+                    positional_arguments,
                     strict=False,
                 ):
                     propagate(parameter, argument)
@@ -6926,6 +7015,21 @@ def _referenced_model_keys(
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
     boundary_functions: frozenset[tuple[Path, int, str]],
+    request_body_flows: dict[
+        tuple[Path, int, str],
+        tuple[
+            frozenset[str],
+            frozenset[str],
+            frozenset[str],
+            frozenset[str],
+            frozenset[str],
+            frozenset[str],
+        ],
+    ],
+    raw_mapping_helpers: dict[
+        Path,
+        dict[str, tuple[tuple[str, ...], frozenset[str]]],
+    ],
     model_keys: frozenset[tuple[Path, int, str]],
 ) -> frozenset[tuple[Path, int, str]]:
     trees_by_path = dict(parsed_modules)
@@ -6990,6 +7094,82 @@ def _referenced_model_keys(
                 )
                 if target in model_keys:
                     referenced.add(target)
+    for key, flow in request_body_flows.items():
+        function = functions.get(key)
+        if function is None:
+            continue
+        path, _, _ = key
+        body_aliases, body_module_aliases = _body_aliases(trees_by_path[path])
+        for call in (
+            candidate
+            for statement in function.body
+            for candidate in ast.walk(statement)
+            if isinstance(candidate, ast.Call)
+            and isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr in {"model_validate", "parse_obj"}
+        ):
+            inputs = [
+                *call.args,
+                *(
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg in {"obj", "object"}
+                ),
+            ]
+            if not inputs:
+                continue
+            (
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                scope_mapping_names,
+            ) = _route_provenance_before(
+                function,
+                line_number=call.lineno + 1,
+                request_names=set(flow[0]),
+                websocket_names=set(flow[1]),
+                initial_raw_mapping_names=flow[2],
+                initial_request_body_names=flow[3],
+                initial_websocket_text_names=flow[4],
+                initial_scope_mapping_names=flow[5],
+                body_aliases=frozenset(body_aliases),
+                body_module_aliases=frozenset(body_module_aliases),
+                json_loads_names=_json_loads_aliases(trees_by_path[path]),
+                json_module_names=_json_module_aliases(trees_by_path[path]),
+                raw_mapping_helpers=raw_mapping_helpers[path],
+            )
+            if not any(
+                _is_raw_request_mapping(
+                    candidate,
+                    request_aliases,
+                    websocket_aliases,
+                    raw_mapping_names,
+                    request_body_names,
+                    websocket_text_names,
+                    _json_loads_aliases(trees_by_path[path]),
+                    _json_module_aliases(trees_by_path[path]),
+                    scope_mapping_names,
+                )
+                for candidate in inputs
+            ):
+                continue
+            target = _resolve_model_key(
+                root,
+                path,
+                trees_by_path[path],
+                call.func.value,
+                paths_by_module,
+                trees_by_path,
+                model_definitions,
+                model_scopes,
+                key,
+                owner_scope=function_scopes.get(key, ()),
+                reference_line=call.lineno,
+            )
+            if target in model_keys:
+                referenced.add(target)
     return _model_reference_closure(
         root,
         parsed_modules,
@@ -7770,6 +7950,82 @@ def _route_body_wire_names(
                     key.lineno,
                 )
             )
+    for loop in iterator_bindings:
+        source = loop.iter
+        mapping_source = source
+        yields_pairs = False
+        if (
+            isinstance(source, ast.Call)
+            and isinstance(source.func, ast.Attribute)
+            and source.func.attr in {"items", "keys", "multi_items"}
+        ):
+            mapping_source = source.func.value
+            yields_pairs = source.func.attr in {"items", "multi_items"}
+        (
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
+            active_scope_mapping_names,
+        ) = _route_provenance_before(
+            node,
+            line_number=getattr(loop, "lineno", loop.iter.lineno) + 1,
+            request_names=request_names,
+            websocket_names=websocket_names,
+            initial_raw_mapping_names=initial_raw_mapping_names,
+            initial_request_body_names=initial_request_body_names,
+            initial_websocket_text_names=initial_websocket_text_names,
+            initial_scope_mapping_names=initial_scope_mapping_names,
+            body_aliases=body_aliases,
+            body_module_aliases=body_module_aliases,
+            json_loads_names=json_loads_names,
+            json_module_names=json_module_names,
+            raw_mapping_helpers=raw_mapping_helpers,
+        )
+        if not _is_raw_request_mapping(
+            mapping_source,
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
+            json_loads_names,
+            json_module_names,
+            active_scope_mapping_names,
+        ):
+            continue
+        key_target = loop.target
+        if (
+            yields_pairs
+            and isinstance(loop.target, (ast.Tuple, ast.List))
+            and loop.target.elts
+        ):
+            key_target = loop.target.elts[0]
+        key_names = _assignment_target_names(key_target)
+        if not key_names:
+            continue
+        comparison_roots: list[ast.AST]
+        if isinstance(loop, (ast.For, ast.AsyncFor)):
+            comparison_roots = [*loop.body, *loop.orelse]
+        else:
+            comparison_roots = list(loop.ifs)
+        for comparison in (
+            candidate
+            for root in comparison_roots
+            for candidate in ast.walk(root)
+            if isinstance(candidate, ast.Compare)
+        ):
+            operands = [comparison.left, *comparison.comparators]
+            if not any(
+                isinstance(operand, ast.Name) and operand.id in key_names
+                for operand in operands
+            ):
+                continue
+            for operand in operands:
+                wire_name = _constant_string_value(operand, wire_key_constants)
+                if wire_name is not None and _is_banned_wire_name(wire_name):
+                    wire_names.append((wire_name, operand.lineno))
     active_helper_lines = visited_helper_lines | {node.lineno}
     for call in (
         candidate
