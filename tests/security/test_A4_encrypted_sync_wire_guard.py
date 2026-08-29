@@ -3952,7 +3952,7 @@ def sync(value: str = Query(alias=wire_name())): return bool(value)
         encoding="utf-8",
     )
     assert any(
-        "cannot be statically approved" in violation
+        "raw vault secret" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
 

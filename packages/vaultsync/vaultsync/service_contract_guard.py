@@ -78,6 +78,15 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         service_paths,
         paths_by_module,
     )
+    for path, tree in parsed_modules:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(
+                imported.name == "*" for imported in node.names
+            ):
+                violations.append(
+                    f"{path}:{node.lineno}: wildcard import at a service boundary "
+                    "cannot be statically approved"
+                )
     wire_alias_constants = _string_constants_by_path(
         module_root,
         parsed_modules,
@@ -140,6 +149,16 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         paths_by_module,
         service_paths,
         route_owner_names,
+    )
+    violations.extend(
+        _unresolved_mounted_asgi_violations(
+            module_root,
+            parsed_modules,
+            paths_by_module,
+            service_paths,
+            route_owner_names,
+            mounted_route_owners,
+        )
     )
     (
         programmatic_handlers,
@@ -580,6 +599,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         if not is_boundary and not delegated_request_names and not delegated_websocket_names:
             return
         if is_boundary:
+            if _has_unapproved_route_decorator(node, self.route_owner_names):
+                self.violations.append(
+                    f"{self.path}:{node.lineno}: decorated route signature cannot "
+                    "be statically approved"
+                )
             for parameter_name, line_number in _unconstrained_mapping_request_parameters(
                 node,
                 depends_aliases=self.depends_aliases,
@@ -1235,6 +1259,54 @@ def _mounted_route_owner_keys(
                     mounted.add(target)
                     changed = True
     return frozenset(mounted)
+
+
+def _unresolved_mounted_asgi_violations(
+    root: Path,
+    parsed_modules: list[tuple[Path, ast.Module]],
+    paths_by_module: dict[str, Path],
+    service_paths: frozenset[Path],
+    route_owner_names: dict[Path, frozenset[str]],
+    mounted_route_owners: frozenset[tuple[Path, str]],
+) -> list[str]:
+    trees_by_path = dict(parsed_modules)
+    owner_keys = {
+        (path, name)
+        for path, names in route_owner_names.items()
+        for name in names
+        if "." not in name
+    }
+    violations: list[str] = []
+    for path, tree in parsed_modules:
+        for call in ast.walk(tree):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "mount"
+            ):
+                continue
+            caller = _resolve_reference_target(
+                root, path, tree, call.func.value, paths_by_module, trees_by_path
+            )
+            if caller not in owner_keys or (
+                path not in service_paths and caller not in mounted_route_owners
+            ):
+                continue
+            mounted = next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "app"),
+                call.args[1] if len(call.args) > 1 else None,
+            )
+            if mounted is None:
+                continue
+            target = _resolve_reference_target(
+                root, path, tree, mounted, paths_by_module, trees_by_path
+            )
+            if target not in owner_keys:
+                violations.append(
+                    f"{path}:{mounted.lineno}: mounted ASGI callable cannot be "
+                    "statically approved as a request boundary"
+                )
+    return violations
 
 
 def _is_route_owner_reference(
@@ -2022,9 +2094,14 @@ def _functional_typed_dict_fields(
 def _functional_typed_dict_type_roots(
     node: ast.Call,
     tree: ast.Module,
+    imported_values: dict[str, ast.expr] | None = None,
 ) -> list[ast.AST]:
     mapping = node.args[1] if len(node.args) > 1 else None
-    resolved_mapping = _resolve_named_dict_literal(mapping, tree)
+    resolved_mapping = _resolve_named_dict_literal(
+        mapping,
+        tree,
+        imported_values=imported_values,
+    )
     roots = list(resolved_mapping.values) if resolved_mapping is not None else []
     roots.extend(
         keyword.value
@@ -2892,11 +2969,14 @@ def _wire_alias_values(
     elif isinstance(node, ast.Dict):
         children.extend(key for key in node.keys if key is not None)
         children.extend(node.values)
-    return [
+    values = [
         value
         for child in children
         for value in _wire_alias_values(child, constants)
     ]
+    if isinstance(node, ast.Call) and not values:
+        return [("vault_key", node.lineno)]
+    return values
 
 
 def _string_constants(statements: list[ast.stmt]) -> dict[str, str]:
@@ -3376,15 +3456,9 @@ def _resolve_partial_route_handler(
         ):
             parameters = parameters[1:]
         bound_positionals = max(len(candidate.args) - 1, 0)
-        bound_keywords = {
-            keyword.arg
-            for keyword in candidate.keywords
-            if keyword.arg not in {None, "func"}
-        }
         remaining = frozenset(
             parameter.arg
             for parameter in parameters[bound_positionals:]
-            if parameter.arg not in bound_keywords
         )
         return target, remaining
     return None
@@ -4578,6 +4652,9 @@ def _local_name_aliases(
     before_line: int,
 ) -> set[str]:
     aliases = set(initial)
+    conditional_lines = _conditional_assignment_lines(
+        ast.Module(body=function.body, type_ignores=[])
+    )
     assignments = sorted(
         [
         candidate
@@ -4591,7 +4668,8 @@ def _local_name_aliases(
     for assignment in assignments:
         targets, value = _assignment_targets_and_value(assignment)
         is_alias = _is_name_reference(value, aliases)
-        aliases.difference_update(targets)
+        if assignment.lineno not in conditional_lines:
+            aliases.difference_update(targets)
         if is_alias:
             aliases.update(targets)
     return aliases
@@ -5132,6 +5210,11 @@ def _model_reference_closure(
         },
     }
     trees_by_path = dict(parsed_modules)
+    imported_values = _imported_module_values_by_path(
+        root,
+        parsed_modules,
+        paths_by_module,
+    )
     closure = set(initial)
     pending = list(initial)
     while pending:
@@ -5151,6 +5234,7 @@ def _model_reference_closure(
             reference_roots = _functional_typed_dict_type_roots(
                 model,
                 trees_by_path[path],
+                imported_values[path],
             )
         elif key in created_pydantic_models and isinstance(model, ast.Call):
             reference_roots = _pydantic_create_model_type_roots(model)
@@ -5172,6 +5256,14 @@ def _model_reference_closure(
                     key,
                     reference_line=getattr(reference_root, "lineno", model.lineno),
                 )
+                if target is None and isinstance(candidate, ast.Name):
+                    matching = [
+                        model_key
+                        for model_key in model_keys
+                        if model_key[2] == candidate.id
+                    ]
+                    if len(matching) == 1:
+                        target = matching[0]
                 if target in model_keys and target not in closure:
                     closure.add(target)
                     pending.append(target)
@@ -5928,7 +6020,7 @@ def _is_raw_request_mapping(
         isinstance(node, ast.Attribute)
         and node.attr in {"cookies", "headers", "path_params", "query_params"}
         and isinstance(node.value, ast.Name)
-        and node.value.id in request_aliases
+        and node.value.id in request_aliases | websocket_aliases
     ):
         return True
     if not isinstance(node, ast.Call):
@@ -6081,6 +6173,25 @@ def _is_route_handler(
             continue
         if _is_route_owner_reference(func.value, route_owner_names):
             return True
+    return False
+
+
+def _has_unapproved_route_decorator(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    route_owner_names: frozenset[str],
+) -> bool:
+    for decorator in node.decorator_list:
+        if _is_http_middleware_decorator(decorator, route_owner_names):
+            continue
+        call = decorator if isinstance(decorator, ast.Call) else None
+        func = call.func if call is not None else decorator
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in ROUTE_METHODS | GENERIC_ROUTE_DECORATORS
+            and _is_route_owner_reference(func.value, route_owner_names)
+        ):
+            continue
+        return True
     return False
 
 
