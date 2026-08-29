@@ -162,6 +162,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         _unapproved_route_class_violations(
             parsed_modules,
             service_paths,
+            route_owner_names,
         )
     )
     violations.extend(
@@ -210,6 +211,9 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         depends_aliases, depends_module_aliases = _depends_aliases(
             dict(parsed_modules)[path]
         )
+        body_aliases, body_module_aliases = _body_aliases(
+            dict(parsed_modules)[path]
+        )
         for wire_name, line_number in _route_parameter_wire_names(
             handler,
             depends_aliases=frozenset(depends_aliases),
@@ -240,6 +244,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             websocket_module_names=_websocket_module_aliases(dict(parsed_modules)[path]),
             json_loads_names=_json_loads_aliases(dict(parsed_modules)[path]),
             json_module_names=_json_module_aliases(dict(parsed_modules)[path]),
+            body_aliases=frozenset(body_aliases),
+            body_module_aliases=frozenset(body_module_aliases),
             wire_key_constants=wire_alias_constants[path],
             raw_mapping_helpers=raw_mapping_helpers[path],
         ):
@@ -759,6 +765,8 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             websocket_module_names=self.websocket_module_names,
             json_loads_names=self.json_loads_names,
             json_module_names=self.json_module_names,
+            body_aliases=self.body_aliases,
+            body_module_aliases=self.body_module_aliases,
             raw_mapping_helpers=self.raw_mapping_helpers,
             initial_request_names=delegated_request_names,
             initial_websocket_names=delegated_websocket_names,
@@ -1912,12 +1920,14 @@ def _is_api_router_constructor(
 def _unapproved_route_class_violations(
     parsed_modules: list[tuple[Path, ast.Module]],
     service_paths: frozenset[Path],
+    route_owner_names: dict[Path, frozenset[str]],
 ) -> list[str]:
     violations: list[str] = []
     for path, tree in parsed_modules:
         if path not in service_paths:
             continue
         module_aliases = _framework_module_aliases(tree)
+        owners = route_owner_names.get(path, frozenset())
         default_aliases = {
             imported.asname or imported.name
             for node in ast.walk(tree)
@@ -1926,25 +1936,9 @@ def _unapproved_route_class_violations(
             for imported in node.names
             if imported.name == "APIRoute"
         }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not _is_api_router_constructor(
-                node,
-                tree,
-                module_aliases,
-            ):
-                continue
-            route_class = next(
-                (
-                    keyword.value
-                    for keyword in node.keywords
-                    if keyword.arg == "route_class"
-                ),
-                None,
-            )
-            if route_class is None:
-                continue
+        def is_default(route_class: ast.AST) -> bool:
             parts = _qualified_name_parts(route_class)
-            is_default = (
+            return (
                 isinstance(route_class, ast.Name)
                 and route_class.id in default_aliases
             ) or bool(
@@ -1953,11 +1947,55 @@ def _unapproved_route_class_violations(
                 and parts[-1] == "APIRoute"
                 and parts[0] in module_aliases
             )
-            if not is_default:
-                violations.append(
-                    f"{path}:{route_class.lineno}: APIRouter route_class cannot "
-                    "be statically approved"
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                route_class_keyword = next(
+                    (
+                        keyword
+                        for keyword in node.keywords
+                        if keyword.arg in {"route_class", "route_class_override"}
+                    ),
+                    None,
                 )
+                if route_class_keyword is None:
+                    continue
+                is_router_constructor = _is_api_router_constructor(
+                    node,
+                    tree,
+                    module_aliases,
+                )
+                is_route_registration = (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr
+                    in ROUTE_METHODS
+                    | GENERIC_ROUTE_DECORATORS
+                    | PROGRAMMATIC_ROUTE_REGISTRARS
+                    and _is_route_owner_reference(node.func.value, owners)
+                )
+                if not (is_router_constructor or is_route_registration):
+                    continue
+                if is_default(route_class_keyword.value):
+                    continue
+                violations.append(
+                    f"{path}:{route_class_keyword.value.lineno}: "
+                    f"{route_class_keyword.arg} cannot be statically approved"
+                )
+                continue
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(
+                isinstance(target, ast.Attribute)
+                and target.attr == "route_class"
+                and _is_route_owner_reference(target.value, owners)
+                for target in targets
+            ) or is_default(node.value):
+                continue
+            violations.append(
+                f"{path}:{node.value.lineno}: assigned route_class cannot be "
+                "statically approved"
+            )
     return violations
 
 
@@ -4214,7 +4252,36 @@ def _resolve_partial_route_handler(
             function_scopes=scopes,
             owner_key=owner_key,
         )
-        target = bound_target or callable_target or _resolve_function_key(
+        unbound_target: tuple[Path, int, str] | None = None
+        if (
+            bound_target is None
+            and callable_target is None
+            and isinstance(wrapped, ast.Attribute)
+        ):
+            class_key = _resolve_model_key(
+                root,
+                path,
+                tree,
+                wrapped.value,
+                paths_by_module,
+                trees_by_path,
+                classes,
+                class_scopes,
+                owner_key,
+                owner_scope=scopes.get(owner_key, ()),
+                reference_line=wrapped.lineno,
+            )
+            if class_key is not None:
+                unbound_target = _resolve_class_method_key(
+                    root=root,
+                    class_key=class_key,
+                    method_name=wrapped.attr,
+                    paths_by_module=paths_by_module,
+                    trees_by_path=trees_by_path,
+                    classes=classes,
+                    class_scopes=class_scopes,
+                )
+        target = bound_target or callable_target or unbound_target or _resolve_function_key(
             root,
             path,
             tree,
@@ -5916,7 +5983,7 @@ def _body_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
             direct.update(
                 imported.asname or imported.name
                 for imported in node.names
-                if imported.name == "Body"
+                if imported.name in {"Body", "File", "Form"}
             )
         elif isinstance(node, ast.Import):
             modules.update(
@@ -5938,9 +6005,33 @@ def _is_body_call(
     return bool(
         parts
         and len(parts) >= 2
-        and parts[-1] == "Body"
+        and parts[-1] in {"Body", "File", "Form"}
         and parts[0] in module_aliases
     )
+
+
+def _explicit_body_parameter_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    direct_aliases: frozenset[str],
+    module_aliases: frozenset[str],
+) -> set[str]:
+    defaults = _parameter_defaults(node)
+    names: set[str] = set()
+    for argument in _function_arguments(node):
+        roots = [argument.annotation, defaults.get(id(argument))]
+        if any(
+            isinstance(candidate, ast.Call)
+            and _is_body_call(
+                candidate,
+                set(direct_aliases),
+                set(module_aliases),
+            )
+            for root in roots
+            if root is not None
+            for candidate in ast.walk(root)
+        ):
+            names.add(argument.arg)
+    return names
 
 
 def _is_depends_call(
@@ -6422,6 +6513,8 @@ def _route_body_wire_names(
     websocket_module_names: frozenset[str],
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
+    body_aliases: frozenset[str],
+    body_module_aliases: frozenset[str],
     wire_key_constants: dict[str, str],
     raw_mapping_helpers: dict[
         str,
@@ -6463,7 +6556,12 @@ def _route_body_wire_names(
         if argument.annotation is None and argument.arg in {"socket", "websocket"}
     )
     websocket_names.update(initial_websocket_names)
-    if not request_names and not websocket_names:
+    explicit_body_names = _explicit_body_parameter_names(
+        node,
+        body_aliases,
+        body_module_aliases,
+    )
+    if not request_names and not websocket_names and not explicit_body_names:
         return []
 
     request_aliases = set(request_names)
@@ -6478,7 +6576,7 @@ def _route_body_wire_names(
         for index, parameter in enumerate(parameters[:-1]):
             if parameter.arg in websocket_names:
                 raw_mapping_names.add(parameters[index + 1].arg)
-    request_body_names: set[str] = set()
+    request_body_names: set[str] = set(explicit_body_names)
     websocket_text_names: set[str] = set()
     assignments = [
         candidate
@@ -6832,7 +6930,10 @@ def _is_raw_body_decoder_call(
     if _is_json_loads_call(node, direct_aliases, module_aliases):
         return True
     parts = _qualified_name_parts(node.func)
-    return bool(parts and len(parts) >= 2 and parts[-1] == "loads")
+    return bool(
+        parts
+        and parts[-1] in {"loads", "parse_qs", "parse_qsl"}
+    )
 
 
 def _annotation_contains_request_type(
@@ -6984,26 +7085,13 @@ def _is_raw_request_mapping(
         )
     ):
         return True
-    transformed_values = [
-        *node.args,
-        *(keyword.value for keyword in node.keywords),
-    ]
-    return (
-        _name(node.func) == "dict"
-        and any(
-            _is_raw_request_mapping(
-                argument,
-                request_aliases,
-                websocket_aliases,
-                raw_mapping_names,
-                request_body_names,
-                websocket_text_names,
-                json_loads_names,
-                json_module_names,
-            )
-            for argument in node.args
-        )
-    ) or any(
+    parts = _qualified_name_parts(node.func) or []
+    is_mapping_wrapper = bool(
+        parts
+        and parts[-1]
+        in {"Headers", "QueryParams", "FormData", "MultiDict", "ImmutableMultiDict"}
+    )
+    return (_name(node.func) == "dict" or is_mapping_wrapper) and any(
         _is_raw_request_mapping(
             value,
             request_aliases,
@@ -7014,17 +7102,10 @@ def _is_raw_request_mapping(
             json_loads_names,
             json_module_names,
         )
-        or _is_request_body_value(
-            value,
-            request_aliases,
-            request_body_names,
-        )
-        or _is_websocket_text_value(
-            value,
-            websocket_aliases,
-            websocket_text_names,
-        )
-        for value in transformed_values
+        for value in [
+            *node.args,
+            *(keyword.value for keyword in node.keywords),
+        ]
     )
 
 
@@ -7320,23 +7401,15 @@ def _is_request_body_value(
             )
             for argument in node.args
         )
-    if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Attribute) and _is_request_body_value(
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"decode", "read", "strip", "lstrip", "rstrip"}
+    ):
+        if _is_request_body_value(
             node.func.value,
             request_aliases,
             request_body_names,
-        ):
-            return True
-        if any(
-            _is_request_body_value(
-                value,
-                request_aliases,
-                request_body_names,
-            )
-            for value in [
-                *node.args,
-                *(keyword.value for keyword in node.keywords),
-            ]
         ):
             return True
     return bool(

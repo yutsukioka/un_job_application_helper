@@ -216,11 +216,6 @@ class Argon2idParams:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        _require_supported_argon2id_parameters(
-            self.memory_kib,
-            self.iterations,
-            self.parallelism,
-        )
         return {
             "algorithm": "Argon2id",
             "salt": _b64encode(self.salt),
@@ -504,6 +499,13 @@ class VaultMetadata:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        for wrapped_key in self.key_wraps:
+            if isinstance(wrapped_key, WrappedKey):
+                _require_supported_argon2id_parameters(
+                    wrapped_key.kdf.memory_kib,
+                    wrapped_key.kdf.iterations,
+                    wrapped_key.kdf.parallelism,
+                )
         return {
             "format": self.format,
             "version": self.version,
