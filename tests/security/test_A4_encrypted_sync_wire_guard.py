@@ -3828,3 +3828,171 @@ async def sync(socket: WebSocket) -> None:
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
 
     assert any("vault_key" in violation for violation in violations)
+
+
+def test_A4_guard_keeps_keyword_bound_partial_parameters(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "partial_keyword.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from functools import partial
+from fastapi import FastAPI
+app = FastAPI()
+def sync(vault_key: str) -> dict[str, bool]:
+    return {"ok": bool(vault_key)}
+app.add_api_route("/sync", partial(sync, vault_key="internal"), methods=["POST"])
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "sync.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_preserves_conditional_request_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "conditional_alias.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+async def parse_payload(inbound):
+    return (await inbound.json())["vault_key"]
+@app.post("/sync")
+async def sync(request: Request, use_local: bool):
+    inbound = request
+    if use_local:
+        inbound = object()
+    return await parse_payload(inbound)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_traverses_imported_typed_dict_value_types(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "__init__.py").write_text("", encoding="utf-8")
+    (service_root / "models.py").write_text(
+        'from pydantic import BaseModel\nclass SecretInput(BaseModel):\n    vault_key: str\nFIELDS = {"payload": SecretInput}\n',
+        encoding="utf-8",
+    )
+    (service_root / "api.py").write_text(
+        '''
+from typing import TypedDict
+from fastapi import FastAPI
+from services.models import FIELDS
+Payload = TypedDict("Payload", FIELDS)
+app = FastAPI()
+@app.post("/sync")
+def sync(payload: Payload):
+    return bool(payload)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "SecretInput.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_root)
+    )
+
+
+def test_A4_guard_inspects_websocket_connection_mappings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "socket_query.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, WebSocket
+app = FastAPI()
+@app.websocket("/sync")
+async def sync(socket: WebSocket):
+    _ = socket.query_params["vault_key"]
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_wildcard_service_imports(tmp_path: Path) -> None:
+    service_root = tmp_path / "services"
+    service_root.mkdir()
+    (service_root / "__init__.py").write_text("", encoding="utf-8")
+    (service_root / "models.py").write_text(
+        "from pydantic import BaseModel\nclass Payload(BaseModel):\n    vault_key: str\n",
+        encoding="utf-8",
+    )
+    (service_root / "api.py").write_text(
+        'from fastapi import FastAPI\nfrom services.models import *\napp = FastAPI()\n@app.post("/sync")\ndef sync(payload: Payload): return bool(payload)\n',
+        encoding="utf-8",
+    )
+    assert any(
+        "wildcard import" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_root)
+    )
+
+
+def test_A4_guard_rejects_opaque_wire_aliases(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "opaque_alias.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Query
+app = FastAPI()
+def wire_name(): return "vault_key"
+@app.post("/sync")
+def sync(value: str = Query(alias=wire_name())): return bool(value)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "cannot be statically approved" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_signature_changing_route_decorators(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "decorated_route.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+def expose_secret(function):
+    def wrapper(vault_key: str): return function()
+    return wrapper
+@app.post("/sync")
+@expose_secret
+def sync(): return True
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "decorated route signature" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_unresolved_mounted_asgi_callables(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "mounted_asgi.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+async def raw_app(scope, receive, send):
+    _ = scope["query_string"]
+app.mount("/raw", raw_app)
+''',
+        encoding="utf-8",
+    )
+    assert any(
+        "mounted ASGI callable" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
