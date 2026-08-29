@@ -14,14 +14,18 @@ import 'models.dart';
 import 'pairing.dart';
 import 'plaintext_migration.dart';
 import 'private_state_runtime.dart';
+import 'protected_state_bounds.dart';
 import 'strict_values.dart';
 import 'trusted_devices.dart';
 
 const _transactionFormat = 'atlasvault-pairing-transaction';
 const _transactionVersion = 1;
-const atlasVaultMaximumPairingStateByteCount = 2 * 1024 * 1024;
-const atlasVaultMaximumPairingTransactionByteCount = 64 * 1024;
-const atlasVaultMaximumPairingArtifactByteCount = 128 * 1024 * 1024;
+const atlasVaultMaximumPairingStateByteCount =
+    atlasVaultMaximumTrustedDeviceRegistryByteCount;
+const atlasVaultMaximumPairingTransactionByteCount =
+    atlasVaultMaximumPairingTransactionJournalByteCount;
+const atlasVaultMaximumPairingArtifactByteCount =
+    atlasVaultMaximumStagedPairingArtifactByteCount;
 const _maximumTrustedPairingPeers = 64;
 // Device-identity rotation is independent of the initial vault key.
 const _initialVaultKeyEpoch = 1;
@@ -284,14 +288,6 @@ final class AtlasVaultPairingTransaction {
       if (_time(updatedAt).isBefore(_time(createdAt))) {
         throw const AtlasVaultPairingTransactionException();
       }
-      final encodedPrivateKey = value['ephemeral_private_key'];
-      if (encodedPrivateKey != null) {
-        ephemeralPrivateKey = requireAtlasVaultCanonicalBase64(
-          encodedPrivateKey,
-          field: 'ephemeral_private_key',
-          exactLength: 32,
-        );
-      }
       final artifacts = <AtlasVaultStagedPairingArtifact>[
         for (final item in requireAtlasVaultList(
           value['staged_artifacts'],
@@ -307,6 +303,17 @@ final class AtlasVaultPairingTransaction {
           artifactKinds.toSet().length != artifactKinds.length ||
           !_intListsEqual(artifactKinds, sortedKinds)) {
         throw const AtlasVaultPairingTransactionException();
+      }
+      requireAtlasVaultStagedPairingArtifactByteCounts(
+        artifacts.map((artifact) => artifact.byteCount),
+      );
+      final encodedPrivateKey = value['ephemeral_private_key'];
+      if (encodedPrivateKey != null) {
+        ephemeralPrivateKey = requireAtlasVaultCanonicalBase64(
+          encodedPrivateKey,
+          field: 'ephemeral_private_key',
+          exactLength: 32,
+        );
       }
       final keyEpoch = _optionalPositiveInt(value['key_epoch']);
       final selectionCommitted = requireAtlasVaultBool(
@@ -371,10 +378,10 @@ final class AtlasVaultPairingTransaction {
     Uint8List? input;
     Uint8List? canonical;
     try {
-      if (bytes.isEmpty ||
-          bytes.length > atlasVaultMaximumPairingTransactionByteCount) {
-        throw const AtlasVaultPairingTransactionException();
-      }
+      requireAtlasVaultProtectedStateByteCount(
+        AtlasVaultProtectedStateCategory.pairingTransactionJournal,
+        bytes.length,
+      );
       input = Uint8List.fromList(bytes);
       final decodedJson = jsonDecode(utf8.decode(input, allowMalformed: false));
       if (decodedJson is! Map) {

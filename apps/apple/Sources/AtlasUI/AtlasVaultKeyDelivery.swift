@@ -443,6 +443,10 @@ public struct AtlasVaultPairingBootstrap: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
+            try AtlasVaultProtectedStateBounds.requireByteCount(
+                data.count,
+                for: .pairingBootstrap
+            )
             let value = try JSONDecoder().decode(Self.self, from: data)
             guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
                 try value.canonicalData(), data
@@ -1265,6 +1269,9 @@ public struct AtlasVaultPairingArtifact: Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
+            try AtlasVaultProtectedStateBounds.requireStagedArtifactByteCounts(
+                [data.count]
+            )
             guard
                 let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                 Set(root.keys) == ["format", "version", "kind", "payload"],

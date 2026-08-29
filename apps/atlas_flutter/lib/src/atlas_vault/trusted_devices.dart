@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'canonical_json.dart';
 import 'device_identity.dart';
+import 'protected_state_bounds.dart';
 import 'strict_values.dart';
 
 const _registryFormat = 'atlasvault-trusted-device-registry';
@@ -217,6 +218,10 @@ final class AtlasVaultTrustedDeviceRegistry {
 
   factory AtlasVaultTrustedDeviceRegistry.fromCanonicalBytes(Uint8List bytes) {
     try {
+      requireAtlasVaultProtectedStateByteCount(
+        AtlasVaultProtectedStateCategory.trustedDeviceRegistry,
+        bytes.length,
+      );
       final input = Uint8List.fromList(bytes);
       final decoded = AtlasVaultTrustedDeviceRegistry.fromJson(
         _decodeObject(input),
@@ -512,6 +517,10 @@ final class AtlasVaultPairingReplayStore {
 
   factory AtlasVaultPairingReplayStore.fromCanonicalBytes(Uint8List bytes) {
     try {
+      requireAtlasVaultProtectedStateByteCount(
+        AtlasVaultProtectedStateCategory.pairingReplayState,
+        bytes.length,
+      );
       final input = Uint8List.fromList(bytes);
       final decoded = AtlasVaultPairingReplayStore.fromJson(
         _decodeObject(input),

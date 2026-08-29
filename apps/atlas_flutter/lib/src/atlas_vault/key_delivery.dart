@@ -8,6 +8,7 @@ import 'crypto.dart';
 import 'device_identity.dart';
 import 'models.dart';
 import 'pairing.dart';
+import 'protected_state_bounds.dart';
 import 'strict_values.dart';
 
 const _requestFormat = 'atlasvault-pairing-key-request';
@@ -383,6 +384,10 @@ final class AtlasVaultPairingBootstrap {
 
   factory AtlasVaultPairingBootstrap.fromCanonicalBytes(Uint8List bytes) {
     try {
+      requireAtlasVaultProtectedStateByteCount(
+        AtlasVaultProtectedStateCategory.pairingBootstrap,
+        bytes.length,
+      );
       final input = Uint8List.fromList(bytes);
       final decoded = AtlasVaultPairingBootstrap.fromJson(_decodeObject(input));
       if (!_bytesEqual(input, decoded.canonicalBytes())) {
@@ -1186,6 +1191,7 @@ final class AtlasVaultPairingArtifact {
 
   factory AtlasVaultPairingArtifact.fromCanonicalBytes(Uint8List bytes) {
     try {
+      requireAtlasVaultStagedPairingArtifactByteCounts(<int>[bytes.length]);
       final input = Uint8List.fromList(bytes);
       final decoded = AtlasVaultPairingArtifact.fromJson(_decodeObject(input));
       if (!_bytesEqual(input, decoded.canonicalBytes())) {

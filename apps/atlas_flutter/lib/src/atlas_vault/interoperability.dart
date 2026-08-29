@@ -11,6 +11,7 @@ import 'models.dart';
 import 'payloads.dart';
 import 'plaintext_migration.dart';
 import 'private_state_runtime.dart';
+import 'protected_state_bounds.dart';
 import 'recovery.dart';
 import 'strict_values.dart';
 
@@ -389,7 +390,8 @@ final class _NoopRecoveryImportOperationAdmission
 
 final class AtlasVaultInteroperabilityCoordinator
     implements AtlasVaultInteroperabilityCoordinating {
-  static const int _maximumDocumentByteCount = 128 * 1024 * 1024;
+  static const int _maximumDocumentByteCount =
+      atlasVaultMaximumImportedEncryptedStateByteCount;
 
   AtlasVaultInteroperabilityCoordinator({
     required AtlasVaultPrivateStateRuntime runtime,

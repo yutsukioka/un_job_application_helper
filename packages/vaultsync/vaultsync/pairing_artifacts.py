@@ -22,6 +22,9 @@ from vaultsync.pairing import (
     SignedPairingAcceptance,
     SignedPairingOffer,
 )
+from vaultsync.protected_state_bounds import (
+    require_staged_pairing_artifact_byte_counts,
+)
 
 
 PAIRING_ARTIFACT_FORMAT = "atlasvault-pairing-artifact"
@@ -173,6 +176,7 @@ class PairingArtifact:
         try:
             if not isinstance(data, bytes) or not data:
                 raise _invalid_artifact()
+            require_staged_pairing_artifact_byte_counts((len(data),))
             obj = _mapping(json.loads(data.decode("utf-8")))
             if not hmac.compare_digest(_canonical_bytes(obj), data):
                 raise _invalid_artifact()

@@ -10,6 +10,10 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Mapping, Sequence, TypeAlias
 
+from vaultsync.protected_state_bounds import (
+    MAXIMUM_IMPORTED_ENCRYPTED_STATE_BYTES,
+)
+
 VAULT_FORMAT = "atlas-vault"
 SUPPORTED_VAULT_VERSION = 1
 MAX_ARGON2ID_MEMORY_KIB = 512 * 1024
@@ -155,15 +159,19 @@ def read_vault_import_bytes(
     max_bytes: int = MAX_VAULT_IMPORT_BYTES,
 ) -> bytes:
     path_obj = Path(path)
-    if max_bytes <= 0:
+    if type(max_bytes) is not int or max_bytes <= 0:
         raise VaultImportTooLargeError("vault import size cap must be positive")
+    effective_maximum = min(max_bytes, MAXIMUM_IMPORTED_ENCRYPTED_STATE_BYTES)
     try:
         size = path_obj.stat().st_size
     except OSError as exc:
         raise VaultFormatError("vault import file cannot be inspected") from exc
-    if size > max_bytes:
+    if size <= 0 or size > effective_maximum:
         raise VaultImportTooLargeError("vault import exceeds maximum size")
-    return path_obj.read_bytes()
+    data = path_obj.read_bytes()
+    if not data or len(data) > effective_maximum:
+        raise VaultImportTooLargeError("vault import exceeds maximum size")
+    return data
 
 
 @dataclass(frozen=True)

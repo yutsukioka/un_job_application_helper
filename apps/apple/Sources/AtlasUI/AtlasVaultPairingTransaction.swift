@@ -62,7 +62,11 @@ public struct AtlasVaultStagedPairingArtifact: Codable, Equatable, Sendable {
         sha256: String,
         byteCount: Int
     ) throws {
-        guard byteCount > 0, byteCount <= 128 * 1_024 * 1_024 else {
+        guard
+            byteCount > 0,
+            byteCount <= AtlasVaultProtectedStateBounds
+                .maximumStagedArtifactByteCount
+        else {
             throw AtlasVaultPairingTransactionError.invalidTransaction
         }
         self.kind = kind
@@ -101,7 +105,8 @@ public struct AtlasVaultStagedPairingArtifact: Codable, Equatable, Sendable {
 }
 
 public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
-    public static let maximumByteCount = 64 * 1_024
+    public static let maximumByteCount = AtlasVaultProtectedStateBounds
+        .maximumPairingTransactionJournalByteCount
 
     public let format: String
     public let version: Int
@@ -212,15 +217,6 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
             if let keyEpoch, keyEpoch <= 0 {
                 throw AtlasVaultPairingTransactionError.invalidTransaction
             }
-            if let encoded = try values.decodeIfPresent(
-                String.self, forKey: .ephemeralPrivateKey
-            ) {
-                ephemeralPrivateKey = try AtlasVaultPairingValidation.canonicalBase64(
-                    encoded, length: 32
-                )
-            } else {
-                ephemeralPrivateKey = nil
-            }
             storeSHA256 = try Self.optionalSHA(values, .storeSHA256)
             vaultKeySHA256 = try Self.optionalSHA(values, .vaultKeySHA256)
             selectionCommitted = try values.decode(
@@ -230,6 +226,18 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
                 [AtlasVaultStagedPairingArtifact].self,
                 forKey: .stagedArtifacts
             )
+            try AtlasVaultProtectedStateBounds.requireStagedArtifactByteCounts(
+                stagedArtifacts.map(\.byteCount)
+            )
+            if let encoded = try values.decodeIfPresent(
+                String.self, forKey: .ephemeralPrivateKey
+            ) {
+                ephemeralPrivateKey = try AtlasVaultPairingValidation.canonicalBase64(
+                    encoded, length: 32
+                )
+            } else {
+                ephemeralPrivateKey = nil
+            }
             let roleStages = Self.stages(for: role)
             let createdDate = try AtlasVaultPairingValidation.date(createdAt)
             let updatedDate = try AtlasVaultPairingValidation.date(updatedAt)
@@ -299,9 +307,10 @@ public struct AtlasVaultPairingTransaction: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
-            guard !data.isEmpty, data.count <= maximumByteCount else {
-                throw AtlasVaultPairingTransactionError.invalidTransaction
-            }
+            try AtlasVaultProtectedStateBounds.requireByteCount(
+                data.count,
+                for: .pairingTransactionJournal
+            )
             let value = try JSONDecoder().decode(Self.self, from: data)
             guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
                 try value.canonicalData(), data
@@ -685,7 +694,8 @@ public struct AtlasKeychainTrustedDeviceRegistryStore<
             client: client,
             service: Self.service,
             account: "state-v1",
-            maximumByteCount: 2 * 1_024 * 1_024
+            maximumByteCount: AtlasVaultProtectedStateBounds
+                .maximumTrustedDeviceRegistryByteCount
         )
     }
 
@@ -735,7 +745,8 @@ public struct AtlasKeychainPairingReplayStore<
             client: client,
             service: Self.service,
             account: "state-v1",
-            maximumByteCount: 2 * 1_024 * 1_024
+            maximumByteCount: AtlasVaultProtectedStateBounds
+                .maximumPairingReplayStateByteCount
         )
     }
 
@@ -806,7 +817,8 @@ where Client == SecItemAtlasKeychainClient {
 }
 
 public struct AtlasVaultPairingArtifactStageStore: Sendable {
-    public static let maximumByteCount = 128 * 1_024 * 1_024
+    public static let maximumByteCount = AtlasVaultProtectedStateBounds
+        .maximumStagedArtifactByteCount
     private let root: URL
 
     public init(root: URL) throws {
