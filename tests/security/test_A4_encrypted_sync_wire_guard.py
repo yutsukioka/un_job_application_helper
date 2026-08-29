@@ -4564,3 +4564,148 @@ app = Starlette(routes=routes)
         "vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_rejects_route_classes_assigned_after_construction(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "assigned_route_class.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import APIRouter, FastAPI
+from fastapi.routing import APIRoute
+class SecretRoute(APIRoute): pass
+router = APIRouter()
+router.route_class = SecretRoute
+@router.get("/sync")
+def sync(): return {"ok": True}
+app = FastAPI()
+app.include_router(router)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "route_class" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_per_route_class_overrides(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "route_class_override.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import APIRouter, FastAPI
+from fastapi.routing import APIRoute
+class SecretRoute(APIRoute): pass
+router = APIRouter()
+def sync(): return {"ok": True}
+router.add_api_route(
+    "/sync",
+    sync,
+    methods=["GET"],
+    route_class_override=SecretRoute,
+)
+app = FastAPI()
+app.include_router(router)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "route_class_override" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_resolves_class_qualified_partial_dependencies(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "unbound_partial_dependency.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from functools import partial
+from fastapi import Depends, FastAPI
+app = FastAPI()
+class Parser:
+    def secret(self, prefix, vault_key): return prefix + vault_key
+parser = Parser()
+@app.get("/sync")
+def sync(value=Depends(partial(Parser.secret, parser, "prefix"))):
+    return bool(value)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_does_not_taint_safe_body_consuming_helper_returns(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "safe_body_consumer.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+def internal_context(raw_body):
+    _ = len(raw_body)
+    return {"vault_key": "server-owned"}
+@app.post("/sync")
+async def sync(request: Request):
+    context = internal_context(await request.body())
+    return context["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_tracks_explicit_typed_body_parameters(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "typed_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import json
+from fastapi import Body, FastAPI
+app = FastAPI()
+@app.post("/sync")
+def sync(payload: bytes = Body()):
+    return json.loads(payload)["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_explicit_uploaded_file_contents(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "uploaded_body.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import json
+from fastapi import FastAPI, File, UploadFile
+app = FastAPI()
+@app.post("/sync")
+async def sync(payload: UploadFile = File()):
+    return json.loads(await payload.read())["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )

@@ -20,6 +20,7 @@ from vaultsync import (  # noqa: E402
     write_local_store,
 )
 from vaultsync.export import VaultImportTooLargeError  # noqa: E402
+from vaultsync.crypto import unwrap_vault_key, wrap_vault_key  # noqa: E402
 from vaultsync.format import (  # noqa: E402
     Argon2idParams,
     MAX_ARGON2ID_ITERATIONS,
@@ -101,6 +102,25 @@ def test_B5_trusted_argon2id_params_are_not_limited_by_import_caps() -> None:
     assert params.memory_kib == MAX_ARGON2ID_MEMORY_KIB + 1
     assert params.iterations == MAX_ARGON2ID_ITERATIONS + 1
     assert params.parallelism == MAX_ARGON2ID_PARALLELISM + 1
+
+
+def test_B5_trusted_stronger_argon2id_params_work_for_key_wrapping() -> None:
+    params = Argon2idParams(
+        salt=b"s" * 16,
+        memory_kib=1024,
+        iterations=MAX_ARGON2ID_ITERATIONS + 1,
+        parallelism=1,
+    )
+
+    wrapped = wrap_vault_key(
+        b"v" * 32,
+        "test passphrase",
+        params=params,
+        nonce=b"n" * 12,
+    )
+
+    assert wrapped.kdf.to_dict()["iterations"] == MAX_ARGON2ID_ITERATIONS + 1
+    assert unwrap_vault_key(wrapped, "test passphrase") == b"v" * 32
 
 
 def test_B5_vault_import_cap_matches_supported_cross_platform_document_limit() -> None:
