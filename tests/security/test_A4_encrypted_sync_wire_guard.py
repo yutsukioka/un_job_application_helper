@@ -5284,3 +5284,170 @@ async def sync(request: Request):
         "vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(bad_root)
     )
+
+
+def test_A4_guard_propagates_parsed_payloads_into_consumer_helpers(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "payload_consumer.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+def consume(payload):
+    return payload["vault_key"]
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    return consume(payload)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_request_payloads_captured_by_lambdas(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "payload_lambda.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    pick = lambda: payload["vault_key"]
+    return pick()
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_resolves_programmatic_route_wrapper_endpoints(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "route_wrapper.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+def secret(vault_key: str):
+    return {"ok": bool(vault_key)}
+def register(endpoint):
+    app.add_api_route("/sync", endpoint, methods=["POST"])
+register(secret)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_request_payloads_stored_on_attributes(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "attribute_payload.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+class State:
+    pass
+state = State()
+@app.post("/sync")
+async def sync(request: Request):
+    state.payload = await request.json()
+    return state.payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_seeds_starlette_route_decorator_positional_requests(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "starlette_route.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from starlette.applications import Starlette
+app = Starlette()
+@app.route("/sync")
+def sync(req):
+    return req.query_params["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_constructor_installed_middleware(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "constructor_middleware.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+class SecretMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, req, call_next):
+        _ = req.headers["vault_key"]
+        return await call_next(req)
+app = Starlette(middleware=[Middleware(SecretMiddleware)])
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_constructor_installed_exception_handlers(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "constructor_exception_handler.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from starlette.applications import Starlette
+def handle(req, exc):
+    return req.headers["vault_key"]
+app = Starlette(exception_handlers={Exception: handle})
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
