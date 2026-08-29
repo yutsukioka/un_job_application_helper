@@ -53,6 +53,7 @@ _CANONICAL_BANNED_WIRE_FIELD_NAMES = frozenset(
     "".join(character for character in name.casefold() if character.isalnum())
     for name in BANNED_WIRE_FIELD_NAMES
 )
+_DYNAMIC_REQUEST_MAPPING_KEY = "<dynamic request mapping key>"
 
 
 def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[str]:
@@ -249,7 +250,12 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
             wire_key_constants=wire_alias_constants[path],
             raw_mapping_helpers=raw_mapping_helpers[path],
         ):
-            if _is_banned_wire_name(wire_name):
+            if wire_name == _DYNAMIC_REQUEST_MAPPING_KEY:
+                violations.append(
+                    f"{path}:{line_number}: route body lambda uses a dynamic "
+                    "request mapping key that cannot be statically approved"
+                )
+            elif _is_banned_wire_name(wire_name):
                 violations.append(
                     f"{path}:{line_number}: route body lambda[{wire_name!r}] "
                     "would accept raw vault secret material over the wire"
@@ -279,6 +285,36 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                         f"{path}:{line_number}: dependency lambda.{wire_name} would "
                         "accept raw vault secret material over the wire"
                     )
+        mounted_names = {
+            name for owner_path, name in mounted_route_owners if owner_path == path
+        }
+        route_owners = route_owner_names.get(path, frozenset())
+        for call in (
+            candidate
+            for candidate in ast.walk(tree)
+            if isinstance(candidate, ast.Call)
+        ):
+            for replacement in _dependency_override_update_values(
+                call,
+                tree=tree,
+                path_in_services=path in service_paths,
+                mounted_names=mounted_names,
+                route_owners=route_owners,
+            ):
+                if not isinstance(replacement, ast.Lambda):
+                    continue
+                for wire_name, line_number in _route_parameter_wire_names(
+                    replacement,
+                    depends_aliases=frozenset(depends_aliases),
+                    depends_module_aliases=frozenset(depends_modules),
+                    wire_alias_constants=wire_alias_constants[path],
+                ):
+                    if _is_banned_wire_name(wire_name):
+                        violations.append(
+                            f"{path}:{line_number}: dependency override "
+                            f"lambda.{wire_name} would accept raw vault secret "
+                            "material over the wire"
+                        )
     function_definitions = _function_definitions(parsed_modules)
     trees_by_path = dict(parsed_modules)
     for target, remaining_parameters in partial_programmatic_handlers:
@@ -775,7 +811,12 @@ class _ServiceContractVisitor(ast.NodeVisitor):
                 **_string_constants(node.body),
             },
         ):
-            if _is_banned_wire_name(wire_name):
+            if wire_name == _DYNAMIC_REQUEST_MAPPING_KEY:
+                self.violations.append(
+                    f"{self.path}:{line_number}: route body {node.name} uses a "
+                    "dynamic request mapping key that cannot be statically approved"
+                )
+            elif _is_banned_wire_name(wire_name):
                 self.violations.append(
                     f"{self.path}:{line_number}: route body {node.name}[{wire_name!r}] "
                     "would accept raw vault secret material over the wire"
@@ -1448,6 +1489,8 @@ def _route_template_wire_violations(
     wire_alias_constants: dict[Path, dict[str, str]],
 ) -> list[str]:
     violations: list[str] = []
+    functions = _function_definitions(parsed_modules)
+    function_scopes = _function_scopes(parsed_modules)
     path_decorators = ROUTE_METHODS | {
         "api_route",
         "route",
@@ -1467,16 +1510,41 @@ def _route_template_wire_violations(
         _, framework_module_aliases = _framework_constructor_imports(tree)
         for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
             template_nodes: list[ast.expr] = []
-            if (
+            direct_route_call = (
                 isinstance(call.func, ast.Attribute)
-                and call.func.attr in path_decorators | path_registrars
+                and call.func.attr in path_decorators
                 and _active_route_owner_reference(
                     call.func.value,
                     path_in_services=path in service_paths,
                     mounted_names=mounted_names,
                     route_owners=route_owners,
                 )
-            ):
+            )
+            owner_key = _enclosing_function_key(
+                path,
+                call,
+                functions,
+                function_scopes,
+            )
+            registrar = _programmatic_route_registrar_reference(
+                path=path,
+                tree=tree,
+                reference=call.func,
+                reference_line=call.lineno,
+                owner_key=owner_key,
+                function_scopes=function_scopes,
+            )
+            programmatic_route_call = bool(
+                registrar is not None
+                and registrar.attr in path_registrars
+                and _active_route_owner_reference(
+                    registrar.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+            )
+            if direct_route_call or programmatic_route_call:
                 template_node = next(
                     (keyword.value for keyword in call.keywords if keyword.arg == "path"),
                     call.args[0] if call.args else None,
@@ -1607,6 +1675,14 @@ def _unapproved_asgi_middleware_violations(
                 reference_line=call.lineno,
             )
             if _is_framework_middleware_reference(middleware, tree):
+                for keyword in call.keywords:
+                    if keyword.arg not in {"backend", "dispatch", "on_error"}:
+                        continue
+                    violations.append(
+                        f"{path}:{keyword.value.lineno}: framework middleware "
+                        f"{keyword.arg} cannot be statically approved as a request "
+                        "boundary"
+                    )
                 continue
             call_key = (
                 _resolve_class_method_key(
@@ -6718,9 +6794,33 @@ def _route_body_wire_names(
         for candidate in ast.walk(statement)
         if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
     ]
+    iterator_bindings = [
+        candidate
+        for statement in node.body
+        for candidate in ast.walk(statement)
+        if isinstance(candidate, (ast.For, ast.AsyncFor))
+    ]
     changed = True
     while changed:
         changed = False
+        for loop in iterator_bindings:
+            source = loop.iter
+            if not (
+                isinstance(source, ast.Call)
+                and isinstance(source.func, ast.Attribute)
+                and isinstance(source.func.value, ast.Name)
+                and source.func.value.id in websocket_aliases
+            ):
+                continue
+            targets = _assignment_target_names(loop.target)
+            if source.func.attr == "iter_json":
+                previous_size = len(raw_mapping_names)
+                raw_mapping_names.update(targets)
+                changed = changed or len(raw_mapping_names) != previous_size
+            elif source.func.attr in {"iter_bytes", "iter_text"}:
+                previous_size = len(websocket_text_names)
+                websocket_text_names.update(targets)
+                changed = changed or len(websocket_text_names) != previous_size
         for assignment in assignments:
             targets, value = _assignment_targets_and_value(assignment)
             if isinstance(value, ast.Name) and value.id in request_aliases:
@@ -6791,21 +6891,23 @@ def _route_body_wire_names(
                 container = candidate.func.value
             else:
                 continue
-            wire_key = _constant_string_value(key, wire_key_constants)
-            if (
-                wire_key is not None
-                and _is_raw_request_mapping(
-                    container,
-                    request_aliases,
-                    websocket_aliases,
-                    raw_mapping_names,
-                    request_body_names,
-                    websocket_text_names,
-                    json_loads_names,
-                    json_module_names,
-                )
+            if _is_raw_request_mapping(
+                container,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
             ):
-                wire_names.append((wire_key, key.lineno))
+                wire_names.append(
+                    (
+                        _constant_string_value(key, wire_key_constants)
+                        or _DYNAMIC_REQUEST_MAPPING_KEY,
+                        key.lineno,
+                    )
+                )
     return wire_names
 
 
@@ -7198,7 +7300,7 @@ def _is_raw_request_mapping(
             if (
                 isinstance(source, ast.Call)
                 and isinstance(source.func, ast.Attribute)
-                and source.func.attr in {"items", "keys"}
+                and source.func.attr in {"items", "keys", "multi_items"}
                 and _is_raw_request_mapping(
                     source.func.value,
                     request_aliases,
@@ -7563,6 +7665,21 @@ def _is_request_body_value(
         )
     if isinstance(node, ast.Name):
         return node.id in request_body_names
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr == "query"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "url"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id in request_aliases
+    ):
+        return True
+    if isinstance(node, ast.Subscript):
+        return _is_request_body_value(
+            node.value,
+            request_aliases,
+            request_body_names,
+        )
     if isinstance(node, ast.Attribute) and node.attr == "file":
         return _is_request_body_value(
             node.value,
@@ -7605,7 +7722,7 @@ def _is_request_body_value(
     return bool(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"body", "stream"}
+        and node.func.attr in {"body", "receive", "stream"}
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id in request_aliases
     )
