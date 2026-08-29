@@ -80,6 +80,28 @@ def test_monotonic_deadline_rejects_wall_clock_rollback() -> None:
         )
 
 
+def test_monotonic_deadline_rejects_decrease_from_last_reading() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+    deadline.require_live(
+        current_time="2026-08-15T10:05:00Z",
+        monotonic_time=400.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T09:59:00Z",
+            monotonic_time=340.0,
+        )
+
+
 def test_monotonic_deadline_counts_suspend_time() -> None:
     deadline = PairingMonotonicDeadline(
         wall_time="2026-08-15T10:00:00Z",

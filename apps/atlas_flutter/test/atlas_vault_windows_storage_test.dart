@@ -70,7 +70,10 @@ void main() {
     expect(source, contains('UserConsentVerifier'));
     expect(source, contains('#include <winrt/Windows.Foundation.h>'));
     expect(source, contains('CheckAvailabilityAsync'));
-    expect(source, contains('RequestVerificationAsync'));
+    expect(source, contains('IUserConsentVerifierInterop'));
+    expect(source, contains('RequestVerificationForWindowAsync'));
+    expect(source, contains('AuthorizePairingKeyRelease(HWND owner_window)'));
+    expect(source, contains('AuthorizePairingKeyRelease(owner_window_)'));
     expect(source, contains('UserConsentVerificationResult::Verified'));
     expect(source, contains('"authorizePairingKeyRelease"'));
     expect(cmake, contains('"runtimeobject.lib"'));

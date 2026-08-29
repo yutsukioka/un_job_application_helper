@@ -205,6 +205,36 @@ void main() {
     );
   });
 
+  test('key release revalidates expiry after authorization', () async {
+    final authorizationStarted = Completer<void>();
+    final authorizationResult = Completer<bool>();
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterKeyReleaseAuthorization: (_) {
+        authorizationStarted.complete();
+        return authorizationResult.future;
+      },
+    );
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+
+    final confirmation = journey.inviter.confirmCodesMatch();
+    await authorizationStarted.future;
+    journey.clock.value = journey.clock.value.add(const Duration(minutes: 10));
+    journey.clock.elapsed = const Duration(minutes: 10);
+    authorizationResult.complete(true);
+    final result = await confirmation;
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+  });
+
   test(
     'key-release authorization errors fail closed before delivery',
     () async {
@@ -859,6 +889,30 @@ void main() {
     );
   });
 
+  test('monotonic deadline rejects a decrease from the last reading', () {
+    final deadline = AtlasVaultPairingMonotonicDeadline(
+      wallTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+    deadline.present(
+      expiresAt: DateTime.utc(2026, 8, 15, 10, 10),
+      currentTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+    deadline.requireLive(
+      currentTime: DateTime.utc(2026, 8, 15, 10, 5),
+      monotonicTime: const Duration(minutes: 5),
+    );
+
+    expect(
+      () => deadline.requireLive(
+        currentTime: DateTime.utc(2026, 8, 15, 9, 59),
+        monotonicTime: const Duration(minutes: 4),
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
+
   test('monotonic deadline counts suspend time', () {
     final deadline = AtlasVaultPairingMonotonicDeadline(
       wallTime: DateTime.utc(2026, 8, 15, 10),
@@ -933,6 +987,35 @@ void main() {
       isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
     );
   });
+
+  test(
+    'inspect anchors a recovered pending offer before presentation',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+      await journey.inviter.stop();
+      final restarted = journey.restartInviter();
+      addTearDown(restarted.stop);
+
+      expect(
+        (await restarted.inspect()).disposition,
+        AtlasVaultTrustedPairingDisposition.codesReady,
+      );
+    journey.clock.elapsed = const Duration(minutes: 10);
+
+      final result = await restarted.confirmCodesMatch();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviterStage.values,
+        isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+      );
+    },
+  );
 
   test('expired key request fails before delivery creation', () async {
     final journey = await _PairingJourney.create(vector);
@@ -1782,6 +1865,7 @@ void main() {
 final class _PairingJourney {
   _PairingJourney({
     required this.inviter,
+    required this.restartInviter,
     required this.invitee,
     required this.inviterIdentity,
     required this.inviteeIdentity,
@@ -1808,6 +1892,7 @@ final class _PairingJourney {
   });
 
   final AtlasVaultTrustedPairingCoordinator inviter;
+  final AtlasVaultTrustedPairingCoordinator Function() restartInviter;
   final AtlasVaultTrustedPairingCoordinator invitee;
   final AtlasVaultPairingMemoryIdentityStore inviterIdentity;
   final AtlasVaultPairingMemoryIdentityStore inviteeIdentity;
@@ -1970,30 +2055,32 @@ final class _PairingJourney {
     final clock = _PairingClock(DateTime.utc(2026, 8, 15, 10, 5));
     var activationFailuresRemaining = inviteeActivationFailures;
 
-    final inviter = AtlasVaultTrustedPairingCoordinator(
-      identityStore: inviterIdentity,
-      registryStore: inviterRegistry,
-      replayStore: inviterReplay,
-      transactionStore: inviterTransactions,
-      stageStore: inviterStage,
-      artifactTransport: inviterTransport,
-      runtime: inviterRuntime,
-      cleanInstallProbe: () async =>
-          AtlasVaultPairingCleanInstallDisposition.existingVault,
-      secureKeyStore: inviterKeys,
-      localStoreIO: inviterLocal,
-      selectedVaultStore: inviterSelected,
-      uuidProvider: inviterDeterminism.uuid,
-      randomBytes: inviterDeterminism.bytes,
-      now: inviterNow ?? (() => clock.value),
-      monotonicNow: () => clock.elapsed,
-      transactionAdmission: inviterTransactionAdmission,
-      authorizeKeyRelease: (vaultId) async {
-        inviterEvents.add('key-release.authorize');
-        return await (inviterKeyReleaseAuthorization?.call(vaultId) ??
-            Future<bool>.value(true));
-      },
-    );
+    AtlasVaultTrustedPairingCoordinator createInviterCoordinator() =>
+        AtlasVaultTrustedPairingCoordinator(
+          identityStore: inviterIdentity,
+          registryStore: inviterRegistry,
+          replayStore: inviterReplay,
+          transactionStore: inviterTransactions,
+          stageStore: inviterStage,
+          artifactTransport: inviterTransport,
+          runtime: inviterRuntime,
+          cleanInstallProbe: () async =>
+              AtlasVaultPairingCleanInstallDisposition.existingVault,
+          secureKeyStore: inviterKeys,
+          localStoreIO: inviterLocal,
+          selectedVaultStore: inviterSelected,
+          uuidProvider: inviterDeterminism.uuid,
+          randomBytes: inviterDeterminism.bytes,
+          now: inviterNow ?? (() => clock.value),
+          monotonicNow: () => clock.elapsed,
+          transactionAdmission: inviterTransactionAdmission,
+          authorizeKeyRelease: (vaultId) async {
+            inviterEvents.add('key-release.authorize');
+            return await (inviterKeyReleaseAuthorization?.call(vaultId) ??
+                Future<bool>.value(true));
+          },
+        );
+    final inviter = createInviterCoordinator();
     final invitee = AtlasVaultTrustedPairingCoordinator(
       identityStore: inviteeIdentity,
       registryStore: inviteeRegistry,
@@ -2025,6 +2112,7 @@ final class _PairingJourney {
     vaultKey.fillRange(0, vaultKey.length, 0);
     return _PairingJourney(
       inviter: inviter,
+      restartInviter: createInviterCoordinator,
       invitee: invitee,
       inviterIdentity: inviterIdentity,
       inviteeIdentity: inviteeIdentity,
