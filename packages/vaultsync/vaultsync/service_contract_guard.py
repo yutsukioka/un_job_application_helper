@@ -3893,6 +3893,57 @@ def _constant_string_value(
     return None
 
 
+def _programmatic_route_registrar_reference(
+    *,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.expr,
+    reference_line: int,
+    owner_key: tuple[Path, int, str] | None,
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+) -> ast.Attribute | None:
+    if isinstance(reference, ast.Attribute):
+        return (
+            reference
+            if reference.attr in PROGRAMMATIC_ROUTE_REGISTRARS
+            else None
+        )
+    if not isinstance(reference, ast.Name):
+        return None
+    owner_scope = (
+        (*function_scopes.get(owner_key, ()), owner_key[1])
+        if owner_key is not None
+        else ()
+    )
+    assignments = _module_assignment_entries(path, tree)
+    current: ast.expr = reference
+    before_line = reference_line
+    seen: set[str] = set()
+    while isinstance(current, ast.Name) and current.id not in seen:
+        seen.add(current.id)
+        visible = [
+            (key, value, scope)
+            for key, value, scope, _ in assignments
+            if key[2] == current.id
+            and key[1] < before_line
+            and len(scope) <= len(owner_scope)
+            and owner_scope[: len(scope)] == scope
+        ]
+        if not visible:
+            return None
+        key, current, _ = max(
+            visible,
+            key=lambda entry: (len(entry[2]), entry[0][1]),
+        )
+        before_line = key[1]
+    return (
+        current
+        if isinstance(current, ast.Attribute)
+        and current.attr in PROGRAMMATIC_ROUTE_REGISTRARS
+        else None
+    )
+
+
 def _programmatic_route_handler_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -4024,20 +4075,25 @@ def _programmatic_route_handler_keys(
                         handlers.add(target)
                     continue
             else:
-                if (
-                    not isinstance(node.func, ast.Attribute)
-                    or node.func.attr not in PROGRAMMATIC_ROUTE_REGISTRARS
-                ):
+                registrar = _programmatic_route_registrar_reference(
+                    path=path,
+                    tree=tree,
+                    reference=node.func,
+                    reference_line=node.lineno,
+                    owner_key=owner_key,
+                    function_scopes=scopes,
+                )
+                if registrar is None:
                     continue
                 if not _active_route_owner_reference(
-                    node.func.value,
+                    registrar.value,
                     path_in_services=path in service_paths,
                     mounted_names=mounted_names,
                     route_owners=route_owners,
                 ):
                     continue
                 positional_request_handler = (
-                    node.func.attr == "add_exception_handler"
+                    registrar.attr == "add_exception_handler"
                 )
                 endpoint = next(
                     (
@@ -5214,6 +5270,58 @@ def _boundary_function_keys(
     partial_dependency_parameters: dict[
         tuple[Path, int, str], frozenset[str]
     ] = {}
+
+    def dependency_replacement_target(
+        path: Path,
+        tree: ast.Module,
+        replacement: ast.expr,
+        owner_key: tuple[Path, int, str] | None,
+    ) -> tuple[Path, int, str] | None:
+        return _resolve_bound_method_key(
+            root=root,
+            path=path,
+            tree=tree,
+            reference=replacement,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=scopes,
+            owner_key=owner_key,
+        ) or _resolve_callable_instance_key(
+            root=root,
+            path=path,
+            tree=tree,
+            reference=replacement,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=scopes,
+            owner_key=owner_key,
+        ) or _resolve_function_key(
+            root,
+            path,
+            tree,
+            replacement,
+            paths_by_module,
+            trees_by_path,
+            functions,
+            scopes,
+            owner_key,
+        ) or _resolve_dependency_class_init_key(
+            root=root,
+            path=path,
+            tree=tree,
+            reference=replacement,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=scopes,
+            owner_key=owner_key,
+        )
+
     for key, node in functions.items():
         path = key[0]
         mounted_names = {
@@ -5276,6 +5384,24 @@ def _boundary_function_keys(
                             partial_parameter_filters=partial_dependency_parameters,
                         )
                     )
+            replacements = _dependency_override_update_values(
+                call,
+                tree=tree,
+                path_in_services=path in service_paths,
+                mounted_names=mounted_names,
+                route_owners=route_owners,
+            )
+            if replacements:
+                owner_key = _enclosing_function_key(path, call, functions, scopes)
+                for replacement in replacements:
+                    target = dependency_replacement_target(
+                        path,
+                        tree,
+                        replacement,
+                        owner_key,
+                    )
+                    if target is not None:
+                        boundary.add(target)
         for assignment in (
             node
             for node in ast.walk(tree)
@@ -5298,49 +5424,11 @@ def _boundary_function_keys(
                 continue
             owner_key = _enclosing_function_key(path, assignment, functions, scopes)
             replacement = assignment.value
-            target = _resolve_bound_method_key(
-                root=root,
-                path=path,
-                tree=tree,
-                reference=replacement,
-                paths_by_module=paths_by_module,
-                trees_by_path=trees_by_path,
-                classes=classes,
-                class_scopes=class_scopes,
-                function_scopes=scopes,
-                owner_key=owner_key,
-            ) or _resolve_callable_instance_key(
-                root=root,
-                path=path,
-                tree=tree,
-                reference=replacement,
-                paths_by_module=paths_by_module,
-                trees_by_path=trees_by_path,
-                classes=classes,
-                class_scopes=class_scopes,
-                function_scopes=scopes,
-                owner_key=owner_key,
-            ) or _resolve_function_key(
-                root,
+            target = dependency_replacement_target(
                 path,
                 tree,
                 replacement,
-                paths_by_module,
-                trees_by_path,
-                functions,
-                scopes,
                 owner_key,
-            ) or _resolve_dependency_class_init_key(
-                root=root,
-                path=path,
-                tree=tree,
-                reference=replacement,
-                paths_by_module=paths_by_module,
-                trees_by_path=trees_by_path,
-                classes=classes,
-                class_scopes=class_scopes,
-                function_scopes=scopes,
-                owner_key=owner_key,
             )
             if target is not None:
                 boundary.add(target)
@@ -5637,6 +5725,52 @@ def _is_framework_dependency_override_target(
             route_owners=route_owners,
         )
     )
+
+
+def _dependency_override_update_values(
+    call: ast.Call,
+    *,
+    tree: ast.Module,
+    path_in_services: bool,
+    mounted_names: set[str],
+    route_owners: frozenset[str],
+) -> tuple[ast.expr, ...]:
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "update"
+        and isinstance(call.func.value, ast.Attribute)
+        and call.func.value.attr == "dependency_overrides"
+        and _active_route_owner_reference(
+            call.func.value.value,
+            path_in_services=path_in_services,
+            mounted_names=mounted_names,
+            route_owners=route_owners,
+        )
+    ):
+        return ()
+
+    replacements: list[ast.expr] = []
+
+    def add_mapping_values(node: ast.expr, before_line: int) -> None:
+        resolved = _resolve_module_expression(
+            node,
+            tree,
+            before_line=before_line,
+        )
+        if not isinstance(resolved, ast.Dict):
+            return
+        for key, value in zip(resolved.keys, resolved.values, strict=True):
+            if key is None:
+                add_mapping_values(value, value.lineno)
+            else:
+                replacements.append(value)
+
+    for argument in call.args:
+        add_mapping_values(argument, call.lineno)
+    replacements.extend(
+        keyword.value for keyword in call.keywords if keyword.arg is not None
+    )
+    return tuple(replacements)
 
 
 def _dependency_targets(
@@ -7032,6 +7166,52 @@ def _is_raw_request_mapping(
             json_loads_names,
             json_module_names,
         )
+    if isinstance(node, ast.Dict):
+        return any(
+            key is None
+            and _is_raw_request_mapping(
+                value,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+            )
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
+    if isinstance(node, ast.DictComp):
+        for generator in node.generators:
+            source = generator.iter
+            if _is_raw_request_mapping(
+                source,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+            ):
+                return True
+            if (
+                isinstance(source, ast.Call)
+                and isinstance(source.func, ast.Attribute)
+                and source.func.attr in {"items", "keys"}
+                and _is_raw_request_mapping(
+                    source.func.value,
+                    request_aliases,
+                    websocket_aliases,
+                    raw_mapping_names,
+                    request_body_names,
+                    websocket_text_names,
+                    json_loads_names,
+                    json_module_names,
+                )
+            ):
+                return True
+        return False
     if (
         isinstance(node, ast.Attribute)
         and node.attr
@@ -7236,7 +7416,7 @@ def _raw_mapping_return_parameters(
         request_aliases = {source.arg}
         websocket_aliases = {source.arg}
         raw_mapping_names: set[str] = set()
-        request_body_names: set[str] = set()
+        request_body_names: set[str] = {source.arg}
         websocket_text_names: set[str] = set()
         changed = True
         while changed:
@@ -7343,6 +7523,10 @@ def _call_returns_raw_mapping(
         return _is_name_reference(
             argument,
             request_aliases | websocket_aliases,
+        ) or _is_request_body_value(
+            argument,
+            request_aliases,
+            request_body_names,
         ) or _is_raw_request_mapping(
             argument,
             request_aliases,
@@ -7379,6 +7563,12 @@ def _is_request_body_value(
         )
     if isinstance(node, ast.Name):
         return node.id in request_body_names
+    if isinstance(node, ast.Attribute) and node.attr == "file":
+        return _is_request_body_value(
+            node.value,
+            request_aliases,
+            request_body_names,
+        )
     if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
         return any(
             _is_request_body_value(
