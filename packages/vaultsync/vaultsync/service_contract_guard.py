@@ -159,6 +159,12 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         route_owner_names,
     )
     violations.extend(
+        _unapproved_route_class_violations(
+            parsed_modules,
+            service_paths,
+        )
+    )
+    violations.extend(
         _route_template_wire_violations(
             parsed_modules,
             service_paths,
@@ -1901,6 +1907,58 @@ def _is_api_router_constructor(
         and parts[-1] == "APIRouter"
         and parts[0] in module_aliases
     )
+
+
+def _unapproved_route_class_violations(
+    parsed_modules: list[tuple[Path, ast.Module]],
+    service_paths: frozenset[Path],
+) -> list[str]:
+    violations: list[str] = []
+    for path, tree in parsed_modules:
+        if path not in service_paths:
+            continue
+        module_aliases = _framework_module_aliases(tree)
+        default_aliases = {
+            imported.asname or imported.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "fastapi.routing"
+            for imported in node.names
+            if imported.name == "APIRoute"
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not _is_api_router_constructor(
+                node,
+                tree,
+                module_aliases,
+            ):
+                continue
+            route_class = next(
+                (
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg == "route_class"
+                ),
+                None,
+            )
+            if route_class is None:
+                continue
+            parts = _qualified_name_parts(route_class)
+            is_default = (
+                isinstance(route_class, ast.Name)
+                and route_class.id in default_aliases
+            ) or bool(
+                parts
+                and len(parts) >= 2
+                and parts[-1] == "APIRoute"
+                and parts[0] in module_aliases
+            )
+            if not is_default:
+                violations.append(
+                    f"{path}:{route_class.lineno}: APIRouter route_class cannot "
+                    "be statically approved"
+                )
+    return violations
 
 
 def _paths_by_module(
@@ -3965,6 +4023,8 @@ def _programmatic_route_handler_keys(
                 trees_by_path=trees_by_path,
                 functions=functions,
                 scopes=scopes,
+                classes=classes,
+                class_scopes=class_scopes,
                 owner_key=owner_key,
             )
             if partial_handler is not None:
@@ -4075,6 +4135,8 @@ def _resolve_partial_route_handler(
     trees_by_path: dict[Path, ast.Module],
     functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
     scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
     owner_key: tuple[Path, int, str] | None,
 ) -> tuple[tuple[Path, int, str], frozenset[str]] | None:
     candidates: list[ast.expr] = [endpoint]
@@ -4128,7 +4190,31 @@ def _resolve_partial_route_handler(
         )
         if wrapped is None:
             continue
-        target = _resolve_function_key(
+        bound_target = _resolve_bound_method_key(
+            root=root,
+            path=path,
+            tree=tree,
+            reference=wrapped,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=scopes,
+            owner_key=owner_key,
+        )
+        callable_target = _resolve_callable_instance_key(
+            root=root,
+            path=path,
+            tree=tree,
+            reference=wrapped,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=scopes,
+            owner_key=owner_key,
+        )
+        target = bound_target or callable_target or _resolve_function_key(
             root,
             path,
             tree,
@@ -4143,7 +4229,7 @@ def _resolve_partial_route_handler(
             continue
         parameters = _function_arguments(functions[target])
         if (
-            isinstance(wrapped, ast.Attribute)
+            (bound_target is not None or callable_target is not None)
             and parameters
             and parameters[0].arg in {"self", "cls"}
         ):
@@ -5603,6 +5689,8 @@ def _dependency_targets(
                 trees_by_path=trees_by_path,
                 functions=functions,
                 scopes=scopes,
+                classes=classes,
+                class_scopes=class_scopes,
                 owner_key=owner_key,
             )
             if partial_handler is not None and partial_parameter_filters is not None:
@@ -6381,6 +6469,15 @@ def _route_body_wire_names(
     request_aliases = set(request_names)
     websocket_aliases = set(websocket_names)
     raw_mapping_names: set[str] = set()
+    if node.name == "on_receive":
+        parameters = [
+            argument
+            for argument in arguments
+            if argument.arg not in {"self", "cls"}
+        ]
+        for index, parameter in enumerate(parameters[:-1]):
+            if parameter.arg in websocket_names:
+                raw_mapping_names.add(parameters[index + 1].arg)
     request_body_names: set[str] = set()
     websocket_text_names: set[str] = set()
     assignments = [
@@ -6836,7 +6933,8 @@ def _is_raw_request_mapping(
         )
     if (
         isinstance(node, ast.Attribute)
-        and node.attr in {"cookies", "headers", "path_params", "query_params"}
+        and node.attr
+        in {"cookies", "headers", "path_params", "query_params", "scope"}
         and isinstance(node.value, ast.Name)
         and node.value.id in request_aliases | websocket_aliases
     ):
@@ -6886,9 +6984,28 @@ def _is_raw_request_mapping(
         )
     ):
         return True
-    return _name(node.func) == "dict" and any(
+    transformed_values = [
+        *node.args,
+        *(keyword.value for keyword in node.keywords),
+    ]
+    return (
+        _name(node.func) == "dict"
+        and any(
+            _is_raw_request_mapping(
+                argument,
+                request_aliases,
+                websocket_aliases,
+                raw_mapping_names,
+                request_body_names,
+                websocket_text_names,
+                json_loads_names,
+                json_module_names,
+            )
+            for argument in node.args
+        )
+    ) or any(
         _is_raw_request_mapping(
-            argument,
+            value,
             request_aliases,
             websocket_aliases,
             raw_mapping_names,
@@ -6897,7 +7014,17 @@ def _is_raw_request_mapping(
             json_loads_names,
             json_module_names,
         )
-        for argument in node.args
+        or _is_request_body_value(
+            value,
+            request_aliases,
+            request_body_names,
+        )
+        or _is_websocket_text_value(
+            value,
+            websocket_aliases,
+            websocket_text_names,
+        )
+        for value in transformed_values
     )
 
 
@@ -7193,6 +7320,25 @@ def _is_request_body_value(
             )
             for argument in node.args
         )
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Attribute) and _is_request_body_value(
+            node.func.value,
+            request_aliases,
+            request_body_names,
+        ):
+            return True
+        if any(
+            _is_request_body_value(
+                value,
+                request_aliases,
+                request_body_names,
+            )
+            for value in [
+                *node.args,
+                *(keyword.value for keyword in node.keywords),
+            ]
+        ):
+            return True
     return bool(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
