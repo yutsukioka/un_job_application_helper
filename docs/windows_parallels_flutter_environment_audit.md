@@ -192,7 +192,9 @@ above is closed as of this subsection.
 
 ## Split-Role Collaboration Contract
 
-See `docs/collaboration_pattern.md` when that document is added.
+A separate collaboration-pattern document is not present on this baseline.
+Until one is added, the working contract below is the only claim made by this
+audit.
 
 Current working contract:
 

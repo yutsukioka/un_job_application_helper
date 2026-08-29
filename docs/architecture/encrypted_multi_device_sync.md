@@ -1,15 +1,28 @@
 # Encrypted Multi-Device Sync Architecture
 
-Status: Phase 0 and Phase 1 foundation only. This document describes the target
-architecture and the current boundary. It does not claim cloud sync, platform
-secure storage, account management, or migration is implemented.
+Status: local encrypted persistence, migration, recovery export/import,
+platform secure storage, device identity, and explicit trusted-device pairing
+and vault-key delivery are implemented. Account-backed ciphertext sync,
+multi-device convergence, rollback protection, revocation, and key rotation
+remain unimplemented. This document does not claim production multi-device
+readiness.
 
 ## Current State
 
 The Apple app has real SwiftUI code under `apps/apple/Sources/AtlasUI/`.
-`AtlasLocalCache` stores `atlas-local-snapshot.json` under Application Support.
-`AtlasLocalSnapshot` includes `savedSearches` and `savedJobs`, so user-specific
-saved state can currently exist locally in plaintext.
+`AtlasLocalCache` now serializes `AtlasPublicLocalSnapshot`, while private saved
+searches and saved jobs are hydrated from encrypted AtlasVault records. The
+corresponding private-free cache checks are in
+`apps/apple/Tests/AtlasUITests/AtlasPublicLocalSnapshotTests.swift` and
+`apps/apple/Tests/AtlasUITests/AtlasVaultPayloadTests.swift`.
+
+Apple Keychain, Android Keystore, and Windows current-user DPAPI adapters hold
+device-local key material. Python, Dart, and Swift implementations cover signed
+device descriptors, pairing offers and acceptances, replay-aware trusted-device
+state, authenticated key delivery, acknowledgement, and explicit local pairing
+presentation. See
+[Phase 2F-1](phase2f1_device_identity_and_pairing_foundation.md) and
+[Phase 2F-2](phase2f2_trusted_device_pairing_and_key_delivery.md).
 
 The local FastAPI service in `services/job-api` exposes plaintext local
 endpoints for saved searches and tracker records:
@@ -21,8 +34,10 @@ endpoints for saved searches and tracker records:
 - `POST /api/tracker/jobs/{job_key}`
 - `DELETE /api/tracker/{record_id}`
 
-The service has no authentication and is currently designed as a local service,
-defaulting to `127.0.0.1:8765`.
+The validated launcher defaults to direct-loopback admission at
+`127.0.0.1:8765`; it also supports explicit token or disabled modes and has no
+unauthenticated open mode. These controls protect a local compatibility API,
+not a cloud synchronization service.
 
 These local plaintext paths are not cloud sync architecture. They must not be
 used as internet-facing sync endpoints.
@@ -37,7 +52,7 @@ flowchart LR
     UI["Atlas UI"]
     LocalPlain["Local plaintext app state"]
     Vault["AtlasVault crypto"]
-    SecureStore["Future platform secure storage"]
+    SecureStore["Implemented platform secure storage"]
   end
   subgraph Sync["Future sync provider or backend"]
     Auth["Authentication and account identity"]
@@ -90,19 +105,27 @@ record payloads. A passphrase or recovery key wraps the vault key. The passphras
 or recovery key itself is never stored, and raw vault keys are never serialized
 into vault files.
 
-Future devices may store a local unwrapped vault key copy in platform secure
-storage after the user unlocks the vault.
+Trusted local devices store protected vault-key material through their platform
+secure-storage boundary. Explicit pairing can deliver the vault key to another
+locally admitted device without serializing a raw key into the transported
+artifact.
 
 ### Local Secure Storage
 
-Platform secure storage is a future phase:
+Platform secure storage is implemented for the current local clients:
 
-- Apple Keychain for Apple platforms;
-- Android Keystore for Android;
-- Windows DPAPI or Credential Manager for Windows.
+- Apple uses device-only, non-synchronizable Keychain items;
+- Android uses a non-exportable Android Keystore key to protect no-backup local
+  state;
+- Windows uses current-user DPAPI for its protected local state.
 
-Phase 1 does not implement any of these. The Python reference package only
-defines and tests the portable cryptographic format.
+The concrete boundaries are documented in
+[Apple Keychain integration](phase2d8_keychain_secitem_adapter.md),
+[Android secure storage](phase2e2_android_secure_key_and_encrypted_store.md),
+and [Windows secure storage](phase2e5_windows_secure_key_and_encrypted_store.md).
+This implemented local custody does not establish server-side device
+management, remote revocation, key rotation, or protection after a device is
+unlocked.
 
 ### Cloud Blob Storage
 
@@ -112,10 +135,11 @@ not store plaintext user text or raw secrets.
 
 ### Manual Encrypted Export And Import
 
-Manual export/import is a required non-cloud sync path. Export bundles should
-contain encrypted vault metadata and encrypted record blobs. A user imports by
-providing a passphrase or recovery key locally; decryption and merge happen on
-the client.
+Manual encrypted export/import is implemented as a non-cloud interoperability
+path. Export bundles contain encrypted vault metadata and encrypted record
+blobs; passphrase or recovery-key handling and decryption remain local. The
+current import path is deliberately bounded and is not a substitute for an
+account-backed synchronization protocol.
 
 ## Data Separation
 
@@ -181,9 +205,12 @@ consistently across all clients.
 
 ### Onboard A Device
 
-Future device-to-device onboarding should add a device-specific key wrap or use
-an encrypted pairing flow. A server may broker encrypted messages but must not
-receive raw vault keys or plaintext.
+The current device-to-device onboarding flow is explicit and local. It uses
+signed device descriptors, signed offer and acceptance artifacts, a
+replay-resistant pairing transcript, bilateral confirmation, authenticated
+vault-key delivery, acknowledgement, and a trusted-device registry. It does not
+include QR onboarding, a network broker, continuous record exchange, device
+revocation, or key rotation.
 
 ### Remove A Device
 
@@ -198,9 +225,8 @@ Phase 1 does not implement key rotation.
 
 ## Implementation Phases
 
-Phase 0 creates contracts and architecture docs.
-
-Phase 1 creates the Python reference package and crypto tests:
+Phase 0 created contracts and architecture documents. Phase 1 created the
+Python reference package and crypto tests for:
 
 - metadata serialization;
 - vault key generation;
@@ -210,8 +236,12 @@ Phase 1 creates the Python reference package and crypto tests:
 - version rejection;
 - deterministic test-only vectors.
 
-Later phases may add local migrations, platform secure storage, manual export UI,
-device onboarding, cloud sync APIs, and key rotation.
+Subsequent merged phases implemented local migration, platform secure storage,
+manual recovery export/import, cross-platform encrypted interoperability,
+device identity, and explicit trusted-device pairing and key delivery. Future
+phases still need the ciphertext-only account/device-registry backend,
+encrypted patch/snapshot convergence, malicious-server rollback defenses,
+revocation, and key rotation.
 
 ## Security Warnings
 

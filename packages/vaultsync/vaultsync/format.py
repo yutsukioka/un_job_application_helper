@@ -6,10 +6,16 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass, field
+from os import PathLike
+from pathlib import Path
 from typing import Any, Mapping, Sequence, TypeAlias
 
 VAULT_FORMAT = "atlas-vault"
 SUPPORTED_VAULT_VERSION = 1
+MAX_ARGON2ID_MEMORY_KIB = 512 * 1024
+MAX_ARGON2ID_ITERATIONS = 10
+MAX_ARGON2ID_PARALLELISM = 4
+MAX_VAULT_IMPORT_BYTES = 50 * 1024 * 1024
 MAX_VAULT_ID_LENGTH = 96
 _ALLOWED_VAULT_ID_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
@@ -31,6 +37,14 @@ class VaultFormatError(ValueError):
 
 class UnsupportedVaultVersion(VaultFormatError):
     """Raised when a vault metadata version is not supported by this package."""
+
+
+class UnsafeKDFParameters(VaultFormatError):
+    """Raised when imported key-derivation parameters exceed safe bounds."""
+
+
+class VaultImportTooLargeError(VaultFormatError):
+    """Raised when an imported vault envelope exceeds the configured size cap."""
 
 
 class VaultCryptoError(ValueError):
@@ -86,7 +100,11 @@ def _json_loads(data: str | bytes | bytearray, error_cls: type[Exception]) -> An
         raise error_cls("serialized data must be valid JSON") from exc
 
 
-def _require_mapping(value: Any, context: str, error_cls: type[Exception] = VaultFormatError) -> Mapping[str, Any]:
+def _require_mapping(
+    value: Any,
+    context: str,
+    error_cls: type[Exception] = VaultFormatError,
+) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise error_cls(f"{context} must be an object")
     return value
@@ -131,6 +149,23 @@ def _require_exact_keys(
         raise VaultFormatError(f"{context} contains invalid fields")
 
 
+def read_vault_import_bytes(
+    path: str | PathLike[str],
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> bytes:
+    path_obj = Path(path)
+    if max_bytes <= 0:
+        raise VaultImportTooLargeError("vault import size cap must be positive")
+    try:
+        size = path_obj.stat().st_size
+    except OSError as exc:
+        raise VaultFormatError("vault import file cannot be inspected") from exc
+    if size > max_bytes:
+        raise VaultImportTooLargeError("vault import exceeds maximum size")
+    return path_obj.read_bytes()
+
+
 @dataclass(frozen=True)
 class Argon2idParams:
     salt: bytes = field(default_factory=lambda: secrets.token_bytes(16))
@@ -146,6 +181,12 @@ class Argon2idParams:
         parallelism = _require_int(self.parallelism, "kdf.parallelism")
         if memory_kib <= 0 or iterations <= 0 or parallelism <= 0:
             raise VaultFormatError("Argon2id parameters must be positive")
+        if self.memory_kib > MAX_ARGON2ID_MEMORY_KIB:
+            raise UnsafeKDFParameters("Argon2id memory exceeds import cap")
+        if self.iterations > MAX_ARGON2ID_ITERATIONS:
+            raise UnsafeKDFParameters("Argon2id iterations exceed import cap")
+        if self.parallelism > MAX_ARGON2ID_PARALLELISM:
+            raise UnsafeKDFParameters("Argon2id parallelism exceeds import cap")
 
     def with_salt(self, salt: bytes) -> Argon2idParams:
         return Argon2idParams(
