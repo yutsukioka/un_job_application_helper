@@ -1089,12 +1089,14 @@ public struct AtlasVaultPairingMonotonicDeadline: Sendable {
 
     private let anchorWallTime: String
     private let anchorMonotonicTime: TimeInterval
+    private var lastMonotonicTime: TimeInterval
     private var expiresAt: Date?
     private var deadline: TimeInterval?
 
     public init(wallTime: String, monotonicTime: TimeInterval) {
         anchorWallTime = wallTime
         anchorMonotonicTime = monotonicTime
+        lastMonotonicTime = monotonicTime
     }
 
     public mutating func present(
@@ -1115,7 +1117,7 @@ public struct AtlasVaultPairingMonotonicDeadline: Sendable {
         deadline = monotonic + min(remaining, Self.maximumLifetime)
     }
 
-    public func requireLive(
+    public mutating func requireLive(
         currentTime: String,
         monotonicTime: TimeInterval
     ) throws {
@@ -1136,13 +1138,14 @@ public struct AtlasVaultPairingMonotonicDeadline: Sendable {
         deadline = nil
     }
 
-    private func effectiveTime(
+    private mutating func effectiveTime(
         currentTime: String,
         monotonicTime: TimeInterval
     ) throws -> (Date, TimeInterval) {
         guard monotonicTime.isFinite,
               anchorMonotonicTime.isFinite,
               monotonicTime >= anchorMonotonicTime,
+              monotonicTime >= lastMonotonicTime,
               anchorMonotonicTime >= 0
         else {
             throw AtlasVaultPairingError.verificationFailed
@@ -1152,6 +1155,7 @@ public struct AtlasVaultPairingMonotonicDeadline: Sendable {
         let monotonicWall = anchor.addingTimeInterval(
             monotonicTime - anchorMonotonicTime
         )
+        lastMonotonicTime = monotonicTime
         return (max(wall, monotonicWall), monotonicTime)
     }
 }
@@ -1404,6 +1408,14 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     identity == nil ? .ready : .identityReady,
                     local: identity
                 )
+            }
+            switch transaction.stage {
+            case .offerCreated, .offerSaved, .offerImported,
+                 .acceptanceCreated, .acceptanceSaved, .acceptanceImported,
+                 .sasConfirmed, .offerConsumed:
+                try await self.requireLivePairingDeadline(for: transaction)
+            default:
+                break
             }
             return try await self.result(for: transaction, identity: identity)
         }
@@ -1815,6 +1827,15 @@ public actor AtlasVaultTrustedPairingCoordinator:
                 throw AtlasVaultPairingTransactionError.unavailable
             }
             try Task.checkCancellation()
+            try await self.requireLivePairingDeadline(for: transaction)
+            _ = try AtlasVaultKeyDelivery.verifyKeyRequest(
+                acceptance.signedKeyRequest,
+                transcriptSHA256: transcript,
+                inviterDeviceID: identity.deviceID,
+                inviteeDeviceID: acceptance.signedAcceptance.acceptance
+                    .invitee.descriptor.deviceID,
+                currentTime: self.environment.timestamp()
+            )
             var vaultKey = active.withKeyMaterial { Data($0) }
             defer { Self.wipe(&vaultKey) }
             let confirmed = try await self.advance(

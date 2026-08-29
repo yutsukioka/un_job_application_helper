@@ -683,12 +683,14 @@ final class AtlasVaultPairingMonotonicDeadline {
     required DateTime wallTime,
     required Duration monotonicTime,
   }) : _anchorWall = wallTime.toUtc(),
-       _anchorMonotonic = monotonicTime;
+       _anchorMonotonic = monotonicTime,
+       _lastMonotonic = monotonicTime;
 
   static const Duration _maximumLifetime = Duration(minutes: 10);
 
   final DateTime _anchorWall;
   final Duration _anchorMonotonic;
+  Duration _lastMonotonic;
   DateTime? _expiresAt;
   Duration? _deadline;
 
@@ -738,11 +740,12 @@ final class AtlasVaultPairingMonotonicDeadline {
     required DateTime currentTime,
     required Duration monotonicTime,
   }) {
-    if (monotonicTime < _anchorMonotonic) {
+    if (monotonicTime < _anchorMonotonic || monotonicTime < _lastMonotonic) {
       throw const AtlasVaultPairingException();
     }
     final monotonicWall = _anchorWall.add(monotonicTime - _anchorMonotonic);
     final wall = currentTime.toUtc();
+    _lastMonotonic = monotonicTime;
     return (wall.isAfter(monotonicWall) ? wall : monotonicWall, monotonicTime);
   }
 }
@@ -848,6 +851,9 @@ final class AtlasVaultTrustedPairingCoordinator
               ? null
               : atlasVaultPairingDeviceFingerprint(identity.deviceId),
         );
+      }
+      if (_inspectRequiresLivePairingDeadline(transaction.stage)) {
+        await _requireLivePairingDeadlineFor(transaction);
       }
       return await _resultFor(transaction, identity: identity);
     } finally {
@@ -1264,6 +1270,14 @@ final class AtlasVaultTrustedPairingCoordinator
           if (!await _authorizeKeyRelease(vaultSession.vaultId)) {
             throw const AtlasVaultPairingTransactionException();
           }
+          await _requireLivePairingDeadlineFor(current);
+          await verifyAtlasVaultPairingKeyRequest(
+            keyRequest,
+            transcriptSha256: transcript,
+            inviterDeviceId: identity.deviceId,
+            inviteeDeviceId: current.peerDeviceId!,
+            currentTime: _utc(_now()),
+          );
           _authorizeSensitiveMutation();
           vaultKey = vaultSession.copyVaultKey();
           final confirmed = await _advance(
@@ -2942,6 +2956,19 @@ final class AtlasVaultTrustedPairingCoordinator
       expiresAt: _time(_signedOffer(offerArtifact).offer.expiresAt),
     );
   }
+
+  bool _inspectRequiresLivePairingDeadline(AtlasVaultPairingStage stage) =>
+      switch (stage) {
+        AtlasVaultPairingStage.offerCreated ||
+        AtlasVaultPairingStage.offerSaved ||
+        AtlasVaultPairingStage.offerImported ||
+        AtlasVaultPairingStage.acceptanceCreated ||
+        AtlasVaultPairingStage.acceptanceSaved ||
+        AtlasVaultPairingStage.acceptanceImported ||
+        AtlasVaultPairingStage.sasConfirmed ||
+        AtlasVaultPairingStage.offerConsumed => true,
+        _ => false,
+      };
 
   Future<void> _clearTransaction(
     AtlasVaultPairingTransaction transaction,

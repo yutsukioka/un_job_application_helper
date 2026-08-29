@@ -9,6 +9,7 @@
 #include <roapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <UserConsentVerifierInterop.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Security.Credentials.UI.h>
 
@@ -1724,8 +1725,11 @@ StorageCapabilities ProbeStorageCapabilities() {
   return capabilities;
 }
 
-bool AuthorizePairingKeyRelease() {
+bool AuthorizePairingKeyRelease(HWND owner_window) {
   try {
+    if (owner_window == nullptr || !IsWindow(owner_window)) {
+      return false;
+    }
     ScopedRoInitialization apartment;
     if (!apartment.available()) {
       return false;
@@ -1739,9 +1743,16 @@ bool AuthorizePairingKeyRelease() {
         UserConsentVerifierAvailability::Available) {
       return false;
     }
-    return UserConsentVerifier::RequestVerificationAsync(
-               L"Authorize AtlasVault vault-key delivery")
-               .get() == UserConsentVerificationResult::Verified;
+    const winrt::hstring message(L"Authorize AtlasVault vault-key delivery");
+    auto interop = winrt::get_activation_factory<
+        UserConsentVerifier, IUserConsentVerifierInterop>();
+    winrt::Windows::Foundation::IAsyncOperation<
+        UserConsentVerificationResult>
+        verification{nullptr};
+    winrt::check_hresult(interop->RequestVerificationForWindowAsync(
+        owner_window, static_cast<HSTRING>(winrt::get_abi(message)),
+        winrt::guid_of<decltype(verification)>(), winrt::put_abi(verification)));
+    return verification.get() == UserConsentVerificationResult::Verified;
   } catch (...) {
     return false;
   }
@@ -2367,7 +2378,7 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
       return;
     }
     result->Success(
-        flutter::EncodableValue(AuthorizePairingKeyRelease()));
+        flutter::EncodableValue(AuthorizePairingKeyRelease(owner_window_)));
     return;
   }
 

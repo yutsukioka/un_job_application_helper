@@ -508,6 +508,7 @@ class PairingMonotonicDeadline:
     def __init__(self, *, wall_time: str, monotonic_time: float) -> None:
         self._anchor_wall = _time(wall_time)
         self._anchor_monotonic = self._monotonic(monotonic_time)
+        self._last_monotonic = self._anchor_monotonic
         self._expires: datetime | None = None
         self._deadline: float | None = None
 
@@ -528,10 +529,11 @@ class PairingMonotonicDeadline:
     ) -> tuple[datetime, float]:
         monotonic = self._monotonic(monotonic_time)
         elapsed = monotonic - self._anchor_monotonic
-        if elapsed < 0:
+        if elapsed < 0 or monotonic < self._last_monotonic:
             raise _invalid_pairing()
         monotonic_wall = self._anchor_wall + timedelta(seconds=elapsed)
         wall = _time(current_time)
+        self._last_monotonic = monotonic
         return max(wall, monotonic_wall), monotonic
 
     def present(

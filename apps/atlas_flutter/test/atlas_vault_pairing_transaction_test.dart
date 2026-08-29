@@ -1002,7 +1002,7 @@ void main() {
         (await restarted.inspect()).disposition,
         AtlasVaultTrustedPairingDisposition.codesReady,
       );
-    journey.clock.elapsed = const Duration(minutes: 10);
+      journey.clock.elapsed = const Duration(minutes: 10);
 
       final result = await restarted.confirmCodesMatch();
 
