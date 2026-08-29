@@ -7,7 +7,7 @@ void main() {
     final source = File(
       'integration_test/'
       'atlas_vault_windows_interoperability_recovery_test.dart',
-    ).readAsStringSync();
+    ).readAsStringSync().replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final processRegistration = _section(
       source,
       'void _registerCrossProcessRecoveryTest(String stage) {',
