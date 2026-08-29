@@ -168,7 +168,15 @@ def serialize_local_store_bytes(store: LocalVaultStore) -> bytes:
     return serialize_local_store(store).encode("utf-8")
 
 
-def deserialize_local_store(data: str | bytes | bytearray | Mapping[str, Any]) -> LocalVaultStore:
+def deserialize_local_store(
+    data: str | bytes | bytearray | Mapping[str, Any],
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> LocalVaultStore:
+    if isinstance(data, str):
+        require_vault_import_size(len(data.encode("utf-8")), max_bytes=max_bytes)
+    elif isinstance(data, (bytes, bytearray)):
+        require_vault_import_size(len(data), max_bytes=max_bytes)
     obj = data if isinstance(data, Mapping) else _load_json(data)
     return LocalVaultStore.from_dict(_require_mapping(obj, "local store"))
 
@@ -189,4 +197,7 @@ def read_local_store(
     *,
     max_bytes: int = MAX_VAULT_IMPORT_BYTES,
 ) -> LocalVaultStore:
-    return deserialize_local_store(read_vault_import_bytes(path, max_bytes=max_bytes))
+    return deserialize_local_store(
+        read_vault_import_bytes(path, max_bytes=max_bytes),
+        max_bytes=max_bytes,
+    )

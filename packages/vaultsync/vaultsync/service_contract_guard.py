@@ -70,6 +70,15 @@ _CLIENT_CONTROLLED_SCOPE_KEYS = frozenset(
         "subprotocols",
     }
 )
+_FRAMEWORK_MIDDLEWARE_POSITIONAL_CALLBACKS = {
+    "AuthenticationMiddleware": frozenset({0, 1}),
+    "CORSMiddleware": frozenset(),
+    "GZipMiddleware": frozenset(),
+    "HTTPSRedirectMiddleware": frozenset(),
+    "SessionMiddleware": frozenset(),
+    "TrustedHostMiddleware": frozenset(),
+    "WSGIMiddleware": frozenset({0}),
+}
 
 
 def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[str]:
@@ -1060,6 +1069,52 @@ def _lexical_body_nodes(statements: list[ast.stmt]) -> list[ast.AST]:
     return nodes
 
 
+def _nested_function_definitions(
+    statements: list[ast.stmt],
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            functions.append(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            functions.append(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            return
+
+    collector = Collector()
+    for statement in statements:
+        collector.visit(statement)
+    return functions
+
+
+def _function_local_binding_names(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    names = {argument.arg for argument in _function_arguments(function)}
+    lexical_nodes = _lexical_body_nodes(function.body)
+    names.update(
+        candidate.id
+        for candidate in lexical_nodes
+        if isinstance(candidate, ast.Name) and isinstance(candidate.ctx, ast.Store)
+    )
+    for candidate in lexical_nodes:
+        if isinstance(candidate, ast.Import):
+            names.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in candidate.names
+            )
+        elif isinstance(candidate, ast.ImportFrom):
+            names.update(imported.asname or imported.name for imported in candidate.names)
+    names.update(nested.name for nested in _nested_function_definitions(function.body))
+    return frozenset(names)
+
+
 def _is_framework_factory_call(
     node: ast.AST,
     factory_names: set[str] | frozenset[str],
@@ -1607,6 +1662,10 @@ def _route_template_wire_violations(
                     wire_alias_constants[path],
                 )
                 if template is None:
+                    violations.append(
+                        f"{path}:{template_node.lineno}: route template cannot be "
+                        "statically approved"
+                    )
                     continue
                 try:
                     fields = [
@@ -1691,7 +1750,19 @@ def _unapproved_asgi_middleware_violations(
                 reference_line=call.lineno,
             )
             if _is_framework_middleware_reference(middleware, tree):
-                for argument in call.args[1:]:
+                middleware_name = _framework_middleware_reference_name(
+                    middleware,
+                    tree,
+                )
+                callback_positions = _FRAMEWORK_MIDDLEWARE_POSITIONAL_CALLBACKS.get(
+                    middleware_name or "",
+                )
+                positional_options = call.args[1:]
+                if callback_positions is None and positional_options:
+                    callback_positions = frozenset(range(len(positional_options)))
+                for index, argument in enumerate(positional_options):
+                    if callback_positions is not None and index not in callback_positions:
+                        continue
                     violations.append(
                         f"{path}:{argument.lineno}: framework middleware positional "
                         "option cannot be statically approved as a request boundary"
@@ -1762,6 +1833,31 @@ def _is_framework_middleware_reference(node: ast.AST, tree: ast.Module) -> bool:
         )
         for import_node in tree.body
     )
+
+
+def _framework_middleware_reference_name(
+    node: ast.AST,
+    tree: ast.Module,
+) -> str | None:
+    parts = _qualified_name_parts(node)
+    if not parts:
+        return None
+    if len(parts) > 1:
+        return parts[-1]
+    local_name = parts[0]
+    for import_node in tree.body:
+        if not (
+            isinstance(import_node, ast.ImportFrom)
+            and import_node.module is not None
+            and import_node.module.startswith(
+                ("fastapi.middleware", "starlette.middleware")
+            )
+        ):
+            continue
+        for imported in import_node.names:
+            if (imported.asname or imported.name) == local_name:
+                return imported.name
+    return local_name
 
 
 def _asgi_callable_uses_unapproved_input(
@@ -6032,6 +6128,18 @@ def _dependency_targets(
                 functions,
                 scopes,
                 owner_key,
+            ) or _resolve_dependency_factory_return_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=dependency,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                functions=functions,
+                function_scopes=scopes,
+                classes=classes,
+                class_scopes=class_scopes,
+                owner_key=owner_key,
             ) or _resolve_dependency_class_init_key(
                 root=root,
                 path=path,
@@ -6138,6 +6246,106 @@ def _resolve_dependency_class_init_key(
         classes=classes,
         class_scopes=class_scopes,
     )
+
+
+def _resolve_dependency_factory_return_key(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    reference: ast.AST,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    function_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+    seen: frozenset[tuple[Path, int, str]] = frozenset(),
+) -> tuple[Path, int, str] | None:
+    if not isinstance(reference, ast.Call):
+        return None
+    factory_key = _resolve_function_key(
+        root,
+        path,
+        tree,
+        reference.func,
+        paths_by_module,
+        trees_by_path,
+        functions,
+        function_scopes,
+        owner_key,
+    )
+    if factory_key is None or factory_key in seen:
+        return None
+    factory = functions[factory_key]
+    factory_path = factory_key[0]
+    factory_tree = trees_by_path[factory_path]
+    targets: set[tuple[Path, int, str]] = set()
+    for candidate in _lexical_body_nodes(factory.body):
+        if not isinstance(candidate, ast.Return) or candidate.value is None:
+            continue
+        returned = candidate.value
+        target = _resolve_bound_method_key(
+            root=root,
+            path=factory_path,
+            tree=factory_tree,
+            reference=returned,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=function_scopes,
+            owner_key=factory_key,
+        ) or _resolve_callable_instance_key(
+            root=root,
+            path=factory_path,
+            tree=factory_tree,
+            reference=returned,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=function_scopes,
+            owner_key=factory_key,
+        ) or _resolve_function_key(
+            root,
+            factory_path,
+            factory_tree,
+            returned,
+            paths_by_module,
+            trees_by_path,
+            functions,
+            function_scopes,
+            factory_key,
+        ) or _resolve_dependency_factory_return_key(
+            root=root,
+            path=factory_path,
+            tree=factory_tree,
+            reference=returned,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            functions=functions,
+            function_scopes=function_scopes,
+            classes=classes,
+            class_scopes=class_scopes,
+            owner_key=factory_key,
+            seen=seen | {factory_key},
+        ) or _resolve_dependency_class_init_key(
+            root=root,
+            path=factory_path,
+            tree=factory_tree,
+            reference=returned,
+            paths_by_module=paths_by_module,
+            trees_by_path=trees_by_path,
+            classes=classes,
+            class_scopes=class_scopes,
+            function_scopes=function_scopes,
+            owner_key=factory_key,
+        )
+        if target is not None:
+            targets.add(target)
+    return next(iter(targets)) if len(targets) == 1 else None
 
 
 def _expanded_dependency_nodes(
@@ -6753,6 +6961,10 @@ def _route_body_wire_names(
     ],
     initial_request_names: frozenset[str] = frozenset(),
     initial_websocket_names: frozenset[str] = frozenset(),
+    initial_raw_mapping_names: frozenset[str] = frozenset(),
+    initial_request_body_names: frozenset[str] = frozenset(),
+    initial_websocket_text_names: frozenset[str] = frozenset(),
+    initial_scope_mapping_names: frozenset[str] = frozenset(),
 ) -> list[tuple[str, int]]:
     arguments = _function_arguments(node)
     request_names = {
@@ -6792,12 +7004,20 @@ def _route_body_wire_names(
         body_aliases,
         body_module_aliases,
     )
-    if not request_names and not websocket_names and not explicit_body_names:
+    if not (
+        request_names
+        or websocket_names
+        or explicit_body_names
+        or initial_raw_mapping_names
+        or initial_request_body_names
+        or initial_websocket_text_names
+        or initial_scope_mapping_names
+    ):
         return []
 
     request_aliases = set(request_names)
     websocket_aliases = set(websocket_names)
-    raw_mapping_names: set[str] = set()
+    raw_mapping_names = set(initial_raw_mapping_names)
     if node.name == "on_receive":
         parameters = [
             argument
@@ -6807,18 +7027,18 @@ def _route_body_wire_names(
         for index, parameter in enumerate(parameters[:-1]):
             if parameter.arg in websocket_names:
                 raw_mapping_names.add(parameters[index + 1].arg)
-    request_body_names: set[str] = set(explicit_body_names)
-    websocket_text_names: set[str] = set()
+    request_body_names = set(explicit_body_names) | set(initial_request_body_names)
+    websocket_text_names = set(initial_websocket_text_names)
+    scope_mapping_names = set(initial_scope_mapping_names)
+    lexical_nodes = _lexical_body_nodes(node.body)
     assignments = [
         candidate
-        for statement in node.body
-        for candidate in ast.walk(statement)
+        for candidate in lexical_nodes
         if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
     ]
     iterator_bindings = [
         candidate
-        for statement in node.body
-        for candidate in ast.walk(statement)
+        for candidate in lexical_nodes
         if isinstance(candidate, (ast.For, ast.AsyncFor, ast.comprehension))
     ]
     changed = True
@@ -6844,6 +7064,15 @@ def _route_body_wire_names(
                 changed = changed or len(websocket_text_names) != previous_size
         for assignment in assignments:
             targets, value = _assignment_targets_and_value(assignment)
+            if _is_request_scope_reference(
+                value,
+                request_aliases,
+                websocket_aliases,
+                scope_mapping_names,
+            ):
+                previous_size = len(scope_mapping_names)
+                scope_mapping_names.update(targets)
+                changed = changed or len(scope_mapping_names) != previous_size
             if isinstance(value, ast.Name) and value.id in request_aliases:
                 previous_size = len(request_aliases)
                 request_aliases.update(targets)
@@ -6864,6 +7093,7 @@ def _route_body_wire_names(
                 value,
                 request_aliases,
                 request_body_names,
+                scope_mapping_names,
             ):
                 previous_size = len(request_body_names)
                 request_body_names.update(targets)
@@ -6877,6 +7107,7 @@ def _route_body_wire_names(
                 websocket_text_names,
                 json_loads_names,
                 json_module_names,
+                scope_mapping_names,
             ):
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
@@ -6891,44 +7122,74 @@ def _route_body_wire_names(
                 json_loads_names,
                 json_module_names,
                 raw_mapping_helpers,
+                scope_mapping_names,
             ):
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
                 changed = changed or len(raw_mapping_names) != previous_size
 
     wire_names: list[tuple[str, int]] = []
-    for statement in node.body:
-        for candidate in ast.walk(statement):
-            if isinstance(candidate, ast.Subscript):
-                key = candidate.slice
-                container = candidate.value
-            elif (
-                isinstance(candidate, ast.Call)
-                and isinstance(candidate.func, ast.Attribute)
-                and candidate.func.attr in {"get", "getlist", "pop", "setdefault"}
-                and candidate.args
-            ):
-                key = candidate.args[0]
-                container = candidate.func.value
-            else:
-                continue
-            if _is_raw_request_mapping(
-                container,
-                request_aliases,
-                websocket_aliases,
-                raw_mapping_names,
-                request_body_names,
-                websocket_text_names,
-                json_loads_names,
-                json_module_names,
-            ):
-                wire_names.append(
-                    (
-                        _constant_string_value(key, wire_key_constants)
-                        or _DYNAMIC_REQUEST_MAPPING_KEY,
-                        key.lineno,
-                    )
+    for candidate in lexical_nodes:
+        if isinstance(candidate, ast.Subscript):
+            key = candidate.slice
+            container = candidate.value
+        elif (
+            isinstance(candidate, ast.Call)
+            and isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr in {"get", "getlist", "pop", "setdefault"}
+            and candidate.args
+        ):
+            key = candidate.args[0]
+            container = candidate.func.value
+        else:
+            continue
+        if _is_raw_request_mapping(
+            container,
+            request_aliases,
+            websocket_aliases,
+            raw_mapping_names,
+            request_body_names,
+            websocket_text_names,
+            json_loads_names,
+            json_module_names,
+            scope_mapping_names,
+        ):
+            wire_names.append(
+                (
+                    _constant_string_value(key, wire_key_constants)
+                    or _DYNAMIC_REQUEST_MAPPING_KEY,
+                    key.lineno,
                 )
+            )
+    for nested in _nested_function_definitions(node.body):
+        shadowed = _function_local_binding_names(nested)
+        wire_names.extend(
+            _route_body_wire_names(
+                nested,
+                request_type_names=request_type_names,
+                request_module_names=request_module_names,
+                websocket_type_names=websocket_type_names,
+                websocket_module_names=websocket_module_names,
+                json_loads_names=json_loads_names,
+                json_module_names=json_module_names,
+                body_aliases=body_aliases,
+                body_module_aliases=body_module_aliases,
+                wire_key_constants=wire_key_constants,
+                raw_mapping_helpers=raw_mapping_helpers,
+                initial_request_names=frozenset(request_aliases - shadowed),
+                initial_websocket_names=frozenset(websocket_aliases - shadowed),
+                initial_raw_mapping_names=frozenset(raw_mapping_names - shadowed),
+                initial_request_body_names=frozenset(
+                    request_body_names - shadowed
+                ),
+                initial_websocket_text_names=frozenset(
+                    websocket_text_names - shadowed
+                ),
+                initial_scope_mapping_names=frozenset(
+                    scope_mapping_names - shadowed
+                ),
+            )
+        )
     return wire_names
 
 
@@ -7262,7 +7523,10 @@ def _is_request_scope_reference(
     node: ast.AST,
     request_aliases: set[str],
     websocket_aliases: set[str],
+    scope_mapping_names: set[str] | frozenset[str] = frozenset(),
 ) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in scope_mapping_names
     return bool(
         isinstance(node, ast.Attribute)
         and node.attr == "scope"
@@ -7280,6 +7544,7 @@ def _is_raw_request_mapping(
     websocket_text_names: set[str],
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
+    scope_mapping_names: set[str] | frozenset[str] = frozenset(),
 ) -> bool:
     if isinstance(node, ast.Await):
         return _is_raw_request_mapping(
@@ -7291,6 +7556,7 @@ def _is_raw_request_mapping(
             websocket_text_names,
             json_loads_names,
             json_module_names,
+            scope_mapping_names,
         )
     if isinstance(node, ast.Name):
         return node.id in raw_mapping_names
@@ -7299,6 +7565,7 @@ def _is_raw_request_mapping(
             node.value,
             request_aliases,
             websocket_aliases,
+            scope_mapping_names,
         ):
             scope_key = _constant_string_value(node.slice, {})
             return scope_key is None or scope_key in _CLIENT_CONTROLLED_SCOPE_KEYS
@@ -7311,6 +7578,7 @@ def _is_raw_request_mapping(
             websocket_text_names,
             json_loads_names,
             json_module_names,
+            scope_mapping_names,
         )
     if isinstance(node, ast.Dict):
         return any(
@@ -7324,6 +7592,7 @@ def _is_raw_request_mapping(
                 websocket_text_names,
                 json_loads_names,
                 json_module_names,
+                scope_mapping_names,
             )
             for key, value in zip(node.keys, node.values, strict=True)
         )
@@ -7339,6 +7608,7 @@ def _is_raw_request_mapping(
                 websocket_text_names,
                 json_loads_names,
                 json_module_names,
+                scope_mapping_names,
             ):
                 return True
             if (
@@ -7354,6 +7624,7 @@ def _is_raw_request_mapping(
                     websocket_text_names,
                     json_loads_names,
                     json_module_names,
+                    scope_mapping_names,
                 )
             ):
                 return True
@@ -7361,7 +7632,7 @@ def _is_raw_request_mapping(
     if (
         isinstance(node, ast.Attribute)
         and node.attr
-        in {"cookies", "headers", "path_params", "query_params", "scope"}
+        in {"cookies", "headers", "path_params", "query_params"}
         and isinstance(node.value, ast.Name)
         and node.value.id in request_aliases | websocket_aliases
     ):
@@ -7381,6 +7652,7 @@ def _is_raw_request_mapping(
                 argument,
                 request_aliases,
                 request_body_names,
+                scope_mapping_names,
             )
             or _is_websocket_text_value(
                 argument,
@@ -7399,6 +7671,22 @@ def _is_raw_request_mapping(
     if (
         isinstance(node.func, ast.Attribute)
         and node.func.attr in {"get", "pop", "setdefault", "copy"}
+        and _is_request_scope_reference(
+            node.func.value,
+            request_aliases,
+            websocket_aliases,
+            scope_mapping_names,
+        )
+    ):
+        if node.func.attr == "copy":
+            return False
+        scope_key = (
+            _constant_string_value(node.args[0], {}) if node.args else None
+        )
+        return scope_key is None or scope_key in _CLIENT_CONTROLLED_SCOPE_KEYS
+    if (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "pop", "setdefault", "copy"}
         and _is_raw_request_mapping(
             node.func.value,
             request_aliases,
@@ -7408,6 +7696,7 @@ def _is_raw_request_mapping(
             websocket_text_names,
             json_loads_names,
             json_module_names,
+            scope_mapping_names,
         )
     ):
         return True
@@ -7418,7 +7707,13 @@ def _is_raw_request_mapping(
         in {"Headers", "QueryParams", "FormData", "MultiDict", "ImmutableMultiDict"}
     )
     return (_name(node.func) == "dict" or is_mapping_wrapper) and any(
-        _is_raw_request_mapping(
+        _is_request_scope_reference(
+            value,
+            request_aliases,
+            websocket_aliases,
+            scope_mapping_names,
+        )
+        or _is_raw_request_mapping(
             value,
             request_aliases,
             websocket_aliases,
@@ -7427,6 +7722,7 @@ def _is_raw_request_mapping(
             websocket_text_names,
             json_loads_names,
             json_module_names,
+            scope_mapping_names,
         )
         for value in [
             *node.args,
@@ -7650,6 +7946,7 @@ def _call_returns_raw_mapping(
     json_loads_names: frozenset[str],
     json_module_names: frozenset[str],
     raw_mapping_helpers: dict[str, tuple[tuple[str, ...], frozenset[str]]],
+    scope_mapping_names: set[str] | frozenset[str] = frozenset(),
 ) -> bool:
     while isinstance(node, ast.Await):
         node = node.value
@@ -7673,6 +7970,7 @@ def _call_returns_raw_mapping(
             argument,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         ) or _is_raw_request_mapping(
             argument,
             request_aliases,
@@ -7682,6 +7980,7 @@ def _call_returns_raw_mapping(
             websocket_text_names,
             json_loads_names,
             json_module_names,
+            scope_mapping_names,
         )
 
     if any(
@@ -7700,12 +7999,14 @@ def _is_request_body_value(
     node: ast.AST,
     request_aliases: set[str],
     request_body_names: set[str],
+    scope_mapping_names: set[str] | frozenset[str] = frozenset(),
 ) -> bool:
     if isinstance(node, ast.Await):
         return _is_request_body_value(
             node.value,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         )
     if isinstance(node, ast.Name):
         return node.id in request_body_names
@@ -7719,16 +8020,25 @@ def _is_request_body_value(
     ):
         return True
     if isinstance(node, ast.Subscript):
+        if _is_request_scope_reference(
+            node.value,
+            request_aliases,
+            set(),
+            scope_mapping_names,
+        ):
+            return _constant_string_value(node.slice, {}) == "query_string"
         return _is_request_body_value(
             node.value,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         )
     if isinstance(node, ast.Attribute) and node.attr == "file":
         return _is_request_body_value(
             node.value,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         )
     if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
         return any(
@@ -7736,8 +8046,24 @@ def _is_request_body_value(
                 generator.iter,
                 request_aliases,
                 request_body_names,
+                scope_mapping_names,
             )
             for generator in node.generators
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "getlist", "pop", "setdefault"}
+        and _is_request_scope_reference(
+            node.func.value,
+            request_aliases,
+            set(),
+            scope_mapping_names,
+        )
+    ):
+        return bool(
+            node.args
+            and _constant_string_value(node.args[0], {}) == "query_string"
         )
     if (
         isinstance(node, ast.Call)
@@ -7747,6 +8073,7 @@ def _is_request_body_value(
             node.func.value,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         )
     ):
         return True
@@ -7760,6 +8087,7 @@ def _is_request_body_value(
                 argument,
                 request_aliases,
                 request_body_names,
+                scope_mapping_names,
             )
             for argument in node.args
         )
@@ -7772,6 +8100,7 @@ def _is_request_body_value(
             node.func.value,
             request_aliases,
             request_body_names,
+            scope_mapping_names,
         ):
             return True
     return bool(

@@ -223,7 +223,15 @@ def serialize_vault_export_bytes(export: AtlasVaultExport) -> bytes:
     return serialize_vault_export(export).encode("utf-8")
 
 
-def deserialize_vault_export(data: str | bytes | bytearray | Mapping[str, Any]) -> AtlasVaultExport:
+def deserialize_vault_export(
+    data: str | bytes | bytearray | Mapping[str, Any],
+    *,
+    max_bytes: int = MAX_VAULT_IMPORT_BYTES,
+) -> AtlasVaultExport:
+    if isinstance(data, str):
+        require_vault_import_size(len(data.encode("utf-8")), max_bytes=max_bytes)
+    elif isinstance(data, (bytes, bytearray)):
+        require_vault_import_size(len(data), max_bytes=max_bytes)
     obj = data if isinstance(data, Mapping) else _load_json(data)
     return AtlasVaultExport.from_dict(_require_mapping(obj, "export"))
 
@@ -244,4 +252,7 @@ def read_atlasvault_export(
     *,
     max_bytes: int = MAX_VAULT_IMPORT_BYTES,
 ) -> AtlasVaultExport:
-    return deserialize_vault_export(read_vault_import_bytes(path, max_bytes=max_bytes))
+    return deserialize_vault_export(
+        read_vault_import_bytes(path, max_bytes=max_bytes),
+        max_bytes=max_bytes,
+    )
