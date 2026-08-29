@@ -4427,3 +4427,140 @@ def sync(value=Depends(partial(secret, "internal"))): return bool(value)
         for violation in find_raw_secret_wire_contract_violations(bad_root)
     )
     assert find_raw_secret_wire_contract_violations(safe_root) == []
+
+
+def test_A4_guard_unwraps_bound_method_partial_dependencies(tmp_path: Path) -> None:
+    bad_root = tmp_path / "bad" / "services"
+    bad_root.mkdir(parents=True)
+    (bad_root / "bound_partial_dependency.py").write_text(
+        '''
+from functools import partial
+from fastapi import Depends, FastAPI
+app = FastAPI()
+class Parser:
+    def secret(self, prefix, vault_key): return prefix + vault_key
+parser = Parser()
+@app.get("/sync")
+def sync(value=Depends(partial(parser.secret, "prefix"))): return bool(value)
+''',
+        encoding="utf-8",
+    )
+    safe_root = tmp_path / "safe" / "services"
+    safe_root.mkdir(parents=True)
+    (safe_root / "bound_partial_dependency.py").write_text(
+        '''
+from functools import partial
+from fastapi import Depends, FastAPI
+app = FastAPI()
+class Parser:
+    def secret(self, prefix, vault_key): return prefix + vault_key
+parser = Parser()
+@app.get("/sync")
+def sync(value=Depends(partial(parser.secret, "prefix", "internal"))):
+    return bool(value)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(bad_root)
+    )
+    assert find_raw_secret_wire_contract_violations(safe_root) == []
+
+
+def test_A4_guard_tracks_wrappers_created_from_request_scope(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "request_scope.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+from starlette.datastructures import Headers
+app = FastAPI()
+@app.get("/sync")
+def sync(request: Request):
+    headers = Headers(scope=request.scope)
+    return headers["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_non_loads_request_body_decoders(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "form_decoder.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from urllib.parse import parse_qs
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = parse_qs((await request.body()).decode())
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_rejects_unapproved_custom_route_classes(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "custom_route_class.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.routing import APIRoute
+class SecretRoute(APIRoute):
+    def get_route_handler(self):
+        original = super().get_route_handler()
+        async def handler(request: Request):
+            _ = request.query_params["vault_key"]
+            return await original(request)
+        return handler
+router = APIRouter(route_class=SecretRoute)
+@router.get("/sync")
+def sync(): return {"ok": True}
+app = FastAPI()
+app.include_router(router)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "route_class" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_seeds_decoded_websocket_endpoint_payloads(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "websocket_endpoint.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from starlette.applications import Starlette
+from starlette.endpoints import WebSocketEndpoint
+from starlette.routing import WebSocketRoute
+class SyncEndpoint(WebSocketEndpoint):
+    encoding = "json"
+    async def on_receive(self, websocket, data):
+        _ = data["vault_key"]
+routes = [WebSocketRoute("/sync", SyncEndpoint)]
+app = Starlette(routes=routes)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
