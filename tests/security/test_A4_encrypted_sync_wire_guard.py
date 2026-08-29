@@ -5024,3 +5024,113 @@ def sync(request: Request):
         "dynamic request mapping key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_inspects_positional_framework_middleware_options(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "positional_authentication_backend.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+from starlette.authentication import AuthenticationBackend
+from starlette.middleware.authentication import AuthenticationMiddleware
+class SecretBackend(AuthenticationBackend):
+    async def authenticate(self, conn):
+        return conn.headers["vault_key"]
+app = FastAPI()
+app.add_middleware(AuthenticationMiddleware, SecretBackend())
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "middleware positional option" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_request_receive_mapping_accessors(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "request_receive_get.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import json
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    message = await request.receive()
+    body = message.get("body", b"{}")
+    fields = json.loads(body)
+    return fields["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_websocket_comprehension_payloads(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "websocket_comprehension.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, WebSocket
+app = FastAPI()
+@app.websocket("/sync")
+async def sync(websocket: WebSocket):
+    return [
+        payload["vault_key"]
+        async for payload in websocket.iter_json()
+    ]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_allows_server_managed_request_scope_state(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "request_scope_state.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.get("/sync")
+def sync(request: Request):
+    return request.scope["state"]["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_tracks_http_connection_request_mappings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "http_connection.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+from starlette.requests import HTTPConnection
+app = FastAPI()
+@app.get("/sync")
+def sync(conn: HTTPConnection):
+    return conn.headers["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
