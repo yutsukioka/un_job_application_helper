@@ -3,6 +3,7 @@ library;
 export 'src/atlas_vault/android_storage.dart'
     show
         atlasVaultAndroidMethodChannelName,
+        AtlasAndroidPairingKeyReleaseAuthorizer,
         AtlasAndroidDeviceIdentitySecretStore,
         AtlasAndroidEncryptedDocumentTransport,
         AtlasAndroidPairingArtifactStageStore,

@@ -196,11 +196,28 @@ merge.
 
 Go only for this bounded local onboarding milestone when all three checkpoints,
 the exact 53-file scope, all three role cycles, platform builds, exact-head
-reviews, and artifact scans pass. Production multi-device readiness remains a
-no-go until issue #101 adds a monotonic post-presentation deadline, aggregate
-protected-state bounds, and explicit step-up authorization before vault-key
-release. Ongoing ciphertext synchronization, trusted-list convergence,
-revocation, and key rotation remain deferred.
+reviews, and artifact scans pass.
+
+Issue #101 hardening requires a fresh, attempt-local operating-system
+authorization immediately before the inviter copies vault-key material for a
+delivery. Apple creates a new `LAContext` and evaluates device-owner
+authentication, Android launches explicit secure-device credential
+confirmation through `KeyguardManager`, and Windows uses a fresh
+`UserConsentVerifier` request. Cancellation, unavailable authentication,
+unexpected platform responses, and platform errors fail closed. Authorization
+is never journaled or reused, and denial leaves the pre-delivery transaction
+recoverable without changing recovery/import behavior.
+
+The Windows cross-process recovery stage remains isolated from widget teardown:
+only the stage-specific plain test is registered in child processes. The
+Android controller disposal race is fenced by invalidating every outstanding
+connection-operation identifier before `ChangeNotifier.dispose()`, so late
+operation finalizers cannot notify a disposed controller. Deterministic tests
+assert both boundaries and prohibit framework-error suppression.
+
+Production multi-device readiness remains a no-go until the rest of issue #101
+and the P2 real-platform gate complete. Ongoing ciphertext synchronization,
+trusted-list convergence, revocation, and key rotation remain deferred.
 
 ## Next Product Gate
 

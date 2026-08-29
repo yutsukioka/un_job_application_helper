@@ -65,12 +65,15 @@ void main() {
     final source = File(
       'windows/runner/atlas_vault_windows_storage.cpp',
     ).readAsStringSync();
+    final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
 
     expect(source, contains('UserConsentVerifier'));
     expect(source, contains('CheckAvailabilityAsync'));
     expect(source, contains('RequestVerificationAsync'));
     expect(source, contains('UserConsentVerificationResult::Verified'));
     expect(source, contains('"authorizePairingKeyRelease"'));
+    expect(cmake, contains('"runtimeobject.lib"'));
+    expect(cmake, contains('"windowsapp.lib"'));
   });
 
   test('encrypted-document save uses exact bounded path-free call', () async {

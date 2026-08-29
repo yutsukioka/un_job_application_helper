@@ -30,6 +30,9 @@ const _maximumTrustedPairingPeers = 64;
 // Device-identity rotation is independent of the initial vault key.
 const _initialVaultKeyEpoch = 1;
 
+typedef AtlasVaultPairingKeyReleaseAuthorization =
+    Future<bool> Function(String vaultId);
+
 final class AtlasVaultPairingTransactionException implements Exception {
   const AtlasVaultPairingTransactionException();
 
@@ -765,6 +768,7 @@ final class AtlasVaultTrustedPairingCoordinator
     AtlasVaultPairingRandomBytes? randomBytes,
     DateTime Function()? now,
     Duration Function()? monotonicNow,
+    required AtlasVaultPairingKeyReleaseAuthorization authorizeKeyRelease,
   }) : // Keep public dependency labels explicit at composition sites.
        // ignore: prefer_initializing_formals
        _identityStore = identityStore,
@@ -800,7 +804,9 @@ final class AtlasVaultTrustedPairingCoordinator
        _uuidProvider = uuidProvider ?? _securePairingUuid,
        _randomBytes = randomBytes ?? _securePairingBytes,
        _now = now ?? DateTime.now,
-       _monotonicNow = monotonicNow ?? _pairingMonotonicElapsed;
+       _monotonicNow = monotonicNow ?? _pairingMonotonicElapsed,
+       // ignore: prefer_initializing_formals
+       _authorizeKeyRelease = authorizeKeyRelease;
 
   final AtlasDeviceIdentitySecretStore _identityStore;
   final AtlasVaultTrustedDeviceRegistryStore _registryStore;
@@ -820,6 +826,7 @@ final class AtlasVaultTrustedPairingCoordinator
   final AtlasVaultPairingRandomBytes _randomBytes;
   final DateTime Function() _now;
   final Duration Function() _monotonicNow;
+  final AtlasVaultPairingKeyReleaseAuthorization _authorizeKeyRelease;
   AtlasVaultPairingMonotonicDeadline? _pairingDeadline;
 
   Future<void>? _operation;
@@ -1235,7 +1242,6 @@ final class AtlasVaultTrustedPairingCoordinator
           final keyRequest = _keyRequest(acceptanceArtifact);
           final transcript = _requiredHex(current.transcriptSha256);
           final currentStore = await vaultSession.readCurrentLocalStore();
-          vaultKey = vaultSession.copyVaultKey();
           final bootstrap = AtlasVaultPairingBootstrap.fromJson(
             <String, Object?>{
               'format': 'atlasvault-pairing-bootstrap',
@@ -1255,6 +1261,11 @@ final class AtlasVaultTrustedPairingCoordinator
             inviteeDeviceId: current.peerDeviceId!,
             currentTime: _utc(_now()),
           );
+          if (!await _authorizeKeyRelease(vaultSession.vaultId)) {
+            throw const AtlasVaultPairingTransactionException();
+          }
+          _authorizeSensitiveMutation();
+          vaultKey = vaultSession.copyVaultKey();
           final confirmed = await _advance(
             current,
             AtlasVaultPairingStage.sasConfirmed,

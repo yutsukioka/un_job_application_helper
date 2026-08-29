@@ -1224,6 +1224,7 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
                 -> AtlasVaultTrustedPairingResult
         ) async throws -> AtlasVaultTrustedPairingResult
     public let authorizeSensitiveMutation: @Sendable () async -> Bool
+    public let authorizeKeyRelease: @Sendable () async -> Bool
     public let uuid: @Sendable () -> String
     public let timestamp: @Sendable () -> String
     public let monotonicTime: @Sendable () -> TimeInterval
@@ -1310,6 +1311,9 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
         authorizeSensitiveMutation: @escaping @Sendable () async -> Bool = {
             true
         },
+        authorizeKeyRelease: @escaping @Sendable () async -> Bool = {
+            false
+        },
         uuid: @escaping @Sendable () -> String = {
             UUID().uuidString.lowercased()
         },
@@ -1366,6 +1370,7 @@ public struct AtlasVaultTrustedPairingEnvironment: Sendable {
         self.validateProjection = validateProjection
         self.transactionAdmission = transactionAdmission
         self.authorizeSensitiveMutation = authorizeSensitiveMutation
+        self.authorizeKeyRelease = authorizeKeyRelease
         self.uuid = uuid
         self.timestamp = timestamp
         self.monotonicTime = monotonicTime
@@ -1795,10 +1800,6 @@ public actor AtlasVaultTrustedPairingCoordinator:
                     .invitee.descriptor.deviceID,
                 currentTime: self.environment.timestamp()
             )
-            let confirmed = try await self.advance(
-                transaction,
-                to: .sasConfirmed
-            )
             let metadata = try AtlasVaultVersionedWrappedKeyMetadata(
                 localStoreMetadata: active.store.vaultMetadata
             )
@@ -1810,20 +1811,28 @@ public actor AtlasVaultTrustedPairingCoordinator:
             )
             var deliverySecret = try self.environment.randomBytes(32)
             defer { Self.wipe(&deliverySecret) }
-            let delivery = try active.withKeyMaterial { material in
-                try AtlasVaultKeyDelivery.createDelivery(
-                    inviter: identity,
-                    keyRequest: acceptance.signedKeyRequest,
-                    transcriptSHA256: transcript,
-                    bootstrap: bootstrap,
-                    vaultKey: material,
-                    inviterEphemeralPrivateKey: deliverySecret,
-                    nonce: try self.environment.randomBytes(12),
-                    deliveryID: self.environment.uuid(),
-                    keyEpoch: confirmed.keyEpoch ?? 1,
-                    expiresAt: acceptance.signedKeyRequest.request.expiresAt
-                )
+            guard await self.environment.authorizeKeyRelease() else {
+                throw AtlasVaultPairingTransactionError.unavailable
             }
+            try Task.checkCancellation()
+            var vaultKey = active.withKeyMaterial { Data($0) }
+            defer { Self.wipe(&vaultKey) }
+            let confirmed = try await self.advance(
+                transaction,
+                to: .sasConfirmed
+            )
+            let delivery = try AtlasVaultKeyDelivery.createDelivery(
+                inviter: identity,
+                keyRequest: acceptance.signedKeyRequest,
+                transcriptSHA256: transcript,
+                bootstrap: bootstrap,
+                vaultKey: vaultKey,
+                inviterEphemeralPrivateKey: deliverySecret,
+                nonce: try self.environment.randomBytes(12),
+                deliveryID: self.environment.uuid(),
+                keyEpoch: confirmed.keyEpoch ?? 1,
+                expiresAt: acceptance.signedKeyRequest.request.expiresAt
+            )
             var session = try await self.sessionKey(
                 transaction: confirmed,
                 identity: identity

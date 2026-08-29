@@ -6,8 +6,10 @@
 #include <dpapi.h>
 #include <flutter/standard_method_codec.h>
 #include <knownfolders.h>
+#include <roapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <winrt/Windows.Security.Credentials.UI.h>
 
 #include <algorithm>
 #include <array>
@@ -101,6 +103,24 @@ class ScopedHandle {
 
  private:
   HANDLE handle_;
+};
+
+class ScopedRoInitialization {
+ public:
+  ScopedRoInitialization() : result_(RoInitialize(RO_INIT_MULTITHREADED)) {}
+  ~ScopedRoInitialization() {
+    if (SUCCEEDED(result_)) {
+      RoUninitialize();
+    }
+  }
+
+  ScopedRoInitialization(const ScopedRoInitialization&) = delete;
+  ScopedRoInitialization& operator=(const ScopedRoInitialization&) = delete;
+
+  bool available() const { return SUCCEEDED(result_); }
+
+ private:
+  HRESULT result_;
 };
 
 class ScopedVaultLock {
@@ -1703,6 +1723,29 @@ StorageCapabilities ProbeStorageCapabilities() {
   return capabilities;
 }
 
+bool AuthorizePairingKeyRelease() {
+  try {
+    ScopedRoInitialization apartment;
+    if (!apartment.available()) {
+      return false;
+    }
+    using winrt::Windows::Security::Credentials::UI::UserConsentVerifier;
+    using winrt::Windows::Security::Credentials::UI::
+        UserConsentVerifierAvailability;
+    using winrt::Windows::Security::Credentials::UI::
+        UserConsentVerificationResult;
+    if (UserConsentVerifier::CheckAvailabilityAsync().get() !=
+        UserConsentVerifierAvailability::Available) {
+      return false;
+    }
+    return UserConsentVerifier::RequestVerificationAsync(
+               L"Authorize AtlasVault vault-key delivery")
+               .get() == UserConsentVerificationResult::Verified;
+  } catch (...) {
+    return false;
+  }
+}
+
 const flutter::EncodableMap* ExactArguments(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     const std::vector<std::string>& expected_keys) {
@@ -2314,6 +2357,16 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
          flutter::EncodableValue(probed.hardware_backed_guaranteed)},
     };
     result->Success(flutter::EncodableValue(capabilities));
+    return;
+  }
+
+  if (method == "authorizePairingKeyRelease") {
+    if (!HasNoArguments(call)) {
+      result->Success(flutter::EncodableValue(false));
+      return;
+    }
+    result->Success(
+        flutter::EncodableValue(AuthorizePairingKeyRelease()));
     return;
   }
 
