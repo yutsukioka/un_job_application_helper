@@ -5839,3 +5839,177 @@ app.dependency_overrides = {safe_dependency: secret_dependency}
         "secret_dependency.vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_preserves_client_scope_provenance_through_copies(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "copied_request_scope.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from urllib.parse import parse_qs
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.get("/sync")
+def sync(request: Request):
+    scope = request.scope.copy()
+    payload = parse_qs(scope["query_string"].decode())
+    return payload["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_resolves_dependency_override_mapping_constructors(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "constructed_dependency_overrides.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def safe_dependency():
+    return True
+def secret_dependency(vault_key: str):
+    return bool(vault_key)
+@app.get("/sync")
+def sync(value=Depends(safe_dependency)):
+    return {"ok": value}
+app.dependency_overrides = dict({safe_dependency: secret_dependency})
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret_dependency.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_nested_asgi_path_parameter_mappings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "asgi_path_params.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+class PathMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        path_params = scope["path_params"]
+        _ = path_params["vault_key"]
+        await self.app(scope, receive, send)
+app.add_middleware(PathMiddleware)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_dependencies_appended_to_active_routers(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "appended_router_dependency.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def secret_dependency(vault_key: str):
+    return bool(vault_key)
+app.router.dependencies.append(Depends(secret_dependency))
+@app.get("/sync")
+def sync():
+    return {"ok": True}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret_dependency.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_uploaded_file_header_mappings(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "uploaded_file_headers.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, File, UploadFile
+app = FastAPI()
+@app.post("/sync")
+async def sync(payload: UploadFile = File()):
+    return payload.headers["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_implicit_uploaded_file_bodies(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "implicit_uploaded_file.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+import json
+from fastapi import FastAPI, UploadFile
+app = FastAPI()
+@app.post("/sync")
+async def sync(payload: UploadFile):
+    return json.loads(await payload.read())["vault_key"]
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_propagates_dependency_return_provenance(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "dependency_return_provenance.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI, Request
+app = FastAPI()
+async def get_payload(request: Request):
+    return await request.json()
+def get_request(request: Request):
+    return request
+@app.post("/payload")
+async def payload_route(payload=Depends(get_payload)):
+    return payload["vault_key"]
+@app.get("/request")
+def request_route(injected=Depends(get_request)):
+    return injected.headers["recovery_key"]
+''',
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("vault_key" in violation for violation in violations)
+    assert any("recovery_key" in violation for violation in violations)
