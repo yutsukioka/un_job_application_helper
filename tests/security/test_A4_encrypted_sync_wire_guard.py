@@ -5703,3 +5703,139 @@ app.add_middleware(HeaderMiddleware)
     )
 
     assert find_raw_secret_wire_contract_violations(service_file.parent) == []
+
+
+def test_A4_guard_checks_byte_keys_in_raw_asgi_header_mappings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "asgi_byte_header_key.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+class HeaderMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        headers = dict(scope["headers"])
+        _ = headers[b"vault_key"]
+        await self.app(scope, receive, send)
+app.add_middleware(HeaderMiddleware)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_raw_parser_keyword_payloads(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "raw_parser_keywords.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+app = FastAPI()
+class FirstPayload(BaseModel):
+    vault_key: str
+class SecondPayload(BaseModel):
+    recovery_key: str
+@app.post("/sync")
+async def sync(request: Request):
+    first = FirstPayload.model_validate_json(json_data=await request.body())
+    second = SecondPayload.parse_raw(b=await request.body())
+    return first, second
+''',
+        encoding="utf-8",
+    )
+
+    violations = find_raw_secret_wire_contract_violations(service_file.parent)
+
+    assert any("FirstPayload.vault_key" in violation for violation in violations)
+    assert any("SecondPayload.recovery_key" in violation for violation in violations)
+
+
+def test_A4_guard_tracks_header_wrappers_constructed_from_asgi_scope(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "asgi_header_wrapper.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+from starlette.datastructures import Headers
+app = FastAPI()
+class HeaderMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        headers = Headers(scope=scope)
+        _ = headers["vault_key"]
+        await self.app(scope, receive, send)
+app.add_middleware(HeaderMiddleware)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_mapping_patterns_on_request_payloads(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "request_mapping_pattern.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    payload = await request.json()
+    match payload:
+        case {"vault_key": secret}:
+            return secret
+        case _:
+            return None
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_whole_dependency_override_mappings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "whole_dependency_overrides.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import Depends, FastAPI
+app = FastAPI()
+def safe_dependency():
+    return True
+def secret_dependency(vault_key: str):
+    return bool(vault_key)
+@app.get("/sync")
+def sync(value=Depends(safe_dependency)):
+    return {"ok": value}
+app.dependency_overrides = {safe_dependency: secret_dependency}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "secret_dependency.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
