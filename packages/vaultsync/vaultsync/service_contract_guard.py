@@ -617,6 +617,11 @@ class _ServiceContractVisitor(ast.NodeVisitor):
         self.path = path
         self.module_tree = module_tree
         self.module_statements = module_statements
+        self.local_helper_functions = {
+            statement.name: statement
+            for statement in module_statements
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         self.imported_module_values = imported_module_values
         self.pydantic_model_lines = pydantic_model_lines
         self.dataclass_model_lines = dataclass_model_lines
@@ -829,6 +834,7 @@ class _ServiceContractVisitor(ast.NodeVisitor):
             body_aliases=self.body_aliases,
             body_module_aliases=self.body_module_aliases,
             raw_mapping_helpers=self.raw_mapping_helpers,
+            local_helper_functions=self.local_helper_functions,
             initial_request_names=delegated_request_names,
             initial_websocket_names=delegated_websocket_names,
             wire_key_constants={
@@ -1093,6 +1099,28 @@ def _nested_function_definitions(
     return functions
 
 
+def _nested_lambdas(statements: list[ast.stmt]) -> list[ast.Lambda]:
+    lambdas: list[ast.Lambda] = []
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            lambdas.append(node)
+
+    collector = Collector()
+    for statement in statements:
+        collector.visit(statement)
+    return lambdas
+
+
 def _function_local_binding_names(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> frozenset[str]:
@@ -1113,6 +1141,10 @@ def _function_local_binding_names(
             names.update(imported.asname or imported.name for imported in candidate.names)
     names.update(nested.name for nested in _nested_function_definitions(function.body))
     return frozenset(names)
+
+
+def _lambda_local_binding_names(node: ast.Lambda) -> frozenset[str]:
+    return frozenset(argument.arg for argument in _function_arguments(node))
 
 
 def _is_framework_factory_call(
@@ -4137,6 +4169,131 @@ def _programmatic_route_registrar_reference(
     )
 
 
+def _middleware_constructor_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
+    direct: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "starlette.middleware":
+            direct.update(
+                imported.asname or imported.name
+                for imported in node.names
+                if imported.name == "Middleware"
+            )
+        elif isinstance(node, ast.Import):
+            modules.update(
+                imported.asname or imported.name.split(".")[0]
+                for imported in node.names
+                if imported.name in {"starlette", "starlette.middleware"}
+            )
+    return direct, modules
+
+
+def _is_middleware_constructor(
+    node: ast.Call,
+    direct_aliases: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(parts and parts[-1] == "Middleware" and parts[0] in module_aliases)
+
+
+def _programmatic_wrapper_handler_keys(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    endpoint: ast.expr,
+    wrapper_key: tuple[Path, int, str] | None,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    classes: dict[tuple[Path, int, str], ast.ClassDef],
+    class_scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+) -> frozenset[tuple[Path, int, str]]:
+    if wrapper_key is None or not isinstance(endpoint, ast.Name):
+        return frozenset()
+    wrapper = functions.get(wrapper_key)
+    if wrapper is None:
+        return frozenset()
+    parameters = _function_arguments(wrapper)
+    endpoint_parameter = next(
+        (parameter for parameter in parameters if parameter.arg == endpoint.id),
+        None,
+    )
+    if endpoint_parameter is None:
+        return frozenset()
+    targets: set[tuple[Path, int, str]] = set()
+    for call in (candidate for candidate in ast.walk(tree) if isinstance(candidate, ast.Call)):
+        caller_key = _enclosing_function_key(path, call, functions, scopes)
+        called = _resolve_function_key(
+            root,
+            path,
+            tree,
+            call.func,
+            paths_by_module,
+            trees_by_path,
+            functions,
+            scopes,
+            caller_key,
+        )
+        if called != wrapper_key:
+            continue
+        arguments = {
+            parameter.arg: argument
+            for parameter, argument in _bound_call_parameter_arguments(call, parameters)
+            if isinstance(parameter, ast.arg)
+        }
+        arguments.update(
+            {keyword.arg: keyword.value for keyword in call.keywords if keyword.arg is not None}
+        )
+        actual = arguments.get(endpoint_parameter.arg)
+        if actual is None:
+            continue
+        target = (
+            _resolve_bound_method_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=actual,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=caller_key,
+            )
+            or _resolve_callable_instance_key(
+                root=root,
+                path=path,
+                tree=tree,
+                reference=actual,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+                function_scopes=scopes,
+                owner_key=caller_key,
+            )
+            or _resolve_function_key(
+                root,
+                path,
+                tree,
+                actual,
+                paths_by_module,
+                trees_by_path,
+                functions,
+                scopes,
+                caller_key,
+            )
+        )
+        if target is not None:
+            targets.add(target)
+    return frozenset(targets)
+
+
 def _programmatic_route_handler_keys(
     root: Path,
     parsed_modules: list[tuple[Path, ast.Module]],
@@ -4172,11 +4329,102 @@ def _programmatic_route_handler_keys(
         route_module_aliases = _starlette_route_module_aliases(tree)
         middleware_aliases = _base_http_middleware_aliases(tree)
         middleware_module_aliases = _base_http_middleware_module_aliases(tree)
+        middleware_constructor_aliases, middleware_constructor_modules = (
+            _middleware_constructor_aliases(tree)
+        )
+        framework_class_names = _framework_class_names(tree)
+        framework_module_aliases = _framework_module_aliases(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             owner_key = _enclosing_function_key(path, node, functions, scopes)
             positional_request_handler = False
+            if _is_framework_constructor(
+                node,
+                framework_class_names,
+                framework_module_aliases,
+            ):
+                middleware_value = next(
+                    (keyword.value for keyword in node.keywords if keyword.arg == "middleware"),
+                    None,
+                )
+                if isinstance(middleware_value, (ast.List, ast.Tuple)):
+                    for entry in middleware_value.elts:
+                        if not (
+                            isinstance(entry, ast.Call)
+                            and _is_middleware_constructor(
+                                entry,
+                                middleware_constructor_aliases,
+                                middleware_constructor_modules,
+                            )
+                            and entry.args
+                        ):
+                            continue
+                        class_key = _resolve_model_key(
+                            root,
+                            path,
+                            tree,
+                            entry.args[0],
+                            paths_by_module,
+                            trees_by_path,
+                            classes,
+                            class_scopes,
+                            owner_key,
+                            owner_scope=scopes.get(owner_key, ()),
+                            reference_line=entry.lineno,
+                        )
+                        if class_key is None:
+                            continue
+                        base_http = _class_inherits_base_http_middleware(
+                            root=root,
+                            class_key=class_key,
+                            paths_by_module=paths_by_module,
+                            trees_by_path=trees_by_path,
+                            classes=classes,
+                            class_scopes=class_scopes,
+                        )
+                        target = _resolve_class_method_key(
+                            root=root,
+                            class_key=class_key,
+                            method_name="dispatch" if base_http else "__call__",
+                            paths_by_module=paths_by_module,
+                            trees_by_path=trees_by_path,
+                            classes=classes,
+                            class_scopes=class_scopes,
+                        )
+                        if target is not None:
+                            handlers.add(target)
+                            if base_http:
+                                positional_request_handlers.add(target)
+                exception_handlers = next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "exception_handlers"
+                    ),
+                    None,
+                )
+                exception_mapping = _resolve_named_dict_literal(
+                    exception_handlers,
+                    tree,
+                )
+                if exception_mapping is not None:
+                    for endpoint_value in exception_mapping.values:
+                        target = _resolve_function_key(
+                            root,
+                            path,
+                            tree,
+                            endpoint_value,
+                            paths_by_module,
+                            trees_by_path,
+                            functions,
+                            scopes,
+                            owner_key,
+                        )
+                        if target is not None:
+                            handlers.add(target)
+                            positional_request_handlers.add(target)
+                continue
             is_route_constructor = _is_starlette_route_constructor(
                 node,
                 route_constructor_aliases,
@@ -4297,6 +4545,24 @@ def _programmatic_route_handler_keys(
                     node.args[1] if len(node.args) > 1 else None,
                 )
             if endpoint is None:
+                continue
+            wrapper_handlers = _programmatic_wrapper_handler_keys(
+                root=root,
+                path=path,
+                tree=tree,
+                endpoint=endpoint,
+                wrapper_key=owner_key,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                functions=functions,
+                scopes=scopes,
+                classes=classes,
+                class_scopes=class_scopes,
+            )
+            if wrapper_handlers:
+                handlers.update(wrapper_handlers)
+                if positional_request_handler:
+                    positional_request_handlers.update(wrapper_handlers)
                 continue
             if isinstance(endpoint, ast.Lambda):
                 lambda_handlers.append((path, endpoint))
@@ -5723,6 +5989,12 @@ def _request_body_flow_names(
                 and argument.arg in {"socket", "websocket"}
             )
         }
+        websocket_names.update(
+            _framework_positional_websocket_names(
+                function,
+                route_owner_names.get(path, frozenset()),
+            )
+        )
         if request_names or websocket_names:
             flows[key] = (request_names, websocket_names)
 
@@ -6959,13 +7231,21 @@ def _route_body_wire_names(
         str,
         tuple[tuple[str, ...], frozenset[str]],
     ],
+    local_helper_functions: dict[
+        str,
+        ast.FunctionDef | ast.AsyncFunctionDef,
+    ]
+    | None = None,
     initial_request_names: frozenset[str] = frozenset(),
     initial_websocket_names: frozenset[str] = frozenset(),
     initial_raw_mapping_names: frozenset[str] = frozenset(),
     initial_request_body_names: frozenset[str] = frozenset(),
     initial_websocket_text_names: frozenset[str] = frozenset(),
     initial_scope_mapping_names: frozenset[str] = frozenset(),
+    visited_helper_lines: frozenset[int] = frozenset(),
 ) -> list[tuple[str, int]]:
+    if local_helper_functions is None:
+        local_helper_functions = {}
     arguments = _function_arguments(node)
     request_names = {
         argument.arg
@@ -7161,6 +7441,201 @@ def _route_body_wire_names(
                     key.lineno,
                 )
             )
+    conditional_assignment_lines = _conditional_assignment_lines(
+        ast.Module(body=node.body, type_ignores=[])
+    )
+
+    def provenance_before(
+        line_number: int,
+    ) -> tuple[set[str], set[str], set[str], set[str], set[str], set[str]]:
+        active_requests = set(request_names)
+        active_websockets = set(websocket_names)
+        active_raw_mappings = set(initial_raw_mapping_names)
+        active_request_bodies = set(explicit_body_names) | set(initial_request_body_names)
+        active_websocket_text = set(initial_websocket_text_names)
+        active_scope_mappings = set(initial_scope_mapping_names)
+        for assignment in sorted(assignments, key=lambda candidate: candidate.lineno):
+            if assignment.lineno >= line_number:
+                continue
+            targets, value = _assignment_targets_and_value(assignment)
+            is_scope = _is_request_scope_reference(
+                value,
+                active_requests,
+                active_websockets,
+                active_scope_mappings,
+            )
+            is_request = _is_name_reference(value, active_requests)
+            is_websocket = _is_name_reference(value, active_websockets)
+            is_websocket_text = _is_websocket_text_value(
+                value,
+                active_websockets,
+                active_websocket_text,
+            )
+            is_request_body = _is_request_body_value(
+                value,
+                active_requests,
+                active_request_bodies,
+                active_scope_mappings,
+            )
+            is_raw_mapping = _is_raw_request_mapping(
+                value,
+                active_requests,
+                active_websockets,
+                active_raw_mappings,
+                active_request_bodies,
+                active_websocket_text,
+                json_loads_names,
+                json_module_names,
+                active_scope_mappings,
+            ) or _call_returns_raw_mapping(
+                value,
+                active_requests,
+                active_websockets,
+                active_raw_mappings,
+                active_request_bodies,
+                active_websocket_text,
+                json_loads_names,
+                json_module_names,
+                raw_mapping_helpers,
+                active_scope_mappings,
+            )
+            if assignment.lineno not in conditional_assignment_lines:
+                for names in (
+                    active_requests,
+                    active_websockets,
+                    active_raw_mappings,
+                    active_request_bodies,
+                    active_websocket_text,
+                    active_scope_mappings,
+                ):
+                    names.difference_update(targets)
+            if is_scope:
+                active_scope_mappings.update(targets)
+            if is_request:
+                active_requests.update(targets)
+            if is_websocket:
+                active_websockets.update(targets)
+            if is_websocket_text:
+                active_websocket_text.update(targets)
+            if is_request_body:
+                active_request_bodies.update(targets)
+            if is_raw_mapping:
+                active_raw_mappings.update(targets)
+        return (
+            active_requests,
+            active_websockets,
+            active_raw_mappings,
+            active_request_bodies,
+            active_websocket_text,
+            active_scope_mappings,
+        )
+
+    active_helper_lines = visited_helper_lines | {node.lineno}
+    for call in (
+        candidate
+        for candidate in lexical_nodes
+        if isinstance(candidate, ast.Call) and isinstance(candidate.func, ast.Name)
+    ):
+        helper = local_helper_functions.get(call.func.id)
+        if helper is None or helper.lineno in active_helper_lines:
+            continue
+        (
+            call_request_aliases,
+            call_websocket_aliases,
+            call_raw_mapping_names,
+            call_request_body_names,
+            call_websocket_text_names,
+            call_scope_mapping_names,
+        ) = provenance_before(call.lineno)
+        parameters = _function_arguments(helper)
+        parameters_by_name = {parameter.arg: parameter for parameter in parameters}
+        propagated_requests: set[str] = set()
+        propagated_websockets: set[str] = set()
+        propagated_raw_mappings: set[str] = set()
+        propagated_request_bodies: set[str] = set()
+        propagated_websocket_text: set[str] = set()
+        propagated_scope_mappings: set[str] = set()
+
+        def propagate(parameter: ast.arg, argument: ast.expr) -> None:
+            name = parameter.arg
+            if _is_name_reference(argument, call_request_aliases):
+                propagated_requests.add(name)
+            if _is_name_reference(argument, call_websocket_aliases):
+                propagated_websockets.add(name)
+            if _is_raw_request_mapping(
+                argument,
+                call_request_aliases,
+                call_websocket_aliases,
+                call_raw_mapping_names,
+                call_request_body_names,
+                call_websocket_text_names,
+                json_loads_names,
+                json_module_names,
+                call_scope_mapping_names,
+            ):
+                propagated_raw_mappings.add(name)
+            if _is_request_body_value(
+                argument,
+                call_request_aliases,
+                call_request_body_names,
+                call_scope_mapping_names,
+            ):
+                propagated_request_bodies.add(name)
+            if _is_websocket_text_value(
+                argument,
+                call_websocket_aliases,
+                call_websocket_text_names,
+            ):
+                propagated_websocket_text.add(name)
+            if _is_request_scope_reference(
+                argument,
+                call_request_aliases,
+                call_websocket_aliases,
+                call_scope_mapping_names,
+            ):
+                propagated_scope_mappings.add(name)
+
+        for parameter, argument in _bound_call_parameter_arguments(call, parameters):
+            if isinstance(parameter, ast.arg):
+                propagate(parameter, argument)
+        for keyword in call.keywords:
+            parameter = parameters_by_name.get(keyword.arg or "")
+            if parameter is not None:
+                propagate(parameter, keyword.value)
+        if not any(
+            (
+                propagated_requests,
+                propagated_websockets,
+                propagated_raw_mappings,
+                propagated_request_bodies,
+                propagated_websocket_text,
+                propagated_scope_mappings,
+            )
+        ):
+            continue
+        wire_names.extend(
+            _route_body_wire_names(
+                helper,
+                request_type_names=request_type_names,
+                request_module_names=request_module_names,
+                websocket_type_names=websocket_type_names,
+                websocket_module_names=websocket_module_names,
+                json_loads_names=json_loads_names,
+                json_module_names=json_module_names,
+                body_aliases=body_aliases,
+                body_module_aliases=body_module_aliases,
+                wire_key_constants=wire_key_constants,
+                raw_mapping_helpers=raw_mapping_helpers,
+                local_helper_functions=local_helper_functions,
+                initial_request_names=frozenset(propagated_requests),
+                initial_websocket_names=frozenset(propagated_websockets),
+                initial_raw_mapping_names=frozenset(propagated_raw_mappings),
+                initial_request_body_names=frozenset(propagated_request_bodies),
+                initial_websocket_text_names=frozenset(propagated_websocket_text),
+                initial_scope_mapping_names=frozenset(propagated_scope_mappings),
+                visited_helper_lines=active_helper_lines,
+            )
+        )
     for nested in _nested_function_definitions(node.body):
         shadowed = _function_local_binding_names(nested)
         wire_names.extend(
@@ -7176,6 +7651,42 @@ def _route_body_wire_names(
                 body_module_aliases=body_module_aliases,
                 wire_key_constants=wire_key_constants,
                 raw_mapping_helpers=raw_mapping_helpers,
+                local_helper_functions=local_helper_functions,
+                initial_request_names=frozenset(request_aliases - shadowed),
+                initial_websocket_names=frozenset(websocket_aliases - shadowed),
+                initial_raw_mapping_names=frozenset(raw_mapping_names - shadowed),
+                initial_request_body_names=frozenset(request_body_names - shadowed),
+                initial_websocket_text_names=frozenset(websocket_text_names - shadowed),
+                initial_scope_mapping_names=frozenset(scope_mapping_names - shadowed),
+                visited_helper_lines=active_helper_lines,
+            )
+        )
+    for nested in _nested_lambdas(node.body):
+        shadowed = _lambda_local_binding_names(nested)
+        synthetic = ast.FunctionDef(
+            name="lambda",
+            args=nested.args,
+            body=[ast.Return(value=nested.body)],
+            decorator_list=[],
+            returns=None,
+            type_comment=None,
+            type_params=[],
+        )
+        ast.copy_location(synthetic, nested)
+        wire_names.extend(
+            _route_body_wire_names(
+                synthetic,
+                request_type_names=request_type_names,
+                request_module_names=request_module_names,
+                websocket_type_names=websocket_type_names,
+                websocket_module_names=websocket_module_names,
+                json_loads_names=json_loads_names,
+                json_module_names=json_module_names,
+                body_aliases=body_aliases,
+                body_module_aliases=body_module_aliases,
+                wire_key_constants=wire_key_constants,
+                raw_mapping_helpers=raw_mapping_helpers,
+                local_helper_functions=local_helper_functions,
                 initial_request_names=frozenset(request_aliases - shadowed),
                 initial_websocket_names=frozenset(websocket_aliases - shadowed),
                 initial_raw_mapping_names=frozenset(raw_mapping_names - shadowed),
@@ -7188,6 +7699,7 @@ def _route_body_wire_names(
                 initial_scope_mapping_names=frozenset(
                     scope_mapping_names - shadowed
                 ),
+                visited_helper_lines=active_helper_lines,
             )
         )
     return wire_names
@@ -7560,6 +8072,10 @@ def _is_raw_request_mapping(
         )
     if isinstance(node, ast.Name):
         return node.id in raw_mapping_names
+    if isinstance(node, ast.Attribute):
+        parts = _qualified_name_parts(node)
+        if parts and ".".join(parts) in raw_mapping_names:
+            return True
     if isinstance(node, ast.Subscript):
         if _is_request_scope_reference(
             node.value,
@@ -8246,6 +8762,14 @@ def _framework_positional_request_names(
         if (
             isinstance(decorator, ast.Call)
             and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "route"
+            and _is_route_owner_reference(decorator.func.value, owner_names)
+        ):
+            is_positional_request_callback = True
+            break
+        if (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
             and decorator.func.attr == "exception_handler"
             and _is_route_owner_reference(decorator.func.value, owner_names)
         ):
@@ -8257,6 +8781,25 @@ def _framework_positional_request_names(
     if positional and positional[0].arg in {"self", "cls"}:
         positional = positional[1:]
     return frozenset({positional[0].arg}) if positional else frozenset()
+
+
+def _framework_positional_websocket_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    owner_names: frozenset[str],
+) -> frozenset[str]:
+    for decorator in node.decorator_list:
+        if not (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "websocket_route"
+            and _is_route_owner_reference(decorator.func.value, owner_names)
+        ):
+            continue
+        positional = [*node.args.posonlyargs, *node.args.args]
+        if positional and positional[0].arg in {"self", "cls"}:
+            positional = positional[1:]
+        return frozenset({positional[0].arg}) if positional else frozenset()
+    return frozenset()
 
 
 def _is_banned_wire_name(name: str) -> bool:
