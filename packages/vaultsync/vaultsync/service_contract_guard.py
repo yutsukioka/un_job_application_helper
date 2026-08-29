@@ -6399,10 +6399,11 @@ def _request_body_flow_names(
         path = key[0]
         body_aliases, body_module_aliases = _body_aliases(trees_by_path[path])
         result = [False, False, False, False, False, False]
-        for return_node in (
+        for result_node in (
             candidate
             for candidate in _lexical_body_nodes(function.body)
-            if isinstance(candidate, ast.Return) and candidate.value is not None
+            if isinstance(candidate, (ast.Return, ast.Yield, ast.YieldFrom))
+            and candidate.value is not None
         ):
             (
                 request_aliases,
@@ -6413,7 +6414,7 @@ def _request_body_flow_names(
                 scope_mapping_names,
             ) = _route_provenance_before(
                 function,
-                line_number=return_node.lineno + 1,
+                line_number=result_node.lineno + 1,
                 request_names=flow[0],
                 websocket_names=flow[1],
                 initial_raw_mapping_names=frozenset(flow[2]),
@@ -6426,7 +6427,7 @@ def _request_body_flow_names(
                 json_module_names=_json_module_aliases(trees_by_path[path]),
                 raw_mapping_helpers=raw_mapping_helpers[path],
             )
-            value = return_node.value
+            value = result_node.value
             result[0] = result[0] or _is_name_reference(value, request_aliases)
             result[1] = result[1] or _is_name_reference(value, websocket_aliases)
             result[2] = result[2] or _is_raw_request_mapping(
@@ -8129,6 +8130,14 @@ def _route_provenance_before(
         )
     ):
         source = loop.iter
+        targets = _assignment_target_names(loop.target)
+        if _is_request_body_value(
+            source,
+            active_requests,
+            active_request_bodies,
+            active_scope_mappings,
+        ):
+            active_request_bodies.update(targets)
         if not (
             isinstance(source, ast.Call)
             and isinstance(source.func, ast.Attribute)
@@ -8136,7 +8145,6 @@ def _route_provenance_before(
             and source.func.value.id in active_websockets
         ):
             continue
-        targets = _assignment_target_names(loop.target)
         if source.func.attr == "iter_json":
             active_raw_mappings.update(targets)
         elif source.func.attr in {"iter_bytes", "iter_text"}:
@@ -8262,6 +8270,16 @@ def _route_body_wire_names(
         changed = False
         for loop in iterator_bindings:
             source = loop.iter
+            targets = _assignment_target_names(loop.target)
+            if _is_request_body_value(
+                source,
+                request_aliases,
+                request_body_names,
+                scope_mapping_names,
+            ):
+                previous_size = len(request_body_names)
+                request_body_names.update(targets)
+                changed = changed or len(request_body_names) != previous_size
             if not (
                 isinstance(source, ast.Call)
                 and isinstance(source.func, ast.Attribute)
@@ -8269,7 +8287,6 @@ def _route_body_wire_names(
                 and source.func.value.id in websocket_aliases
             ):
                 continue
-            targets = _assignment_target_names(loop.target)
             if source.func.attr == "iter_json":
                 previous_size = len(raw_mapping_names)
                 raw_mapping_names.update(targets)
@@ -9183,8 +9200,12 @@ def _is_raw_request_mapping(
     if (
         isinstance(node, ast.Attribute)
         and node.attr == "headers"
-        and isinstance(node.value, ast.Name)
-        and node.value.id in request_body_names
+        and _is_request_body_value(
+            node.value,
+            request_aliases,
+            request_body_names,
+            scope_mapping_names,
+        )
     ):
         return True
     if not isinstance(node, ast.Call):
