@@ -17,9 +17,7 @@ def test_A4_services_do_not_accept_raw_vault_secret_material() -> None:
     assert violations == []
 
 
-def test_A4_guard_detects_raw_passphrase_and_unwrapped_key_fields(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_detects_raw_passphrase_and_unwrapped_key_fields(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "bad_api.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -185,9 +183,7 @@ def sync(request: BadSyncRequest) -> dict[str, bool]:
     assert any("raw_vault_key" in violation for violation in violations)
 
 
-def test_A4_guard_normalizes_common_wire_name_casing_and_separators(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_normalizes_common_wire_name_casing_and_separators(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "wire_names.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -218,9 +214,7 @@ def bad_sync(
     assert any("vault-key" in violation for violation in violations)
 
 
-def test_A4_guard_scans_programmatically_registered_route_handlers(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_scans_programmatically_registered_route_handlers(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "registered_route.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -269,9 +263,7 @@ app.add_api_route("/api/encrypted-sync", sync, methods=["POST"])
     assert any("vault_key" in violation for violation in violations)
 
 
-def test_A4_guard_resolves_module_qualified_programmatic_handlers(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_resolves_module_qualified_programmatic_handlers(tmp_path: Path) -> None:
     service_root = tmp_path / "services"
     service_root.mkdir()
     (service_root / "handlers.py").write_text(
@@ -570,9 +562,7 @@ def unrelated_factory() -> None:
     assert violations == []
 
 
-def test_A4_guard_ignores_non_web_decorators_with_route_method_names(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_ignores_non_web_decorators_with_route_method_names(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "registry.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -648,9 +638,7 @@ def sync(vault_key: bytes = Depends(load_vault_key)) -> dict[str, bool]:
     assert violations == []
 
 
-def test_A4_guard_detects_imported_dataclass_request_body_fields(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_detects_imported_dataclass_request_body_fields(tmp_path: Path) -> None:
     service_root = tmp_path / "services"
     service_root.mkdir()
     (service_root / "models.py").write_text(
@@ -748,9 +736,7 @@ def sync(request: SyncRequest) -> dict[str, bool]:
     assert violations == []
 
 
-def test_A4_guard_follows_request_models_from_repository_packages(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_follows_request_models_from_repository_packages(tmp_path: Path) -> None:
     repository_root = tmp_path / "repository"
     service_root = repository_root / "services"
     shared_root = repository_root / "shared_api"
@@ -904,9 +890,7 @@ async def raw_sync(request: Request) -> dict[str, bool]:
     assert any("passphrase" in violation for violation in violations)
 
 
-def test_A4_guard_ignores_banned_names_in_internal_route_mappings(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_ignores_banned_names_in_internal_route_mappings(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "internal_mapping.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -1007,9 +991,7 @@ def safe(settings: dict[str, Any] = Depends(local_settings)) -> dict[str, bool]:
     assert not any("safe.settings" in violation for violation in violations)
 
 
-def test_A4_guard_resolves_module_qualified_imported_route_owners(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_resolves_module_qualified_imported_route_owners(tmp_path: Path) -> None:
     service_root = tmp_path / "services"
     service_root.mkdir()
     (service_root / "router.py").write_text(
@@ -1304,9 +1286,7 @@ def annotated_sync(request: AnnotatedPayload) -> dict[str, bool]:
     assert sum("SyncRequest.vault_key" in violation for violation in violations) == 1
 
 
-def test_A4_guard_fails_closed_for_missing_or_empty_service_roots(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_fails_closed_for_missing_or_empty_service_roots(tmp_path: Path) -> None:
     missing_root = tmp_path / "missing-services"
     empty_root = tmp_path / "empty-services"
     empty_root.mkdir()
@@ -1315,14 +1295,10 @@ def test_A4_guard_fails_closed_for_missing_or_empty_service_roots(
     empty_violations = find_raw_secret_wire_contract_violations(empty_root)
 
     assert any("service root" in violation for violation in missing_violations)
-    assert any(
-        "no Python service modules" in violation for violation in empty_violations
-    )
+    assert any("no Python service modules" in violation for violation in empty_violations)
 
 
-def test_A4_guard_uses_stable_source_order_for_reassigned_constants(
-    tmp_path: Path,
-) -> None:
+def test_A4_guard_uses_stable_source_order_for_reassigned_constants(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "reassigned_alias.py"
     service_file.parent.mkdir()
     service_file.write_text(
@@ -3858,14 +3834,14 @@ def test_A4_guard_keeps_keyword_bound_partial_parameters(tmp_path: Path) -> None
     service_file = tmp_path / "services" / "partial_keyword.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from functools import partial
 from fastapi import FastAPI
 app = FastAPI()
 def sync(vault_key: str) -> dict[str, bool]:
     return {"ok": bool(vault_key)}
 app.add_api_route("/sync", partial(sync, vault_key="internal"), methods=["POST"])
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -3878,7 +3854,7 @@ def test_A4_guard_preserves_conditional_request_aliases(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "conditional_alias.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Request
 app = FastAPI()
 async def parse_payload(inbound):
@@ -3889,7 +3865,7 @@ async def sync(request: Request, use_local: bool):
     if use_local:
         inbound = object()
     return await parse_payload(inbound)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -3907,7 +3883,7 @@ def test_A4_guard_traverses_imported_typed_dict_value_types(tmp_path: Path) -> N
         encoding="utf-8",
     )
     (service_root / "api.py").write_text(
-        """
+        '''
 from typing import TypedDict
 from fastapi import FastAPI
 from services.models import FIELDS
@@ -3916,7 +3892,7 @@ app = FastAPI()
 @app.post("/sync")
 def sync(payload: Payload):
     return bool(payload)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -3929,13 +3905,13 @@ def test_A4_guard_inspects_websocket_connection_mappings(tmp_path: Path) -> None
     service_file = tmp_path / "services" / "socket_query.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, WebSocket
 app = FastAPI()
 @app.websocket("/sync")
 async def sync(socket: WebSocket):
     _ = socket.query_params["vault_key"]
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -3966,13 +3942,13 @@ def test_A4_guard_rejects_opaque_wire_aliases(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "opaque_alias.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Query
 app = FastAPI()
 def wire_name(): return "vault_key"
 @app.post("/sync")
 def sync(value: str = Query(alias=wire_name())): return bool(value)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -3985,7 +3961,7 @@ def test_A4_guard_rejects_signature_changing_route_decorators(tmp_path: Path) ->
     service_file = tmp_path / "services" / "decorated_route.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 def expose_secret(function):
@@ -3994,7 +3970,7 @@ def expose_secret(function):
 @app.post("/sync")
 @expose_secret
 def sync(): return True
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4007,13 +3983,13 @@ def test_A4_guard_rejects_unresolved_mounted_asgi_callables(tmp_path: Path) -> N
     service_file = tmp_path / "services" / "mounted_asgi.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 async def raw_app(scope, receive, send):
     _ = scope["query_string"]
 app.mount("/raw", raw_app)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4039,7 +4015,7 @@ def test_A4_guard_propagates_helper_returned_raw_mappings(tmp_path: Path) -> Non
     service_file = tmp_path / "services" / "helper_return.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Request
 app = FastAPI()
 async def parse(request): return await request.json()
@@ -4047,7 +4023,7 @@ async def parse(request): return await request.json()
 async def sync(request: Request):
     payload = await parse(request)
     return payload["vault_key"]
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4060,14 +4036,14 @@ def test_A4_guard_preserves_qualified_route_owner_targets(tmp_path: Path) -> Non
     service_file = tmp_path / "services" / "qualified_owner.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from types import SimpleNamespace
 from fastapi import FastAPI
 state = SimpleNamespace()
 state.app = FastAPI()
 @state.app.post("/sync")
 def sync(vault_key: str): return bool(vault_key)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4093,7 +4069,7 @@ def test_A4_guard_rejects_unapproved_asgi_middleware(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "asgi_middleware.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 class SecretMiddleware:
@@ -4102,7 +4078,7 @@ class SecretMiddleware:
         _ = scope["query_string"]
         await self.app(scope, receive, send)
 app.add_middleware(SecretMiddleware)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4115,7 +4091,7 @@ def test_A4_guard_propagates_asgi_receive_into_helpers(tmp_path: Path) -> None:
     service_file = tmp_path / "services" / "asgi_receive_helper.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 async def parse(receive):
@@ -4127,7 +4103,7 @@ class SecretMiddleware:
         _ = await parse(receive)
         await self.app(scope, receive, send)
 app.add_middleware(SecretMiddleware)
-""",
+''',
         encoding="utf-8",
     )
     assert any(
@@ -4142,7 +4118,7 @@ def test_A4_guard_propagates_only_request_derived_helper_returns(
     service_file = tmp_path / "services" / "safe_helper_return.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Request
 app = FastAPI()
 def build_context(request):
@@ -4152,7 +4128,7 @@ def build_context(request):
 async def sync(request: Request):
     context = build_context(request)
     return context["vault_key"]
-""",
+''',
         encoding="utf-8",
     )
     assert find_raw_secret_wire_contract_violations(service_file.parent) == []
@@ -4164,14 +4140,14 @@ def test_A4_guard_allows_decorators_applied_after_route_registration(
     service_file = tmp_path / "services" / "post_registration_decorator.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 def audit(function): return function
 @audit
 @app.get("/health")
 def health(): return {"ok": True}
-""",
+''',
         encoding="utf-8",
     )
     assert find_raw_secret_wire_contract_violations(service_file.parent) == []
@@ -4181,14 +4157,14 @@ def test_A4_guard_rejects_route_template_secret_placeholders(tmp_path: Path) -> 
     service_file = tmp_path / "services" / "route_templates.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Request
 app = FastAPI()
 @app.get("/sync/{vault_key}")
 def decorated(request: Request): return request.url.path
 def programmatic(request: Request): return request.url.path
 app.add_api_route("/other/{recovery_key:path}", programmatic)
-""",
+''',
         encoding="utf-8",
     )
     violations = find_raw_secret_wire_contract_violations(service_file.parent)
@@ -4202,7 +4178,7 @@ def test_A4_guard_rejects_composed_router_prefix_secret_placeholders(
     service_file = tmp_path / "services" / "router_prefixes.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import APIRouter, FastAPI
 app = FastAPI()
 secret_router = APIRouter(prefix="/{vault_key}")
@@ -4213,7 +4189,7 @@ def prefixed(): return True
 def included(): return True
 app.include_router(secret_router)
 app.include_router(included_router, prefix="/{recovery_key}")
-""",
+''',
         encoding="utf-8",
     )
 
@@ -4227,7 +4203,7 @@ def test_A4_guard_binds_asgi_receive_for_instance_helpers(tmp_path: Path) -> Non
     service_file = tmp_path / "services" / "bound_asgi_helper.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 class SecretMiddleware:
@@ -4239,7 +4215,7 @@ class SecretMiddleware:
         _ = await self.parse(receive)
         await self.app(scope, receive, send)
 app.add_middleware(SecretMiddleware)
-""",
+''',
         encoding="utf-8",
     )
 
@@ -4253,7 +4229,7 @@ def test_A4_guard_binds_request_returns_for_instance_helpers(tmp_path: Path) -> 
     service_file = tmp_path / "services" / "bound_request_helper.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI, Request
 app = FastAPI()
 class Parser:
@@ -4264,7 +4240,7 @@ parser = Parser()
 async def sync(request: Request):
     payload = await parser.parse(request)
     return payload["vault_key"]
-""",
+''',
         encoding="utf-8",
     )
 
@@ -4280,7 +4256,7 @@ def test_A4_guard_allows_internal_secret_literals_in_pass_through_asgi_middlewar
     service_file = tmp_path / "services" / "internal_asgi_literal.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 class InternalMiddleware:
@@ -4290,7 +4266,7 @@ class InternalMiddleware:
         assert internal["vault_key"]
         await self.app(scope, receive, send)
 app.add_middleware(InternalMiddleware)
-""",
+''',
         encoding="utf-8",
     )
 
@@ -4301,14 +4277,14 @@ def test_A4_guard_inspects_functional_dataclass_request_models(tmp_path: Path) -
     service_file = tmp_path / "services" / "functional_dataclass.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from dataclasses import make_dataclass
 from fastapi import FastAPI
 app = FastAPI()
 Payload = make_dataclass("Payload", [("vault_key", str)])
 @app.post("/sync")
 def sync(payload: Payload): return bool(payload)
-""",
+''',
         encoding="utf-8",
     )
 
@@ -4322,7 +4298,7 @@ def test_A4_guard_tracks_positional_framework_request_callbacks(tmp_path: Path) 
     service_file = tmp_path / "services" / "positional_request_callbacks.py"
     service_file.parent.mkdir()
     service_file.write_text(
-        """
+        '''
 from fastapi import FastAPI
 app = FastAPI()
 @app.middleware("http")
@@ -4333,7 +4309,7 @@ async def inspect(req, call_next):
 async def errors(req, exc):
     _ = req.query_params["recovery_key"]
     return {"ok": False}
-""",
+''',
         encoding="utf-8",
     )
 

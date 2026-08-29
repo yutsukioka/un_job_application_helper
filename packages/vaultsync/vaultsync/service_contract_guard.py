@@ -136,6 +136,8 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         parsed_modules,
         paths_by_module,
     )
+    functional_dataclasses = _functional_dataclass_definitions(parsed_modules)
+    functional_dataclass_models = frozenset(functional_dataclasses)
     pydantic_dataclass_models = _pydantic_dataclass_model_keys(parsed_modules)
     typed_dict_models = _typed_dict_model_keys(
         module_root,
@@ -301,6 +303,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         boundary_functions,
         request_type_names,
         websocket_type_names,
+        route_owner_names,
     )
     request_models = _referenced_model_keys(
         module_root,
@@ -309,6 +312,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         boundary_functions,
         pydantic_models
         | dataclass_models
+        | functional_dataclass_models
         | typed_dict_models
         | functional_typed_dict_models,
     )
@@ -317,6 +321,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         created_pydantic_models
     )
     request_dataclasses = request_models & dataclass_models
+    request_functional_dataclasses = request_models & functional_dataclass_models
     request_typed_dicts = request_models & typed_dict_models
     request_functional_typed_dicts = request_models & functional_typed_dict_models
     for key in sorted(request_functional_typed_dicts):
@@ -332,6 +337,24 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                     f"{model_name}.{field_name} would accept raw vault secret "
                     "material over the wire"
                 )
+    for key in sorted(request_functional_dataclasses):
+        path, _, model_name = key
+        fields, opaque_field_lines = _functional_dataclass_fields(
+            functional_dataclasses[key],
+            dict(parsed_modules)[path],
+        )
+        for field_name, line_number in fields:
+            if _is_banned_wire_name(field_name):
+                violations.append(
+                    f"{path}:{line_number}: functional dataclass request model "
+                    f"{model_name}.{field_name} would accept raw vault secret "
+                    "material over the wire"
+                )
+        for line_number in opaque_field_lines:
+            violations.append(
+                f"{path}:{line_number}: functional dataclass request model "
+                f"{model_name} uses fields that cannot be statically approved"
+            )
     for key in sorted(request_created_pydantic_models):
         path, _, model_name = key
         tree = dict(parsed_modules)[path]
@@ -1413,8 +1436,9 @@ def _route_template_wire_violations(
         route_owners = route_owner_names.get(path, frozenset())
         route_constructor_aliases = _starlette_route_constructor_aliases(tree)
         route_module_aliases = _starlette_route_module_aliases(tree)
+        _, framework_module_aliases = _framework_constructor_imports(tree)
         for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
-            template_node: ast.expr | None = None
+            template_nodes: list[ast.expr] = []
             if (
                 isinstance(call.func, ast.Attribute)
                 and call.func.attr in path_decorators | path_registrars
@@ -1429,6 +1453,8 @@ def _route_template_wire_violations(
                     (keyword.value for keyword in call.keywords if keyword.arg == "path"),
                     call.args[0] if call.args else None,
                 )
+                if template_node is not None:
+                    template_nodes.append(template_node)
             elif _is_starlette_route_constructor(
                 call,
                 route_constructor_aliases,
@@ -1438,30 +1464,54 @@ def _route_template_wire_violations(
                     (keyword.value for keyword in call.keywords if keyword.arg == "path"),
                     call.args[0] if call.args else None,
                 )
-            if template_node is None:
-                continue
-            template = _constant_string_value(
-                template_node,
-                wire_alias_constants[path],
-            )
-            if template is None:
-                continue
-            try:
-                fields = [
-                    field_name
-                    for _, field_name, _, _ in Formatter().parse(template)
-                    if field_name is not None
-                ]
-            except ValueError:
-                continue
-            for field_name in fields:
-                normalized = field_name.split(".", 1)[0].split("[", 1)[0]
-                if _is_banned_wire_name(normalized):
-                    violations.append(
-                        f"{path}:{template_node.lineno}: route template field "
-                        f"{normalized} would accept raw vault secret material over "
-                        "the wire"
-                    )
+                if template_node is not None:
+                    template_nodes.append(template_node)
+            elif _is_api_router_constructor(call, tree, framework_module_aliases):
+                prefix_node = next(
+                    (keyword.value for keyword in call.keywords if keyword.arg == "prefix"),
+                    call.args[0] if call.args else None,
+                )
+                if prefix_node is not None:
+                    template_nodes.append(prefix_node)
+            elif (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr == "include_router"
+                and _active_route_owner_reference(
+                    call.func.value,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                )
+            ):
+                prefix_node = next(
+                    (keyword.value for keyword in call.keywords if keyword.arg == "prefix"),
+                    None,
+                )
+                if prefix_node is not None:
+                    template_nodes.append(prefix_node)
+            for template_node in template_nodes:
+                template = _constant_string_value(
+                    template_node,
+                    wire_alias_constants[path],
+                )
+                if template is None:
+                    continue
+                try:
+                    fields = [
+                        field_name
+                        for _, field_name, _, _ in Formatter().parse(template)
+                        if field_name is not None
+                    ]
+                except ValueError:
+                    continue
+                for field_name in fields:
+                    normalized = field_name.split(".", 1)[0].split("[", 1)[0]
+                    if _is_banned_wire_name(normalized):
+                        violations.append(
+                            f"{path}:{template_node.lineno}: route template field "
+                            f"{normalized} would accept raw vault secret material over "
+                            "the wire"
+                        )
     return violations
 
 
@@ -1599,6 +1649,9 @@ def _asgi_callable_uses_unapproved_input(
 ) -> bool:
     initial_function = functions[initial_key]
     initial_arguments = _function_arguments(initial_function)
+    parsed_modules = list(trees_by_path.items())
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
     pending = [
         (
             initial_key,
@@ -1658,12 +1711,6 @@ def _asgi_callable_uses_unapproved_input(
         tree = trees_by_path[path]
         for statement in function.body:
             for candidate in ast.walk(statement):
-                if (
-                    isinstance(candidate, ast.Constant)
-                    and isinstance(candidate.value, str)
-                    and _is_banned_wire_name(candidate.value)
-                ):
-                    return True
                 if isinstance(candidate, ast.Subscript):
                     container = candidate.value
                     key = candidate.slice
@@ -1691,7 +1738,18 @@ def _asgi_callable_uses_unapproved_input(
                     continue
                 if _is_name_reference(candidate.func, receive_names):
                     return True
-                target = _resolve_function_key(
+                target = _resolve_bound_method_key(
+                    root=root,
+                    path=path,
+                    tree=tree,
+                    reference=candidate.func,
+                    paths_by_module=paths_by_module,
+                    trees_by_path=trees_by_path,
+                    classes=classes,
+                    class_scopes=class_scopes,
+                    function_scopes=function_scopes,
+                    owner_key=function_key,
+                ) or _resolve_function_key(
                     root,
                     path,
                     tree,
@@ -1733,7 +1791,7 @@ def _bound_tracked_parameter_names(
 ) -> set[str]:
     bound = {
         parameter.arg
-        for parameter, argument in zip(parameters, call.args)
+        for parameter, argument in _bound_call_parameter_arguments(call, parameters)
         if _is_name_reference(argument, tracked_names)
     }
     parameters_by_name = {parameter.arg: parameter for parameter in parameters}
@@ -1744,6 +1802,25 @@ def _bound_tracked_parameter_names(
         and _is_name_reference(keyword.value, tracked_names)
     )
     return bound
+
+
+def _bound_call_parameter_arguments(
+    call: ast.Call,
+    parameters: list[ast.arg] | tuple[str, ...],
+) -> list[tuple[ast.arg | str, ast.expr]]:
+    positional_parameters = list(parameters)
+    if (
+        isinstance(call.func, ast.Attribute)
+        and positional_parameters
+        and (
+            positional_parameters[0].arg
+            if isinstance(positional_parameters[0], ast.arg)
+            else positional_parameters[0]
+        )
+        in {"self", "cls"}
+    ):
+        positional_parameters = positional_parameters[1:]
+    return list(zip(positional_parameters, call.args, strict=False))
 
 
 def _is_route_owner_reference(
@@ -1782,6 +1859,32 @@ def _is_framework_constructor(
                 and parts[0] in module_aliases
             )
         )
+    )
+
+
+def _is_api_router_constructor(
+    node: ast.Call,
+    tree: ast.Module,
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return any(
+            isinstance(import_node, ast.ImportFrom)
+            and import_node.module is not None
+            and import_node.module.startswith("fastapi")
+            and any(
+                imported.name == "APIRouter"
+                and (imported.asname or imported.name) == node.func.id
+                for imported in import_node.names
+            )
+            for import_node in ast.walk(tree)
+        )
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "APIRouter"
+        and parts[0] in module_aliases
     )
 
 
@@ -2256,6 +2359,118 @@ def _functional_typed_dict_definitions(
             ):
                 definitions[key] = value
     return definitions
+
+
+def _functional_dataclass_definitions(
+    parsed_modules: list[tuple[Path, ast.Module]],
+) -> dict[tuple[Path, int, str], ast.Call]:
+    definitions: dict[tuple[Path, int, str], ast.Call] = {}
+    for path, tree in parsed_modules:
+        direct_aliases = {
+            imported.asname or imported.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "dataclasses"
+            for imported in node.names
+            if imported.name == "make_dataclass"
+        }
+        module_aliases = {
+            imported.asname or imported.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for imported in node.names
+            if imported.name == "dataclasses"
+        }
+        for key, value, _, _ in _module_assignment_entries(path, tree):
+            if isinstance(value, ast.Call) and _is_make_dataclass_call(
+                value,
+                direct_aliases,
+                module_aliases,
+            ):
+                definitions[key] = value
+    return definitions
+
+
+def _is_make_dataclass_call(
+    node: ast.Call,
+    direct_aliases: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(node.func, ast.Name):
+        return node.func.id in direct_aliases
+    parts = _qualified_name_parts(node.func)
+    return bool(
+        parts
+        and len(parts) >= 2
+        and parts[-1] == "make_dataclass"
+        and parts[0] in module_aliases
+    )
+
+
+def _functional_dataclass_fields(
+    node: ast.Call,
+    tree: ast.Module,
+) -> tuple[list[tuple[str, int]], list[int]]:
+    fields_node = next(
+        (keyword.value for keyword in node.keywords if keyword.arg == "fields"),
+        node.args[1] if len(node.args) > 1 else None,
+    )
+    if fields_node is None:
+        return [], [node.lineno]
+    resolved = _resolve_module_expression(
+        fields_node,
+        tree,
+        before_line=node.lineno,
+    )
+    if not isinstance(resolved, (ast.List, ast.Tuple)):
+        return [], [fields_node.lineno]
+    fields: list[tuple[str, int]] = []
+    opaque_lines: list[int] = []
+    for element in resolved.elts:
+        resolved_element = _resolve_module_expression(
+            element,
+            tree,
+            before_line=element.lineno,
+        )
+        name_node: ast.AST | None
+        if isinstance(resolved_element, ast.Constant):
+            name_node = resolved_element
+        elif isinstance(resolved_element, (ast.List, ast.Tuple)) and resolved_element.elts:
+            name_node = resolved_element.elts[0]
+        else:
+            name_node = None
+        if (
+            isinstance(name_node, ast.Constant)
+            and isinstance(name_node.value, str)
+        ):
+            fields.append((name_node.value, name_node.lineno))
+        else:
+            opaque_lines.append(element.lineno)
+    return fields, opaque_lines
+
+
+def _functional_dataclass_type_roots(
+    node: ast.Call,
+    tree: ast.Module,
+) -> list[ast.AST]:
+    fields_node = next(
+        (keyword.value for keyword in node.keywords if keyword.arg == "fields"),
+        node.args[1] if len(node.args) > 1 else None,
+    )
+    if fields_node is None:
+        return []
+    resolved = _resolve_module_expression(
+        fields_node,
+        tree,
+        before_line=node.lineno,
+    )
+    if not isinstance(resolved, (ast.List, ast.Tuple)):
+        return []
+    return [
+        element.elts[1]
+        for element in resolved.elts
+        if isinstance(element, (ast.List, ast.Tuple)) and len(element.elts) > 1
+    ]
 
 
 def _pydantic_create_model_definitions(
@@ -4086,6 +4301,29 @@ def _resolve_bound_method_key(
         return None
 
     owner_scope = function_scopes.get(owner_key, ())
+    if (
+        isinstance(reference.value, ast.Name)
+        and reference.value.id in {"self", "cls"}
+    ):
+        enclosing_classes = [
+            key
+            for key in classes
+            if key[0] == path and key[1] in owner_scope
+        ]
+        if enclosing_classes:
+            class_key = max(
+                enclosing_classes,
+                key=lambda key: owner_scope.index(key[1]),
+            )
+            return _resolve_class_method_key(
+                root=root,
+                class_key=class_key,
+                method_name=reference.attr,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                classes=classes,
+                class_scopes=class_scopes,
+            )
     constructor: ast.AST | None = None
     constructor_scope = owner_scope
     constructor_line = reference.lineno
@@ -4948,6 +5186,7 @@ def _request_body_flow_names(
     boundary_functions: frozenset[tuple[Path, int, str]],
     request_type_names: dict[Path, frozenset[str]],
     websocket_type_names: dict[Path, frozenset[str]],
+    route_owner_names: dict[Path, frozenset[str]],
 ) -> dict[
     tuple[Path, int, str],
     tuple[frozenset[str], frozenset[str]],
@@ -4976,6 +5215,12 @@ def _request_body_flow_names(
             )
             or (argument.annotation is None and argument.arg == "request")
         }
+        request_names.update(
+            _framework_positional_request_names(
+                function,
+                route_owner_names.get(path, frozenset()),
+            )
+        )
         websocket_names = {
             argument.arg
             for argument in _function_arguments(function)
@@ -5563,10 +5808,12 @@ def _referenced_model_keys(
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
     functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    functional_dataclasses = _functional_dataclass_definitions(parsed_modules)
     created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
     model_definitions: dict[tuple[Path, int, str], ast.AST] = {
         **classes,
         **functional_typed_dicts,
+        **functional_dataclasses,
         **created_pydantic_models,
     }
     model_scopes = {
@@ -5576,6 +5823,12 @@ def _referenced_model_keys(
             for path, tree in parsed_modules
             for key, _, scope, _ in _module_assignment_entries(path, tree)
             if key in functional_typed_dicts
+        },
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in functional_dataclasses
         },
         **{
             key: scope
@@ -5630,10 +5883,12 @@ def _model_reference_closure(
     classes = _class_definitions(parsed_modules)
     class_scopes = _class_scopes(parsed_modules)
     functional_typed_dicts = _functional_typed_dict_definitions(parsed_modules)
+    functional_dataclasses = _functional_dataclass_definitions(parsed_modules)
     created_pydantic_models = _pydantic_create_model_definitions(parsed_modules)
     model_definitions: dict[tuple[Path, int, str], ast.AST] = {
         **classes,
         **functional_typed_dicts,
+        **functional_dataclasses,
         **created_pydantic_models,
     }
     model_scopes = {
@@ -5643,6 +5898,12 @@ def _model_reference_closure(
             for path, tree in parsed_modules
             for key, _, scope, _ in _module_assignment_entries(path, tree)
             if key in functional_typed_dicts
+        },
+        **{
+            key: scope
+            for path, tree in parsed_modules
+            for key, _, scope, _ in _module_assignment_entries(path, tree)
+            if key in functional_dataclasses
         },
         **{
             key: scope
@@ -5677,6 +5938,11 @@ def _model_reference_closure(
                 model,
                 trees_by_path[path],
                 imported_values[path],
+            )
+        elif key in functional_dataclasses and isinstance(model, ast.Call):
+            reference_roots = _functional_dataclass_type_roots(
+                model,
+                trees_by_path[path],
             )
         elif key in created_pydantic_models and isinstance(model, ast.Call):
             reference_roots = _pydantic_create_model_type_roots(model)
@@ -6806,7 +7072,7 @@ def _call_returns_raw_mapping(
 
     if any(
         parameter in raw_parameters and is_raw(argument)
-        for parameter, argument in zip(parameters, node.args)
+        for parameter, argument in _bound_call_parameter_arguments(node, parameters)
     ):
         return True
     return any(
@@ -6978,6 +7244,31 @@ def _is_http_middleware_decorator(
         isinstance(middleware_type, ast.Constant)
         and middleware_type.value == "http"
     )
+
+
+def _framework_positional_request_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    owner_names: frozenset[str],
+) -> frozenset[str]:
+    is_positional_request_callback = False
+    for decorator in node.decorator_list:
+        if _is_http_middleware_decorator(decorator, owner_names):
+            is_positional_request_callback = True
+            break
+        if (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "exception_handler"
+            and _is_route_owner_reference(decorator.func.value, owner_names)
+        ):
+            is_positional_request_callback = True
+            break
+    if not is_positional_request_callback:
+        return frozenset()
+    positional = [*node.args.posonlyargs, *node.args.args]
+    if positional and positional[0].arg in {"self", "cls"}:
+        positional = positional[1:]
+    return frozenset({positional[0].arg}) if positional else frozenset()
 
 
 def _is_banned_wire_name(name: str) -> bool:
