@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
+import 'package:atlas/src/atlas_vault/key_delivery.dart'
+    show createAtlasVaultKeyDeliveryForTesting;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_vector_loader.dart';
@@ -50,7 +52,7 @@ void main() {
     final bootstrap = AtlasVaultPairingBootstrap.fromJson(
       atlasVaultObject(root['bootstrap']),
     );
-    final delivery = await createAtlasVaultKeyDelivery(
+    final delivery = await createAtlasVaultKeyDeliveryForTesting(
       inviter: inviter,
       keyRequest: request,
       transcriptSha256: transcript,
@@ -180,7 +182,54 @@ void main() {
       );
     },
   );
+
+  test(
+    'production delivery owns entropy across revision stress and crash retry',
+    () async {
+      final pairs = <String>{};
+      for (var index = 0; index < 96; index += 1) {
+        pairs.add(_deliveryEntropy(await _productionDelivery(root)));
+      }
+      expect(pairs, hasLength(96));
+
+      final abandoned = await _productionDelivery(root);
+      final recovered = await _productionDelivery(root);
+      expect(_deliveryEntropy(recovered), isNot(_deliveryEntropy(abandoned)));
+    },
+  );
+
+  test('production delivery owns entropy across concurrent attempts', () async {
+    final deliveries = await Future.wait(
+      <Future<AtlasVaultSignedVaultKeyDelivery>>[
+        for (var index = 0; index < 48; index += 1) _productionDelivery(root),
+      ],
+    );
+    expect(deliveries.map(_deliveryEntropy).toSet(), hasLength(48));
+  });
 }
+
+Future<AtlasVaultSignedVaultKeyDelivery> _productionDelivery(
+  Map<String, Object?> root,
+) async {
+  return createAtlasVaultKeyDelivery(
+    inviter: await _identity(root, 'inviter'),
+    keyRequest: AtlasVaultSignedPairingKeyRequest.fromJson(
+      atlasVaultObject(root['signed_key_request']),
+    ),
+    transcriptSha256: _hex(root['transcript_sha256']! as String),
+    bootstrap: AtlasVaultPairingBootstrap.fromJson(
+      atlasVaultObject(root['bootstrap']),
+    ),
+    vaultKey: _bytes(root['test_only_vault_key_b64']),
+    deliveryId: root['delivery_id']! as String,
+    keyEpoch: root['vault_key_epoch']! as int,
+    expiresAt: root['delivery_expires_at']! as String,
+  );
+}
+
+String _deliveryEntropy(AtlasVaultSignedVaultKeyDelivery delivery) =>
+    '${base64Encode(delivery.delivery.inviterEphemeralPublicKey)}:'
+    '${base64Encode(delivery.delivery.nonce)}';
 
 Future<AtlasVaultDeviceIdentity> _identity(
   Map<String, Object?> root,

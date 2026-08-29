@@ -101,7 +101,7 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         let fixedDelivery = try AtlasVaultSignedVaultKeyDelivery.decodeStrict(
             try data(root["signed_delivery_canonical_b64"])
         )
-        let delivery = try AtlasVaultKeyDelivery.createDelivery(
+        let delivery = try AtlasVaultKeyDelivery.createDeliveryForTesting(
             inviter: inviter,
             keyRequest: fixedRequest,
             transcriptSHA256: transcript,
@@ -180,6 +180,72 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
         XCTAssertEqual(acknowledgement.acknowledgement.deliveryID, delivery.delivery.deliveryID)
     }
 
+    func testProductionDeliveryOwnsEntropyAcrossRevisionStressAndCrashRetry()
+        throws
+    {
+        let root = try loadRoot()
+        var pairs = Set<String>()
+        for _ in 0..<96 {
+            pairs.insert(try deliveryEntropy(productionDelivery(root)))
+        }
+        XCTAssertEqual(pairs.count, 96)
+
+        let abandoned = try productionDelivery(root)
+        let recovered = try productionDelivery(root)
+        XCTAssertNotEqual(
+            try deliveryEntropy(abandoned),
+            try deliveryEntropy(recovered)
+        )
+    }
+
+    func testProductionDeliveryOwnsEntropyAcrossConcurrentAttempts()
+        async throws
+    {
+        let root = try loadRoot()
+        let inviter = try identity(root, name: "inviter")
+        let request = try AtlasVaultSignedPairingKeyRequest.decodeStrict(
+            try data(root["signed_key_request_canonical_b64"])
+        )
+        let transcript = try data(hex: try string(root["transcript_sha256"]))
+        let bootstrap = try AtlasVaultPairingBootstrap.decodeStrict(
+            try data(root["bootstrap_canonical_b64"])
+        )
+        let vaultKey = try data(root["test_only_vault_key_b64"])
+        let deliveryID = try string(root["delivery_id"])
+        let keyEpoch = try integer(root["vault_key_epoch"])
+        let expiresAt = try string(root["delivery_expires_at"])
+
+        let pairs = try await withThrowingTaskGroup(
+            of: String.self,
+            returning: [String].self
+        ) { group in
+            for _ in 0..<48 {
+                group.addTask {
+                    let delivery = try AtlasVaultKeyDelivery.createDelivery(
+                        inviter: inviter,
+                        keyRequest: request,
+                        transcriptSHA256: transcript,
+                        bootstrap: bootstrap,
+                        vaultKey: vaultKey,
+                        deliveryID: deliveryID,
+                        keyEpoch: keyEpoch,
+                        expiresAt: expiresAt
+                    )
+                    return delivery.delivery.inviterEphemeralPublicKey
+                        .base64EncodedString()
+                        + ":"
+                        + delivery.delivery.nonce.base64EncodedString()
+                }
+            }
+            var values: [String] = []
+            for try await value in group {
+                values.append(value)
+            }
+            return values
+        }
+        XCTAssertEqual(Set(pairs).count, 48)
+    }
+
     func testWrongEphemeralKeyAndExpiryFailWithRedactedErrors() throws {
         let root = try loadRoot()
         let delivery = try AtlasVaultSignedVaultKeyDelivery.decodeStrict(
@@ -230,6 +296,33 @@ final class AtlasVaultKeyDeliveryTests: XCTestCase {
             throw NSError(domain: "AtlasVaultTests", code: 1)
         }
         return try dictionary(JSONSerialization.jsonObject(with: Data(contentsOf: url)))
+    }
+
+    private func productionDelivery(
+        _ root: [String: Any]
+    ) throws -> AtlasVaultSignedVaultKeyDelivery {
+        try AtlasVaultKeyDelivery.createDelivery(
+            inviter: identity(root, name: "inviter"),
+            keyRequest: AtlasVaultSignedPairingKeyRequest.decodeStrict(
+                data(root["signed_key_request_canonical_b64"])
+            ),
+            transcriptSHA256: data(hex: string(root["transcript_sha256"])),
+            bootstrap: AtlasVaultPairingBootstrap.decodeStrict(
+                data(root["bootstrap_canonical_b64"])
+            ),
+            vaultKey: data(root["test_only_vault_key_b64"]),
+            deliveryID: string(root["delivery_id"]),
+            keyEpoch: integer(root["vault_key_epoch"]),
+            expiresAt: string(root["delivery_expires_at"])
+        )
+    }
+
+    private func deliveryEntropy(
+        _ delivery: AtlasVaultSignedVaultKeyDelivery
+    ) throws -> String {
+        delivery.delivery.inviterEphemeralPublicKey.base64EncodedString()
+            + ":"
+            + delivery.delivery.nonce.base64EncodedString()
     }
 
     private func dictionary(_ value: Any?) throws -> [String: Any] {

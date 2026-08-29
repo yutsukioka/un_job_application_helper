@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import copy
+import inspect
 import json
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,7 @@ from vaultsync.key_delivery import (
     create_pairing_acknowledgement,
     create_pairing_key_request,
     create_vault_key_delivery,
+    create_vault_key_delivery_for_testing,
     derive_pairing_sas,
     open_vault_key_delivery,
     verify_pairing_acknowledgement,
@@ -91,7 +95,7 @@ def test_sas_request_bootstrap_delivery_and_acknowledgement_match_vector() -> No
     assert bootstrap.records[0].deleted is False
     assert bootstrap.records[1].deleted is True
 
-    delivery = create_vault_key_delivery(
+    delivery = create_vault_key_delivery_for_testing(
         inviter=inviter,
         key_request=request,
         transcript_sha256=transcript,
@@ -221,3 +225,48 @@ def test_all_zero_ephemeral_secret_and_errors_fail_closed_without_secrets() -> N
             current_time=root["verification_time"],
         )
     assert secret not in str(raised.value)
+
+
+def _production_delivery(delivery_id: str) -> SignedVaultKeyDelivery:
+    root = _root()
+    return create_vault_key_delivery(
+        inviter=_identity(root, "inviter"),
+        key_request=SignedPairingKeyRequest.from_dict(root["signed_key_request"]),
+        transcript_sha256=bytes.fromhex(root["transcript_sha256"]),
+        bootstrap=PairingBootstrap.from_dict(root["bootstrap"]),
+        vault_key=_bytes(root["test_only_vault_key_b64"]),
+        delivery_id=delivery_id,
+        key_epoch=root["vault_key_epoch"],
+        expires_at=root["delivery_expires_at"],
+    )
+
+
+def _delivery_entropy(delivery: SignedVaultKeyDelivery) -> tuple[bytes, bytes]:
+    value = delivery.delivery
+    return value.inviter_ephemeral_public_key, value.nonce
+
+
+def test_production_delivery_api_owns_ephemeral_key_and_nonce() -> None:
+    parameters = inspect.signature(create_vault_key_delivery).parameters
+    assert "inviter_ephemeral_private_key" not in parameters
+    assert "nonce" not in parameters
+
+
+def test_production_delivery_revision_stress_and_crash_retry_use_unique_entropy() -> None:
+    delivery_id = str(uuid.UUID(int=1))
+    pairs = {
+        _delivery_entropy(_production_delivery(delivery_id))
+        for _ in range(96)
+    }
+    assert len(pairs) == 96
+
+    abandoned = _production_delivery(delivery_id)
+    recovered = _production_delivery(delivery_id)
+    assert _delivery_entropy(abandoned) != _delivery_entropy(recovered)
+
+
+def test_production_delivery_concurrency_uses_unique_entropy() -> None:
+    delivery_id = str(uuid.UUID(int=2))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        deliveries = list(pool.map(_production_delivery, [delivery_id] * 48))
+    assert len({_delivery_entropy(value) for value in deliveries}) == 48
