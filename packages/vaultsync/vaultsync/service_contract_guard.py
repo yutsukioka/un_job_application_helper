@@ -340,6 +340,39 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                             f"lambda.{wire_name} would accept raw vault secret "
                             "material over the wire"
                         )
+        for assignment in (
+            candidate
+            for candidate in ast.walk(tree)
+            if isinstance(candidate, (ast.Assign, ast.AnnAssign))
+        ):
+            targets = (
+                assignment.targets
+                if isinstance(assignment, ast.Assign)
+                else (assignment.target,)
+            )
+            for target in targets:
+                for replacement in _dependency_override_assignment_values(
+                    target,
+                    assignment.value,
+                    tree=tree,
+                    path_in_services=path in service_paths,
+                    mounted_names=mounted_names,
+                    route_owners=route_owners,
+                ):
+                    if not isinstance(replacement, ast.Lambda):
+                        continue
+                    for wire_name, line_number in _route_parameter_wire_names(
+                        replacement,
+                        depends_aliases=frozenset(depends_aliases),
+                        depends_module_aliases=frozenset(depends_modules),
+                        wire_alias_constants=wire_alias_constants[path],
+                    ):
+                        if _is_banned_wire_name(wire_name):
+                            violations.append(
+                                f"{path}:{line_number}: dependency override "
+                                f"lambda.{wire_name} would accept raw vault secret "
+                                "material over the wire"
+                            )
     function_definitions = _function_definitions(parsed_modules)
     trees_by_path = dict(parsed_modules)
     for target, remaining_parameters in partial_programmatic_handlers:
@@ -2064,7 +2097,7 @@ def _asgi_callable_uses_unapproved_input(
                     container,
                     header_names,
                 ):
-                    key_value = _constant_string_value(key, {})
+                    key_value = _asgi_header_key_value(key)
                     if key_value is None and isinstance(key, ast.Constant):
                         continue
                     if key_value is None or _is_banned_wire_name(key_value):
@@ -2168,6 +2201,12 @@ def _is_asgi_header_value(
         "tuple",
     }:
         return False
+    if parts[-1] in {"Headers", "MutableHeaders"} and any(
+        keyword.arg == "scope"
+        and _is_name_reference(keyword.value, scope_names)
+        for keyword in node.keywords
+    ):
+        return True
     return any(
         _is_asgi_header_value(value, scope_names, header_names)
         for value in [
@@ -2175,6 +2214,15 @@ def _is_asgi_header_value(
             *(keyword.value for keyword in node.keywords),
         ]
     )
+
+
+def _asgi_header_key_value(node: ast.expr) -> str | None:
+    value = _constant_string_value(node, {})
+    if value is not None:
+        return value
+    if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+        return node.value.decode("latin-1")
+    return None
 
 
 def _bound_tracked_parameter_names(
@@ -6011,26 +6059,30 @@ def _boundary_function_keys(
                 if isinstance(assignment, ast.Assign)
                 else (assignment.target,)
             )
-            if not any(
-                _is_framework_dependency_override_target(
+            replacements = [
+                replacement
+                for target in targets
+                for replacement in _dependency_override_assignment_values(
                     target,
+                    assignment.value,
+                    tree=tree,
                     path_in_services=path in service_paths,
                     mounted_names=mounted_names,
                     route_owners=route_owners,
                 )
-                for target in targets
-            ):
+            ]
+            if not replacements:
                 continue
             owner_key = _enclosing_function_key(path, assignment, functions, scopes)
-            replacement = assignment.value
-            target = dependency_replacement_target(
-                path,
-                tree,
-                replacement,
-                owner_key,
-            )
-            if target is not None:
-                boundary.add(target)
+            for replacement in replacements:
+                target = dependency_replacement_target(
+                    path,
+                    tree,
+                    replacement,
+                    owner_key,
+                )
+                if target is not None:
+                    boundary.add(target)
 
     pending = list(boundary)
     while pending:
@@ -6447,16 +6499,71 @@ def _is_framework_dependency_override_target(
     mounted_names: set[str],
     route_owners: frozenset[str],
 ) -> bool:
+    override_attribute = node.value if isinstance(node, ast.Subscript) else node
     return bool(
-        isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Attribute)
-        and node.value.attr == "dependency_overrides"
+        isinstance(override_attribute, ast.Attribute)
+        and override_attribute.attr == "dependency_overrides"
         and _active_route_owner_reference(
-            node.value.value,
+            override_attribute.value,
             path_in_services=path_in_services,
             mounted_names=mounted_names,
             route_owners=route_owners,
         )
+    )
+
+
+def _dependency_override_mapping_values(
+    node: ast.expr,
+    *,
+    tree: ast.Module,
+    before_line: int,
+) -> tuple[ast.expr, ...]:
+    replacements: list[ast.expr] = []
+
+    def add_mapping_values(value: ast.expr, line_number: int) -> None:
+        resolved = _resolve_module_expression(
+            value,
+            tree,
+            before_line=line_number,
+        )
+        if not isinstance(resolved, ast.Dict):
+            return
+        for key, replacement in zip(
+            resolved.keys,
+            resolved.values,
+            strict=True,
+        ):
+            if key is None:
+                add_mapping_values(replacement, replacement.lineno)
+            else:
+                replacements.append(replacement)
+
+    add_mapping_values(node, before_line)
+    return tuple(replacements)
+
+
+def _dependency_override_assignment_values(
+    target: ast.expr,
+    value: ast.expr,
+    *,
+    tree: ast.Module,
+    path_in_services: bool,
+    mounted_names: set[str],
+    route_owners: frozenset[str],
+) -> tuple[ast.expr, ...]:
+    if not _is_framework_dependency_override_target(
+        target,
+        path_in_services=path_in_services,
+        mounted_names=mounted_names,
+        route_owners=route_owners,
+    ):
+        return ()
+    if isinstance(target, ast.Subscript):
+        return (value,)
+    return _dependency_override_mapping_values(
+        value,
+        tree=tree,
+        before_line=value.lineno,
     )
 
 
@@ -6484,22 +6591,14 @@ def _dependency_override_update_values(
 
     replacements: list[ast.expr] = []
 
-    def add_mapping_values(node: ast.expr, before_line: int) -> None:
-        resolved = _resolve_module_expression(
-            node,
-            tree,
-            before_line=before_line,
-        )
-        if not isinstance(resolved, ast.Dict):
-            return
-        for key, value in zip(resolved.keys, resolved.values, strict=True):
-            if key is None:
-                add_mapping_values(value, value.lineno)
-            else:
-                replacements.append(value)
-
     for argument in call.args:
-        add_mapping_values(argument, call.lineno)
+        replacements.extend(
+            _dependency_override_mapping_values(
+                argument,
+                tree=tree,
+                before_line=call.lineno,
+            )
+        )
     replacements.extend(
         keyword.value for keyword in call.keywords if keyword.arg is not None
     )
@@ -7128,12 +7227,17 @@ def _referenced_model_keys(
             and candidate.func.attr
             in {"model_validate", "model_validate_json", "parse_obj", "parse_raw"}
         ):
+            input_keywords = {"obj", "object"}
+            if call.func.attr == "model_validate_json":
+                input_keywords.add("json_data")
+            elif call.func.attr == "parse_raw":
+                input_keywords.add("b")
             inputs = [
                 *call.args,
                 *(
                     keyword.value
                     for keyword in call.keywords
-                    if keyword.arg in {"obj", "object"}
+                    if keyword.arg in input_keywords
                 ),
             ]
             if not inputs:
@@ -7987,6 +8091,59 @@ def _route_body_wire_names(
                     key.lineno,
                 )
             )
+    for match_node in (
+        candidate for candidate in lexical_nodes if isinstance(candidate, ast.Match)
+    ):
+        (
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
+            active_scope_mapping_names,
+        ) = _route_provenance_before(
+            node,
+            line_number=match_node.lineno + 1,
+            request_names=request_names,
+            websocket_names=websocket_names,
+            initial_raw_mapping_names=initial_raw_mapping_names,
+            initial_request_body_names=initial_request_body_names,
+            initial_websocket_text_names=initial_websocket_text_names,
+            initial_scope_mapping_names=initial_scope_mapping_names,
+            body_aliases=body_aliases,
+            body_module_aliases=body_module_aliases,
+            json_loads_names=json_loads_names,
+            json_module_names=json_module_names,
+            raw_mapping_helpers=raw_mapping_helpers,
+        )
+        if not _is_raw_request_mapping(
+            match_node.subject,
+            active_request_aliases,
+            active_websocket_aliases,
+            active_raw_mapping_names,
+            active_request_body_names,
+            active_websocket_text_names,
+            json_loads_names,
+            json_module_names,
+            active_scope_mapping_names,
+        ):
+            continue
+        for match_case in match_node.cases:
+            for mapping_pattern in (
+                candidate
+                for candidate in ast.walk(match_case.pattern)
+                if isinstance(candidate, ast.MatchMapping)
+            ):
+                for key in mapping_pattern.keys:
+                    wire_name = _constant_string_value(key, wire_key_constants)
+                    if wire_name is None and isinstance(key, ast.Constant):
+                        continue
+                    wire_names.append(
+                        (
+                            wire_name or _DYNAMIC_REQUEST_MAPPING_KEY,
+                            key.lineno,
+                        )
+                    )
     for loop in iterator_bindings:
         source = loop.iter
         mapping_source = source
