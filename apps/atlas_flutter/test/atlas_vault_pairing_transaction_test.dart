@@ -158,6 +158,80 @@ void main() {
     );
   });
 
+  test('inviter requires fresh authorization for every key release', () async {
+    final decisions = <bool>[false, true];
+    var authorizationCalls = 0;
+    final journey = await _PairingJourney.create(
+      vector,
+      inviterKeyReleaseAuthorization: (vaultId) async {
+        expect(vaultId, isNotEmpty);
+        authorizationCalls += 1;
+        return decisions.removeAt(0);
+      },
+    );
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+
+    final denied = await journey.inviter.confirmCodesMatch();
+
+    expect(
+      denied.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(authorizationCalls, 1);
+    expect(
+      journey.inviterTransactions.value?.stage,
+      AtlasVaultPairingStage.acceptanceImported,
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+    expect(
+      journey.inviterEvents,
+      isNot(contains('transaction.replace:sas_confirmed')),
+    );
+
+    final approved = await journey.inviter.confirmCodesMatch();
+
+    expect(
+      approved.disposition,
+      AtlasVaultTrustedPairingDisposition.deliveryReady,
+    );
+    expect(authorizationCalls, 2);
+    expect(
+      journey.inviterEvents.lastIndexOf('key-release.authorize'),
+      lessThan(journey.inviterEvents.indexOf('stage.create:delivery')),
+    );
+  });
+
+  test(
+    'key-release authorization errors fail closed before delivery',
+    () async {
+      final journey = await _PairingJourney.create(
+        vector,
+        inviterKeyReleaseAuthorization: (_) async => throw StateError('denied'),
+      );
+      addTearDown(journey.stop);
+      await _exchangeAcceptance(journey);
+
+      final result = await journey.inviter.confirmCodesMatch();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviterTransactions.value?.stage,
+        AtlasVaultPairingStage.acceptanceImported,
+      );
+      expect(
+        journey.inviterStage.values,
+        isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+      );
+    },
+  );
+
   test(
     'pairing construction performs no identity or platform operation',
     () async {
@@ -1778,6 +1852,7 @@ final class _PairingJourney {
     DateTime Function()? inviterNow,
     int inviterIdentityKeyEpoch = 1,
     AtlasVaultTrustedPairingTransactionAdmission? inviterTransactionAdmission,
+    Future<bool> Function(String vaultId)? inviterKeyReleaseAuthorization,
   }) async {
     final inviterEvents = <String>[];
     final inviteeEvents = <String>[];
@@ -1913,6 +1988,11 @@ final class _PairingJourney {
       now: inviterNow ?? (() => clock.value),
       monotonicNow: () => clock.elapsed,
       transactionAdmission: inviterTransactionAdmission,
+      authorizeKeyRelease: (vaultId) async {
+        inviterEvents.add('key-release.authorize');
+        return await (inviterKeyReleaseAuthorization?.call(vaultId) ??
+            Future<bool>.value(true));
+      },
     );
     final invitee = AtlasVaultTrustedPairingCoordinator(
       identityStore: inviteeIdentity,
@@ -1940,6 +2020,7 @@ final class _PairingJourney {
       randomBytes: inviteeDeterminism.bytes,
       now: () => clock.value,
       monotonicNow: () => clock.elapsed,
+      authorizeKeyRelease: (_) async => true,
     );
     vaultKey.fillRange(0, vaultKey.length, 0);
     return _PairingJourney(

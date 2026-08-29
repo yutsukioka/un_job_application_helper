@@ -29,6 +29,39 @@ void main() {
     expect(recorder.calls, isEmpty);
   });
 
+  test('key-release authorization is fresh and fail closed', () async {
+    var decisions = <Object?>[true, false, 'invalid'];
+    recorder.handler = (call) async {
+      expect(call.method, 'authorizePairingKeyRelease');
+      expect(call.arguments, isNull);
+      return decisions.removeAt(0);
+    };
+    final authorizer = AtlasAndroidPairingKeyReleaseAuthorizer(
+      channel: recorder.channel,
+    );
+
+    expect(await authorizer.authorize(), isTrue);
+    expect(await authorizer.authorize(), isFalse);
+    expect(await authorizer.authorize(), isFalse);
+    recorder.handler = (_) async => throw PlatformException(code: 'cancelled');
+    expect(await authorizer.authorize(), isFalse);
+    expect(recorder.calls, hasLength(4));
+  });
+
+  test('native key release uses explicit device credential confirmation', () {
+    final source = File(
+      'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'
+      'AtlasVaultAndroidStorage.kt',
+    ).readAsStringSync();
+
+    expect(source, contains('KeyguardManager'));
+    expect(source, contains('isDeviceSecure'));
+    expect(source, contains('createConfirmDeviceCredentialIntent'));
+    expect(source, contains('AUTHORIZE_KEY_RELEASE_REQUEST_CODE'));
+    expect(source, contains('resultCode == Activity.RESULT_OK'));
+    expect(source, contains('"authorizePairingKeyRelease"'));
+  });
+
   test('native document bridge owns one path-free SAF operation', () {
     final storage = File(
       'android/app/src/main/kotlin/com/yutsukioka/jobagg/atlas/'

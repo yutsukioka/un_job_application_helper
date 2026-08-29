@@ -227,6 +227,49 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         XCTAssertNil(delivery)
     }
 
+    func testInviterRequiresFreshAuthorizationForEveryKeyRelease()
+        async throws
+    {
+        let decisions = Mutex<[Bool]>([false, true])
+        let authorizationCalls = Mutex<Int>(0)
+        let journey = try makeJourney(authorizeKeyRelease: {
+            authorizationCalls.withLock { $0 += 1 }
+            return decisions.withLock { $0.removeFirst() }
+        })
+        try await exchangeAcceptance(journey)
+
+        let denied = await journey.inviter.confirmCodesMatch()
+        let deniedTransaction = await journey.inviterState.loadTransaction()
+        let deniedDelivery = await journey.inviterState.loadArtifact(.delivery)
+
+        XCTAssertEqual(denied.disposition, .recoveryRequired)
+        XCTAssertEqual(authorizationCalls.withLock { $0 }, 1)
+        XCTAssertEqual(deniedTransaction?.stage, .acceptanceImported)
+        XCTAssertNil(deniedDelivery)
+
+        let approved = await journey.inviter.confirmCodesMatch()
+        let approvedDelivery = await journey.inviterState.loadArtifact(
+            .delivery
+        )
+
+        XCTAssertEqual(approved.disposition, .deliveryReady)
+        XCTAssertEqual(authorizationCalls.withLock { $0 }, 2)
+        XCTAssertNotNil(approvedDelivery)
+    }
+
+    func testKeyReleaseAuthorizationErrorFailsClosed() async throws {
+        let journey = try makeJourney(authorizeKeyRelease: { false })
+        try await exchangeAcceptance(journey)
+
+        let result = await journey.inviter.confirmCodesMatch()
+        let transaction = await journey.inviterState.loadTransaction()
+        let delivery = await journey.inviterState.loadArtifact(.delivery)
+
+        XCTAssertEqual(result.disposition, .recoveryRequired)
+        XCTAssertEqual(transaction?.stage, .acceptanceImported)
+        XCTAssertNil(delivery)
+    }
+
     func testMonotonicDeadlineRejectsWallClockRollback() throws {
         var deadline = AtlasVaultPairingMonotonicDeadline(
             wallTime: "2026-08-15T12:00:00Z",
@@ -1146,7 +1189,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
         inviteeArtifactFailure: AtlasVaultPairingArtifactKind? = nil,
         inviteeReplaceFailure: AtlasVaultPairingStage? = nil,
         inviteeDeleteFailures: Int = 0,
-        inviteeRejectsRepeatedActivation: Bool = false
+        inviteeRejectsRepeatedActivation: Bool = false,
+        authorizeKeyRelease: @escaping @Sendable () async -> Bool = { true }
     ) throws -> PairingJourneyHarness {
         let timestamp = "2026-08-15T12:00:00Z"
         let inviterIdentity = try AtlasVaultDeviceIdentity.generate(
@@ -1204,7 +1248,8 @@ final class AtlasVaultPairingTransactionTests: XCTestCase {
                     identifiers: identifiers,
                     random: random,
                     timestamp: { clock.now() },
-                    monotonicTime: { clock.monotonicNow() }
+                    monotonicTime: { clock.monotonicNow() },
+                    authorizeKeyRelease: authorizeKeyRelease
                 )
             ),
             invitee: AtlasVaultTrustedPairingCoordinator(
@@ -1709,7 +1754,8 @@ private func pairingEnvironment(
     identifiers: PairingIdentifierSequence,
     random: PairingRandomSequence,
     timestamp: @escaping @Sendable () -> String,
-    monotonicTime: @escaping @Sendable () -> TimeInterval
+    monotonicTime: @escaping @Sendable () -> TimeInterval,
+    authorizeKeyRelease: @escaping @Sendable () async -> Bool = { true }
 ) -> AtlasVaultTrustedPairingEnvironment {
     AtlasVaultTrustedPairingEnvironment(
         loadIdentity: { await state.loadIdentity() },
@@ -1764,6 +1810,7 @@ private func pairingEnvironment(
             if !active { return true }
             return await state.isActive()
         },
+        authorizeKeyRelease: authorizeKeyRelease,
         uuid: { identifiers.next() },
         timestamp: timestamp,
         monotonicTime: monotonicTime,
