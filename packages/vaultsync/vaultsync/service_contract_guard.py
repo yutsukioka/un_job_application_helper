@@ -141,7 +141,11 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         service_paths,
         route_owner_names,
     )
-    programmatic_handlers, programmatic_lambdas = _programmatic_route_handler_keys(
+    (
+        programmatic_handlers,
+        programmatic_lambdas,
+        partial_programmatic_handlers,
+    ) = _programmatic_route_handler_keys(
         module_root,
         parsed_modules,
         paths_by_module,
@@ -163,6 +167,27 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
                 violations.append(
                     f"{path}:{line_number}: route parameter "
                     f"lambda.{wire_name} would accept raw vault secret "
+                    "material over the wire"
+                )
+    function_definitions = _function_definitions(parsed_modules)
+    trees_by_path = dict(parsed_modules)
+    for target, remaining_parameters in partial_programmatic_handlers:
+        handler = function_definitions[target]
+        path = target[0]
+        depends_aliases, depends_module_aliases = _depends_aliases(
+            trees_by_path[path]
+        )
+        for wire_name, line_number in _route_parameter_wire_names(
+            handler,
+            depends_aliases=frozenset(depends_aliases),
+            depends_module_aliases=frozenset(depends_module_aliases),
+            wire_alias_constants=wire_alias_constants[path],
+            included_parameter_names=remaining_parameters,
+        ):
+            if _is_banned_wire_name(wire_name):
+                violations.append(
+                    f"{path}:{line_number}: route parameter "
+                    f"{target[2]}.{wire_name} would accept raw vault secret "
                     "material over the wire"
                 )
     boundary_functions = _boundary_function_keys(
@@ -204,6 +229,7 @@ def find_raw_secret_wire_contract_violations(service_root: str | Path) -> list[s
         for field_name, line_number in _functional_typed_dict_fields(
             functional_typed_dicts[key],
             dict(parsed_modules)[path],
+            imported_module_values[path],
         ):
             if _is_banned_wire_name(field_name):
                 violations.append(
@@ -1970,10 +1996,15 @@ def _is_typed_dict_call(
 def _functional_typed_dict_fields(
     node: ast.Call,
     tree: ast.Module,
+    imported_values: dict[str, ast.expr] | None = None,
 ) -> list[tuple[str, int]]:
     fields: list[tuple[str, int]] = []
     mapping = node.args[1] if len(node.args) > 1 else None
-    resolved_mapping = _resolve_named_dict_literal(mapping, tree)
+    resolved_mapping = _resolve_named_dict_literal(
+        mapping,
+        tree,
+        imported_values=imported_values,
+    )
     if resolved_mapping is not None:
         fields.extend(
             (key.value, key.lineno)
@@ -2006,11 +2037,16 @@ def _functional_typed_dict_type_roots(
 def _resolve_named_dict_literal(
     node: ast.AST | None,
     tree: ast.Module,
+    *,
+    imported_values: dict[str, ast.expr] | None = None,
 ) -> ast.Dict | None:
     if isinstance(node, ast.Dict):
         return node
     if not isinstance(node, ast.Name):
         return None
+    imported = imported_values.get(node.id) if imported_values is not None else None
+    if isinstance(imported, ast.Dict):
+        return imported
     candidates = [
         (key, value)
         for key, value, scope, _ in _module_assignment_entries(Path("."), tree)
@@ -2593,12 +2629,18 @@ def _route_parameter_wire_names(
     depends_aliases: frozenset[str],
     depends_module_aliases: frozenset[str],
     wire_alias_constants: dict[str, str],
+    included_parameter_names: frozenset[str] | None = None,
 ) -> list[tuple[str, int]]:
     parameters = _function_arguments(node)
     defaults_by_argument = _parameter_defaults(node)
 
     wire_names: list[tuple[str, int]] = []
     for argument in parameters:
+        if (
+            included_parameter_names is not None
+            and argument.arg not in included_parameter_names
+        ):
+            continue
         default = defaults_by_argument.get(id(argument))
         dependency_injected = isinstance(default, ast.Call) and _is_depends_call(
             default,
@@ -3010,6 +3052,7 @@ def _programmatic_route_handler_keys(
 ) -> tuple[
     frozenset[tuple[Path, int, str]],
     tuple[tuple[Path, ast.Lambda], ...],
+    tuple[tuple[tuple[Path, int, str], frozenset[str]], ...],
 ]:
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
@@ -3018,6 +3061,9 @@ def _programmatic_route_handler_keys(
     class_scopes = _class_scopes(parsed_modules)
     handlers: set[tuple[Path, int, str]] = set()
     lambda_handlers: list[tuple[Path, ast.Lambda]] = []
+    partial_handlers: list[
+        tuple[tuple[Path, int, str], frozenset[str]]
+    ] = []
     for path, tree in parsed_modules:
         mounted_names = {
             name for owner_path, name in mounted_route_owners if owner_path == path
@@ -3144,6 +3190,20 @@ def _programmatic_route_handler_keys(
             if isinstance(endpoint, ast.Lambda):
                 lambda_handlers.append((path, endpoint))
                 continue
+            partial_handler = _resolve_partial_route_handler(
+                root=root,
+                path=path,
+                tree=tree,
+                endpoint=endpoint,
+                paths_by_module=paths_by_module,
+                trees_by_path=trees_by_path,
+                functions=functions,
+                scopes=scopes,
+                owner_key=owner_key,
+            )
+            if partial_handler is not None:
+                partial_handlers.append(partial_handler)
+                continue
             if is_route_constructor:
                 class_key = _resolve_model_key(
                     root,
@@ -3229,7 +3289,105 @@ def _programmatic_route_handler_keys(
             )
             if target is not None:
                 handlers.add(target)
-    return frozenset(handlers), tuple(lambda_handlers)
+    return frozenset(handlers), tuple(lambda_handlers), tuple(partial_handlers)
+
+
+def _resolve_partial_route_handler(
+    *,
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+    endpoint: ast.expr,
+    paths_by_module: dict[str, Path],
+    trees_by_path: dict[Path, ast.Module],
+    functions: dict[tuple[Path, int, str], ast.FunctionDef | ast.AsyncFunctionDef],
+    scopes: dict[tuple[Path, int, str], tuple[int, ...]],
+    owner_key: tuple[Path, int, str] | None,
+) -> tuple[tuple[Path, int, str], frozenset[str]] | None:
+    candidates: list[ast.expr] = [endpoint]
+    if isinstance(endpoint, ast.Name):
+        candidates = [
+            value
+            for _, value, _ in _visible_assignment_candidates(
+                path,
+                tree,
+                endpoint.id,
+                endpoint.lineno,
+                scopes.get(owner_key, ()),
+            )
+        ]
+    direct_aliases = {
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "functools"
+        for imported in node.names
+        if imported.name == "partial"
+    }
+    module_aliases = {
+        imported.asname or imported.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for imported in node.names
+        if imported.name == "functools"
+    }
+    for candidate in candidates:
+        if not isinstance(candidate, ast.Call):
+            continue
+        is_partial = (
+            isinstance(candidate.func, ast.Name)
+            and candidate.func.id in direct_aliases
+        ) or (
+            isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr == "partial"
+            and isinstance(candidate.func.value, ast.Name)
+            and candidate.func.value.id in module_aliases
+        )
+        if not is_partial:
+            continue
+        wrapped = candidate.args[0] if candidate.args else next(
+            (
+                keyword.value
+                for keyword in candidate.keywords
+                if keyword.arg == "func"
+            ),
+            None,
+        )
+        if wrapped is None:
+            continue
+        target = _resolve_function_key(
+            root,
+            path,
+            tree,
+            wrapped,
+            paths_by_module,
+            trees_by_path,
+            functions,
+            scopes,
+            owner_key,
+        )
+        if target is None:
+            continue
+        parameters = _function_arguments(functions[target])
+        if (
+            isinstance(wrapped, ast.Attribute)
+            and parameters
+            and parameters[0].arg in {"self", "cls"}
+        ):
+            parameters = parameters[1:]
+        bound_positionals = max(len(candidate.args) - 1, 0)
+        bound_keywords = {
+            keyword.arg
+            for keyword in candidate.keywords
+            if keyword.arg not in {None, "func"}
+        }
+        remaining = frozenset(
+            parameter.arg
+            for parameter in parameters[bound_positionals:]
+            if parameter.arg not in bound_keywords
+        )
+        return target, remaining
+    return None
 
 
 def _active_route_owner_reference(
@@ -4281,6 +4439,8 @@ def _request_body_flow_names(
     trees_by_path = dict(parsed_modules)
     functions = _function_definitions(parsed_modules)
     scopes = _function_scopes(parsed_modules)
+    classes = _class_definitions(parsed_modules)
+    class_scopes = _class_scopes(parsed_modules)
     flows: dict[tuple[Path, int, str], tuple[set[str], set[str]]] = {}
     for key in boundary_functions:
         function = functions.get(key)
@@ -4325,15 +4485,34 @@ def _request_body_flow_names(
         for key, (request_names, websocket_names) in list(flows.items()):
             function = functions[key]
             path = key[0]
-            request_aliases = _local_name_aliases(function, request_names)
-            websocket_aliases = _local_name_aliases(function, websocket_names)
             for call in (
                 candidate
                 for statement in function.body
                 for candidate in ast.walk(statement)
                 if isinstance(candidate, ast.Call)
             ):
-                target = _resolve_function_key(
+                request_aliases = _local_name_aliases(
+                    function,
+                    request_names,
+                    before_line=call.lineno,
+                )
+                websocket_aliases = _local_name_aliases(
+                    function,
+                    websocket_names,
+                    before_line=call.lineno,
+                )
+                target = _resolve_bound_method_key(
+                    root=root,
+                    path=path,
+                    tree=trees_by_path[path],
+                    reference=call.func,
+                    paths_by_module=paths_by_module,
+                    trees_by_path=trees_by_path,
+                    classes=classes,
+                    class_scopes=class_scopes,
+                    function_scopes=scopes,
+                    owner_key=key,
+                ) or _resolve_function_key(
                     root,
                     path,
                     trees_by_path[path],
@@ -4348,6 +4527,12 @@ def _request_body_flow_names(
                 if target is None or target_function is None:
                     continue
                 parameters = _function_arguments(target_function)
+                if (
+                    isinstance(call.func, ast.Attribute)
+                    and parameters
+                    and parameters[0].arg in {"self", "cls"}
+                ):
+                    parameters = parameters[1:]
                 parameters_by_name = {
                     parameter.arg: parameter for parameter in parameters
                 }
@@ -4389,24 +4574,26 @@ def _request_body_flow_names(
 def _local_name_aliases(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     initial: set[str],
+    *,
+    before_line: int,
 ) -> set[str]:
     aliases = set(initial)
-    assignments = [
+    assignments = sorted(
+        [
         candidate
         for statement in function.body
         for candidate in ast.walk(statement)
         if isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
-    ]
-    changed = True
-    while changed:
-        changed = False
-        for assignment in assignments:
-            targets, value = _assignment_targets_and_value(assignment)
-            if not _is_name_reference(value, aliases):
-                continue
-            before = len(aliases)
+        and candidate.lineno < before_line
+        ],
+        key=lambda candidate: candidate.lineno,
+    )
+    for assignment in assignments:
+        targets, value = _assignment_targets_and_value(assignment)
+        is_alias = _is_name_reference(value, aliases)
+        aliases.difference_update(targets)
+        if is_alias:
             aliases.update(targets)
-            changed = changed or len(aliases) != before
     return aliases
 
 
@@ -4445,6 +4632,12 @@ def _is_framework_dependency_call(
                 or imported.name.startswith("starlette.")
             )
     if _is_framework_constructor(call, constructor_aliases, module_aliases):
+        return True
+    if _is_starlette_route_constructor(
+        call,
+        _starlette_route_constructor_aliases(tree),
+        _starlette_route_module_aliases(tree),
+    ):
         return True
     if not isinstance(call.func, ast.Attribute):
         return False
@@ -4511,7 +4704,15 @@ def _dependency_targets(
             if not isinstance(candidate, ast.Name):
                 continue
             binding = symbol_targets.get(candidate.id)
-            if binding is None or binding in seen_imported_bindings:
+            if binding is None:
+                continue
+            binding = _follow_symbol_reexports(
+                root,
+                binding,
+                paths_by_module,
+                trees_by_path,
+            )
+            if binding in seen_imported_bindings:
                 continue
             target_path, target_name = binding
             target_tree = trees_by_path.get(target_path)
@@ -5390,13 +5591,14 @@ def _imported_module_values_by_path(
     parsed_modules: list[tuple[Path, ast.Module]],
     paths_by_module: dict[str, Path],
 ) -> dict[Path, dict[str, ast.expr]]:
-    module_values: dict[Path, dict[str, ast.expr]] = {
+    trees_by_path = dict(parsed_modules)
+    module_values: dict[Path, dict[str, tuple[int, ast.expr]]] = {
         path: {} for path, _ in parsed_modules
     }
     for path, tree in parsed_modules:
         for key, value, scope, _ in _module_assignment_entries(path, tree):
             if not scope:
-                module_values[path][key[2]] = value
+                module_values[path][key[2]] = (key[1], value)
 
     imported_values: dict[Path, dict[str, ast.expr]] = {
         path: {} for path, _ in parsed_modules
@@ -5412,9 +5614,17 @@ def _imported_module_values_by_path(
                 paths_by_module,
             )
             for local_name, (target_path, target_name) in symbol_targets.items():
-                value = module_values.get(target_path, {}).get(
-                    target_name
-                ) or imported_values.get(target_path, {}).get(target_name)
+                entry = module_values.get(target_path, {}).get(target_name)
+                value = (
+                    _resolve_module_expression(
+                        entry[1],
+                        trees_by_path[target_path],
+                        before_line=entry[0],
+                        imported_values=imported_values[target_path],
+                    )
+                    if entry is not None
+                    else imported_values.get(target_path, {}).get(target_name)
+                )
                 if value is None or local_name in imported_values[path]:
                     continue
                 imported_values[path][local_name] = value
@@ -5838,10 +6048,16 @@ def _is_websocket_text_value(
         )
     if isinstance(node, ast.Name):
         return node.id in websocket_text_names
+    if isinstance(node, ast.Subscript):
+        return _is_websocket_text_value(
+            node.value,
+            websocket_aliases,
+            websocket_text_names,
+        )
     return bool(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "receive_text"
+        and node.func.attr in {"receive", "receive_bytes", "receive_text"}
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id in websocket_aliases
     )
