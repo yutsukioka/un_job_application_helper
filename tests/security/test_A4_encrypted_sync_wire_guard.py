@@ -5523,3 +5523,107 @@ async def sync(request: Request):
         "vault_key" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_inspects_keys_selected_while_iterating_request_mappings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "iterated_headers.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/sync")
+async def sync(request: Request):
+    for key, value in request.headers.items():
+        if key == "vault_key":
+            return value
+    return None
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_propagates_request_payloads_into_background_tasks(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "background_task.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import BackgroundTasks, FastAPI, Request
+app = FastAPI()
+def consume(payload):
+    return payload["vault_key"]
+@app.post("/sync")
+async def sync(request: Request, tasks: BackgroundTasks):
+    payload = await request.json()
+    tasks.add_task(consume, payload)
+    return {"ok": True}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_models_validated_from_request_mappings(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "manual_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+app = FastAPI()
+class Payload(BaseModel):
+    vault_key: str
+@app.post("/sync")
+async def sync(request: Request):
+    return Payload.model_validate(await request.json())
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "Payload.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_tracks_decoded_asgi_headers(tmp_path: Path) -> None:
+    service_file = tmp_path / "services" / "asgi_headers.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+class SecretMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        headers = {
+            key.decode("latin-1"): value.decode("latin-1")
+            for key, value in scope["headers"]
+        }
+        _ = headers["vault_key"]
+        await self.app(scope, receive, send)
+app.add_middleware(SecretMiddleware)
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "ASGI middleware" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
