@@ -5627,3 +5627,79 @@ app.add_middleware(SecretMiddleware)
         "ASGI middleware" in violation
         for violation in find_raw_secret_wire_contract_violations(service_file.parent)
     )
+
+
+def test_A4_guard_resolves_keyword_background_task_callbacks(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "keyword_background_task.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import BackgroundTasks, FastAPI, Request
+app = FastAPI()
+def consume(payload):
+    return payload["vault_key"]
+@app.post("/sync")
+async def sync(request: Request, tasks: BackgroundTasks):
+    payload = await request.json()
+    tasks.add_task(func=consume, payload=payload)
+    return {"ok": True}
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_inspects_models_validated_from_raw_request_json(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "manual_json_model.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+app = FastAPI()
+class Payload(BaseModel):
+    vault_key: str
+@app.post("/sync")
+async def sync(request: Request):
+    return Payload.model_validate_json(await request.body())
+''',
+        encoding="utf-8",
+    )
+
+    assert any(
+        "Payload.vault_key" in violation
+        for violation in find_raw_secret_wire_contract_violations(service_file.parent)
+    )
+
+
+def test_A4_guard_allows_numeric_indexes_into_raw_asgi_header_sequences(
+    tmp_path: Path,
+) -> None:
+    service_file = tmp_path / "services" / "asgi_header_sequence.py"
+    service_file.parent.mkdir()
+    service_file.write_text(
+        '''
+from fastapi import FastAPI
+app = FastAPI()
+class HeaderMiddleware:
+    def __init__(self, app):
+        self.app = app
+    async def __call__(self, scope, receive, send):
+        headers = list(scope["headers"])
+        first = headers[0] if headers else None
+        await self.app(scope, receive, send)
+        return first
+app.add_middleware(HeaderMiddleware)
+''',
+        encoding="utf-8",
+    )
+
+    assert find_raw_secret_wire_contract_violations(service_file.parent) == []
