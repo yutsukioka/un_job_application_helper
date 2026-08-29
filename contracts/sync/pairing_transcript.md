@@ -98,8 +98,37 @@ The maximum clock skew is 120 seconds. Verification requires caller-supplied
 current time; server time is not authoritative. Reject when current time is at
 or after expiry, issue time is more than 120 seconds in the future, acceptance
 time is outside the skew-adjusted offer window, or offer lifetime exceeds 600
-seconds. A later interactive phase must also maintain a monotonic local
-deadline after displaying an offer.
+seconds.
+
+Each pairing coordinator also maintains a process-local monotonic deadline.
+Before accepting or displaying an offer, the coordinator records an anchor
+pair `(wall_time, monotonic_time)`. Its effective current time is the later of
+the caller-supplied wall time and:
+
+```text
+anchor_wall_time + (monotonic_time - anchor_monotonic_time)
+```
+
+When an offer is displayed, the coordinator rejects an expired offer and sets:
+
+```text
+remaining = min(expires_at - effective_current_time, 600 seconds)
+local_deadline = monotonic_time + remaining
+```
+
+Acceptance processing, SAS confirmation, and inviter key release require both
+`effective_current_time < expires_at` and
+`monotonic_time < local_deadline`. Equality is expired. A wall-clock rollback
+therefore cannot extend a displayed offer, and a monotonic source that advances
+during suspend makes suspend/resume consume the same deadline. A decreasing,
+non-finite, or otherwise invalid monotonic reading fails closed.
+
+The deadline is local runtime state. It is not serialized into an offer,
+acceptance, transaction, or wire artifact. After process replacement, the new
+coordinator establishes a new anchor and revalidates the signed wall-clock
+expiry before presenting the pending offer again. Python uses a monotonic
+elapsed-seconds source, Dart uses `Stopwatch.elapsed`, and Swift uses system
+uptime. None of these sources is server-controlled.
 
 ## Transcript Hash
 
