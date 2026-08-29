@@ -765,6 +765,103 @@ void main() {
     expect(journey.inviteeLocal.values, isEmpty);
   });
 
+  test('monotonic deadline rejects wall-clock rollback', () {
+    final deadline = AtlasVaultPairingMonotonicDeadline(
+      wallTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+    deadline.present(
+      expiresAt: DateTime.utc(2026, 8, 15, 10, 10),
+      currentTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+
+    expect(
+      () => deadline.requireLive(
+        currentTime: DateTime.utc(2026, 8, 15, 9, 59),
+        monotonicTime: const Duration(minutes: 10),
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
+
+  test('monotonic deadline counts suspend time', () {
+    final deadline = AtlasVaultPairingMonotonicDeadline(
+      wallTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+    deadline.present(
+      expiresAt: DateTime.utc(2026, 8, 15, 10, 10),
+      currentTime: DateTime.utc(2026, 8, 15, 10),
+      monotonicTime: Duration.zero,
+    );
+
+    expect(
+      () => deadline.requireLive(
+        currentTime: DateTime.utc(2026, 8, 15, 10),
+        monotonicTime: const Duration(minutes: 10),
+      ),
+      throwsA(isA<AtlasVaultPairingException>()),
+    );
+  });
+
+  test('monotonic deadline rejects a stale offer after rollback', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await journey.inviter.createPairingOffer();
+    await journey.inviter.savePairingOffer();
+    journey.clock.value = DateTime.utc(2026, 8, 15, 10, 4);
+    journey.clock.elapsed = const Duration(minutes: 11);
+
+    final result = await journey.invitee.importPairingOffer();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(journey.inviteeTransactions.value, isNull);
+  });
+
+  test(
+    'monotonic deadline rejects a stale acceptance after rollback',
+    () async {
+      final journey = await _PairingJourney.create(vector);
+      addTearDown(journey.stop);
+      await _prepareAcceptance(journey);
+      journey.clock.value = DateTime.utc(2026, 8, 15, 10, 4);
+      journey.clock.elapsed = const Duration(minutes: 11);
+
+      final result = await journey.inviter.importPairingAcceptance();
+
+      expect(
+        result.disposition,
+        AtlasVaultTrustedPairingDisposition.recoveryRequired,
+      );
+      expect(
+        journey.inviterTransactions.value?.stage,
+        AtlasVaultPairingStage.offerSaved,
+      );
+    },
+  );
+
+  test('monotonic deadline blocks delayed inviter key release', () async {
+    final journey = await _PairingJourney.create(vector);
+    addTearDown(journey.stop);
+    await _exchangeAcceptance(journey);
+    journey.clock.elapsed = const Duration(minutes: 10);
+
+    final result = await journey.inviter.confirmCodesMatch();
+
+    expect(
+      result.disposition,
+      AtlasVaultTrustedPairingDisposition.recoveryRequired,
+    );
+    expect(
+      journey.inviterStage.values,
+      isNot(contains(AtlasVaultPairingArtifactKind.delivery)),
+    );
+  });
+
   test('expired key request fails before delivery creation', () async {
     final journey = await _PairingJourney.create(vector);
     addTearDown(journey.stop);
@@ -1816,6 +1913,7 @@ final class _PairingJourney {
       uuidProvider: inviterDeterminism.uuid,
       randomBytes: inviterDeterminism.bytes,
       now: inviterNow ?? (() => clock.value),
+      monotonicNow: () => clock.elapsed,
       transactionAdmission: inviterTransactionAdmission,
     );
     final invitee = AtlasVaultTrustedPairingCoordinator(
@@ -1843,6 +1941,7 @@ final class _PairingJourney {
       uuidProvider: inviteeDeterminism.uuid,
       randomBytes: inviteeDeterminism.bytes,
       now: () => clock.value,
+      monotonicNow: () => clock.elapsed,
     );
     vaultKey.fillRange(0, vaultKey.length, 0);
     return _PairingJourney(
@@ -1883,6 +1982,7 @@ final class _PairingClock {
   _PairingClock(this.value);
 
   DateTime value;
+  Duration elapsed = Duration.zero;
 }
 
 Future<void> _exchangeAcceptance(_PairingJourney journey) async {
