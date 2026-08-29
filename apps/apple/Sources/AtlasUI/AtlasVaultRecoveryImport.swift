@@ -405,7 +405,8 @@ struct AtlasVaultRecoveryImportFileReader:
     AtlasVaultRecoveryImportFileReading,
     Sendable
 {
-    static let maximumByteCount = 128 * 1_024 * 1_024
+    static let maximumByteCount = AtlasVaultProtectedStateBounds
+        .maximumImportedEncryptedStateByteCount
 
     func read(from url: URL) throws -> Data {
         guard

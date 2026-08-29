@@ -14,17 +14,24 @@ import 'models.dart';
 import 'pairing.dart';
 import 'plaintext_migration.dart';
 import 'private_state_runtime.dart';
+import 'protected_state_bounds.dart';
 import 'strict_values.dart';
 import 'trusted_devices.dart';
 
 const _transactionFormat = 'atlasvault-pairing-transaction';
 const _transactionVersion = 1;
-const atlasVaultMaximumPairingStateByteCount = 2 * 1024 * 1024;
-const atlasVaultMaximumPairingTransactionByteCount = 64 * 1024;
-const atlasVaultMaximumPairingArtifactByteCount = 128 * 1024 * 1024;
+const atlasVaultMaximumPairingStateByteCount =
+    atlasVaultMaximumTrustedDeviceRegistryByteCount;
+const atlasVaultMaximumPairingTransactionByteCount =
+    atlasVaultMaximumPairingTransactionJournalByteCount;
+const atlasVaultMaximumPairingArtifactByteCount =
+    atlasVaultMaximumStagedPairingArtifactByteCount;
 const _maximumTrustedPairingPeers = 64;
 // Device-identity rotation is independent of the initial vault key.
 const _initialVaultKeyEpoch = 1;
+
+typedef AtlasVaultPairingKeyReleaseAuthorization =
+    Future<bool> Function(String vaultId);
 
 final class AtlasVaultPairingTransactionException implements Exception {
   const AtlasVaultPairingTransactionException();
@@ -284,14 +291,6 @@ final class AtlasVaultPairingTransaction {
       if (_time(updatedAt).isBefore(_time(createdAt))) {
         throw const AtlasVaultPairingTransactionException();
       }
-      final encodedPrivateKey = value['ephemeral_private_key'];
-      if (encodedPrivateKey != null) {
-        ephemeralPrivateKey = requireAtlasVaultCanonicalBase64(
-          encodedPrivateKey,
-          field: 'ephemeral_private_key',
-          exactLength: 32,
-        );
-      }
       final artifacts = <AtlasVaultStagedPairingArtifact>[
         for (final item in requireAtlasVaultList(
           value['staged_artifacts'],
@@ -307,6 +306,17 @@ final class AtlasVaultPairingTransaction {
           artifactKinds.toSet().length != artifactKinds.length ||
           !_intListsEqual(artifactKinds, sortedKinds)) {
         throw const AtlasVaultPairingTransactionException();
+      }
+      requireAtlasVaultStagedPairingArtifactByteCounts(
+        artifacts.map((artifact) => artifact.byteCount),
+      );
+      final encodedPrivateKey = value['ephemeral_private_key'];
+      if (encodedPrivateKey != null) {
+        ephemeralPrivateKey = requireAtlasVaultCanonicalBase64(
+          encodedPrivateKey,
+          field: 'ephemeral_private_key',
+          exactLength: 32,
+        );
       }
       final keyEpoch = _optionalPositiveInt(value['key_epoch']);
       final selectionCommitted = requireAtlasVaultBool(
@@ -371,10 +381,10 @@ final class AtlasVaultPairingTransaction {
     Uint8List? input;
     Uint8List? canonical;
     try {
-      if (bytes.isEmpty ||
-          bytes.length > atlasVaultMaximumPairingTransactionByteCount) {
-        throw const AtlasVaultPairingTransactionException();
-      }
+      requireAtlasVaultProtectedStateByteCount(
+        AtlasVaultProtectedStateCategory.pairingTransactionJournal,
+        bytes.length,
+      );
       input = Uint8List.fromList(bytes);
       final decodedJson = jsonDecode(utf8.decode(input, allowMalformed: false));
       if (decodedJson is! Map) {
@@ -668,6 +678,78 @@ typedef AtlasVaultPairingCleanInstallProbe =
 typedef AtlasVaultPairingUuidProvider = String Function();
 typedef AtlasVaultPairingRandomBytes = Uint8List Function(int length);
 
+final class AtlasVaultPairingMonotonicDeadline {
+  AtlasVaultPairingMonotonicDeadline({
+    required DateTime wallTime,
+    required Duration monotonicTime,
+  }) : _anchorWall = wallTime.toUtc(),
+       _anchorMonotonic = monotonicTime,
+       _lastMonotonic = monotonicTime;
+
+  static const Duration _maximumLifetime = Duration(minutes: 10);
+
+  final DateTime _anchorWall;
+  final Duration _anchorMonotonic;
+  Duration _lastMonotonic;
+  DateTime? _expiresAt;
+  Duration? _deadline;
+
+  void present({
+    required DateTime expiresAt,
+    required DateTime currentTime,
+    required Duration monotonicTime,
+  }) {
+    final (effective, monotonic) = _effectiveTime(
+      currentTime: currentTime,
+      monotonicTime: monotonicTime,
+    );
+    final expires = expiresAt.toUtc();
+    var remaining = expires.difference(effective);
+    if (remaining <= Duration.zero) {
+      throw const AtlasVaultPairingException();
+    }
+    if (remaining > _maximumLifetime) remaining = _maximumLifetime;
+    _expiresAt = expires;
+    _deadline = monotonic + remaining;
+  }
+
+  void requireLive({
+    required DateTime currentTime,
+    required Duration monotonicTime,
+  }) {
+    final expiresAt = _expiresAt;
+    final deadline = _deadline;
+    if (expiresAt == null || deadline == null) {
+      throw const AtlasVaultPairingException();
+    }
+    final (effective, monotonic) = _effectiveTime(
+      currentTime: currentTime,
+      monotonicTime: monotonicTime,
+    );
+    if (!effective.isBefore(expiresAt) || monotonic >= deadline) {
+      throw const AtlasVaultPairingException();
+    }
+  }
+
+  void clear() {
+    _expiresAt = null;
+    _deadline = null;
+  }
+
+  (DateTime, Duration) _effectiveTime({
+    required DateTime currentTime,
+    required Duration monotonicTime,
+  }) {
+    if (monotonicTime < _anchorMonotonic || monotonicTime < _lastMonotonic) {
+      throw const AtlasVaultPairingException();
+    }
+    final monotonicWall = _anchorWall.add(monotonicTime - _anchorMonotonic);
+    final wall = currentTime.toUtc();
+    _lastMonotonic = monotonicTime;
+    return (wall.isAfter(monotonicWall) ? wall : monotonicWall, monotonicTime);
+  }
+}
+
 final class AtlasVaultTrustedPairingCoordinator
     implements AtlasVaultTrustedPairingCoordinating {
   AtlasVaultTrustedPairingCoordinator({
@@ -688,6 +770,8 @@ final class AtlasVaultTrustedPairingCoordinator
     AtlasVaultPairingUuidProvider? uuidProvider,
     AtlasVaultPairingRandomBytes? randomBytes,
     DateTime Function()? now,
+    Duration Function()? monotonicNow,
+    required AtlasVaultPairingKeyReleaseAuthorization authorizeKeyRelease,
   }) : // Keep public dependency labels explicit at composition sites.
        // ignore: prefer_initializing_formals
        _identityStore = identityStore,
@@ -722,7 +806,10 @@ final class AtlasVaultTrustedPairingCoordinator
            identityGenerator ?? (() => generateAtlasVaultDeviceIdentity()),
        _uuidProvider = uuidProvider ?? _securePairingUuid,
        _randomBytes = randomBytes ?? _securePairingBytes,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now,
+       _monotonicNow = monotonicNow ?? _pairingMonotonicElapsed,
+       // ignore: prefer_initializing_formals
+       _authorizeKeyRelease = authorizeKeyRelease;
 
   final AtlasDeviceIdentitySecretStore _identityStore;
   final AtlasVaultTrustedDeviceRegistryStore _registryStore;
@@ -741,6 +828,9 @@ final class AtlasVaultTrustedPairingCoordinator
   final AtlasVaultPairingUuidProvider _uuidProvider;
   final AtlasVaultPairingRandomBytes _randomBytes;
   final DateTime Function() _now;
+  final Duration Function() _monotonicNow;
+  final AtlasVaultPairingKeyReleaseAuthorization _authorizeKeyRelease;
+  AtlasVaultPairingMonotonicDeadline? _pairingDeadline;
 
   Future<void>? _operation;
   bool _stopped = false;
@@ -761,6 +851,9 @@ final class AtlasVaultTrustedPairingCoordinator
               ? null
               : atlasVaultPairingDeviceFingerprint(identity.deviceId),
         );
+      }
+      if (_inspectRequiresLivePairingDeadline(transaction.stage)) {
+        await _requireLivePairingDeadlineFor(transaction);
       }
       return await _resultFor(transaction, identity: identity);
     } finally {
@@ -814,7 +907,9 @@ final class AtlasVaultTrustedPairingCoordinator
         return await _runtime.withInteroperabilitySession((session) async {
           final issued = _now().toUtc();
           final issuedAt = _utc(issued);
-          final expiresAt = _utc(issued.add(const Duration(minutes: 10)));
+          final expires = issued.add(const Duration(minutes: 10));
+          final expiresAt = _utc(expires);
+          _presentPairingDeadline(expiresAt: expires, currentTime: issued);
           final signed = await createAtlasVaultPairingOffer(
             inviter: identity!,
             offerId: _uuidProvider(),
@@ -894,6 +989,10 @@ final class AtlasVaultTrustedPairingCoordinator
         final offer = await verifyAtlasVaultPairingOffer(
           signedOffer,
           currentTime: currentTime,
+        );
+        _presentPairingDeadline(
+          expiresAt: _time(offer.expiresAt),
+          currentTime: _time(currentTime),
         );
         if (offer.inviter.descriptor.deviceId == identity.deviceId) {
           throw const AtlasVaultPairingException();
@@ -1023,6 +1122,9 @@ final class AtlasVaultTrustedPairingCoordinator
           throw const AtlasVaultPairingTransactionException();
         }
         final signedOffer = _signedOffer(offerArtifact);
+        _requireLivePairingDeadline(
+          expiresAt: _time(signedOffer.offer.expiresAt),
+        );
         final signedAcceptance = _signedAcceptance(acceptanceArtifact);
         final keyRequest = _keyRequest(acceptanceArtifact);
         final transcript = await atlasVaultPairingTranscriptSha256(
@@ -1119,6 +1221,7 @@ final class AtlasVaultTrustedPairingCoordinator
         if (transaction.stage != AtlasVaultPairingStage.acceptanceSaved) {
           return _fixed(AtlasVaultTrustedPairingDisposition.failed);
         }
+        await _requireLivePairingDeadlineFor(transaction);
         final confirmed = await _advance(
           transaction,
           AtlasVaultPairingStage.sasConfirmed,
@@ -1132,6 +1235,7 @@ final class AtlasVaultTrustedPairingCoordinator
       if (transaction.stage != AtlasVaultPairingStage.acceptanceImported) {
         return _fixed(AtlasVaultTrustedPairingDisposition.failed);
       }
+      await _requireLivePairingDeadlineFor(transaction);
       return await _runtime.withInteroperabilitySession((vaultSession) async {
         Uint8List? vaultKey;
         Uint8List? inviterEphemeral;
@@ -1144,7 +1248,6 @@ final class AtlasVaultTrustedPairingCoordinator
           final keyRequest = _keyRequest(acceptanceArtifact);
           final transcript = _requiredHex(current.transcriptSha256);
           final currentStore = await vaultSession.readCurrentLocalStore();
-          vaultKey = vaultSession.copyVaultKey();
           final bootstrap = AtlasVaultPairingBootstrap.fromJson(
             <String, Object?>{
               'format': 'atlasvault-pairing-bootstrap',
@@ -1164,6 +1267,19 @@ final class AtlasVaultTrustedPairingCoordinator
             inviteeDeviceId: current.peerDeviceId!,
             currentTime: _utc(_now()),
           );
+          if (!await _authorizeKeyRelease(vaultSession.vaultId)) {
+            throw const AtlasVaultPairingTransactionException();
+          }
+          await _requireLivePairingDeadlineFor(current);
+          await verifyAtlasVaultPairingKeyRequest(
+            keyRequest,
+            transcriptSha256: transcript,
+            inviterDeviceId: identity.deviceId,
+            inviteeDeviceId: current.peerDeviceId!,
+            currentTime: _utc(_now()),
+          );
+          _authorizeSensitiveMutation();
+          vaultKey = vaultSession.copyVaultKey();
           final confirmed = await _advance(
             current,
             AtlasVaultPairingStage.sasConfirmed,
@@ -2790,6 +2906,70 @@ final class AtlasVaultTrustedPairingCoordinator
         current.vaultMetadata == imported.vaultMetadata;
   }
 
+  void _presentPairingDeadline({
+    required DateTime expiresAt,
+    required DateTime currentTime,
+  }) {
+    final monotonic = _monotonicNow();
+    final deadline = _pairingDeadline ??= AtlasVaultPairingMonotonicDeadline(
+      wallTime: currentTime,
+      monotonicTime: monotonic,
+    );
+    deadline.present(
+      expiresAt: expiresAt,
+      currentTime: currentTime,
+      monotonicTime: monotonic,
+    );
+  }
+
+  void _requireLivePairingDeadline({required DateTime expiresAt}) {
+    final currentTime = _now();
+    final monotonicTime = _monotonicNow();
+    final deadline = _pairingDeadline;
+    if (deadline == null) {
+      final replacement = AtlasVaultPairingMonotonicDeadline(
+        wallTime: currentTime,
+        monotonicTime: monotonicTime,
+      );
+      replacement.present(
+        expiresAt: expiresAt,
+        currentTime: currentTime,
+        monotonicTime: monotonicTime,
+      );
+      _pairingDeadline = replacement;
+      return;
+    }
+    deadline.requireLive(
+      currentTime: currentTime,
+      monotonicTime: monotonicTime,
+    );
+  }
+
+  Future<void> _requireLivePairingDeadlineFor(
+    AtlasVaultPairingTransaction transaction,
+  ) async {
+    final offerArtifact = await _requireStaged(
+      AtlasVaultPairingArtifactKind.offer,
+      transaction,
+    );
+    _requireLivePairingDeadline(
+      expiresAt: _time(_signedOffer(offerArtifact).offer.expiresAt),
+    );
+  }
+
+  bool _inspectRequiresLivePairingDeadline(AtlasVaultPairingStage stage) =>
+      switch (stage) {
+        AtlasVaultPairingStage.offerCreated ||
+        AtlasVaultPairingStage.offerSaved ||
+        AtlasVaultPairingStage.offerImported ||
+        AtlasVaultPairingStage.acceptanceCreated ||
+        AtlasVaultPairingStage.acceptanceSaved ||
+        AtlasVaultPairingStage.acceptanceImported ||
+        AtlasVaultPairingStage.sasConfirmed ||
+        AtlasVaultPairingStage.offerConsumed => true,
+        _ => false,
+      };
+
   Future<void> _clearTransaction(
     AtlasVaultPairingTransaction transaction,
   ) async {
@@ -2815,6 +2995,7 @@ final class AtlasVaultTrustedPairingCoordinator
     if (await _transactionStore.read() != null) {
       throw const AtlasVaultPairingTransactionException();
     }
+    _pairingDeadline = null;
   }
 
   Future<List<Object?>> _stagedJson(
@@ -2945,6 +3126,10 @@ final class _AcceptingPairingReplayGuard
     required String expiresAt,
   }) async => AtlasVaultPairingReplayOutcome.accepted;
 }
+
+final Stopwatch _pairingMonotonicClock = Stopwatch()..start();
+
+Duration _pairingMonotonicElapsed() => _pairingMonotonicClock.elapsed;
 
 String _securePairingUuid() {
   final bytes = _securePairingBytes(16);

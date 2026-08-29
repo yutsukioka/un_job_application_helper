@@ -33,6 +33,38 @@ void main() {
   });
 
   test(
+    'disposing during refresh cannot notify a disposed controller',
+    () async {
+      const query = 'dispose-during-refresh';
+      final enteredSearch = Completer<void>();
+      final releaseSearch = Completer<void>();
+      addTearDown(() {
+        if (!releaseSearch.isCompleted) {
+          releaseSearch.complete();
+        }
+      });
+      final transport = _RecordingTransport()
+        ..expectedSearchText = query
+        ..enteredExpectedSearch = enteredSearch
+        ..releaseExpectedSearch = releaseSearch;
+      final controller = AtlasAppController(
+        initialBaseURL: Uri.parse('http://atlas.test:8765'),
+        clientFactory: (baseURL) =>
+            AtlasAPIClient(baseURL: baseURL, transport: transport),
+        now: () => _cacheFixtureNow,
+      );
+      controller.updateQuery(query);
+
+      final refresh = controller.refreshLocalSave();
+      await enteredSearch.future;
+      controller.dispose();
+      releaseSearch.complete();
+
+      await expectLater(refresh, completes);
+    },
+  );
+
+  test(
     'conditional saved-search deletion sends the exact reviewed snapshot',
     () async {
       final transport = _ConditionalDeleteTransport(

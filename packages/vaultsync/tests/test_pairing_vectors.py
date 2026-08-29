@@ -19,6 +19,7 @@ from vaultsync.device_identity import (
 from vaultsync.pairing import (
     InMemoryPairingReplayGuard,
     PairingError,
+    PairingMonotonicDeadline,
     PairingProofs,
     SignedPairingAcceptance,
     SignedPairingOffer,
@@ -59,6 +60,114 @@ def identity(root: dict[str, Any], name: str):
         created_at=vector["descriptor"]["created_at"],
         key_epoch=vector["descriptor"]["key_epoch"],
     )
+
+
+def test_monotonic_deadline_rejects_wall_clock_rollback() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T09:59:00Z",
+            monotonic_time=700.0,
+        )
+
+
+def test_monotonic_deadline_rejects_decrease_from_last_reading() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=100.0,
+    )
+    deadline.require_live(
+        current_time="2026-08-15T10:05:00Z",
+        monotonic_time=400.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T09:59:00Z",
+            monotonic_time=340.0,
+        )
+
+
+def test_monotonic_deadline_counts_suspend_time() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=10.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=10.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T10:00:00Z",
+            monotonic_time=610.0,
+        )
+
+
+def test_monotonic_deadline_rejects_stale_offer_at_presentation() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=0.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.present(
+            expires_at="2026-08-15T10:10:00Z",
+            current_time="2026-08-15T09:59:00Z",
+            monotonic_time=601.0,
+        )
+
+
+def test_monotonic_deadline_rejects_stale_acceptance() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=20.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=20.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T09:59:00Z",
+            monotonic_time=620.0,
+        )
+
+
+def test_monotonic_deadline_blocks_delayed_key_release() -> None:
+    deadline = PairingMonotonicDeadline(
+        wall_time="2026-08-15T10:00:00Z",
+        monotonic_time=50.0,
+    )
+    deadline.present(
+        expires_at="2026-08-15T10:10:00Z",
+        current_time="2026-08-15T10:00:00Z",
+        monotonic_time=50.0,
+    )
+
+    with pytest.raises(PairingError):
+        deadline.require_live(
+            current_time="2026-08-15T10:00:00Z",
+            monotonic_time=650.0,
+        )
 
 
 def test_offer_and_acceptance_match_exact_vector_bytes_and_signatures() -> None:

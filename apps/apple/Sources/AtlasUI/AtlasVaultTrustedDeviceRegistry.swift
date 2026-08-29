@@ -276,6 +276,10 @@ public struct AtlasVaultTrustedDeviceRegistry: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
+            try AtlasVaultProtectedStateBounds.requireByteCount(
+                data.count,
+                for: .trustedDeviceRegistry
+            )
             let value = try JSONDecoder().decode(Self.self, from: data)
             guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
                 try value.canonicalData(),
@@ -519,6 +523,10 @@ public struct AtlasVaultPairingReplayStore: Codable, Equatable, Sendable {
 
     public static func decodeStrict(_ data: Data) throws -> Self {
         do {
+            try AtlasVaultProtectedStateBounds.requireByteCount(
+                data.count,
+                for: .pairingReplayState
+            )
             let value = try JSONDecoder().decode(Self.self, from: data)
             guard AtlasVaultDeviceIdentityValidation.constantTimeEqual(
                 try value.canonicalData(),

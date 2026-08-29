@@ -1108,6 +1108,7 @@ public enum AtlasVaultProductionCompositionFactory {
                 return false
             }
         }
+        let keyReleaseAuthorizer = AtlasApplePairingKeyReleaseAuthorizer()
         guard
             let privateMutationHost =
                 host as? any AtlasVaultPrivateMutationHosting,
@@ -1693,7 +1694,15 @@ public enum AtlasVaultProductionCompositionFactory {
                 transactionAdmission: { operation in
                     try await pendingTransactionAuthority.perform(operation)
                 },
-                authorizeSensitiveMutation: authorizeSensitivePairingMutation
+                authorizeSensitiveMutation: authorizeSensitivePairingMutation,
+                authorizeKeyRelease: {
+                    guard await authorizeSensitivePairingMutation(),
+                          await keyReleaseAuthorizer.authorize()
+                    else {
+                        return false
+                    }
+                    return await authorizeSensitivePairingMutation()
+                }
             )
         )
         let pairingOwner = AtlasVaultTrustedPairingPresentationOwner(

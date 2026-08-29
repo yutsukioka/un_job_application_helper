@@ -192,6 +192,29 @@ final class AtlasVaultWindowsCapabilities {
   String toString() => 'AtlasVaultWindowsCapabilities(<redacted>)';
 }
 
+final class AtlasWindowsPairingKeyReleaseAuthorizer {
+  AtlasWindowsPairingKeyReleaseAuthorizer({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultWindowsChannel;
+
+  final MethodChannel _channel;
+
+  Future<bool> authorize() async {
+    try {
+      final result = await _invoke<Object?>(
+        _channel,
+        'authorizePairingKeyRelease',
+        null,
+      );
+      return result is bool && result;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  String toString() => 'AtlasWindowsPairingKeyReleaseAuthorizer(<redacted>)';
+}
+
 final class AtlasWindowsVaultSecureKeyStore
     implements AtlasVaultSecureKeyStore {
   AtlasWindowsVaultSecureKeyStore({MethodChannel? channel})

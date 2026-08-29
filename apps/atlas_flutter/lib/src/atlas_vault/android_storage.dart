@@ -551,6 +551,29 @@ final class AtlasVaultAndroidCapabilities {
 abstract interface class AtlasVaultSecureKeyStore
     implements AtlasVaultMigrationSecureKeyStore {}
 
+final class AtlasAndroidPairingKeyReleaseAuthorizer {
+  AtlasAndroidPairingKeyReleaseAuthorizer({MethodChannel? channel})
+    : _channel = channel ?? _defaultAtlasVaultAndroidChannel;
+
+  final MethodChannel _channel;
+
+  Future<bool> authorize() async {
+    try {
+      final result = await invokeAtlasVaultAndroidMethodInternal<Object?>(
+        _channel,
+        'authorizePairingKeyRelease',
+        null,
+      );
+      return result is bool && result;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  String toString() => 'AtlasAndroidPairingKeyReleaseAuthorizer(<redacted>)';
+}
+
 final class AtlasAndroidVaultSecureKeyStore
     implements AtlasVaultSecureKeyStore {
   AtlasAndroidVaultSecureKeyStore({MethodChannel? channel})

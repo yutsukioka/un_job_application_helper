@@ -30,6 +30,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_BUILD=${FLUTT
 
 # Disable Windows macros that collide with C++ standard library functions.
 target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
+target_compile_definitions(${BINARY_NAME} PRIVATE
+  "_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS")
 
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
@@ -40,6 +42,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "crypt32.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "bcrypt.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "runtimeobject.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

@@ -586,6 +586,7 @@ runAtlasVaultPairingPlatformJourney({
     uuidProvider: platformDeterminism.uuid,
     randomBytes: platformDeterminism.bytes,
     now: () => clock,
+    authorizeKeyRelease: (_) async => true,
   );
   final peer = AtlasVaultTrustedPairingCoordinator(
     identityStore: peerIdentity,
@@ -604,6 +605,7 @@ runAtlasVaultPairingPlatformJourney({
     uuidProvider: peerDeterminism.uuid,
     randomBytes: peerDeterminism.bytes,
     now: () => clock,
+    authorizeKeyRelease: (_) async => true,
   );
   final inviter = nativeIsInviter ? platform : peer;
   final invitee = nativeIsInviter ? peer : platform;

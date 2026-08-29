@@ -15,6 +15,10 @@ from vaultsync.device_identity import (
     verify_signed_device_descriptor,
 )
 from vaultsync.format import VaultFormatError, _require_vault_id
+from vaultsync.protected_state_bounds import (
+    ProtectedStateCategory,
+    require_protected_state_byte_count,
+)
 
 
 TRUSTED_DEVICE_REGISTRY_FORMAT = "atlasvault-trusted-device-registry"
@@ -307,7 +311,16 @@ class TrustedDeviceRegistry:
 
     @classmethod
     def from_canonical_bytes(cls, data: bytes) -> TrustedDeviceRegistry:
-        return cls.from_dict(_canonical_object(data))
+        try:
+            require_protected_state_byte_count(
+                ProtectedStateCategory.trusted_device_registry,
+                len(data),
+            )
+            return cls.from_dict(_canonical_object(data))
+        except TrustedDeviceStateError:
+            raise
+        except Exception as exc:
+            raise _invalid_state() from exc
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -502,7 +515,16 @@ class PairingReplayStore:
 
     @classmethod
     def from_canonical_bytes(cls, data: bytes) -> PairingReplayStore:
-        return cls.from_dict(_canonical_object(data))
+        try:
+            require_protected_state_byte_count(
+                ProtectedStateCategory.pairing_replay_state,
+                len(data),
+            )
+            return cls.from_dict(_canonical_object(data))
+        except TrustedDeviceStateError:
+            raise
+        except Exception as exc:
+            raise _invalid_state() from exc
 
     def to_dict(self) -> dict[str, Any]:
         return {

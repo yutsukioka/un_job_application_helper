@@ -89,6 +89,32 @@ exactly. Python fixed signatures remain the deterministic vector instances;
 fresh CryptoKit signatures need only verify, consistent with the device
 identity contract.
 
+## Fresh Inviter Authorization
+
+SAS confirmation does not itself authorize release of the vault key. After the
+signed key request, transcript, peer identities, expiry, and active vault have
+been validated, the inviter must obtain a new platform user-verification result
+for that delivery attempt. The authorization call occurs immediately before
+the runtime exposes a temporary vault-key copy to delivery encryption.
+
+The Python delivery primitive remains a platform-neutral cryptographic
+conformance function and does not itself satisfy this user-authorization
+boundary. The Dart coordinator requires an asynchronous
+`authorizeKeyRelease(vaultId)` callback, and the Swift environment requires an
+asynchronous `authorizeKeyRelease()` callback. Production Apple, Android, and
+Windows composition binds those callbacks to a fresh operating-system
+authentication prompt. Test composition may inject a deterministic callback,
+but absence of a callback or any unavailable, cancelled, failed, stale, or
+exceptional result denies release.
+
+Authorization is single-use and attempt-local. It is not cached in pairing
+state, cannot be inferred from an unlocked vault or active lifecycle state, and
+cannot be reused after a denial, cancellation, retry, lifecycle transition, or
+process restart. A retry must invoke the platform authenticator again. Denial
+must occur before key copy, delivery construction, delivery persistence, or
+transport, while leaving the existing pairing transaction recoverable and
+allowing its ordinary cancel/reset path.
+
 ## Acknowledgement
 
 After store-first, key-second, selection-third installation and runtime
@@ -111,10 +137,45 @@ wipe mutable temporary copies best-effort. Every failure is fixed and redacted.
 Wrong transcript, peer, request, bootstrap, epoch, expiry, signature,
 ciphertext, or acknowledgement fails without installation or trust commitment.
 
+## Aggregate Protected-State Bounds
+
+Every client enforces the following limits on the complete canonical document
+for each protected-state category:
+
+| Category | Maximum canonical byte count |
+|---|---:|
+| Trusted-device registry | 2 MiB |
+| Pairing replay state | 2 MiB |
+| Pairing transaction journal | 64 KiB |
+| Pairing bootstrap | 128 MiB |
+| Imported encrypted state | 128 MiB hard ceiling |
+
+An implementation may impose a stricter imported-state limit. In particular,
+VaultSync retains its 50 MiB A4 import limit beneath the shared 128 MiB hard
+ceiling.
+
+A transaction may reference at most one artifact of each pairing kind and at
+most four artifacts in total. Every staged artifact has a positive canonical
+byte count no greater than 128 MiB, and the overflow-checked sum of all staged
+artifact byte counts must not exceed 128 MiB. This aggregate limit applies to
+the current transaction, not separately to each artifact.
+
+Readers reject an oversized byte count before copying, decoding, parsing, or
+otherwise allocating from attacker-controlled content. File readers inspect
+the file size before reading and recheck the bytes actually read. Writers
+validate the complete replacement state, including staged-artifact totals,
+before any protected-store mutation. A rejected update leaves the prior state
+and staged artifacts unchanged; partial persistence is forbidden.
+
+The category limits overlap where one canonical object embeds another, so
+clients do not add all table rows into a second global total. The staged
+artifact total is different: it sums the actual canonical bytes retained by a
+single pairing transaction. These limits do not alter any wire format.
+
 ## Deferred Work
 
 This contract has no backend, ongoing synchronization, existing-vault merge,
 revocation, or key rotation. Key epoch is authenticated but not advanced by
-Phase 2F-2. A monotonic post-presentation deadline, aggregate protected-state
-bounds, and explicit inviter step-up authorization are separately tracked in
-issue #101 and block a production multi-device-readiness claim.
+Phase 2F-2. Fresh inviter step-up authorization is implemented as issue #101
+production hardening; the remaining deferred work still blocks a production
+multi-device-readiness claim.

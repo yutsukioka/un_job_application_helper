@@ -6,8 +6,12 @@
 #include <dpapi.h>
 #include <flutter/standard_method_codec.h>
 #include <knownfolders.h>
+#include <roapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <UserConsentVerifierInterop.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Security.Credentials.UI.h>
 
 #include <algorithm>
 #include <array>
@@ -101,6 +105,24 @@ class ScopedHandle {
 
  private:
   HANDLE handle_;
+};
+
+class ScopedRoInitialization {
+ public:
+  ScopedRoInitialization() : result_(RoInitialize(RO_INIT_MULTITHREADED)) {}
+  ~ScopedRoInitialization() {
+    if (SUCCEEDED(result_)) {
+      RoUninitialize();
+    }
+  }
+
+  ScopedRoInitialization(const ScopedRoInitialization&) = delete;
+  ScopedRoInitialization& operator=(const ScopedRoInitialization&) = delete;
+
+  bool available() const { return SUCCEEDED(result_); }
+
+ private:
+  HRESULT result_;
 };
 
 class ScopedVaultLock {
@@ -1703,6 +1725,39 @@ StorageCapabilities ProbeStorageCapabilities() {
   return capabilities;
 }
 
+bool AuthorizePairingKeyRelease(HWND owner_window) {
+  try {
+    if (owner_window == nullptr || !IsWindow(owner_window)) {
+      return false;
+    }
+    ScopedRoInitialization apartment;
+    if (!apartment.available()) {
+      return false;
+    }
+    using winrt::Windows::Security::Credentials::UI::UserConsentVerifier;
+    using winrt::Windows::Security::Credentials::UI::
+        UserConsentVerifierAvailability;
+    using winrt::Windows::Security::Credentials::UI::
+        UserConsentVerificationResult;
+    if (UserConsentVerifier::CheckAvailabilityAsync().get() !=
+        UserConsentVerifierAvailability::Available) {
+      return false;
+    }
+    const winrt::hstring message(L"Authorize AtlasVault vault-key delivery");
+    auto interop = winrt::get_activation_factory<
+        UserConsentVerifier, IUserConsentVerifierInterop>();
+    winrt::Windows::Foundation::IAsyncOperation<
+        UserConsentVerificationResult>
+        verification{nullptr};
+    winrt::check_hresult(interop->RequestVerificationForWindowAsync(
+        owner_window, static_cast<HSTRING>(winrt::get_abi(message)),
+        winrt::guid_of<decltype(verification)>(), winrt::put_abi(verification)));
+    return verification.get() == UserConsentVerificationResult::Verified;
+  } catch (...) {
+    return false;
+  }
+}
+
 const flutter::EncodableMap* ExactArguments(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     const std::vector<std::string>& expected_keys) {
@@ -2314,6 +2369,16 @@ void AtlasVaultWindowsStorage::ExecuteMethodCall(
          flutter::EncodableValue(probed.hardware_backed_guaranteed)},
     };
     result->Success(flutter::EncodableValue(capabilities));
+    return;
+  }
+
+  if (method == "authorizePairingKeyRelease") {
+    if (!HasNoArguments(call)) {
+      result->Success(flutter::EncodableValue(false));
+      return;
+    }
+    result->Success(
+        flutter::EncodableValue(AuthorizePairingKeyRelease(owner_window_)));
     return;
   }
 

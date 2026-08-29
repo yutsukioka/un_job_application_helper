@@ -1,6 +1,7 @@
 package com.yutsukioka.jobagg.atlas
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -47,6 +48,7 @@ internal class AtlasVaultAndroidStorage(
     private val masterKeyLock = Any()
     private var channel: MethodChannel? = null
     private var pendingDocumentOperation: PendingDocumentOperation? = null
+    private var pendingKeyReleaseAuthorization: MethodChannel.Result? = null
     private var closed = false
 
     fun attach(messenger: BinaryMessenger) {
@@ -67,6 +69,8 @@ internal class AtlasVaultAndroidStorage(
                 if (pending.kind == DocumentOperationKind.PICK) null else false,
             )
         }
+        pendingKeyReleaseAuthorization?.success(false)
+        pendingKeyReleaseAuthorization = null
         channel?.setMethodCallHandler(null)
         channel = null
         executor.shutdown()
@@ -78,6 +82,10 @@ internal class AtlasVaultAndroidStorage(
             return
         }
         when (call.method) {
+            "authorizePairingKeyRelease" -> {
+                beginAuthorizePairingKeyRelease(call, result)
+                return
+            }
             "pickEncryptedExport" -> {
                 beginPickEncryptedExport(result)
                 return
@@ -325,11 +333,53 @@ internal class AtlasVaultAndroidStorage(
         }
     }
 
+    private fun beginAuthorizePairingKeyRelease(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        if (call.arguments != null || closed ||
+            pendingKeyReleaseAuthorization != null ||
+            pendingDocumentOperation != null
+        ) {
+            result.success(false)
+            return
+        }
+        val keyguard = activity.getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isDeviceSecure) {
+            result.success(false)
+            return
+        }
+        val intent = keyguard.createConfirmDeviceCredentialIntent(
+            "Authorize AtlasVault key delivery",
+            "Confirm your device credential before releasing the vault key.",
+        )
+        if (intent == null) {
+            result.success(false)
+            return
+        }
+        pendingKeyReleaseAuthorization = result
+        try {
+            activity.startActivityForResult(
+                intent,
+                AUTHORIZE_KEY_RELEASE_REQUEST_CODE,
+            )
+        } catch (_: Throwable) {
+            pendingKeyReleaseAuthorization = null
+            result.success(false)
+        }
+    }
+
     fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
         data: Intent?,
     ): Boolean {
+        if (requestCode == AUTHORIZE_KEY_RELEASE_REQUEST_CODE) {
+            val pending = pendingKeyReleaseAuthorization
+            pendingKeyReleaseAuthorization = null
+            pending?.success(resultCode == Activity.RESULT_OK)
+            return true
+        }
         if (requestCode !in setOf(
                 SAVE_DOCUMENT_REQUEST_CODE,
                 PICK_DOCUMENT_REQUEST_CODE,
@@ -2250,6 +2300,7 @@ internal class AtlasVaultAndroidStorage(
         const val PICK_DOCUMENT_REQUEST_CODE = 0x4157
         const val SAVE_PAIRING_DOCUMENT_REQUEST_CODE = 0x4158
         const val PICK_PAIRING_DOCUMENT_REQUEST_CODE = 0x4159
+        const val AUTHORIZE_KEY_RELEASE_REQUEST_CODE = 0x415a
         const val ENCRYPTED_EXPORT_MIME_TYPE =
             "application/vnd.atlasvault+json"
         const val ENCRYPTED_EXPORT_FILENAME =
@@ -2262,6 +2313,7 @@ internal class AtlasVaultAndroidStorage(
 
         val SUPPORTED_METHODS = setOf(
             "capabilities",
+            "authorizePairingKeyRelease",
             "createVaultKey",
             "loadVaultKey",
             "containsVaultKey",

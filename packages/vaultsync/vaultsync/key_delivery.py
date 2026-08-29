@@ -27,6 +27,10 @@ from vaultsync.device_identity import (
     verify_signed_device_descriptor,
 )
 from vaultsync.format import VaultFormatError, VaultMetadata, _require_vault_id
+from vaultsync.protected_state_bounds import (
+    ProtectedStateCategory,
+    require_protected_state_byte_count,
+)
 from vaultsync.records import EncryptedRecord, RecordFormatError
 
 
@@ -512,7 +516,16 @@ class PairingBootstrap:
 
     @classmethod
     def from_canonical_bytes(cls, data: bytes) -> PairingBootstrap:
-        return cls.from_dict(_canonical_object(data))
+        try:
+            require_protected_state_byte_count(
+                ProtectedStateCategory.pairing_bootstrap,
+                len(data),
+            )
+            return cls.from_dict(_canonical_object(data))
+        except PairingKeyDeliveryError:
+            raise
+        except Exception as exc:
+            raise _invalid_delivery() from exc
 
     def to_dict(self) -> dict[str, Any]:
         return {

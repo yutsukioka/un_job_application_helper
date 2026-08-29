@@ -42,6 +42,48 @@ void main() {
     expect(recorder.calls, isEmpty);
   });
 
+  test('key-release authorization is fresh and fail closed', () async {
+    var decisions = <Object?>[true, false, 'invalid'];
+    recorder.handler = (call) async {
+      expect(call.method, 'authorizePairingKeyRelease');
+      expect(call.arguments, isNull);
+      return decisions.removeAt(0);
+    };
+    final authorizer = AtlasWindowsPairingKeyReleaseAuthorizer(
+      channel: recorder.channel,
+    );
+
+    expect(await authorizer.authorize(), isTrue);
+    expect(await authorizer.authorize(), isFalse);
+    expect(await authorizer.authorize(), isFalse);
+    recorder.handler = (_) async => throw PlatformException(code: 'cancelled');
+    expect(await authorizer.authorize(), isFalse);
+    expect(recorder.calls, hasLength(4));
+  });
+
+  test('native key release uses a fresh Windows user verification prompt', () {
+    final source = File(
+      'windows/runner/atlas_vault_windows_storage.cpp',
+    ).readAsStringSync();
+    final cmake = File('windows/runner/CMakeLists.txt').readAsStringSync();
+
+    expect(source, contains('UserConsentVerifier'));
+    expect(source, contains('#include <winrt/Windows.Foundation.h>'));
+    expect(source, contains('CheckAvailabilityAsync'));
+    expect(source, contains('IUserConsentVerifierInterop'));
+    expect(source, contains('RequestVerificationForWindowAsync'));
+    expect(source, contains('AuthorizePairingKeyRelease(HWND owner_window)'));
+    expect(source, contains('AuthorizePairingKeyRelease(owner_window_)'));
+    expect(source, contains('UserConsentVerificationResult::Verified'));
+    expect(source, contains('"authorizePairingKeyRelease"'));
+    expect(cmake, contains('"runtimeobject.lib"'));
+    expect(cmake, contains('"windowsapp.lib"'));
+    expect(
+      cmake,
+      contains('"_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"'),
+    );
+  });
+
   test('encrypted-document save uses exact bounded path-free call', () async {
     final bytes = Uint8List.fromList(utf8.encode('{"encrypted":true}'));
     recorder.handler = (call) async {

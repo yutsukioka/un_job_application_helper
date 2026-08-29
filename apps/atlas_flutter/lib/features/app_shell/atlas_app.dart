@@ -343,6 +343,10 @@ class AtlasAppController extends ChangeNotifier
     _searchRefreshPendingAfterPrivateTransition = false;
     _activeConnectionOperation = null;
     _connectionOperationSequence += 1;
+    _testingConnectionOperationIdentifier = null;
+    _savingConnectionOperationIdentifier = null;
+    _refreshingConnectionOperationIdentifier = null;
+    _searchingConnectionOperationIdentifier = null;
     _cancelSearchDebounce();
     super.dispose();
   }
@@ -3102,6 +3106,7 @@ AtlasVaultTrustedPairingPresentationOwner _attachWindowsTrustedPairing({
       await resolveAtlasPersistentCacheLocation(importLegacyCache: false),
     );
   });
+  final keyReleaseAuthorizer = AtlasWindowsPairingKeyReleaseAuthorizer();
   final coordinator = AtlasVaultTrustedPairingCoordinator(
     identityStore: AtlasWindowsDeviceIdentitySecretStore(),
     registryStore: AtlasWindowsTrustedDeviceRegistryStore(),
@@ -3126,6 +3131,7 @@ AtlasVaultTrustedPairingPresentationOwner _attachWindowsTrustedPairing({
         await controller._activateImportedAtlasVault(vaultId) ==
         AtlasVaultActivationResult.activated,
     transactionAdmission: transactionAdmission,
+    authorizeKeyRelease: (_) => keyReleaseAuthorizer.authorize(),
   );
   final owner = AtlasVaultTrustedPairingPresentationOwner(
     coordinator: coordinator,
@@ -3152,6 +3158,7 @@ AtlasVaultTrustedPairingPresentationOwner _attachAndroidTrustedPairing({
     controller,
   );
   final cacheSource = _AtlasControllerCacheMigrationSource(controller);
+  final keyReleaseAuthorizer = AtlasAndroidPairingKeyReleaseAuthorizer();
   final coordinator = AtlasVaultTrustedPairingCoordinator(
     identityStore: AtlasAndroidDeviceIdentitySecretStore(),
     registryStore: AtlasAndroidTrustedDeviceRegistryStore(),
@@ -3176,6 +3183,7 @@ AtlasVaultTrustedPairingPresentationOwner _attachAndroidTrustedPairing({
         await controller._activateImportedAtlasVault(vaultId) ==
         AtlasVaultActivationResult.activated,
     transactionAdmission: transactionAdmission,
+    authorizeKeyRelease: (_) => keyReleaseAuthorizer.authorize(),
   );
   final owner = AtlasVaultTrustedPairingPresentationOwner(
     coordinator: coordinator,
