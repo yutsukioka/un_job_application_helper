@@ -111,6 +111,34 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
         XCTAssertFalse(source.contains("minimumKeyEpoch: Int64 = 1"))
     }
 
+    func testEpochDeliveryExposesAndEnforcesItsContextBound() throws {
+        XCTAssertEqual(AtlasVaultKeyEpochRing.maximumContextBytes, 4_058)
+        let root = try loadRoot()
+        let vector = try object(root, "hpke_v2_epoch_delivery")
+        let context = Data(repeating: 0x63, count: 4_058)
+        let ring = try makeRing(root)
+        let sealed = try ring.sealCurrentHPKEV2(
+            recipientPublicKey: try data(vector, "recipient_public_key_hex"),
+            context: context
+        )
+
+        XCTAssertEqual(
+            try AtlasVaultKeyEpochHPKE.open(
+                recipientPrivateKey: seed(try string(vector, "recipient_seed_label")),
+                sealed: sealed,
+                context: context,
+                minimumKeyEpoch: sealed.keyEpoch
+            ).vaultKey,
+            ring.currentVaultKey
+        )
+        XCTAssertThrowsError(
+            try ring.sealCurrentHPKEV2(
+                recipientPublicKey: try data(vector, "recipient_public_key_hex"),
+                context: Data(repeating: 0x63, count: 4_059)
+            )
+        )
+    }
+
     func testCurrentEpochHPKEOpensVectorAndRejectsEpochTamper() throws {
         let root = try loadRoot()
         let vector = try object(root, "hpke_v2_epoch_delivery")

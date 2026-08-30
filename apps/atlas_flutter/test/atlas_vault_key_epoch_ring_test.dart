@@ -143,6 +143,54 @@ void main() {
     expect(body, contains('atlasVaultWipeBytesInternal(vaultKey);'));
   });
 
+  test('epoch operations wipe key copies without textual duplicate keys', () {
+    final source = File(
+      'lib/src/atlas_vault/key_epochs.dart',
+    ).readAsStringSync();
+    final deriveStart = source.indexOf('Future<Uint8List> deriveRecordKey');
+    final sealStart = source.indexOf(
+      'Future<AtlasVaultEpochHPKESealedVaultKeyV2> sealCurrentHPKEV2',
+    );
+    final testingStart = source.indexOf(
+      'sealAtlasVaultCurrentEpochHPKEV2ForTesting',
+    );
+    final openStart = source.indexOf(
+      'Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2',
+    );
+    final validationStart = source.indexOf('Map<int, Uint8List> _validatedKeys');
+    final validationEnd = source.indexOf(
+      'AtlasVaultEpochHPKESealedVaultKeyV2 _epochSealed',
+    );
+
+    final deriveBody = source.substring(deriveStart, sealStart);
+    final sealBody = source.substring(sealStart, testingStart);
+    final testingBody = source.substring(testingStart, openStart);
+    final validationBody = source.substring(validationStart, validationEnd);
+    expect(deriveBody, contains('final vaultKey = vaultKeyForEpoch(epoch);'));
+    expect(deriveBody, contains('atlasVaultWipeBytesInternal(vaultKey);'));
+    expect(sealBody, contains('final vaultKey = currentVaultKey;'));
+    expect(sealBody, contains('atlasVaultWipeBytesInternal(vaultKey);'));
+    expect(testingBody, contains('final vaultKey = ring.currentVaultKey;'));
+    expect(testingBody, contains('atlasVaultWipeBytesInternal(vaultKey);'));
+    expect(validationBody, contains('_containsDuplicateKeyMaterial'));
+    expect(validationBody, isNot(contains('base64Encode')));
+  });
+
+  test('epoch delivery publishes its caller context bound', () {
+    final source = File(
+      'lib/src/atlas_vault/key_epochs.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains('const atlasVaultMaximumEpochContextBytes = 4058;'),
+    );
+    expect(
+      source,
+      contains('context.length > atlasVaultMaximumEpochContextBytes'),
+    );
+  });
+
   test('current epoch HPKE matches vector and rejects epoch tamper', () async {
     final vector = atlasVaultObject(root['hpke_v2_epoch_delivery']);
     final ring = await _ring(root);

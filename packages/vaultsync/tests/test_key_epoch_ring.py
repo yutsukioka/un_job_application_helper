@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from vaultsync.crypto import derive_record_key as derive_legacy_record_key
+import vaultsync.key_epochs as key_epochs
 from vaultsync.key_epochs import (
     MAXIMUM_KEY_RING_ENTRIES,
     EpochHPKESealedVaultKeyV2,
@@ -135,6 +136,29 @@ def test_epoch_delivery_open_requires_a_trusted_monotonic_floor() -> None:
     parameter = inspect.signature(open_epoch_hpke_v2).parameters["minimum_key_epoch"]
 
     assert parameter.default is inspect.Parameter.empty
+
+
+def test_epoch_delivery_exposes_and_enforces_its_context_bound() -> None:
+    assert key_epochs.MAXIMUM_EPOCH_CONTEXT_BYTES == 4_058
+    vector = _root()["hpke_v2_epoch_delivery"]
+    context = b"c" * key_epochs.MAXIMUM_EPOCH_CONTEXT_BYTES
+    sealed = _ring()._seal_current_hpke_v2_for_testing(
+        recipient_public_key=_bytes(vector["recipient_public_key_hex"]),
+        context=context,
+        ephemeral_private_key=_seed(vector["sender_seed_label"]),
+    )
+
+    assert open_epoch_hpke_v2(
+        recipient_private_key=_seed(vector["recipient_seed_label"]),
+        sealed=sealed,
+        context=context,
+        minimum_key_epoch=sealed.key_epoch,
+    ).vault_key == _ring().current_vault_key
+    with pytest.raises(KeyEpochError):
+        _ring().seal_current_hpke_v2(
+            recipient_public_key=_bytes(vector["recipient_public_key_hex"]),
+            context=b"c" * (key_epochs.MAXIMUM_EPOCH_CONTEXT_BYTES + 1),
+        )
 
 
 def test_current_epoch_hpke_delivery_matches_vector_and_rejects_epoch_tamper() -> None:
