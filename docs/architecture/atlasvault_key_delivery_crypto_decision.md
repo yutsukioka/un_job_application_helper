@@ -89,9 +89,12 @@ Under D050, the version-2 work must:
    caller-selected AES-GCM nonce field in version 2.
 5. Keep the Ed25519 signed envelope unless a separately reviewed design proves
    an equally strong mapping to AtlasVault device identity and acknowledgements.
-6. Raise or pin the Python cryptography floor to a version with the required
-   HPKE suite, validate Apple deployment availability, and choose a reviewed
-   Dart implementation/dependency strategy.
+6. Retain the supported `cryptography>=42.0` floor. Use native pyca HPKE when
+   available and otherwise use the isolated RFC 9180 fallback composition,
+   which remains subject to D054 conformance assurance through official
+   vectors, reference differential checks, and fail-closed malformed/tamper
+   coverage. Validate Apple deployment availability and keep the Dart
+   implementation isolated and vector-tested.
 7. Add RFC 9180 vectors plus AtlasVault context/AAD vectors across all three
    languages before changing production writers.
 8. Add version-1-to-version-2 transaction tests: clean cutover, in-progress
