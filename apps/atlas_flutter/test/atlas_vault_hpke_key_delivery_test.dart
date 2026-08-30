@@ -131,6 +131,11 @@ void main() {
     expect(source, contains('atlasVaultWipeBytesInternal(hmacInput);'));
     expect(source, contains('atlasVaultWipeBytesInternal(labeledInput);'));
     expect(source, isNot(contains('inputKeyMaterial: _copyExact(dh')));
+    expect(source, contains('return _copyExact(plaintext, _keyLength);'));
+    expect(
+      source,
+      isNot(contains('Uint8List.fromList(_copyExact(plaintext, _keyLength))')),
+    );
   });
 
   test('HPKE v2 rejects wrong context and ciphertext tamper', () async {

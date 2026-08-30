@@ -108,6 +108,22 @@ void main() {
     expect(source, isNot(contains('int minimumKeyEpoch = 1')));
   });
 
+  test('epoch delivery open wipes the temporary vault key', () {
+    final source = File(
+      'lib/src/atlas_vault/key_epochs.dart',
+    ).readAsStringSync();
+    final start = source.indexOf(
+      'Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2',
+    );
+    final end = source.indexOf('\nMap<int, Uint8List> _validatedKeys', start);
+
+    expect(start, greaterThanOrEqualTo(0));
+    expect(end, greaterThan(start));
+    final body = source.substring(start, end);
+    expect(body, contains('Uint8List? vaultKey;'));
+    expect(body, contains('atlasVaultWipeBytesInternal(vaultKey);'));
+  });
+
   test('current epoch HPKE matches vector and rejects epoch tamper', () async {
     final vector = atlasVaultObject(root['hpke_v2_epoch_delivery']);
     final ring = await _ring(root);
