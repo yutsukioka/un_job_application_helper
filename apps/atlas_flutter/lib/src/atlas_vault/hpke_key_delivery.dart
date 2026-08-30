@@ -205,7 +205,7 @@ Future<Uint8List> openAtlasVaultHPKEVaultKeyV2({
       nonce: nonce,
       aad: Uint8List(0),
     );
-    return Uint8List.fromList(_copyExact(plaintext, _keyLength));
+    return _copyExact(plaintext, _keyLength);
   } catch (_) {
     throw const AtlasVaultHPKEKeyDeliveryException();
   } finally {

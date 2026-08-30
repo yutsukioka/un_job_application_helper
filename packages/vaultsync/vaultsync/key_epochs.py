@@ -58,6 +58,12 @@ def _identifier(value: str) -> str:
     return value
 
 
+def _legacy_identifier(value: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise _invalid()
+    return value
+
+
 @dataclass(frozen=True)
 class KeyRingMetadata:
     current_key_epoch: int
@@ -220,8 +226,8 @@ class VaultKeyEpochRing:
         if epoch == 1:
             return _derive_legacy_record_key(
                 self.vault_key_for_epoch(epoch),
-                _identifier(vault_id),
-                _identifier(record_id),
+                _legacy_identifier(vault_id),
+                _legacy_identifier(record_id),
             )
         return HKDF(
             algorithm=hashes.SHA256(),

@@ -217,12 +217,13 @@ Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2({
   required Uint8List context,
   required int minimumKeyEpoch,
 }) async {
+  Uint8List? vaultKey;
   try {
     final minimum = _requireEpoch(minimumKeyEpoch);
     if (sealed.keyEpoch < minimum) {
       throw const AtlasVaultKeyEpochException();
     }
-    final vaultKey = await openAtlasVaultHPKEVaultKeyV2(
+    vaultKey = await openAtlasVaultHPKEVaultKeyV2(
       recipientPrivateKey: recipientPrivateKey,
       sealed: AtlasVaultHPKESealedVaultKeyV2(
         encapsulatedKey: sealed.encapsulatedKey,
@@ -236,6 +237,8 @@ Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2({
     );
   } catch (_) {
     throw const AtlasVaultKeyEpochException();
+  } finally {
+    atlasVaultWipeBytesInternal(vaultKey);
   }
 }
 
