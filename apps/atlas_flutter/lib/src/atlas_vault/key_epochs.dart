@@ -164,7 +164,7 @@ final class AtlasVaultKeyEpochRing {
       return deriveAtlasVaultRecordKey(
         vaultKey: vaultKeyForEpoch(epoch),
         vaultId: _identifier(vaultId),
-        recordId: _identifier(recordId),
+        recordId: recordId,
       );
     }
     return atlasVaultDeriveHkdfSha256Internal(

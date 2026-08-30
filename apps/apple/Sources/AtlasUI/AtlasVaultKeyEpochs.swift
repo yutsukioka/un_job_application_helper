@@ -153,7 +153,7 @@ public struct AtlasVaultKeyEpochRing: Sendable {
             return try AtlasVaultRecordCrypto.deriveRecordKey(
                 vaultKey: vaultKey(for: epoch),
                 vaultID: identifier(vaultID),
-                recordID: identifier(recordID)
+                recordID: legacyRecordIdentifier(recordID)
             ).withUnsafeBytes { Data($0) }
         }
         let key = SymmetricKey(data: try vaultKey(for: epoch))
@@ -255,6 +255,11 @@ private func identifier(_ value: String) throws -> String {
         let bytes = value.data(using: .utf8),
         bytes.count <= maximumIdentifierBytes
     else { throw AtlasVaultKeyEpochError.operationFailed }
+    return value
+}
+
+private func legacyRecordIdentifier(_ value: String) throws -> String {
+    guard !value.isEmpty else { throw AtlasVaultKeyEpochError.operationFailed }
     return value
 }
 

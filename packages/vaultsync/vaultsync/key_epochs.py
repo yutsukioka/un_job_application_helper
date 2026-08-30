@@ -226,7 +226,7 @@ class VaultKeyEpochRing:
         if epoch == 1:
             return _derive_legacy_record_key(
                 self.vault_key_for_epoch(epoch),
-                _legacy_identifier(vault_id),
+                _identifier(vault_id),
                 _legacy_identifier(record_id),
             )
         return HKDF(
