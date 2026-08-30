@@ -71,6 +71,26 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
         )
     }
 
+    func testMigratedEpochOnePreservesLongLegacyRecordIdentifier() throws {
+        let vaultKey = seed("legacy-long-record-key")
+        let migrated = try AtlasVaultKeyEpochRing.fromLegacy(vaultKey)
+        let recordID = String(repeating: "r", count: 1_025)
+        let legacy = try AtlasVaultRecordCrypto.deriveRecordKey(
+            vaultKey: vaultKey,
+            vaultID: "legacy-vault",
+            recordID: recordID
+        ).withUnsafeBytes { Data($0) }
+
+        XCTAssertEqual(
+            try migrated.deriveRecordKey(
+                keyEpoch: 1,
+                vaultID: "legacy-vault",
+                recordID: recordID
+            ),
+            legacy
+        )
+    }
+
     func testLegacyMigrationRejectsNonInitialEpoch() {
         XCTAssertThrowsError(
             try AtlasVaultKeyEpochRing.fromLegacy(

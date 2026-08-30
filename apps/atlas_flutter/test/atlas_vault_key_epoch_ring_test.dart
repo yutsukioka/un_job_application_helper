@@ -90,6 +90,25 @@ void main() {
     );
   });
 
+  test('migrated epoch one preserves long legacy record identifiers', () async {
+    final vaultKey = await _seed('legacy-long-record-key');
+    final migrated = AtlasVaultKeyEpochRing.fromLegacy(vaultKey);
+    final recordId = 'r' * 1025;
+
+    expect(
+      await migrated.deriveRecordKey(
+        keyEpoch: 1,
+        vaultId: 'legacy-vault',
+        recordId: recordId,
+      ),
+      await deriveAtlasVaultRecordKey(
+        vaultKey: vaultKey,
+        vaultId: 'legacy-vault',
+        recordId: recordId,
+      ),
+    );
+  });
+
   test('legacy migration rejects a non-initial epoch', () async {
     final vaultKey = await _seed('legacy-record-key');
 

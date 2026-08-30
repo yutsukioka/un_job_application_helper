@@ -109,7 +109,7 @@ def test_migrated_epoch_one_preserves_legacy_record_key_derivation() -> None:
 def test_migrated_epoch_one_preserves_long_legacy_identifiers() -> None:
     vault_key = _seed("legacy-long-record-key")
     migrated = VaultKeyEpochRing.from_legacy(vault_key)
-    vault_id = "v" * 1025
+    vault_id = "legacy-vault"
     record_id = "r" * 1025
 
     assert migrated.derive_record_key(
@@ -117,6 +117,13 @@ def test_migrated_epoch_one_preserves_long_legacy_identifiers() -> None:
         vault_id=vault_id,
         record_id=record_id,
     ) == derive_legacy_record_key(vault_key, vault_id, record_id)
+
+    with pytest.raises(KeyEpochError):
+        migrated.derive_record_key(
+            key_epoch=1,
+            vault_id="v" * 1025,
+            record_id="legacy-record",
+        )
 
 
 def test_legacy_migration_rejects_non_initial_epoch() -> None:
