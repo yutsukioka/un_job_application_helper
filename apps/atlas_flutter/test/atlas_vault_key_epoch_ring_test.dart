@@ -175,6 +175,7 @@ void main() {
     expect(testingBody, contains('final vaultKey = ring.currentVaultKey;'));
     expect(testingBody, contains('atlasVaultWipeBytesInternal(vaultKey);'));
     expect(validationBody, contains('_containsDuplicateKeyMaterial'));
+    expect(validationBody, contains('_wipeCopiedKeyMaterial(copied.values);'));
     expect(validationBody, isNot(contains('base64Encode')));
   });
 

@@ -130,6 +130,8 @@ void main() {
     expect(source, contains('atlasVaultWipeBytesInternal(output);'));
     expect(source, contains('atlasVaultWipeBytesInternal(hmacInput);'));
     expect(source, contains('atlasVaultWipeBytesInternal(labeledInput);'));
+    expect(source, contains('List<int>? macBytes;'));
+    expect(source, contains('atlasVaultWipeBytesInternal(macBytes);'));
     expect(source, isNot(contains('inputKeyMaterial: _copyExact(dh')));
     expect(source, contains('return _copyExact(plaintext, _keyLength);'));
     expect(
