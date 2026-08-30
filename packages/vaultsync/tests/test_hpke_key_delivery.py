@@ -28,6 +28,8 @@ VECTOR_PATH = (
     / "atlasvault_hpke_key_delivery_vectors_v2.json"
 )
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+
 
 def _vector() -> dict[str, str]:
     root = json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
@@ -127,6 +129,24 @@ def test_hpke_v2_official_vector_survives_supported_native_absence(
     monkeypatch.setattr(hpke, "_native_suite", lambda: None)
 
     test_hpke_v2_matches_official_rfc9180_and_native_reference()
+
+
+def test_hpke_v2_decision_records_supported_python_fallback() -> None:
+    pyproject = (
+        REPOSITORY_ROOT / "packages" / "vaultsync" / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+    decision = (
+        REPOSITORY_ROOT
+        / "docs"
+        / "architecture"
+        / "atlasvault_key_delivery_crypto_decision.md"
+    ).read_text(encoding="utf-8")
+
+    assert '"cryptography>=42.0"' in pyproject
+    assert "supported `cryptography>=42.0` floor" in decision
+    assert "RFC 9180 fallback composition" in decision
+    assert "D054 conformance assurance" in decision
+    assert "Raise or pin the Python cryptography floor" not in decision
 
 
 def test_hpke_v2_production_api_owns_all_sealing_entropy() -> None:
