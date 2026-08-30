@@ -1,0 +1,26 @@
+{
+  "_warning": "TEST ONLY - deterministic cryptographic material; never use these keys in production.",
+  "format": "atlasvault-hpke-key-delivery-vectors",
+  "version": 2,
+  "source": {
+    "standard": "RFC 9180",
+    "test_vector_commit": "5f503c564da00b0687b3de75f1dfbdfc4079ad31",
+    "profile": "Base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM"
+  },
+  "suite": {
+    "mode": 0,
+    "kem_id": 32,
+    "kdf_id": 1,
+    "aead_id": 2
+  },
+  "single_shot": {
+    "recipient_private_key_hex": "497b4502664cfea5d5af0b39934dac72242a74f8480451e1aee7d6a53320333d",
+    "recipient_public_key_hex": "430f4b9859665145a6b1ba274024487bd66f03a2dd577d7753c68d7d7d00c00c",
+    "sender_ephemeral_private_key_hex": "179d4b53b6365c45b600c4163b61d95cbc2f4d9e36f1695558dce265ab8bab11",
+    "encapsulated_key_hex": "6c93e09869df3402d7bf231bf540fadd35cd56be14f97178f0954db94b7fc256",
+    "context_hex": "7b2264656c6976657279223a2261746c61737661756c742d68706b652d76322d766563746f72222c227265766973696f6e223a377d",
+    "hpke_info_hex": "61746c61737661756c742d7661756c742d6b65792d64656c69766572792d68706b652d76323a7b2264656c6976657279223a2261746c61737661756c742d68706b652d76322d766563746f72222c227265766973696f6e223a377d",
+    "vault_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "ciphertext_hex": "628951f655c1e15dae86846df624db5dc76b3babc9941fbb1a89e81e492599377f22fd6757a506a9d1503242a572e670"
+  }
+}
