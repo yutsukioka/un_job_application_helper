@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from pathlib import Path
 
 import pytest
 
+from vaultsync.crypto import derive_record_key as derive_legacy_record_key
 from vaultsync.key_epochs import (
     MAXIMUM_KEY_RING_ENTRIES,
     EpochHPKESealedVaultKeyV2,
@@ -91,6 +93,23 @@ def test_epoch_ring_migrates_legacy_and_recovers_retained_key() -> None:
     assert _ring().vault_key_for_epoch(1) == legacy_key
     with pytest.raises(KeyEpochError):
         _ring().vault_key_for_epoch(4)
+
+
+def test_migrated_epoch_one_preserves_legacy_record_key_derivation() -> None:
+    vault_key = _seed("legacy-record-key")
+    migrated = VaultKeyEpochRing.from_legacy(vault_key)
+
+    assert migrated.derive_record_key(
+        key_epoch=1,
+        vault_id="legacy-vault",
+        record_id="legacy-record",
+    ) == derive_legacy_record_key(vault_key, "legacy-vault", "legacy-record")
+
+
+def test_epoch_delivery_open_requires_a_trusted_monotonic_floor() -> None:
+    parameter = inspect.signature(open_epoch_hpke_v2).parameters["minimum_key_epoch"]
+
+    assert parameter.default is inspect.Parameter.empty
 
 
 def test_current_epoch_hpke_delivery_matches_vector_and_rejects_epoch_tamper() -> None:

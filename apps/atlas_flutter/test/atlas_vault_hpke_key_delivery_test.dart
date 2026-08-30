@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
@@ -86,6 +87,17 @@ void main() {
         _bytes(vector, 'vault_key_hex'),
       );
     }
+  });
+
+  test('HPKE HKDF expansion wipes intermediate key material', () {
+    final source = File(
+      'lib/src/atlas_vault/hpke_key_delivery.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('final output = Uint8List(length);'));
+    expect(source, contains('atlasVaultWipeBytesInternal(previous);'));
+    expect(source, contains('atlasVaultWipeBytesInternal(output);'));
+    expect(source, contains('atlasVaultWipeBytesInternal(hmacInput);'));
   });
 
   test('HPKE v2 rejects wrong context and ciphertext tamper', () async {

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
@@ -69,6 +70,33 @@ void main() {
       () => ring.vaultKeyForEpoch(4),
       throwsA(isA<AtlasVaultKeyEpochException>()),
     );
+  });
+
+  test('migrated epoch one preserves legacy record-key derivation', () async {
+    final vaultKey = await _seed('legacy-record-key');
+    final migrated = AtlasVaultKeyEpochRing.fromLegacy(vaultKey);
+
+    expect(
+      await migrated.deriveRecordKey(
+        keyEpoch: 1,
+        vaultId: 'legacy-vault',
+        recordId: 'legacy-record',
+      ),
+      await deriveAtlasVaultRecordKey(
+        vaultKey: vaultKey,
+        vaultId: 'legacy-vault',
+        recordId: 'legacy-record',
+      ),
+    );
+  });
+
+  test('epoch delivery open requires a trusted monotonic floor', () {
+    final source = File(
+      'lib/src/atlas_vault/key_epochs.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('required int minimumKeyEpoch'));
+    expect(source, isNot(contains('int minimumKeyEpoch = 1')));
   });
 
   test('current epoch HPKE matches vector and rejects epoch tamper', () async {

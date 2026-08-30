@@ -52,6 +52,36 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
         XCTAssertThrowsError(try makeRing(root).vaultKey(for: 4))
     }
 
+    func testMigratedEpochOnePreservesLegacyRecordKeyDerivation() throws {
+        let vaultKey = seed("legacy-record-key")
+        let migrated = try AtlasVaultKeyEpochRing.fromLegacy(vaultKey)
+        let legacy = try AtlasVaultRecordCrypto.deriveRecordKey(
+            vaultKey: vaultKey,
+            vaultID: "legacy-vault",
+            recordID: "legacy-record"
+        ).withUnsafeBytes { Data($0) }
+
+        XCTAssertEqual(
+            try migrated.deriveRecordKey(
+                keyEpoch: 1,
+                vaultID: "legacy-vault",
+                recordID: "legacy-record"
+            ),
+            legacy
+        )
+    }
+
+    func testEpochDeliveryOpenRequiresTrustedMonotonicFloor() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../Sources/AtlasUI/AtlasVaultKeyEpochs.swift")
+            .standardizedFileURL
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("minimumKeyEpoch: Int64\n"))
+        XCTAssertFalse(source.contains("minimumKeyEpoch: Int64 = 1"))
+    }
+
     func testCurrentEpochHPKEOpensVectorAndRejectsEpochTamper() throws {
         let root = try loadRoot()
         let vector = try object(root, "hpke_v2_epoch_delivery")
