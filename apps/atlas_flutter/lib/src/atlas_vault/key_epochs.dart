@@ -258,21 +258,32 @@ Map<int, Uint8List> _validatedKeys(
   AtlasVaultKeyRingMetadata metadata,
   Map<int, Uint8List> keys,
 ) {
-  final copied = <int, Uint8List>{
-    for (final entry in keys.entries)
-      _requireEpoch(entry.key): _copyKey(entry.value),
-  };
-  final expected = <int>{
-    ...metadata.retainedKeyEpochs,
-    metadata.currentKeyEpoch,
-  };
-  if (copied.keys.toSet().difference(expected).isNotEmpty ||
-      expected.difference(copied.keys.toSet()).isNotEmpty ||
-      copied.length > atlasVaultMaximumKeyRingEntries ||
-      _containsDuplicateKeyMaterial(copied.values)) {
-    throw const AtlasVaultKeyEpochException();
+  final copied = <int, Uint8List>{};
+  try {
+    for (final entry in keys.entries) {
+      copied[_requireEpoch(entry.key)] = _copyKey(entry.value);
+    }
+    final expected = <int>{
+      ...metadata.retainedKeyEpochs,
+      metadata.currentKeyEpoch,
+    };
+    if (copied.keys.toSet().difference(expected).isNotEmpty ||
+        expected.difference(copied.keys.toSet()).isNotEmpty ||
+        copied.length > atlasVaultMaximumKeyRingEntries ||
+        _containsDuplicateKeyMaterial(copied.values)) {
+      throw const AtlasVaultKeyEpochException();
+    }
+    return UnmodifiableMapView<int, Uint8List>(copied);
+  } catch (_) {
+    _wipeCopiedKeyMaterial(copied.values);
+    rethrow;
   }
-  return UnmodifiableMapView<int, Uint8List>(copied);
+}
+
+void _wipeCopiedKeyMaterial(Iterable<Uint8List> values) {
+  for (final value in values) {
+    atlasVaultWipeBytesInternal(value);
+  }
 }
 
 bool _containsDuplicateKeyMaterial(Iterable<Uint8List> values) {

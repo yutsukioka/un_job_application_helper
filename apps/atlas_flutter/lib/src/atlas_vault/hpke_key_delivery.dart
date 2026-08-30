@@ -452,10 +452,13 @@ Future<Uint8List> _hmac(Uint8List key, Uint8List input) async {
     Uint8List.fromList(key),
     overwriteWhenDestroyed: true,
   );
+  List<int>? macBytes;
   try {
     final mac = await Hmac.sha256().calculateMac(input, secretKey: secret);
-    return Uint8List.fromList(mac.bytes);
+    macBytes = mac.bytes;
+    return Uint8List.fromList(macBytes);
   } finally {
+    atlasVaultWipeBytesInternal(macBytes);
     secret.destroy();
   }
 }
