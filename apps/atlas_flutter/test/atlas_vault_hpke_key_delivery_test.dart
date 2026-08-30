@@ -62,6 +62,17 @@ void main() {
     expect(result.ciphertext, _bytes(official, 'ciphertext_hex'));
   });
 
+  test('test-only HPKE conformance helpers stay out of barrel export', () {
+    final source = File('lib/atlas_vault.dart').readAsStringSync();
+    final export = RegExp(
+      r"export 'src/atlas_vault/hpke_key_delivery.dart'([\s\S]*?);",
+    ).firstMatch(source)!.group(0)!;
+
+    expect(export, contains('sealAtlasVaultHPKEVaultKeyV2ForTesting'));
+    expect(export, contains('deriveAtlasVaultHPKEConformanceForTesting'));
+    expect(export, contains('AtlasVaultHPKEConformanceResult'));
+  });
+
   test('HPKE v2 revision stress and crash retry own fresh entropy', () async {
     final attempts = <AtlasVaultHPKESealedVaultKeyV2>[];
     for (var revision = 0; revision < 96; revision += 1) {

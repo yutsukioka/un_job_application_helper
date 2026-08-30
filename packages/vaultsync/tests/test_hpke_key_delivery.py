@@ -118,6 +118,14 @@ def test_hpke_v2_matches_official_rfc9180_and_native_reference() -> None:
     ) == _bytes(project, "vault_key_hex")
 
 
+def test_hpke_v2_official_vector_survives_supported_native_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hpke, "_native_suite", lambda: None)
+
+    test_hpke_v2_matches_official_rfc9180_and_native_reference()
+
+
 def test_hpke_v2_production_api_owns_all_sealing_entropy() -> None:
     parameters = inspect.signature(seal_vault_key_hpke_v2).parameters
     assert "ephemeral_private_key" not in parameters

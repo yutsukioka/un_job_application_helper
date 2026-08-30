@@ -90,6 +90,15 @@ void main() {
     );
   });
 
+  test('legacy migration rejects a non-initial epoch', () async {
+    final vaultKey = await _seed('legacy-record-key');
+
+    expect(
+      () => AtlasVaultKeyEpochRing.fromLegacy(vaultKey, keyEpoch: 2),
+      throwsA(isA<AtlasVaultKeyEpochException>()),
+    );
+  });
+
   test('epoch delivery open requires a trusted monotonic floor', () {
     final source = File(
       'lib/src/atlas_vault/key_epochs.dart',

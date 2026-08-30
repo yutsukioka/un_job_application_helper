@@ -106,6 +106,11 @@ def test_migrated_epoch_one_preserves_legacy_record_key_derivation() -> None:
     ) == derive_legacy_record_key(vault_key, "legacy-vault", "legacy-record")
 
 
+def test_legacy_migration_rejects_non_initial_epoch() -> None:
+    with pytest.raises(KeyEpochError):
+        VaultKeyEpochRing.from_legacy(_seed("legacy-record-key"), key_epoch=2)
+
+
 def test_epoch_delivery_open_requires_a_trusted_monotonic_floor() -> None:
     parameter = inspect.signature(open_epoch_hpke_v2).parameters["minimum_key_epoch"]
 

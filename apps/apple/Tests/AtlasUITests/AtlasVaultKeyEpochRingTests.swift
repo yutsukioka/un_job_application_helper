@@ -71,6 +71,15 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
         )
     }
 
+    func testLegacyMigrationRejectsNonInitialEpoch() {
+        XCTAssertThrowsError(
+            try AtlasVaultKeyEpochRing.fromLegacy(
+                seed("legacy-record-key"),
+                keyEpoch: 2
+            )
+        )
+    }
+
     func testEpochDeliveryOpenRequiresTrustedMonotonicFloor() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
