@@ -126,6 +126,9 @@ public struct AtlasVaultKeyEpochRing: Sendable {
         keyEpoch: Int64 = 1
     ) throws -> AtlasVaultKeyEpochRing {
         let epoch = try requireEpoch(keyEpoch)
+        guard epoch == 1 else {
+            throw AtlasVaultKeyEpochError.operationFailed
+        }
         return try fromEntries(currentKeyEpoch: epoch, keys: [epoch: vaultKey])
     }
 

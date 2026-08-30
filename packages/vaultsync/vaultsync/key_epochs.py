@@ -187,6 +187,8 @@ class VaultKeyEpochRing:
         key_epoch: int = 1,
     ) -> VaultKeyEpochRing:
         epoch = _epoch(key_epoch)
+        if epoch != 1:
+            raise _invalid()
         return cls.from_entries(current_key_epoch=epoch, keys={epoch: vault_key})
 
     @property

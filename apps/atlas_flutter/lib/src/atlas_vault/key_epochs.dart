@@ -130,6 +130,9 @@ final class AtlasVaultKeyEpochRing {
     int keyEpoch = 1,
   }) {
     final epoch = _requireEpoch(keyEpoch);
+    if (epoch != 1) {
+      throw const AtlasVaultKeyEpochException();
+    }
     return AtlasVaultKeyEpochRing.fromEntries(
       currentKeyEpoch: epoch,
       keys: <int, Uint8List>{epoch: vaultKey},

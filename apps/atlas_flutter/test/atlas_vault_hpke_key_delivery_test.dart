@@ -70,7 +70,7 @@ void main() {
 
     expect(export, contains('sealAtlasVaultHPKEVaultKeyV2ForTesting'));
     expect(export, contains('deriveAtlasVaultHPKEConformanceForTesting'));
-    expect(export, contains('AtlasVaultHPKEConformanceResult'));
+    expect(export, contains('AtlasVaultHPKEConformanceForTesting'));
   });
 
   test('HPKE v2 revision stress and crash retry own fresh entropy', () async {

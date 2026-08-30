@@ -105,7 +105,10 @@ def test_hpke_v2_matches_official_rfc9180_and_native_reference() -> None:
     ) == raw("ciphertext_hex")
 
     suite = hpke._native_suite()
-    assert suite is not None
+    if suite is None:
+        pytest.skip(
+            "native HPKE is unavailable at this supported cryptography version"
+        )
     project = _vector()
     project_private = X25519PrivateKey.from_private_bytes(
         _bytes(project, "recipient_private_key_hex")
