@@ -23,6 +23,26 @@ final class AtlasVaultHPKESealedVaultKeyV2 {
   final Uint8List ciphertext;
 }
 
+final class AtlasVaultHPKEConformanceForTesting {
+  AtlasVaultHPKEConformanceForTesting({
+    required List<int> encapsulatedKey,
+    required List<int> sharedSecret,
+    required List<int> key,
+    required List<int> baseNonce,
+    required List<int> ciphertext,
+  }) : encapsulatedKey = _copyExact(encapsulatedKey, _keyLength),
+       sharedSecret = _copyExact(sharedSecret, _keyLength),
+       key = _copyExact(key, _keyLength),
+       baseNonce = _copyExact(baseNonce, _nonceLength),
+       ciphertext = Uint8List.fromList(ciphertext);
+
+  final Uint8List encapsulatedKey;
+  final Uint8List sharedSecret;
+  final Uint8List key;
+  final Uint8List baseNonce;
+  final Uint8List ciphertext;
+}
+
 const atlasVaultHPKEKeyDeliveryVersion = 2;
 const _infoPrefix = 'atlasvault-vault-key-delivery-hpke-v2:';
 const _kemId = 0x0020;
@@ -69,6 +89,82 @@ Future<AtlasVaultHPKESealedVaultKeyV2> sealAtlasVaultHPKEVaultKeyV2ForTesting({
     throw const AtlasVaultHPKEKeyDeliveryException();
   } finally {
     atlasVaultWipeBytesInternal(privateKey);
+  }
+}
+
+Future<AtlasVaultHPKEConformanceForTesting>
+deriveAtlasVaultHPKEConformanceForTesting({
+  required Uint8List recipientPublicKey,
+  required Uint8List ephemeralPrivateKey,
+  required Uint8List info,
+  required Uint8List plaintext,
+  required Uint8List aad,
+}) async {
+  Uint8List? privateKey;
+  Uint8List? recipient;
+  Uint8List? dh;
+  Uint8List? sharedSecret;
+  Uint8List? key;
+  Uint8List? nonce;
+  Uint8List? plaintextCopy;
+  Uint8List? infoCopy;
+  Uint8List? aadCopy;
+  Uint8List? ciphertext;
+  try {
+    privateKey = _copyExact(ephemeralPrivateKey, _keyLength);
+    recipient = _copyExact(recipientPublicKey, _keyLength);
+    plaintextCopy = Uint8List.fromList(plaintext);
+    infoCopy = Uint8List.fromList(info);
+    aadCopy = Uint8List.fromList(aad);
+    final ephemeral = await X25519().newKeyPairFromSeed(privateKey);
+    final encapsulated = Uint8List.fromList(
+      (await ephemeral.extractPublicKey()).bytes,
+    );
+    final sharedKey = await X25519().sharedSecretKey(
+      keyPair: ephemeral,
+      remotePublicKey: SimplePublicKey(recipient, type: KeyPairType.x25519),
+    );
+    dh = Uint8List.fromList(await sharedKey.extractBytes());
+    sharedKey.destroy();
+    sharedSecret = await _extractAndExpand(
+      dh: dh,
+      encapsulatedKey: encapsulated,
+      recipientPublicKey: recipient,
+    );
+    final schedule = await _keySchedule(
+      dh: dh,
+      encapsulatedKey: encapsulated,
+      recipientPublicKey: recipient,
+      info: infoCopy,
+    );
+    key = schedule.key;
+    nonce = schedule.nonce;
+    ciphertext = await atlasVaultSealAes256GcmInternal(
+      plaintext: plaintextCopy,
+      key: key,
+      nonce: nonce,
+      aad: aadCopy,
+    );
+    return AtlasVaultHPKEConformanceForTesting(
+      encapsulatedKey: encapsulated,
+      sharedSecret: sharedSecret,
+      key: key,
+      baseNonce: nonce,
+      ciphertext: ciphertext,
+    );
+  } catch (_) {
+    throw const AtlasVaultHPKEKeyDeliveryException();
+  } finally {
+    atlasVaultWipeBytesInternal(privateKey);
+    atlasVaultWipeBytesInternal(recipient);
+    atlasVaultWipeBytesInternal(dh);
+    atlasVaultWipeBytesInternal(sharedSecret);
+    atlasVaultWipeBytesInternal(key);
+    atlasVaultWipeBytesInternal(nonce);
+    atlasVaultWipeBytesInternal(plaintextCopy);
+    atlasVaultWipeBytesInternal(infoCopy);
+    atlasVaultWipeBytesInternal(aadCopy);
+    atlasVaultWipeBytesInternal(ciphertext);
   }
 }
 
@@ -175,35 +271,16 @@ Future<({Uint8List key, Uint8List nonce})> _keySchedule({
   required Uint8List recipientPublicKey,
   required Uint8List info,
 }) async {
-  if (dh.every((byte) => byte == 0)) {
-    throw const AtlasVaultHPKEKeyDeliveryException();
-  }
-  Uint8List? eaePrk;
   Uint8List? sharedSecret;
   Uint8List? pskIdHash;
   Uint8List? infoHash;
   Uint8List? scheduleContext;
   Uint8List? secret;
   try {
-    final kemSuite = Uint8List.fromList(<int>[
-      ...ascii.encode('KEM'),
-      ..._i2osp(_kemId, 2),
-    ]);
-    eaePrk = await _labeledExtract(
-      suite: kemSuite,
-      salt: Uint8List(0),
-      label: 'eae_prk',
-      inputKeyMaterial: _copyExact(dh, _keyLength),
-    );
-    sharedSecret = await _labeledExpand(
-      suite: kemSuite,
-      pseudorandomKey: eaePrk,
-      label: 'shared_secret',
-      info: Uint8List.fromList(<int>[
-        ...encapsulatedKey,
-        ...recipientPublicKey,
-      ]),
-      length: _keyLength,
+    sharedSecret = await _extractAndExpand(
+      dh: dh,
+      encapsulatedKey: encapsulatedKey,
+      recipientPublicKey: recipientPublicKey,
     );
     final suite = Uint8List.fromList(<int>[
       ...ascii.encode('HPKE'),
@@ -247,7 +324,6 @@ Future<({Uint8List key, Uint8List nonce})> _keySchedule({
       ),
     );
   } finally {
-    atlasVaultWipeBytesInternal(eaePrk);
     atlasVaultWipeBytesInternal(sharedSecret);
     atlasVaultWipeBytesInternal(pskIdHash);
     atlasVaultWipeBytesInternal(infoHash);
@@ -256,21 +332,58 @@ Future<({Uint8List key, Uint8List nonce})> _keySchedule({
   }
 }
 
+Future<Uint8List> _extractAndExpand({
+  required Uint8List dh,
+  required Uint8List encapsulatedKey,
+  required Uint8List recipientPublicKey,
+}) async {
+  if (dh.length != _keyLength || dh.every((byte) => byte == 0)) {
+    throw const AtlasVaultHPKEKeyDeliveryException();
+  }
+  Uint8List? eaePrk;
+  try {
+    final suite = Uint8List.fromList(<int>[
+      ...ascii.encode('KEM'),
+      ..._i2osp(_kemId, 2),
+    ]);
+    eaePrk = await _labeledExtract(
+      suite: suite,
+      salt: Uint8List(0),
+      label: 'eae_prk',
+      inputKeyMaterial: dh,
+    );
+    return await _labeledExpand(
+      suite: suite,
+      pseudorandomKey: eaePrk,
+      label: 'shared_secret',
+      info: Uint8List.fromList(<int>[
+        ...encapsulatedKey,
+        ...recipientPublicKey,
+      ]),
+      length: _keyLength,
+    );
+  } finally {
+    atlasVaultWipeBytesInternal(eaePrk);
+  }
+}
+
 Future<Uint8List> _labeledExtract({
   required Uint8List suite,
   required Uint8List salt,
   required String label,
   required Uint8List inputKeyMaterial,
-}) {
-  return _hkdfExtract(
-    salt,
-    Uint8List.fromList(<int>[
-      ...ascii.encode('HPKE-v1'),
-      ...suite,
-      ...ascii.encode(label),
-      ...inputKeyMaterial,
-    ]),
-  );
+}) async {
+  final labeledInput = Uint8List.fromList(<int>[
+    ...ascii.encode('HPKE-v1'),
+    ...suite,
+    ...ascii.encode(label),
+    ...inputKeyMaterial,
+  ]);
+  try {
+    return await _hkdfExtract(salt, labeledInput);
+  } finally {
+    atlasVaultWipeBytesInternal(labeledInput);
+  }
 }
 
 Future<Uint8List> _labeledExpand({
