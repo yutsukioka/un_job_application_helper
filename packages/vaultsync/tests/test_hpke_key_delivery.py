@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from vaultsync import hpke_key_delivery as hpke
 from vaultsync.hpke_key_delivery import (
     HPKEKeyDeliveryError,
     _seal_vault_key_hpke_v2_for_testing,
@@ -32,6 +34,11 @@ def _vector() -> dict[str, str]:
     assert root["format"] == "atlasvault-hpke-key-delivery-vectors"
     assert root["version"] == 2
     return root["single_shot"]
+
+
+def _official_vector() -> dict[str, str | int]:
+    root = json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
+    return root["official_rfc9180"]
 
 
 def _bytes(vector: dict[str, str], field: str) -> bytes:
@@ -63,6 +70,52 @@ def test_hpke_v2_matches_cross_language_single_shot_vector() -> None:
         sealed=sealed,
         context=_bytes(vector, "context_hex"),
     ) == _bytes(vector, "vault_key_hex")
+
+
+def test_hpke_v2_matches_official_rfc9180_and_native_reference() -> None:
+    vector = _official_vector()
+    raw = lambda field: bytes.fromhex(str(vector[field]))
+    sender = X25519PrivateKey.from_private_bytes(raw("sender_ephemeral_private_key_hex"))
+    recipient_public = hpke.X25519PublicKey.from_public_bytes(
+        raw("recipient_public_key_hex")
+    )
+    encapsulated = sender.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    dh = sender.exchange(recipient_public)
+
+    assert encapsulated == raw("encapsulated_key_hex")
+    assert hpke._extract_and_expand(
+        dh,
+        encapsulated + raw("recipient_public_key_hex"),
+    ) == raw("shared_secret_hex")
+    key, nonce = hpke._key_schedule(
+        dh=dh,
+        encapsulated_key=encapsulated,
+        recipient_public_key=raw("recipient_public_key_hex"),
+        info=raw("info_hex"),
+    )
+    assert key == raw("key_hex")
+    assert nonce == raw("base_nonce_hex")
+    assert AESGCM(key).encrypt(
+        nonce,
+        raw("plaintext_hex"),
+        raw("aad_hex"),
+    ) == raw("ciphertext_hex")
+
+    suite = hpke._native_suite()
+    assert suite is not None
+    project = _vector()
+    project_private = X25519PrivateKey.from_private_bytes(
+        _bytes(project, "recipient_private_key_hex")
+    )
+    assert suite.decrypt(
+        _bytes(project, "encapsulated_key_hex")
+        + _bytes(project, "ciphertext_hex"),
+        project_private,
+        info=hpke.HPKE_KEY_DELIVERY_INFO_PREFIX + _bytes(project, "context_hex"),
+    ) == _bytes(project, "vault_key_hex")
 
 
 def test_hpke_v2_production_api_owns_all_sealing_entropy() -> None:

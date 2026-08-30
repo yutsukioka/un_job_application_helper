@@ -4,7 +4,9 @@ import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/src/atlas_vault/hpke_key_delivery.dart'
-    show sealAtlasVaultHPKEVaultKeyV2ForTesting;
+    show
+        deriveAtlasVaultHPKEConformanceForTesting,
+        sealAtlasVaultHPKEVaultKeyV2ForTesting;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -12,6 +14,7 @@ import 'support/atlas_vault_vector_loader.dart';
 
 void main() {
   late Map<String, Object?> vector;
+  late Map<String, Object?> official;
 
   setUpAll(() {
     final root = loadAtlasVaultVector(
@@ -20,6 +23,7 @@ void main() {
     expect(root['format'], 'atlasvault-hpke-key-delivery-vectors');
     expect(root['version'], 2);
     vector = atlasVaultObject(root['single_shot']);
+    official = atlasVaultObject(root['official_rfc9180']);
   });
 
   test('HPKE v2 matches the cross-language single-shot vector', () async {
@@ -40,6 +44,22 @@ void main() {
       ),
       _bytes(vector, 'vault_key_hex'),
     );
+  });
+
+  test('HPKE v2 matches the official RFC 9180 vector byte-exact', () async {
+    final result = await deriveAtlasVaultHPKEConformanceForTesting(
+      recipientPublicKey: _bytes(official, 'recipient_public_key_hex'),
+      ephemeralPrivateKey: _bytes(official, 'sender_ephemeral_private_key_hex'),
+      info: _bytes(official, 'info_hex'),
+      plaintext: _bytes(official, 'plaintext_hex'),
+      aad: _bytes(official, 'aad_hex'),
+    );
+
+    expect(result.encapsulatedKey, _bytes(official, 'encapsulated_key_hex'));
+    expect(result.sharedSecret, _bytes(official, 'shared_secret_hex'));
+    expect(result.key, _bytes(official, 'key_hex'));
+    expect(result.baseNonce, _bytes(official, 'base_nonce_hex'));
+    expect(result.ciphertext, _bytes(official, 'ciphertext_hex'));
   });
 
   test('HPKE v2 revision stress and crash retry own fresh entropy', () async {
@@ -98,6 +118,8 @@ void main() {
     expect(source, contains('atlasVaultWipeBytesInternal(previous);'));
     expect(source, contains('atlasVaultWipeBytesInternal(output);'));
     expect(source, contains('atlasVaultWipeBytesInternal(hmacInput);'));
+    expect(source, contains('atlasVaultWipeBytesInternal(labeledInput);'));
+    expect(source, isNot(contains('inputKeyMaterial: _copyExact(dh')));
   });
 
   test('HPKE v2 rejects wrong context and ciphertext tamper', () async {

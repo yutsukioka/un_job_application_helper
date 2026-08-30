@@ -13,6 +13,25 @@
     "kdf_id": 1,
     "aead_id": 2
   },
+  "official_rfc9180": {
+    "source": "CFRG test-vectors.json at 5f503c564da00b0687b3de75f1dfbdfc4079ad31",
+    "source_sha256": "61fc662f01996cd06d713dacf5e133167bd309a1f329442d53f1e21a47b3ede6",
+    "mode": 0,
+    "kem_id": 32,
+    "kdf_id": 1,
+    "aead_id": 2,
+    "recipient_private_key_hex": "497b4502664cfea5d5af0b39934dac72242a74f8480451e1aee7d6a53320333d",
+    "recipient_public_key_hex": "430f4b9859665145a6b1ba274024487bd66f03a2dd577d7753c68d7d7d00c00c",
+    "sender_ephemeral_private_key_hex": "179d4b53b6365c45b600c4163b61d95cbc2f4d9e36f1695558dce265ab8bab11",
+    "encapsulated_key_hex": "6c93e09869df3402d7bf231bf540fadd35cd56be14f97178f0954db94b7fc256",
+    "info_hex": "4f6465206f6e2061204772656369616e2055726e",
+    "shared_secret_hex": "3101c54c3a4f87439eaac080699ed9bbcc726ffe44e860c0424ccb7e3e2ead7b",
+    "key_hex": "f50b0609186798729ed0564b36ef2ef8044f1f9d05636874d1f46c819c7a669f",
+    "base_nonce_hex": "151d9929e2449747889bc923",
+    "aad_hex": "436f756e742d30",
+    "plaintext_hex": "4265617574792069732074727574682c20747275746820626561757479",
+    "ciphertext_hex": "e5d84cd531cfb583096e7cfa9641bd3079cf3a91cda813c52deb5f512be9931980a41de125a925cdad859d5b7a"
+  },
   "single_shot": {
     "recipient_private_key_hex": "497b4502664cfea5d5af0b39934dac72242a74f8480451e1aee7d6a53320333d",
     "recipient_public_key_hex": "430f4b9859665145a6b1ba274024487bd66f03a2dd577d7753c68d7d7d00c00c",

@@ -22,6 +22,107 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
         )
     }
 
+    func testHPKEV2MatchesOfficialRFC9180VectorByteExact() throws {
+        let vector = try loadOfficialVector()
+        let sender = try Curve25519.KeyAgreement.PrivateKey(
+            rawRepresentation: data(vector, "sender_ephemeral_private_key_hex")
+        )
+        let recipient = try Curve25519.KeyAgreement.PublicKey(
+            rawRepresentation: data(vector, "recipient_public_key_hex")
+        )
+        let encapsulated = sender.publicKey.rawRepresentation
+        let dh = try sender.sharedSecretFromKeyAgreement(with: recipient)
+            .withUnsafeBytes { Data($0) }
+        let kemSuite = Data("KEM".utf8) + i2osp(0x0020, length: 2)
+        let eaePRK = labeledExtract(
+            suite: kemSuite,
+            salt: Data(),
+            label: "eae_prk",
+            input: dh
+        )
+        let sharedSecret = labeledExpand(
+            suite: kemSuite,
+            key: eaePRK,
+            label: "shared_secret",
+            info: encapsulated + recipient.rawRepresentation,
+            length: 32
+        )
+        let suite = Data("HPKE".utf8)
+            + i2osp(0x0020, length: 2)
+            + i2osp(0x0001, length: 2)
+            + i2osp(0x0002, length: 2)
+        let pskIDHash = labeledExtract(
+            suite: suite,
+            salt: Data(),
+            label: "psk_id_hash",
+            input: Data()
+        )
+        let infoHash = labeledExtract(
+            suite: suite,
+            salt: Data(),
+            label: "info_hash",
+            input: try data(vector, "info_hex")
+        )
+        let scheduleContext = Data([0]) + pskIDHash + infoHash
+        let secret = labeledExtract(
+            suite: suite,
+            salt: sharedSecret,
+            label: "secret",
+            input: Data()
+        )
+        let key = labeledExpand(
+            suite: suite,
+            key: secret,
+            label: "key",
+            info: scheduleContext,
+            length: 32
+        )
+        let baseNonce = labeledExpand(
+            suite: suite,
+            key: secret,
+            label: "base_nonce",
+            info: scheduleContext,
+            length: 12
+        )
+
+        XCTAssertEqual(encapsulated, try data(vector, "encapsulated_key_hex"))
+        XCTAssertEqual(sharedSecret, try data(vector, "shared_secret_hex"))
+        XCTAssertEqual(key, try data(vector, "key_hex"))
+        XCTAssertEqual(baseNonce, try data(vector, "base_nonce_hex"))
+        let sealed = try AES.GCM.seal(
+            data(vector, "plaintext_hex"),
+            using: SymmetricKey(data: key),
+            nonce: AES.GCM.Nonce(data: baseNonce),
+            authenticating: data(vector, "aad_hex")
+        )
+        XCTAssertEqual(
+            sealed.ciphertext + sealed.tag,
+            try data(vector, "ciphertext_hex")
+        )
+
+        let nativeSuite = HPKE.Ciphersuite(
+            kem: .Curve25519_HKDF_SHA256,
+            kdf: .HKDF_SHA256,
+            aead: .AES_GCM_256
+        )
+        let recipientPrivate = try Curve25519.KeyAgreement.PrivateKey(
+            rawRepresentation: data(vector, "recipient_private_key_hex")
+        )
+        var nativeRecipient = try HPKE.Recipient(
+            privateKey: recipientPrivate,
+            ciphersuite: nativeSuite,
+            info: data(vector, "info_hex"),
+            encapsulatedKey: encapsulated
+        )
+        XCTAssertEqual(
+            try nativeRecipient.open(
+                data(vector, "ciphertext_hex"),
+                authenticating: data(vector, "aad_hex")
+            ),
+            try data(vector, "plaintext_hex")
+        )
+    }
+
     func testHPKEV2RevisionStressAndCrashRetryOwnFreshEntropy() throws {
         let vector = try loadVector()
         let attempts = try (0..<96).map { _ in try seal(vector) }
@@ -241,6 +342,22 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
     }
 
     private func loadVector() throws -> [String: Any] {
+        let root = try loadVectorRoot()
+        guard let vector = root["single_shot"] as? [String: Any] else {
+            throw NSError(domain: "AtlasVaultHPKETests", code: 2)
+        }
+        return vector
+    }
+
+    private func loadOfficialVector() throws -> [String: Any] {
+        let root = try loadVectorRoot()
+        guard let vector = root["official_rfc9180"] as? [String: Any] else {
+            throw NSError(domain: "AtlasVaultHPKETests", code: 2)
+        }
+        return vector
+    }
+
+    private func loadVectorRoot() throws -> [String: Any] {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let candidates = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -263,12 +380,11 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
                 with: Data(contentsOf: url)
             ) as? [String: Any],
             root["format"] as? String == "atlasvault-hpke-key-delivery-vectors",
-            root["version"] as? Int == 2,
-            let vector = root["single_shot"] as? [String: Any]
+            root["version"] as? Int == 2
         else {
             throw NSError(domain: "AtlasVaultHPKETests", code: 2)
         }
-        return vector
+        return root
     }
 
     private func data(_ vector: [String: Any], _ field: String) throws -> Data {
@@ -290,5 +406,52 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
 
     private func seed(_ label: String) -> Data {
         Data(SHA256.hash(data: Data(label.utf8)))
+    }
+
+    private func labeledExtract(
+        suite: Data,
+        salt: Data,
+        label: String,
+        input: Data
+    ) -> Data {
+        let key = SymmetricKey(
+            data: salt.isEmpty ? Data(repeating: 0, count: 32) : salt
+        )
+        return Data(HMAC<SHA256>.authenticationCode(
+            for: Data("HPKE-v1".utf8) + suite + Data(label.utf8) + input,
+            using: key
+        ))
+    }
+
+    private func labeledExpand(
+        suite: Data,
+        key: Data,
+        label: String,
+        info: Data,
+        length: Int
+    ) -> Data {
+        let labeled = i2osp(length, length: 2)
+            + Data("HPKE-v1".utf8)
+            + suite
+            + Data(label.utf8)
+            + info
+        var output = Data()
+        var previous = Data()
+        var counter: UInt8 = 1
+        while output.count < length {
+            previous = Data(HMAC<SHA256>.authenticationCode(
+                for: previous + labeled + Data([counter]),
+                using: SymmetricKey(data: key)
+            ))
+            output.append(previous)
+            counter += 1
+        }
+        return output.prefix(length)
+    }
+
+    private func i2osp(_ value: Int, length: Int) -> Data {
+        Data((0..<length).reversed().map { shift in
+            UInt8((value >> (shift * 8)) & 0xff)
+        })
     }
 }
