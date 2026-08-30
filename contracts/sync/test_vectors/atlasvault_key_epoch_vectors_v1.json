@@ -6,7 +6,7 @@
   "record_derivation": {
     "vault_id": "11111111-2222-4333-8444-555555555555",
     "record_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-    "expected_epoch_1_key_sha256": "2fd01664cf6a70538c9e0f95d7e14a2d14ebafbe4b7ea60297cf39ff4bb14f03",
+    "expected_epoch_1_key_sha256": "ebf828cd050e20c8d6dada815a36411241e9b1422f1ebb5fc78c670e7c1bf1a2",
     "expected_epoch_3_key_sha256": "ded5eea0c18c2f6473d0a7be2b281efebf73ca4b5e1fc1ca581db100c455bd85"
   },
   "ring": {

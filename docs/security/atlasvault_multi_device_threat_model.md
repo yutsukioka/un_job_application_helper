@@ -348,11 +348,12 @@ separate size, authenticity, screenshot, forwarding, and accessibility review.
 
 ## 59. Key Delivery Status
 
-**Classification: implemented for local onboarding; cryptographic design under
-P3 review.** The vault key is encrypted to the invitee and bound to the exact
-transcript, peers, request, vault, key epoch, bootstrap, expiry, and delivery
-identifier. C09 evaluates whether the custom X25519/HKDF/AES-GCM composition
-should migrate to RFC 9180 HPKE or remain only after independent review.
+**Classification: implemented for local onboarding; HPKE v2 seam implemented.**
+The vault key is encrypted to the invitee and bound to the exact transcript,
+peers, request, vault, key epoch, bootstrap, expiry, and delivery identifier.
+D050 selects RFC 9180 HPKE for version 2. The version-1 reader and vectors remain
+an explicit compatibility lane; there is no implicit algorithm negotiation or
+silent downgrade.
 
 ## 60. Durable Trust Registry Status
 
@@ -396,13 +397,13 @@ Release is blocked by parser ambiguity, signature verification failure,
 transcript disagreement for identical envelopes, optional replay admission,
 private material in public artifacts or logs, auto-created identity, insecure
 platform storage, unsupported hardware claims, missing fresh-process evidence,
-or scope expansion. Production multi-device release is additionally blocked
-until C09 chooses the key-delivery construction, C10 removes production nonce
-selection from callers, C11 implements multi-epoch handling and obtains the
-required independent review, and later phases provide synchronization,
-rollback defense, revocation, and rotation. Different valid signed envelopes
-may have different transcript hashes; treating that expected difference as a
-mismatch for the same bytes is incorrect.
+or scope expansion. P3 engineering completion additionally requires D054
+objective conformance at the exact merged head. Production distribution remains
+blocked until a named external cryptographer reviews the Dart RFC 9180
+composition at P9/P10 and later phases provide synchronization, rollback
+defense, revocation, and rotation. Different valid signed envelopes may have
+different transcript hashes; treating that expected difference as a mismatch
+for the same bytes is incorrect.
 
 ## 67. Phase 2F-2 Local Onboarding Boundary
 
@@ -513,68 +514,52 @@ compromised authorized device.
 
 ## 78. P3 Cryptographic Decision Boundary
 
-The current delivery format is explicitly not HPKE. It composes fresh
-ephemeral X25519 agreement, transcript-salted HKDF-SHA256, AES-256-GCM, strict
-AAD, and a separate Ed25519 signature. Production transaction coordinators
-generate fresh inviter ephemeral private keys and 12-byte AEAD nonces, while
-the lower-level Python, Dart, and Swift primitives accept deterministic values
-from callers so fixed cross-language vectors can be reproduced.
+Decision D050 supersedes D047 and selects RFC 9180 HPKE. C10 implements an
+isolated version-2 Base-mode seam using DHKEM(X25519, HKDF-SHA256),
+HKDF-SHA256, and AES-256-GCM with internal encapsulation entropy and HPKE nonce
+derivation. Python uses pyca cryptography, Apple uses CryptoKit, and Dart keeps
+the explicit RFC composition isolated and vector-tested.
 
-C09 changes no algorithm or wire format. Decision D047 selects preservation of
-the version-1 construction under release-blocking independent cryptographic
-review. C10-C12 retain the existing wire format and vectors. The independent
-reviewer is not yet assigned; that assignment is required before T28, and the
-review plus resolution of every valid finding is required before the C12 gate
-or any production release. A valid construction weakness reopens T22 for RFC
-9180 HPKE adoption rather than permitting an undocumented version-1 change.
+Version 1 remains a distinct compatibility reader/vector lane. Version 2 is a
+separate API and context; callers do not infer algorithms from field shape or
+retry silently under version 1. The full transaction-writer cutover and eventual
+v1 removal are separate migration steps, not hidden behavior in C10-C12.
 
 ## 79. Nonce Misuse
 
-**Classification: confirmed API hazard; production call sites currently use
-fresh randomness.** AES-GCM confidentiality and integrity depend on never
-reusing a nonce with the same key. A fresh inviter ephemeral X25519 key normally
-produces a fresh delivery key, which reduces collision coupling, but it is not
-a substitute for a misuse-resistant API. The shared delivery primitives accept
-both ephemeral private key and nonce, so a future production caller could
-repeat both and catastrophically reuse the AES-GCM key/nonce pair.
-
-C10 must separate deterministic test/vector injection from production entry
-points and make production randomness internal. Under the selected version-1
-preservation path, production code must generate the ephemeral key and nonce
-inside the sealing boundary and expose no caller-selected nonce parameter. The
-existing deterministic vectors remain unchanged and available only through an
-explicit test/vector boundary.
+**Classification: mitigated in the HPKE v2 production seam.** AES-GCM
+confidentiality and integrity depend on nonce uniqueness under one key. The v2
+sealing API owns encapsulation entropy and derives the AEAD base nonce through
+the RFC 9180 key schedule; callers cannot supply a production nonce.
+Deterministic entropy remains confined to explicit test/vector entry points.
+The retained v1 compatibility lane does not authorize new caller-controlled
+production entropy.
 
 ## 80. Custom Key-Delivery Composition
 
-**Classification: cryptographically plausible but not independently approved.**
-The current construction uses standard primitives and binds the delivery to the
-signed transcript and transaction metadata. Its bespoke KDF context, AAD,
-signature layering, envelope encoding, all-zero X25519 handling, entropy
-ownership, and error behavior nevertheless create a protocol proof and review
-burden that primitive-level test coverage cannot discharge.
+**Classification: standardized design with objective engineering conformance;
+external release review pending.** RFC 9180 standardizes the KEM, key schedule,
+AEAD nonce derivation, domain separation, and encodings used by v2. D054 requires
+byte-exact official vectors, byte-identical reference differential results, and
+fail-closed malformed/tamper suites at the merged head.
 
-RFC 9180 standardizes KEM, key schedule, AEAD nonce derivation, domain
-separation, and encodings for HPKE. Adoption would reduce bespoke-composition
-surface but would not supply replay protection, recipient-compromise forward
-secrecy, trusted-device authorization, or revocation. Decision D047 preserves
-the current construction subject to a release-blocking independent review of
-the complete composition. The reviewer must be named before T28, and all valid
-findings must be resolved before the P3 gate and any production release. Until
-then, this decision is not a claim of independent cryptographic approval.
+Those controls establish reproducible engineering conformance but do not
+replace the P9/P10 external human review of the bespoke Dart composition. HPKE
+also does not supply replay protection, recipient-compromise forward secrecy,
+trusted-device authorization, revocation, or rollback detection; AtlasVault's
+application controls remain mandatory.
 
 ## 81. Key Epochs
 
-**Classification: authenticated field only; enforcement deferred to C11.** A
-positive signed 64-bit `key_epoch` is bound into device descriptors, delivery
-AAD, signatures, and acknowledgements. The current local onboarding path does
-not advance epochs, retain a usable multi-epoch key ring, reject an otherwise
-valid older epoch against a monotonic authority, rewrap state, or retire keys.
+**Classification: bounded multi-epoch primitive implemented; rotation
+deferred.** A positive signed 64-bit `key_epoch` is bound into device
+descriptors, delivery context, signatures, and acknowledgements. C11 adds a
+bounded current/retained key ring, current-only v2 sealing, and a mandatory
+trusted monotonic floor when opening a delivery. Epoch 1 preserves legacy
+record-key derivation; later epochs use epoch-separated derivation.
 
-Both C09 outcomes must preserve epoch binding. C11 must define key identity,
-current and retained epoch semantics, crash-safe migration, recovery behavior,
-and downgrade rejection without conflating this primitive support with the
-later revocation/rotation protocol.
+The ring cannot generate, advance, retire, or rotate keys. Crash-safe
+distribution, revocation, rotation, and convergence remain later protocol work.
 
 ## 82. Compromised Devices
 
@@ -595,14 +580,16 @@ compromise.
 
 ## 83. P3 Decision Requirements
 
-Decision D047 ratifies reviewed preservation of the version-1 construction.
-P3 must retain strict transcript and peer binding, fresh step-up authorization,
-fail-closed parsing, the existing cross-language vectors, explicit version
-handling with no silent downgrade, production-owned entropy, epoch binding,
-and release-blocking independent review evidence. The reviewer remains
-unassigned and must be named before T28. Review completion and resolution of
-all valid findings are required before the C12 merge and any production
-release; a valid construction weakness reopens T22 for RFC 9180 HPKE.
+Decision D050 ratifies RFC 9180 HPKE with an explicit v1-to-v2 migration.
+D054 governs P3 engineering assurance: official vectors must be byte-exact,
+reference differential output must be byte-identical, and malformed/tamper
+cases must fail closed at the merged head. Strict transcript and peer binding,
+fresh step-up authorization, fail-closed parsing, explicit version handling,
+production-owned entropy, and epoch binding remain mandatory.
+
+P3 merge is not production cryptographic sign-off. A named external
+cryptographer must review the Dart RFC 9180 composition before P9/P10 release;
+any valid weakness or conformance mismatch reopens T22.
 
 The comparison and historical recommendation are in
 [`atlasvault_key_delivery_crypto_options.md`](../architecture/atlasvault_key_delivery_crypto_options.md).

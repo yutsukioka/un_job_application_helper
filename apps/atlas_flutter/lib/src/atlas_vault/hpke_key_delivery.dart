@@ -305,16 +305,33 @@ Future<Uint8List> _hkdfExpand(
   if (length <= 0 || length > 255 * 32) {
     throw const AtlasVaultHPKEKeyDeliveryException();
   }
-  final output = BytesBuilder(copy: false);
+  final output = Uint8List(length);
   var previous = Uint8List(0);
-  for (var counter = 1; output.length < length; counter += 1) {
-    previous = await _hmac(
-      pseudorandomKey,
-      Uint8List.fromList(<int>[...previous, ...info, counter]),
-    );
-    output.add(previous);
+  var offset = 0;
+  try {
+    for (var counter = 1; offset < length; counter += 1) {
+      final hmacInput = Uint8List.fromList(<int>[
+        ...previous,
+        ...info,
+        counter,
+      ]);
+      try {
+        final next = await _hmac(pseudorandomKey, hmacInput);
+        atlasVaultWipeBytesInternal(previous);
+        previous = next;
+        final remaining = length - offset;
+        final count = remaining < previous.length ? remaining : previous.length;
+        output.setRange(offset, offset + count, previous);
+        offset += count;
+      } finally {
+        atlasVaultWipeBytesInternal(hmacInput);
+      }
+    }
+    return Uint8List.fromList(output);
+  } finally {
+    atlasVaultWipeBytesInternal(previous);
+    atlasVaultWipeBytesInternal(output);
   }
-  return Uint8List.fromList(output.takeBytes().sublist(0, length));
 }
 
 Future<Uint8List> _hmac(Uint8List key, Uint8List input) async {

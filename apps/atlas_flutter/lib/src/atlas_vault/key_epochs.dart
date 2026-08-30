@@ -157,6 +157,13 @@ final class AtlasVaultKeyEpochRing {
     required String recordId,
   }) {
     final epoch = _requireEpoch(keyEpoch);
+    if (epoch == 1) {
+      return deriveAtlasVaultRecordKey(
+        vaultKey: vaultKeyForEpoch(epoch),
+        vaultId: _identifier(vaultId),
+        recordId: _identifier(recordId),
+      );
+    }
     return atlasVaultDeriveHkdfSha256Internal(
       inputKeyMaterial: vaultKeyForEpoch(epoch),
       salt: utf8.encode('$_recordSaltPrefix${_identifier(vaultId)}'),
@@ -205,7 +212,7 @@ Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2({
   required Uint8List recipientPrivateKey,
   required AtlasVaultEpochHPKESealedVaultKeyV2 sealed,
   required Uint8List context,
-  int minimumKeyEpoch = 1,
+  required int minimumKeyEpoch,
 }) async {
   try {
     final minimum = _requireEpoch(minimumKeyEpoch);

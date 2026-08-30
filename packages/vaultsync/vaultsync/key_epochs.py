@@ -7,6 +7,7 @@ from typing import Mapping
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from .crypto import derive_record_key as _derive_legacy_record_key
 from .hpke_key_delivery import (
     HPKEKeyDeliveryError,
     HPKESealedVaultKeyV2,
@@ -214,6 +215,12 @@ class VaultKeyEpochRing:
         record_id: str,
     ) -> bytes:
         epoch = _epoch(key_epoch)
+        if epoch == 1:
+            return _derive_legacy_record_key(
+                self.vault_key_for_epoch(epoch),
+                _identifier(vault_id),
+                _identifier(record_id),
+            )
         return HKDF(
             algorithm=hashes.SHA256(),
             length=_KEY_BYTES,
@@ -261,7 +268,7 @@ def open_epoch_hpke_v2(
     recipient_private_key: bytes,
     sealed: EpochHPKESealedVaultKeyV2,
     context: bytes,
-    minimum_key_epoch: int = 1,
+    minimum_key_epoch: int,
 ) -> EpochVaultKey:
     try:
         if not isinstance(sealed, EpochHPKESealedVaultKeyV2):

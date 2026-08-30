@@ -107,7 +107,8 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
                     encapsulatedKey: sealed.encapsulatedKey,
                     ciphertext: sealed.ciphertext
                 ),
-                context: try data(vector, "context_hex")
+                context: try data(vector, "context_hex"),
+                minimumKeyEpoch: 1
             )
         )
     }
@@ -260,7 +261,8 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
                 try AtlasVaultKeyEpochHPKE.open(
                     recipientPrivateKey: recipient,
                     sealed: value,
-                    context: context
+                    context: context,
+                    minimumKeyEpoch: sealed.keyEpoch
                 )
             )
         }
@@ -268,7 +270,8 @@ final class AtlasVaultKeyEpochRingTests: XCTestCase {
             try AtlasVaultKeyEpochHPKE.open(
                 recipientPrivateKey: seed("wrong-recipient"),
                 sealed: sealed,
-                context: context
+                context: context,
+                minimumKeyEpoch: sealed.keyEpoch
             )
         )
     }

@@ -146,6 +146,13 @@ public struct AtlasVaultKeyEpochRing: Sendable {
         recordID: String
     ) throws -> Data {
         let epoch = try requireEpoch(keyEpoch)
+        if epoch == 1 {
+            return try AtlasVaultRecordCrypto.deriveRecordKey(
+                vaultKey: vaultKey(for: epoch),
+                vaultID: identifier(vaultID),
+                recordID: identifier(recordID)
+            ).withUnsafeBytes { Data($0) }
+        }
         let key = SymmetricKey(data: try vaultKey(for: epoch))
         let salt = Data(
             "atlasvault-record-key-epoch-v1:\(try identifier(vaultID))".utf8
@@ -188,7 +195,7 @@ public enum AtlasVaultKeyEpochHPKE {
         recipientPrivateKey: Data,
         sealed: AtlasVaultKeyEpochHPKESealedVaultKeyV2,
         context: Data,
-        minimumKeyEpoch: Int64 = 1
+        minimumKeyEpoch: Int64
     ) throws -> AtlasVaultEpochVaultKey {
         do {
             let epoch = try requireEpoch(sealed.keyEpoch)

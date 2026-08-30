@@ -1,6 +1,6 @@
 # AtlasVault Key-Delivery Cryptographic Options
 
-Status: **RATIFIED: OPTION B - REVIEWED VERSION-1 PRESERVATION**
+Status: **RATIFIED: OPTION A - RFC 9180 HPKE**
 
 Baseline: `638eafeba38e03fa943d2a6b366fff76af1c3d31`
 
@@ -13,10 +13,9 @@ P3/C09 compared the cryptographic envelopes available to deliver an existing
 - **Option B:** preserve the current construction, conditional on independent
   cryptographic review and resolution of every valid finding.
 
-Decision D047 selects Option B. This document records the comparison that led
-to that choice and changes no contract, wire format, dependency, or
-implementation. Option A remains the required reconsideration path if the
-independent review identifies a valid weakness in the version-1 construction.
+Decision D050 supersedes D047 and selects Option A. This document preserves the
+comparison and historical recommendation; the governing compatibility details
+are in `atlasvault_key_delivery_crypto_decision.md`.
 
 ## Verified Current Construction
 
@@ -195,17 +194,15 @@ review burden.
 
 ### Maintainer Disposition
 
-Decision D047 ratifies Option B because the near-term delivery constraint does
-not permit the Dart HPKE implementation and version-2 migration work required
-for Option A. The existing interoperable version-1 construction is preserved,
-with no wire-format change in C10-C12 and with the existing vectors retained.
+Decision D050 ratifies Option A because standardizing the KEM and key schedule
+before nonce and epoch work is less costly than preserving a recurring custom
+construction review burden. C10 introduced the isolated HPKE v2 seam and C11
+added bounded epoch support while retaining v1 read compatibility.
 
-This is conditional rather than a cryptographic-clean claim. The independent
-reviewer is currently **UNASSIGNED** and must be named before T28. The complete
-construction review and resolution of every valid finding are required before
-the C12 merge and any production release. C10 nonce ownership, C11 epoch work,
-and later P7 rotation changes are in the same review scope. A valid weakness
-reopens T22 for Option A.
+D054 supplies objective engineering assurance through official RFC 9180
+vectors, reference-differential equality, and fail-closed adversarial tests.
+This is not production sign-off: external human review of the Dart RFC 9180
+composition remains release-blocking at P9/P10.
 
 ## Primary References
 
@@ -217,9 +214,9 @@ reopens T22 for Option A.
 
 ## Ratification
 
-- [ ] **A - Adopt RFC 9180 HPKE.**
-- [x] **B - Preserve version 1 under independent cryptographic review.**
+- [x] **A - Adopt RFC 9180 HPKE.**
+- [ ] **B - Preserve version 1 under independent cryptographic review.**
 
-Ratified by maintainer decision D047 on 2026-08-29. Independent reviewer:
-**UNASSIGNED; must be named before T28**. Review completion is a release and
-C12 gate.
+Ratified by maintainer decision D050 on 2026-08-29. D054 governs the C12
+engineering-conformance gate. External human review remains a P9/P10 release
+gate.

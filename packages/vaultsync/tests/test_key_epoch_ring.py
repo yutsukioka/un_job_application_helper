@@ -266,10 +266,12 @@ def test_epoch_metadata_and_delivery_tamper_fail_closed() -> None:
                 recipient_private_key=recipient,
                 sealed=value,
                 context=context,
+                minimum_key_epoch=sealed.key_epoch,
             )
     with pytest.raises(KeyEpochError):
         open_epoch_hpke_v2(
             recipient_private_key=_seed("wrong-recipient"),
             sealed=sealed,
             context=context,
+            minimum_key_epoch=sealed.key_epoch,
         )

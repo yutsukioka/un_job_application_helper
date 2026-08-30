@@ -1,6 +1,6 @@
 # AtlasVault Key-Delivery Cryptographic Decision And Migration Plan
 
-Status: **RATIFIED - OPTION B**
+Status: **RATIFIED - OPTION A / RFC 9180 HPKE**
 
 Decision key: `P3-C09-T22`
 
@@ -15,11 +15,11 @@ The maintainer considered the two outcomes in
   production entropy injection, and make independent cryptographic review a
   release-blocking P3 condition.
 
-Decision D047 selects **B - reviewed preservation**. The current version-1
-contract remains normative, C10-C12 make no wire-format change, and the
-existing vectors are retained. Outcome A remains the fallback if independent
-review finds a valid weakness that cannot be corrected safely within the
-ratified version-1 construction.
+Decision D050 supersedes D047 and selects **A - RFC 9180 HPKE**. C10 introduced
+an explicitly versioned HPKE v2 key-delivery seam while retaining the version-1
+reader and vectors for migration compatibility. C11 added bounded key-epoch
+metadata and a usable current/retained key ring. Neither change removes the
+version-1 compatibility path or implements key rotation.
 
 ## Invariants For Either Outcome
 
@@ -69,14 +69,16 @@ switch algorithms after interruption.
 
 ### Key-Epoch Compatibility
 
-Both outcomes retain the authenticated positive `key_epoch` field. C11 must
-define current/retained epoch selection, a usable multi-epoch key ring,
-crash-safe migration, recovery, and older-epoch rejection. C09 does not assign
-new epoch semantics or advance an epoch.
+The v2 delivery context authenticates the positive `key_epoch`. C11 defines
+current/retained epoch selection and a bounded multi-epoch key ring. Epoch 1
+retains the version-1 record-key derivation so existing ciphertext remains
+readable; later epochs use epoch-separated derivation. Opening a delivery
+requires a trusted monotonic epoch floor. Rotation and retirement remain later
+work.
 
-## Outcome A Fallback Plan: RFC 9180 HPKE
+## Governing Outcome A Plan: RFC 9180 HPKE
 
-If T22 is reopened and A is later ratified, the replacement work must:
+Under D050, the version-2 work must:
 
 1. Specify a version-2 envelope with explicit HPKE mode and ciphersuite IDs.
 2. Start from the candidate Base-mode suite
@@ -106,9 +108,10 @@ artifacts can be emitted, rollback may disable new pairing but must not silently
 emit version 1 to a transaction that selected version 2. A corrective release
 must either retain a safe version-2 reader or require explicit transaction reset.
 
-## Governing Outcome B Plan: Reviewed Version-1 Preservation
+## Historical Outcome B Plan: Reviewed Version-1 Preservation
 
-Under D047, C10 and later P3 chunks must:
+D047 originally selected this path, but D050 supersedes it. These constraints
+remain useful history and define the retained version-1 compatibility boundary:
 
 1. Keep the current version-1 canonical envelope and algorithm identifiers
    unchanged unless an independent-review finding requires a version bump.
@@ -142,7 +145,8 @@ security-critical blocks rollback to an affected implementation.
 - stress, crash, and concurrency evidence for entropy ownership;
 - exact compatibility behavior for in-progress protected transactions;
 - platform key-custody and fresh-authorization evidence;
-- a documented independent-review disposition with all valid findings closed;
+- D054 objective conformance: byte-exact official RFC 9180 vectors,
+  reference-differential equality, and fail-closed malformed/tamper coverage;
   and
 - one P3 gate PR at C12 with reviewed/merged tree identity.
 
@@ -150,14 +154,14 @@ security-critical blocks rollback to an affected implementation.
 
 | Field | Value |
 |---|---|
-| Decision | `B - reviewed version-1 preservation` |
+| Decision | `A - RFC 9180 HPKE with versioned v1-to-v2 migration` |
 | Date | 2026-08-29 |
 | Maintainer | `yutsukioka` |
-| Rationale | Preserve near-term delivery because the Dart HPKE lift and version-2 migration are infeasible in the current milestone; retain the already interoperable version-1 format under release-blocking independent review. |
-| Compatibility path | Governing Outcome B plan above; no wire-format change in C10-C12 and existing vectors retained. |
-| Independent-review condition | Reviewer `UNASSIGNED`; name before T28, complete review and resolve all valid findings before C12 merge and any production release. C10, C11, and P7 construction changes are included. |
-| Reopen condition | Any valid construction weakness reopens T22 for Outcome A. |
-| Evidence | D046, D047, and E-C09-001 through E-C09-005. |
+| Rationale | Standardize the KEM and key schedule before nonce and epoch work; the one-time migration cost is lower than carrying the custom construction's recurring review burden. |
+| Compatibility path | Explicit HPKE v2 seam, retained v1 reader/vectors, epoch-1 legacy record derivation, and no silent downgrade. |
+| Conformance condition | D054 requires official RFC 9180 byte equality, vetted-reference differential equality, and fail-closed malformed/tamper suites. External human review of the Dart composition remains release-blocking at P9/P10. |
+| Reopen condition | Any unresolved conformance mismatch or valid cryptographic weakness reopens T22. |
+| Evidence | D046, D050, D054, and E-C09-001 through E-C11-007. |
 
-C09 is complete under D047. C10 may proceed under the Outcome B constraints,
-but no C10 implementation is part of this decision-record update.
+C09 is complete under D050. C10 and C11 implemented the bounded HPKE v2 and
+key-epoch slices; C12 supplies expanded adversarial coverage and the phase gate.

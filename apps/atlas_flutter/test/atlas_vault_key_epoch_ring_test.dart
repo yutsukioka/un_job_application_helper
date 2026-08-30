@@ -134,6 +134,7 @@ void main() {
           ciphertext: sealed.ciphertext,
         ),
         context: _bytes(vector, 'context_hex'),
+        minimumKeyEpoch: 1,
       ),
       throwsA(isA<AtlasVaultKeyEpochException>()),
     );
@@ -317,6 +318,7 @@ void main() {
           recipientPrivateKey: recipient,
           sealed: value,
           context: context,
+          minimumKeyEpoch: sealed.keyEpoch,
         ),
         throwsA(isA<AtlasVaultKeyEpochException>()),
       );
@@ -326,6 +328,7 @@ void main() {
         recipientPrivateKey: await _seed('wrong-recipient'),
         sealed: sealed,
         context: context,
+        minimumKeyEpoch: sealed.keyEpoch,
       ),
       throwsA(isA<AtlasVaultKeyEpochException>()),
     );
