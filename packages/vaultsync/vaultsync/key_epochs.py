@@ -86,6 +86,8 @@ class KeyRingMetadata:
         retained = value["retained_key_epochs"]
         if (
             value["format"] != _METADATA_FORMAT
+            or isinstance(value["version"], bool)
+            or not isinstance(value["version"], int)
             or value["version"] != _METADATA_VERSION
             or not isinstance(retained, list)
         ):

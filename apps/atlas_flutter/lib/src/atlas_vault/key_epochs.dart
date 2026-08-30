@@ -47,6 +47,7 @@ final class AtlasVaultKeyRingMetadata {
         }).isNotEmpty ||
         value.length != 4 ||
         value['format'] != _metadataFormat ||
+        value['version'] is! int ||
         value['version'] != _metadataVersion ||
         value['current_key_epoch'] is! int ||
         value['retained_key_epochs'] is! List<Object?>) {

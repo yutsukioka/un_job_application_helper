@@ -1,4 +1,5 @@
 import CryptoKit
+import CoreFoundation
 import Foundation
 
 public enum AtlasVaultKeyEpochError: Error, Equatable, Sendable {
@@ -33,13 +34,14 @@ public struct AtlasVaultKeyRingMetadata: Equatable, Sendable {
                 "format", "version", "current_key_epoch", "retained_key_epochs",
             ],
             jsonObject["format"] as? String == Self.format,
-            (jsonObject["version"] as? NSNumber)?.intValue == Self.version,
-            let current = jsonObject["current_key_epoch"] as? NSNumber,
-            let retained = jsonObject["retained_key_epochs"] as? [NSNumber]
+            let version = jsonObject["version"],
+            try jsonInteger(version) == Self.version,
+            let current = jsonObject["current_key_epoch"],
+            let retained = jsonObject["retained_key_epochs"] as? [Any]
         else { throw AtlasVaultKeyEpochError.operationFailed }
         try self.init(
-            currentKeyEpoch: current.int64Value,
-            retainedKeyEpochs: retained.map(\.int64Value)
+            currentKeyEpoch: jsonInteger(current),
+            retainedKeyEpochs: retained.map(jsonInteger)
         )
     }
 
@@ -210,6 +212,18 @@ public enum AtlasVaultKeyEpochHPKE {
 
 private let maximumKeyEpoch = Int64.max
 private let maximumIdentifierBytes = 1_024
+
+private func jsonInteger(_ value: Any) throws -> Int64 {
+    guard
+        let number = value as? NSNumber,
+        CFGetTypeID(number) != CFBooleanGetTypeID(),
+        ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(
+            String(cString: number.objCType)
+        ),
+        let result = Int64(number.stringValue)
+    else { throw AtlasVaultKeyEpochError.operationFailed }
+    return result
+}
 
 private func requireEpoch(_ value: Int64) throws -> Int64 {
     guard value >= 1, value <= maximumKeyEpoch else {
