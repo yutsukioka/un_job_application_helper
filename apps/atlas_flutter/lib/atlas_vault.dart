@@ -18,6 +18,8 @@ export 'src/atlas_vault/key_delivery.dart'
     hide createAtlasVaultKeyDeliveryForTesting;
 export 'src/atlas_vault/hpke_key_delivery.dart'
     hide sealAtlasVaultHPKEVaultKeyV2ForTesting;
+export 'src/atlas_vault/key_epochs.dart'
+    hide sealAtlasVaultCurrentEpochHPKEV2ForTesting;
 export 'src/atlas_vault/models.dart';
 export 'src/atlas_vault/payloads.dart';
 export 'src/atlas_vault/pairing.dart';

@@ -1,4 +1,5 @@
 {
+  "_warning": "TEST ONLY - labels derive deterministic fake material in test memory; never use it in production.",
   "format": "atlasvault-key-epoch-vectors",
   "version": 1,
   "maximum_ring_entries": 32,
