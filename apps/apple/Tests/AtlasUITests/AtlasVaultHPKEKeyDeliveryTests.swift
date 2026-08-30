@@ -1,5 +1,7 @@
+import CryptoKit
 import Foundation
 import XCTest
+
 @testable import AtlasUI
 
 final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
@@ -96,6 +98,138 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
         )
     }
 
+    func testHPKEV2PropertyRoundTripsDeterministicInputs() throws {
+        for index in 0..<32 {
+            let recipientPrivate = seed("recipient-\(index)")
+            let recipient = try Curve25519.KeyAgreement.PrivateKey(
+                rawRepresentation: recipientPrivate
+            )
+            let vaultKey = seed("vault-key-\(index)")
+            let context = seed("context-\(index)").prefix(index + 1)
+            let sealed = try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+                recipientPublicKey: recipient.publicKey.rawRepresentation,
+                vaultKey: vaultKey,
+                context: Data(context)
+            )
+
+            XCTAssertEqual(
+                try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
+                    recipientPrivateKey: recipientPrivate,
+                    sealed: sealed,
+                    context: Data(context)
+                ),
+                vaultKey
+            )
+        }
+    }
+
+    func testHPKEV2RejectsCompoundMutationsAndWrongRecipient() throws {
+        let vector = try loadVector()
+        let sealed = try seal(vector)
+        let recipient = try data(vector, "recipient_private_key_hex")
+        let context = try data(vector, "context_hex")
+
+        for index in 0..<64 {
+            var payload = sealed.ciphertext
+            let first = payload.index(
+                payload.startIndex,
+                offsetBy: index % payload.count
+            )
+            let second = payload.index(
+                payload.startIndex,
+                offsetBy: (index * 13 + 7) % payload.count
+            )
+            payload[first] ^= UInt8(1 << (index % 8))
+            payload[second] ^= UInt8(1 << ((index + 3) % 8))
+            XCTAssertThrowsError(
+                try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
+                    recipientPrivateKey: recipient,
+                    sealed: AtlasVaultHPKESealedVaultKeyV2(
+                        encapsulatedKey: sealed.encapsulatedKey,
+                        ciphertext: payload
+                    ),
+                    context: context
+                )
+            )
+        }
+
+        for index in 0..<32 {
+            var encapsulated = sealed.encapsulatedKey
+            let position = encapsulated.index(
+                encapsulated.startIndex,
+                offsetBy: index
+            )
+            encapsulated[position] ^= UInt8(1 << (index % 8))
+            XCTAssertThrowsError(
+                try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
+                    recipientPrivateKey: recipient,
+                    sealed: AtlasVaultHPKESealedVaultKeyV2(
+                        encapsulatedKey: encapsulated,
+                        ciphertext: sealed.ciphertext
+                    ),
+                    context: context
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
+                recipientPrivateKey: seed("wrong-recipient"),
+                sealed: sealed,
+                context: context
+            )
+        )
+    }
+
+    func testHPKEV2RejectsMalformedLengthsAndContextBoundaries() throws {
+        let vector = try loadVector()
+        let recipientPublic = try data(vector, "recipient_public_key_hex")
+        let recipientPrivate = try data(vector, "recipient_private_key_hex")
+        let vaultKey = try data(vector, "vault_key_hex")
+
+        for length in [0, 1, 31, 33] {
+            XCTAssertThrowsError(
+                try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+                    recipientPublicKey: Data(repeating: 0, count: length),
+                    vaultKey: vaultKey,
+                    context: Data([1])
+                )
+            )
+            XCTAssertThrowsError(
+                try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+                    recipientPublicKey: recipientPublic,
+                    vaultKey: Data(repeating: 0, count: length),
+                    context: Data([1])
+                )
+            )
+        }
+
+        for context in [Data(), Data(repeating: 0, count: 4_097)] {
+            XCTAssertThrowsError(
+                try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+                    recipientPublicKey: recipientPublic,
+                    vaultKey: vaultKey,
+                    context: context
+                )
+            )
+        }
+
+        let context = Data(repeating: 0, count: 4_096)
+        let sealed = try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+            recipientPublicKey: recipientPublic,
+            vaultKey: vaultKey,
+            context: context
+        )
+        XCTAssertEqual(
+            try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
+                recipientPrivateKey: recipientPrivate,
+                sealed: sealed,
+                context: context
+            ),
+            vaultKey
+        )
+    }
+
     private func seal(
         _ vector: [String: Any]
     ) throws -> AtlasVaultHPKESealedVaultKeyV2 {
@@ -110,12 +244,18 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let candidates = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-                .appendingPathComponent("../../contracts/sync/test_vectors/atlasvault_hpke_key_delivery_vectors_v2.json"),
-            source.appendingPathComponent("../../../../contracts/sync/test_vectors/atlasvault_hpke_key_delivery_vectors_v2.json"),
+                .appendingPathComponent(
+                    "../../contracts/sync/test_vectors/atlasvault_hpke_key_delivery_vectors_v2.json"
+                ),
+            source.appendingPathComponent(
+                "../../../../contracts/sync/test_vectors/atlasvault_hpke_key_delivery_vectors_v2.json"
+            ),
         ]
-        guard let url = candidates.first(where: {
-            FileManager.default.fileExists(atPath: $0.path)
-        }) else {
+        guard
+            let url = candidates.first(where: {
+                FileManager.default.fileExists(atPath: $0.path)
+            })
+        else {
             throw NSError(domain: "AtlasVaultHPKETests", code: 1)
         }
         guard
@@ -146,5 +286,9 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
             index = end
         }
         return result
+    }
+
+    private func seed(_ label: String) -> Data {
+        Data(SHA256.hash(data: Data(label.utf8)))
     }
 }

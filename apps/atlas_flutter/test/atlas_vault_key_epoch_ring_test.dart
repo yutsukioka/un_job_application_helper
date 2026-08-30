@@ -165,6 +165,143 @@ void main() {
       throwsA(isA<AtlasVaultKeyEpochException>()),
     );
   });
+
+  test('epoch metadata rejects non-integer JSON numbers', () {
+    final base = <String, Object?>{
+      'format': 'atlasvault-vault-key-ring',
+      'version': 1,
+      'current_key_epoch': 3,
+      'retained_key_epochs': <Object?>[1, 2],
+    };
+    final malformed = <Map<String, Object?>>[
+      <String, Object?>{...base, 'version': true},
+      <String, Object?>{...base, 'version': 1.0},
+      <String, Object?>{
+        ...base,
+        'current_key_epoch': true,
+        'retained_key_epochs': <Object?>[],
+      },
+      <String, Object?>{...base, 'current_key_epoch': 3.0},
+      <String, Object?>{
+        ...base,
+        'retained_key_epochs': <Object?>[1, 2.0],
+      },
+    ];
+    for (final value in malformed) {
+      expect(
+        () => AtlasVaultKeyRingMetadata.fromJson(value),
+        throwsA(isA<AtlasVaultKeyEpochException>()),
+      );
+    }
+  });
+
+  test('epoch ring properties hold across bounded sizes', () async {
+    for (
+      var currentEpoch = 1;
+      currentEpoch <= atlasVaultMaximumKeyRingEntries;
+      currentEpoch += 1
+    ) {
+      final keys = <int, Uint8List>{
+        for (var epoch = 1; epoch <= currentEpoch; epoch += 1)
+          epoch: await _seed('property-$currentEpoch-$epoch'),
+      };
+      final ring = AtlasVaultKeyEpochRing.fromEntries(
+        currentKeyEpoch: currentEpoch,
+        keys: keys,
+      );
+      expect(ring.metadata.retainedKeyEpochs, <int>[
+        for (var epoch = 1; epoch < currentEpoch; epoch += 1) epoch,
+      ]);
+      expect(ring.currentVaultKey, keys[currentEpoch]);
+      final derived = <String>{};
+      for (final epoch in keys.keys) {
+        derived.add(
+          _hex(
+            await ring.deriveRecordKey(
+              keyEpoch: epoch,
+              vaultId: 'vault-$currentEpoch',
+              recordId: 'record-$epoch',
+            ),
+          ),
+        );
+      }
+      expect(derived, hasLength(keys.length));
+    }
+  });
+
+  test('epoch metadata and delivery tamper fail closed', () async {
+    final base = <String, Object?>{
+      'format': 'atlasvault-vault-key-ring',
+      'version': 1,
+      'current_key_epoch': 3,
+      'retained_key_epochs': <Object?>[1, 2],
+    };
+    final malformed = <Map<String, Object?>>[
+      <String, Object?>{...base}..remove('format'),
+      <String, Object?>{...base, 'unexpected': 1},
+      <String, Object?>{
+        ...base,
+        'retained_key_epochs': <Object?>[2, 1],
+      },
+      <String, Object?>{
+        ...base,
+        'retained_key_epochs': <Object?>[1, 1],
+      },
+      <String, Object?>{
+        ...base,
+        'retained_key_epochs': <Object?>[1, 3],
+      },
+    ];
+    for (final value in malformed) {
+      expect(
+        () => AtlasVaultKeyRingMetadata.fromJson(value),
+        throwsA(isA<AtlasVaultKeyEpochException>()),
+      );
+    }
+
+    final vector = atlasVaultObject(root['hpke_v2_epoch_delivery']);
+    final ring = await _ring(root);
+    final sealed = await sealAtlasVaultCurrentEpochHPKEV2ForTesting(
+      ring: ring,
+      recipientPublicKey: _bytes(vector, 'recipient_public_key_hex'),
+      context: _bytes(vector, 'context_hex'),
+      ephemeralPrivateKey: await _seed(vector['sender_seed_label']! as String),
+    );
+    final recipient = await _seed(vector['recipient_seed_label']! as String);
+    final context = _bytes(vector, 'context_hex');
+    final encapsulated = Uint8List.fromList(sealed.encapsulatedKey)..[0] ^= 1;
+    final ciphertext = Uint8List.fromList(sealed.ciphertext)..last ^= 1;
+    final variants = <AtlasVaultEpochHPKESealedVaultKeyV2>[
+      AtlasVaultEpochHPKESealedVaultKeyV2(
+        keyEpoch: sealed.keyEpoch,
+        encapsulatedKey: encapsulated,
+        ciphertext: sealed.ciphertext,
+      ),
+      AtlasVaultEpochHPKESealedVaultKeyV2(
+        keyEpoch: sealed.keyEpoch,
+        encapsulatedKey: sealed.encapsulatedKey,
+        ciphertext: ciphertext,
+      ),
+    ];
+    for (final value in variants) {
+      await expectLater(
+        openAtlasVaultEpochHPKEV2(
+          recipientPrivateKey: recipient,
+          sealed: value,
+          context: context,
+        ),
+        throwsA(isA<AtlasVaultKeyEpochException>()),
+      );
+    }
+    await expectLater(
+      openAtlasVaultEpochHPKEV2(
+        recipientPrivateKey: await _seed('wrong-recipient'),
+        sealed: sealed,
+        context: context,
+      ),
+      throwsA(isA<AtlasVaultKeyEpochException>()),
+    );
+  });
 }
 
 Future<AtlasVaultKeyEpochRing> _ring(Map<String, Object?> root) async {

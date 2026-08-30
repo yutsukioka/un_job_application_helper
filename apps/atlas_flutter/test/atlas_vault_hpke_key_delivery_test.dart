@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:atlas/atlas_vault.dart';
 import 'package:atlas/src/atlas_vault/hpke_key_delivery.dart'
     show sealAtlasVaultHPKEVaultKeyV2ForTesting;
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/atlas_vault_vector_loader.dart';
@@ -112,6 +114,136 @@ void main() {
       throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
     );
   });
+
+  test('HPKE v2 property round-trips deterministic inputs', () async {
+    for (var index = 0; index < 32; index += 1) {
+      final recipientPrivate = await _seed('recipient-$index');
+      final recipientPair = await X25519().newKeyPairFromSeed(recipientPrivate);
+      final recipientPublic = await recipientPair.extractPublicKey();
+      final vaultKey = await _seed('vault-key-$index');
+      final ephemeralPrivate = await _seed('ephemeral-$index');
+      final contextSeed = await _seed('context-$index');
+      final context = Uint8List.sublistView(contextSeed, 0, index + 1);
+
+      final sealed = await sealAtlasVaultHPKEVaultKeyV2ForTesting(
+        recipientPublicKey: Uint8List.fromList(recipientPublic.bytes),
+        vaultKey: vaultKey,
+        context: context,
+        ephemeralPrivateKey: ephemeralPrivate,
+      );
+      expect(
+        await openAtlasVaultHPKEVaultKeyV2(
+          recipientPrivateKey: recipientPrivate,
+          sealed: sealed,
+          context: context,
+        ),
+        vaultKey,
+      );
+    }
+  });
+
+  test('HPKE v2 rejects compound mutations and wrong recipient', () async {
+    final sealed = await sealAtlasVaultHPKEVaultKeyV2ForTesting(
+      recipientPublicKey: _bytes(vector, 'recipient_public_key_hex'),
+      vaultKey: _bytes(vector, 'vault_key_hex'),
+      context: _bytes(vector, 'context_hex'),
+      ephemeralPrivateKey: _bytes(vector, 'sender_ephemeral_private_key_hex'),
+    );
+    final recipient = _bytes(vector, 'recipient_private_key_hex');
+    final context = _bytes(vector, 'context_hex');
+
+    for (var index = 0; index < 64; index += 1) {
+      final payload = Uint8List.fromList(sealed.ciphertext);
+      payload[index % payload.length] ^= 1 << (index % 8);
+      payload[(index * 13 + 7) % payload.length] ^= 1 << ((index + 3) % 8);
+      await expectLater(
+        openAtlasVaultHPKEVaultKeyV2(
+          recipientPrivateKey: recipient,
+          sealed: AtlasVaultHPKESealedVaultKeyV2(
+            encapsulatedKey: sealed.encapsulatedKey,
+            ciphertext: payload,
+          ),
+          context: context,
+        ),
+        throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+      );
+    }
+
+    for (var index = 0; index < 32; index += 1) {
+      final encapsulated = Uint8List.fromList(sealed.encapsulatedKey);
+      encapsulated[index] ^= 1 << (index % 8);
+      await expectLater(
+        openAtlasVaultHPKEVaultKeyV2(
+          recipientPrivateKey: recipient,
+          sealed: AtlasVaultHPKESealedVaultKeyV2(
+            encapsulatedKey: encapsulated,
+            ciphertext: sealed.ciphertext,
+          ),
+          context: context,
+        ),
+        throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+      );
+    }
+
+    await expectLater(
+      openAtlasVaultHPKEVaultKeyV2(
+        recipientPrivateKey: await _seed('wrong-recipient'),
+        sealed: sealed,
+        context: context,
+      ),
+      throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+    );
+  });
+
+  test('HPKE v2 rejects malformed lengths and context boundaries', () async {
+    final recipientPublic = _bytes(vector, 'recipient_public_key_hex');
+    final recipientPrivate = _bytes(vector, 'recipient_private_key_hex');
+    final vaultKey = _bytes(vector, 'vault_key_hex');
+
+    for (final length in <int>[0, 1, 31, 33]) {
+      await expectLater(
+        sealAtlasVaultHPKEVaultKeyV2(
+          recipientPublicKey: Uint8List(length),
+          vaultKey: vaultKey,
+          context: Uint8List.fromList(<int>[1]),
+        ),
+        throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+      );
+      await expectLater(
+        sealAtlasVaultHPKEVaultKeyV2(
+          recipientPublicKey: recipientPublic,
+          vaultKey: Uint8List(length),
+          context: Uint8List.fromList(<int>[1]),
+        ),
+        throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+      );
+    }
+
+    for (final context in <Uint8List>[Uint8List(0), Uint8List(4097)]) {
+      await expectLater(
+        sealAtlasVaultHPKEVaultKeyV2(
+          recipientPublicKey: recipientPublic,
+          vaultKey: vaultKey,
+          context: context,
+        ),
+        throwsA(isA<AtlasVaultHPKEKeyDeliveryException>()),
+      );
+    }
+
+    final boundary = await sealAtlasVaultHPKEVaultKeyV2(
+      recipientPublicKey: recipientPublic,
+      vaultKey: vaultKey,
+      context: Uint8List(4096),
+    );
+    expect(
+      await openAtlasVaultHPKEVaultKeyV2(
+        recipientPrivateKey: recipientPrivate,
+        sealed: boundary,
+        context: Uint8List(4096),
+      ),
+      vaultKey,
+    );
+  });
 }
 
 Future<AtlasVaultHPKESealedVaultKeyV2> _seal(Map<String, Object?> vector) {
@@ -138,4 +270,9 @@ Uint8List _decodeHex(String value) {
 
 String _hex(List<int> value) {
   return value.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
+
+Future<Uint8List> _seed(String label) async {
+  final digest = await Sha256().hash(ascii.encode(label));
+  return Uint8List.fromList(digest.bytes);
 }
