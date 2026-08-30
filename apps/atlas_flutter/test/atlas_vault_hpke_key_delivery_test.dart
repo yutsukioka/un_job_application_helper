@@ -24,16 +24,10 @@ void main() {
       recipientPublicKey: _bytes(vector, 'recipient_public_key_hex'),
       vaultKey: _bytes(vector, 'vault_key_hex'),
       context: _bytes(vector, 'context_hex'),
-      ephemeralPrivateKey: _bytes(
-        vector,
-        'sender_ephemeral_private_key_hex',
-      ),
+      ephemeralPrivateKey: _bytes(vector, 'sender_ephemeral_private_key_hex'),
     );
 
-    expect(
-      sealed.encapsulatedKey,
-      _bytes(vector, 'encapsulated_key_hex'),
-    );
+    expect(sealed.encapsulatedKey, _bytes(vector, 'encapsulated_key_hex'));
     expect(sealed.ciphertext, _bytes(vector, 'ciphertext_hex'));
     expect(
       await openAtlasVaultHPKEVaultKeyV2(
@@ -120,9 +114,7 @@ void main() {
   });
 }
 
-Future<AtlasVaultHPKESealedVaultKeyV2> _seal(
-  Map<String, Object?> vector,
-) {
+Future<AtlasVaultHPKESealedVaultKeyV2> _seal(Map<String, Object?> vector) {
   return sealAtlasVaultHPKEVaultKeyV2(
     recipientPublicKey: _bytes(vector, 'recipient_public_key_hex'),
     vaultKey: _bytes(vector, 'vault_key_hex'),

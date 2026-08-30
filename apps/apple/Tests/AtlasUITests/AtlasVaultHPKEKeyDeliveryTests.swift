@@ -34,11 +34,21 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
 
     func testHPKEV2ConcurrentAttemptsAreUniqueAndOpen() async throws {
         let vector = try loadVector()
+        let recipientPublicKey = try data(vector, "recipient_public_key_hex")
+        let recipientPrivateKey = try data(vector, "recipient_private_key_hex")
+        let vaultKey = try data(vector, "vault_key_hex")
+        let context = try data(vector, "context_hex")
         let attempts = try await withThrowingTaskGroup(
             of: AtlasVaultHPKESealedVaultKeyV2.self
         ) { group in
             for _ in 0..<48 {
-                group.addTask { try self.seal(vector) }
+                group.addTask {
+                    try AtlasVaultHPKEKeyDelivery.sealVaultKeyV2(
+                        recipientPublicKey: recipientPublicKey,
+                        vaultKey: vaultKey,
+                        context: context
+                    )
+                }
             }
             var values: [AtlasVaultHPKESealedVaultKeyV2] = []
             for try await value in group {
@@ -52,11 +62,11 @@ final class AtlasVaultHPKEKeyDeliveryTests: XCTestCase {
         for sealed in attempts {
             XCTAssertEqual(
                 try AtlasVaultHPKEKeyDelivery.openVaultKeyV2(
-                    recipientPrivateKey: data(vector, "recipient_private_key_hex"),
+                    recipientPrivateKey: recipientPrivateKey,
                     sealed: sealed,
-                    context: data(vector, "context_hex")
+                    context: context
                 ),
-                try data(vector, "vault_key_hex")
+                vaultKey
             )
         }
     }
