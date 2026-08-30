@@ -79,6 +79,7 @@ public struct AtlasVaultKeyEpochHPKESealedVaultKeyV2: Equatable, Sendable {
 
 public struct AtlasVaultKeyEpochRing: Sendable {
     public static let maximumEntries = 32
+    public static let maximumContextBytes = 4_058
 
     public let metadata: AtlasVaultKeyRingMetadata
     private let keys: [Int64: Data]
@@ -264,7 +265,10 @@ private func legacyRecordIdentifier(_ value: String) throws -> String {
 }
 
 private func epochContext(_ keyEpoch: Int64, _ context: Data) throws -> Data {
-    guard !context.isEmpty else { throw AtlasVaultKeyEpochError.operationFailed }
+    guard
+        !context.isEmpty,
+        context.count <= AtlasVaultKeyEpochRing.maximumContextBytes
+    else { throw AtlasVaultKeyEpochError.operationFailed }
     var bigEndian = UInt64(try requireEpoch(keyEpoch)).bigEndian
     let epoch = withUnsafeBytes(of: &bigEndian) { Data($0) }
     return Data("atlasvault-key-epoch-hpke-v1:".utf8)

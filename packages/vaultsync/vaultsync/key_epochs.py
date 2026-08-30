@@ -24,6 +24,7 @@ _MAX_IDENTIFIER_BYTES = 1024
 _METADATA_FORMAT = "atlasvault-vault-key-ring"
 _METADATA_VERSION = 1
 _HPKE_EPOCH_CONTEXT_PREFIX = b"atlasvault-key-epoch-hpke-v1:"
+MAXIMUM_EPOCH_CONTEXT_BYTES = 4_096 - len(_HPKE_EPOCH_CONTEXT_PREFIX) - 9
 _RECORD_SALT_PREFIX = "atlasvault-record-key-epoch-v1:"
 
 
@@ -299,7 +300,11 @@ def open_epoch_hpke_v2(
 
 def _epoch_context(key_epoch: int, context: bytes) -> bytes:
     epoch = _epoch(key_epoch)
-    if not isinstance(context, bytes) or not context:
+    if (
+        not isinstance(context, bytes)
+        or not context
+        or len(context) > MAXIMUM_EPOCH_CONTEXT_BYTES
+    ):
         raise _invalid()
     return _HPKE_EPOCH_CONTEXT_PREFIX + epoch.to_bytes(8, "big") + b":" + context
 

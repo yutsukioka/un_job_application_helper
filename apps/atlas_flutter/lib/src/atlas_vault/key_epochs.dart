@@ -6,6 +6,7 @@ import 'crypto.dart';
 import 'hpke_key_delivery.dart';
 
 const atlasVaultMaximumKeyRingEntries = 32;
+const atlasVaultMaximumEpochContextBytes = 4058;
 const _maximumKeyEpoch = 0x7fffffffffffffff;
 const _keyByteCount = 32;
 const _maximumIdentifierByteCount = 1024;
@@ -158,35 +159,43 @@ final class AtlasVaultKeyEpochRing {
     required int keyEpoch,
     required String vaultId,
     required String recordId,
-  }) {
+  }) async {
     final epoch = _requireEpoch(keyEpoch);
-    if (epoch == 1) {
-      return deriveAtlasVaultRecordKey(
-        vaultKey: vaultKeyForEpoch(epoch),
-        vaultId: _identifier(vaultId),
-        recordId: recordId,
+    final vaultKey = vaultKeyForEpoch(epoch);
+    try {
+      if (epoch == 1) {
+        return await deriveAtlasVaultRecordKey(
+          vaultKey: vaultKey,
+          vaultId: _identifier(vaultId),
+          recordId: recordId,
+        );
+      }
+      return await atlasVaultDeriveHkdfSha256Internal(
+        inputKeyMaterial: vaultKey,
+        salt: utf8.encode('$_recordSaltPrefix${_identifier(vaultId)}'),
+        info: utf8.encode('epoch:$epoch:record:${_identifier(recordId)}'),
       );
+    } finally {
+      atlasVaultWipeBytesInternal(vaultKey);
     }
-    return atlasVaultDeriveHkdfSha256Internal(
-      inputKeyMaterial: vaultKeyForEpoch(epoch),
-      salt: utf8.encode('$_recordSaltPrefix${_identifier(vaultId)}'),
-      info: utf8.encode('epoch:$epoch:record:${_identifier(recordId)}'),
-    );
   }
 
   Future<AtlasVaultEpochHPKESealedVaultKeyV2> sealCurrentHPKEV2({
     required Uint8List recipientPublicKey,
     required Uint8List context,
   }) async {
+    final vaultKey = currentVaultKey;
     try {
       final sealed = await sealAtlasVaultHPKEVaultKeyV2(
         recipientPublicKey: recipientPublicKey,
-        vaultKey: currentVaultKey,
+        vaultKey: vaultKey,
         context: _epochContext(currentKeyEpoch, context),
       );
       return _epochSealed(currentKeyEpoch, sealed);
     } catch (_) {
       throw const AtlasVaultKeyEpochException();
+    } finally {
+      atlasVaultWipeBytesInternal(vaultKey);
     }
   }
 }
@@ -198,16 +207,19 @@ sealAtlasVaultCurrentEpochHPKEV2ForTesting({
   required Uint8List context,
   required Uint8List ephemeralPrivateKey,
 }) async {
+  final vaultKey = ring.currentVaultKey;
   try {
     final sealed = await sealAtlasVaultHPKEVaultKeyV2ForTesting(
       recipientPublicKey: recipientPublicKey,
-      vaultKey: ring.currentVaultKey,
+      vaultKey: vaultKey,
       context: _epochContext(ring.currentKeyEpoch, context),
       ephemeralPrivateKey: ephemeralPrivateKey,
     );
     return _epochSealed(ring.currentKeyEpoch, sealed);
   } catch (_) {
     throw const AtlasVaultKeyEpochException();
+  } finally {
+    atlasVaultWipeBytesInternal(vaultKey);
   }
 }
 
@@ -257,10 +269,26 @@ Map<int, Uint8List> _validatedKeys(
   if (copied.keys.toSet().difference(expected).isNotEmpty ||
       expected.difference(copied.keys.toSet()).isNotEmpty ||
       copied.length > atlasVaultMaximumKeyRingEntries ||
-      copied.values.map(base64Encode).toSet().length != copied.length) {
+      _containsDuplicateKeyMaterial(copied.values)) {
     throw const AtlasVaultKeyEpochException();
   }
   return UnmodifiableMapView<int, Uint8List>(copied);
+}
+
+bool _containsDuplicateKeyMaterial(Iterable<Uint8List> values) {
+  final keys = values.toList(growable: false);
+  for (var left = 0; left < keys.length; left += 1) {
+    for (var right = left + 1; right < keys.length; right += 1) {
+      var mismatch = 0;
+      for (var index = 0; index < _keyByteCount; index += 1) {
+        mismatch |= keys[left][index] ^ keys[right][index];
+      }
+      if (mismatch == 0) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 AtlasVaultEpochHPKESealedVaultKeyV2 _epochSealed(
@@ -273,7 +301,7 @@ AtlasVaultEpochHPKESealedVaultKeyV2 _epochSealed(
 );
 
 Uint8List _epochContext(int keyEpoch, List<int> context) {
-  if (context.isEmpty) {
+  if (context.isEmpty || context.length > atlasVaultMaximumEpochContextBytes) {
     throw const AtlasVaultKeyEpochException();
   }
   final epochBytes = Uint8List(8);

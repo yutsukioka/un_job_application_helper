@@ -157,7 +157,9 @@ void main() {
     final openStart = source.indexOf(
       'Future<AtlasVaultEpochVaultKey> openAtlasVaultEpochHPKEV2',
     );
-    final validationStart = source.indexOf('Map<int, Uint8List> _validatedKeys');
+    final validationStart = source.indexOf(
+      'Map<int, Uint8List> _validatedKeys',
+    );
     final validationEnd = source.indexOf(
       'AtlasVaultEpochHPKESealedVaultKeyV2 _epochSealed',
     );

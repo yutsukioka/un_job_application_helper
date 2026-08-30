@@ -76,6 +76,11 @@ readable; later epochs use epoch-separated derivation. Opening a delivery
 requires a trusted monotonic epoch floor. Rotation and retirement remain later
 work.
 
+The epoch wrapper accepts at most 4,058 caller-supplied context bytes. Its
+38-byte authenticated epoch prefix brings the composed HPKE context to the
+4,096-byte HPKE seam limit. Python, Dart, and Swift expose and enforce this
+same bound, so callers do not depend on an implicit downstream rejection.
+
 ## Governing Outcome A Plan: RFC 9180 HPKE
 
 Under D050, the version-2 work must:
