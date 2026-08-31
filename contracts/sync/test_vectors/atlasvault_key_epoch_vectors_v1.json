@@ -1,0 +1,59 @@
+{
+  "_warning": "TEST ONLY - labels derive deterministic fake material in test memory; never use it in production.",
+  "format": "atlasvault-key-epoch-vectors",
+  "version": 1,
+  "maximum_ring_entries": 32,
+  "record_derivation": {
+    "vault_id": "11111111-2222-4333-8444-555555555555",
+    "record_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "expected_epoch_1_key_sha256": "ebf828cd050e20c8d6dada815a36411241e9b1422f1ebb5fc78c670e7c1bf1a2",
+    "expected_epoch_3_key_sha256": "ded5eea0c18c2f6473d0a7be2b281efebf73ca4b5e1fc1ca581db100c455bd85"
+  },
+  "ring": {
+    "metadata": {
+      "format": "atlasvault-vault-key-ring",
+      "version": 1,
+      "current_key_epoch": 3,
+      "retained_key_epochs": [1, 2]
+    },
+    "entries": [
+      {
+        "key_epoch": 1,
+        "vault_key_label": "atlasvault-key-epoch-vector:vault-key:1"
+      },
+      {
+        "key_epoch": 2,
+        "vault_key_label": "atlasvault-key-epoch-vector:vault-key:2"
+      },
+      {
+        "key_epoch": 3,
+        "vault_key_label": "atlasvault-key-epoch-vector:vault-key:3"
+      }
+    ]
+  },
+  "legacy_migration": {
+    "key_epoch": 1,
+    "vault_key_label": "atlasvault-key-epoch-vector:vault-key:1",
+    "expected_metadata": {
+      "format": "atlasvault-vault-key-ring",
+      "version": 1,
+      "current_key_epoch": 1,
+      "retained_key_epochs": []
+    }
+  },
+  "hpke_v2_epoch_delivery": {
+    "key_epoch": 3,
+    "context_hex": "7b2264656c6976657279223a2261746c61737661756c742d6b65792d65706f63682d766563746f72222c227265766973696f6e223a31317d",
+    "recipient_seed_label": "atlasvault-key-epoch-vector:recipient",
+    "recipient_public_key_hex": "1cb7c4fe77f29d00cda7f969eeffb753cc39591bf63ec4338f4dc73eba9b820b",
+    "sender_seed_label": "atlasvault-key-epoch-vector:sender",
+    "encapsulated_key_hex": "95f8029e1f2670fb4d03ee363a8b8152fd2794507f64cfe92a597e63f0041613",
+    "ciphertext_hex": "d9ac48779cd7b3e98dbd9e05cf9d8fc367fea74ac6a8b9ca8d6a87b43f9fb3b600776b18fe6d7533ea44bf5e5137f880"
+  },
+  "compatibility": {
+    "v1_vector": "atlasvault_trusted_pairing_delivery_vectors_v1.json",
+    "v1_key_epoch": 1,
+    "hpke_v2_vector": "atlasvault_hpke_key_delivery_vectors_v2.json",
+    "hpke_v2_version": 2
+  }
+}

@@ -8,10 +8,17 @@ ready.
 
 ## 2. Scope
 
-Phase 2F-1 covers installation identities, possession proofs, pairing
-transcripts, confirmation proofs, expiry, an injected replay-consumption
-protocol, and platform-local identity custody. It excludes actual trust,
-transport, key delivery, server state, sync, revocation, and rotation.
+The current merged baseline through P2 covers installation identities,
+possession proofs, pairing transcripts, monotonic pairing deadlines, durable
+local replay consumption, explicit file transport, local trusted-device state,
+fresh platform authorization, and authenticated encrypted vault-key delivery.
+It excludes account and ciphertext servers, ongoing synchronization, global
+rollback detection, revocation, and key rotation.
+
+Sections that name Phase 2F-1 retain the historical foundation assessment.
+Sections 67 onward describe the later local-onboarding and production-hardening
+baseline. Sections 78 onward are the P3/C09 cryptographic decision update and
+govern where they conflict with an earlier status statement.
 
 ## 3. Security Properties Under Review
 
@@ -29,12 +36,15 @@ without a separate review.
 ## 5. Vault Plaintext
 
 Private saved searches, tracker data, and future private records require
-confidentiality and integrity. Phase 2F-1 neither transports nor decrypts them.
+confidentiality and integrity. Local onboarding transports an encrypted
+bootstrap, not plaintext records; ongoing record synchronization is absent.
 
 ## 6. Vault Key
 
-The AtlasVault key requires confidentiality and controlled delivery. It is not
-part of any Phase 2F-1 descriptor, transcript, artifact, or custody bundle.
+The AtlasVault key requires confidentiality and controlled delivery. It is
+encrypted to the invitee during the reviewed local onboarding transaction and
+is never a public descriptor, transcript field, plaintext artifact, or
+serialized transaction value.
 
 ## 7. Device Signing Private Key
 
@@ -73,8 +83,10 @@ key and transcript while preserving role separation.
 
 ## 14. Trusted-Device State
 
-No trusted-device registry exists in Phase 2F-1. A self-signed descriptor is
-not trusted-device state.
+A strict device-local trusted-device registry exists after completed local
+onboarding. A self-signed descriptor alone is still not trusted-device state,
+and registry synchronization, revocation, and global membership consistency
+are not implemented.
 
 ## 15. Encrypted Server State
 
@@ -150,9 +162,12 @@ Offline extraction resistance varies and hardware backing is not guaranteed.
 
 ## 28. Stolen Unlocked Device
 
-**Classification: deferred.** An attacker using an unlocked device may invoke
-authorized signing or read process-accessible secrets. Phase 2F-1 does not
-claim protection.
+**Classification: partially mitigated.** A fresh operating-system user
+verification is required immediately before inviter key release, reducing
+silent or stale-session release. An attacker controlling an unlocked process,
+an authenticated user session, or the operating system may still authorize or
+extract process-accessible secrets. Revocation and compromise recovery remain
+absent.
 
 ## 29. Same-User Local Malware
 
@@ -234,9 +249,12 @@ sizes remain observable.
 
 ## 43. Clock Manipulation
 
-**Classification: partially mitigated.** Caller-supplied current time, a
-600-second lifetime, and 120-second skew limits reject many stale/future
-offers. A later UI also needs a monotonic deadline after presentation.
+**Classification: mitigated for a live local transaction.** Caller-supplied
+wall time remains bounded by the signed 600-second lifetime and 120-second
+skew policy. Each runtime also enforces a process-local monotonic deadline, so
+wall-clock rollback and suspend/resume cannot extend a displayed offer. A
+process restart re-establishes the monotonic anchor and revalidates signed
+wall-clock expiry.
 
 ## 44. Revoked-Device Replay
 
@@ -258,9 +276,10 @@ secret custody without leaking private material.
 
 ## 47. Explicit Non-Goals
 
-Actual pairing, trust commitment, QR transport, vault-key delivery, account
-registration, backend storage, synchronization, rollback detection,
-revocation, and rotation are non-goals.
+Account registration, backend storage, network pairing, ongoing
+synchronization, global rollback detection, revocation, and key rotation are
+non-goals of the current baseline. Local file-mediated pairing, bilateral
+trust commitment, and vault-key delivery are implemented.
 
 ## 48. Metadata Leakage
 
@@ -292,9 +311,9 @@ Server time is never authoritative.
 
 Every complete verifier requires a replay guard and consumes only after
 signature, relation, transcript, agreement, and proof verification. No
-permissive default is allowed. In-process check-and-consume is serialized so
-concurrent verifier threads cannot both admit the same transcript. Durable
-cross-process and cross-device replay state remains deferred.
+permissive default is allowed. Device-local consumption is durable and atomic
+across process replacement. Cross-device replay-state convergence and
+malicious-server rollback protection remain deferred.
 
 ## 54. Server Non-Authority
 
@@ -327,15 +346,20 @@ compatibility failure.
 **Classification: deferred.** QR or equivalent user-mediated transport needs
 separate size, authenticity, screenshot, forwarding, and accessibility review.
 
-## 59. Deferred Key Delivery
+## 59. Key Delivery Status
 
-**Classification: deferred.** No vault key is wrapped or delivered. A later
-phase must bind delivery to the verified transcript and explicit confirmation.
+**Classification: implemented for local onboarding; HPKE v2 seam implemented.**
+The vault key is encrypted to the invitee and bound to the exact transcript,
+peers, request, vault, key epoch, bootstrap, expiry, and delivery identifier.
+D050 selects RFC 9180 HPKE for version 2. The version-1 reader and vectors remain
+an explicit compatibility lane; there is no implicit algorithm negotiation or
+silent downgrade.
 
-## 60. Deferred Durable Trust Registry
+## 60. Durable Trust Registry Status
 
-**Classification: deferred.** No local or server trusted-device registry is
-created. Trust establishment remains absent.
+**Classification: implemented locally; convergence deferred.** Bilateral
+commit conditions create strict device-local trusted-device records. No server
+registry, revocation authority, or cross-device membership convergence exists.
 
 ## 61. Deferred Backend
 
@@ -373,10 +397,13 @@ Release is blocked by parser ambiguity, signature verification failure,
 transcript disagreement for identical envelopes, optional replay admission,
 private material in public artifacts or logs, auto-created identity, insecure
 platform storage, unsupported hardware claims, missing fresh-process evidence,
-scope expansion, or any implementation of trust/linking/key delivery before a
-separate review. Different valid signed envelopes may have different transcript
-hashes; treating that expected difference as equivalent to a mismatch for the
-same bytes is incorrect.
+or scope expansion. P3 engineering completion additionally requires D054
+objective conformance at the exact merged head. Production distribution remains
+blocked until a named external cryptographer reviews the Dart RFC 9180
+composition at P9/P10 and later phases provide synchronization, rollback
+defense, revocation, and rotation. Different valid signed envelopes may have
+different transcript hashes; treating that expected difference as a mismatch
+for the same bytes is incorrect.
 
 ## 67. Phase 2F-2 Local Onboarding Boundary
 
@@ -478,11 +505,93 @@ vectors.
 
 ## 77. Production Readiness Follow-Up
 
-**Classification: release blocking for production multi-device use.** Issue
-#101 tracks three controls outside this phase's fixed 53-file scope: a monotonic
-local deadline after artifact presentation, aggregate byte/resource bounds for
-protected pairing state, and explicit step-up authorization immediately before
-an inviter releases encrypted vault-key material. Phase 2F-2 may establish the
-reviewed local onboarding primitive, but production multi-device readiness must
-not be claimed until those controls receive their own implementation and
-verification gate.
+**Classification: mitigated by the merged P2 gate.** Issue #101 implemented
+process-local monotonic pairing deadlines, aggregate protected-state and
+artifact bounds, and fresh step-up authorization immediately before inviter
+key release. Those controls harden local onboarding but do not establish
+ongoing synchronization, revocation, rotation, or protection from a fully
+compromised authorized device.
+
+## 78. P3 Cryptographic Decision Boundary
+
+Decision D050 supersedes D047 and selects RFC 9180 HPKE. C10 implements an
+isolated version-2 Base-mode seam using DHKEM(X25519, HKDF-SHA256),
+HKDF-SHA256, and AES-256-GCM with internal encapsulation entropy and HPKE nonce
+derivation. Python uses pyca cryptography, Apple uses CryptoKit, and Dart keeps
+the explicit RFC composition isolated and vector-tested.
+
+Version 1 remains a distinct compatibility reader/vector lane. Version 2 is a
+separate API and context; callers do not infer algorithms from field shape or
+retry silently under version 1. The full transaction-writer cutover and eventual
+v1 removal are separate migration steps, not hidden behavior in C10-C12.
+
+## 79. Nonce Misuse
+
+**Classification: mitigated in the HPKE v2 production seam.** AES-GCM
+confidentiality and integrity depend on nonce uniqueness under one key. The v2
+sealing API owns encapsulation entropy and derives the AEAD base nonce through
+the RFC 9180 key schedule; callers cannot supply a production nonce.
+Deterministic entropy remains confined to explicit test/vector entry points.
+The retained v1 compatibility lane does not authorize new caller-controlled
+production entropy.
+
+## 80. Custom Key-Delivery Composition
+
+**Classification: standardized design with objective engineering conformance;
+external release review pending.** RFC 9180 standardizes the KEM, key schedule,
+AEAD nonce derivation, domain separation, and encodings used by v2. D054 requires
+byte-exact official vectors, byte-identical reference differential results, and
+fail-closed malformed/tamper suites at the merged head.
+
+Those controls establish reproducible engineering conformance but do not
+replace the P9/P10 external human review of the bespoke Dart composition. HPKE
+also does not supply replay protection, recipient-compromise forward secrecy,
+trusted-device authorization, revocation, or rollback detection; AtlasVault's
+application controls remain mandatory.
+
+## 81. Key Epochs
+
+**Classification: bounded multi-epoch primitive implemented; rotation
+deferred.** A positive signed 64-bit `key_epoch` is bound into device
+descriptors, delivery context, signatures, and acknowledgements. C11 adds a
+bounded current/retained key ring, current-only v2 sealing, and a mandatory
+trusted monotonic floor when opening a delivery. Epoch 1 preserves legacy
+record-key derivation; later epochs use epoch-separated derivation.
+
+The ring cannot generate, advance, retire, or rotate keys. Crash-safe
+distribution, revocation, rotation, and convergence remain later protocol work.
+
+## 82. Compromised Devices
+
+**Classification: partially mitigated before compromise; not remediated after
+compromise.** Signatures, SAS confirmation, local trust records, fresh inviter
+authorization, platform custody, and bounded transactions reduce unauthorized
+onboarding. Neither HPKE nor the current construction protects a vault key from
+a recipient whose operating system or authorized process is already
+compromised. HPKE also does not make old ciphertext confidential after
+recipient private-key compromise.
+
+The present system has no remote revocation, trusted-list convergence,
+compromise notification, key rotation, or re-encryption. A compromised trusted
+device therefore remains capable of using material it already obtained. Later
+phases must remove that device from future authorization and advance key epochs;
+C09 must not claim that a cryptographic envelope choice solves device
+compromise.
+
+## 83. P3 Decision Requirements
+
+Decision D050 ratifies RFC 9180 HPKE with an explicit v1-to-v2 migration.
+D054 governs P3 engineering assurance: official vectors must be byte-exact,
+reference differential output must be byte-identical, and malformed/tamper
+cases must fail closed at the merged head. Strict transcript and peer binding,
+fresh step-up authorization, fail-closed parsing, explicit version handling,
+production-owned entropy, and epoch binding remain mandatory.
+
+P3 merge is not production cryptographic sign-off. A named external
+cryptographer must review the Dart RFC 9180 composition before P9/P10 release;
+any valid weakness or conformance mismatch reopens T22.
+
+The comparison and historical recommendation are in
+[`atlasvault_key_delivery_crypto_options.md`](../architecture/atlasvault_key_delivery_crypto_options.md).
+The ratified compatibility plan is in
+[`atlasvault_key_delivery_crypto_decision.md`](../architecture/atlasvault_key_delivery_crypto_decision.md).

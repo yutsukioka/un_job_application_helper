@@ -1238,7 +1238,6 @@ final class AtlasVaultTrustedPairingCoordinator
       await _requireLivePairingDeadlineFor(transaction);
       return await _runtime.withInteroperabilitySession((vaultSession) async {
         Uint8List? vaultKey;
-        Uint8List? inviterEphemeral;
         try {
           final current = transaction!;
           final acceptanceArtifact = await _requireStaged(
@@ -1284,15 +1283,12 @@ final class AtlasVaultTrustedPairingCoordinator
             current,
             AtlasVaultPairingStage.sasConfirmed,
           );
-          inviterEphemeral = _randomBytes(32);
           final delivery = await createAtlasVaultKeyDelivery(
             inviter: identity,
             keyRequest: keyRequest,
             transcriptSha256: transcript,
             bootstrap: bootstrap,
             vaultKey: vaultKey,
-            inviterEphemeralPrivateKey: inviterEphemeral,
-            nonce: _randomBytes(12),
             deliveryId: _uuidProvider(),
             keyEpoch: confirmed.keyEpoch ?? _initialVaultKeyEpoch,
             expiresAt: keyRequest.request.expiresAt,
@@ -1340,7 +1336,6 @@ final class AtlasVaultTrustedPairingCoordinator
           );
         } finally {
           _wipeBytes(vaultKey);
-          _wipeBytes(inviterEphemeral);
         }
       });
     } catch (_) {

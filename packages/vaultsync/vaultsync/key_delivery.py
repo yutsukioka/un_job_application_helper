@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -745,7 +746,72 @@ def create_vault_key_delivery(
     transcript_sha256: bytes,
     bootstrap: PairingBootstrap,
     vault_key: bytes,
+    delivery_id: str,
+    key_epoch: int,
+    expires_at: str,
+) -> SignedVaultKeyDelivery:
+    try:
+        return _create_vault_key_delivery(
+            inviter,
+            key_request=key_request,
+            transcript_sha256=transcript_sha256,
+            bootstrap=bootstrap,
+            vault_key=vault_key,
+            inviter_ephemeral_private_key=X25519PrivateKey.generate(),
+            nonce=secrets.token_bytes(AES_GCM_NONCE_BYTES),
+            delivery_id=delivery_id,
+            key_epoch=key_epoch,
+            expires_at=expires_at,
+        )
+    except PairingKeyDeliveryError:
+        raise
+    except Exception as exc:
+        raise _invalid_delivery() from exc
+
+
+def create_vault_key_delivery_for_testing(
+    inviter: DeviceIdentity,
+    *,
+    key_request: SignedPairingKeyRequest,
+    transcript_sha256: bytes,
+    bootstrap: PairingBootstrap,
+    vault_key: bytes,
     inviter_ephemeral_private_key: bytes,
+    nonce: bytes,
+    delivery_id: str,
+    key_epoch: int,
+    expires_at: str,
+) -> SignedVaultKeyDelivery:
+    try:
+        private = X25519PrivateKey.from_private_bytes(
+            _bytes(inviter_ephemeral_private_key, DEVICE_KEY_BYTES)
+        )
+        return _create_vault_key_delivery(
+            inviter,
+            key_request=key_request,
+            transcript_sha256=transcript_sha256,
+            bootstrap=bootstrap,
+            vault_key=vault_key,
+            inviter_ephemeral_private_key=private,
+            nonce=nonce,
+            delivery_id=delivery_id,
+            key_epoch=key_epoch,
+            expires_at=expires_at,
+        )
+    except PairingKeyDeliveryError:
+        raise
+    except Exception as exc:
+        raise _invalid_delivery() from exc
+
+
+def _create_vault_key_delivery(
+    inviter: DeviceIdentity,
+    *,
+    key_request: SignedPairingKeyRequest,
+    transcript_sha256: bytes,
+    bootstrap: PairingBootstrap,
+    vault_key: bytes,
+    inviter_ephemeral_private_key: X25519PrivateKey,
     nonce: bytes,
     delivery_id: str,
     key_epoch: int,
@@ -766,9 +832,7 @@ def create_vault_key_delivery(
             or expires_at != request.expires_at
         ):
             raise _invalid_delivery()
-        private = X25519PrivateKey.from_private_bytes(
-            _bytes(inviter_ephemeral_private_key, DEVICE_KEY_BYTES)
-        )
+        private = inviter_ephemeral_private_key
         remote = X25519PublicKey.from_public_bytes(request.invitee_ephemeral_public_key)
         key = _delivery_key(private.exchange(remote), transcript)
         template = VaultKeyDelivery(
