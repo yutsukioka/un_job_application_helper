@@ -243,6 +243,14 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         ("/v1/accounts/{account_id}/sessions", "post"),
         ("/v1/accounts/{account_id}/devices", "get"),
         ("/v1/accounts/{account_id}/devices", "post"),
+        ("/v1/vaults/{vault_id}/metadata", "put"),
+        ("/v1/vaults/{vault_id}/metadata", "get"),
+        ("/v1/vaults/{vault_id}/objects/{object_id}", "put"),
+        ("/v1/vaults/{vault_id}/objects/{object_id}", "get"),
+        ("/v1/vaults/{vault_id}/patches", "post"),
+        ("/v1/vaults/{vault_id}/patches", "get"),
+        ("/v1/vaults/{vault_id}/snapshots", "put"),
+        ("/v1/vaults/{vault_id}/snapshots", "get"),
     }
     assert {
         (path, method)
@@ -388,7 +396,7 @@ def test_c13_registry_tamper_and_stale_parent_fail_closed(
     )
 
 
-def test_c13_models_reject_forbidden_extra_wire_fields_and_storage_is_deferred(
+def test_c13_models_reject_forbidden_extra_wire_fields(
     backend_client: tuple[AtlasVaultBackend, TestClient],
 ) -> None:
     _, client = backend_client
@@ -407,12 +415,4 @@ def test_c13_models_reject_forbidden_extra_wire_fields_and_storage_is_deferred(
             json=bootstrap,
         ).status_code
         == 422
-    )
-
-    assert (
-        client.put(
-            "/v1/vaults/opaque-vault/objects/opaque-object",
-            json={"ciphertext": "ZmFrZQ=="},
-        ).status_code
-        == 404
     )
