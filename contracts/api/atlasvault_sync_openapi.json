@@ -1,0 +1,903 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AtlasVault Zero-Knowledge Sync API",
+    "version": "1.0.0",
+    "description": "Account authentication, signed public-device registry, and ciphertext-only future storage boundary. C13 implements account and device operations; C14 implements vault storage operations."
+  },
+  "paths": {
+    "/v1/accounts/{account_id}/devices/bootstrap": {
+      "post": {
+        "operationId": "bootstrapAccountDevice",
+        "summary": "Create an account from a self-signed initial device transition",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedDeviceRegistryTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account and initial public device registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/auth/challenges": {
+      "post": {
+        "operationId": "createAccountChallenge",
+        "summary": "Issue a one-time challenge for an active public device",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthenticationChallengeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "One-time device challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticationChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/sessions": {
+      "post": {
+        "operationId": "createAccountSession",
+        "summary": "Exchange a signed one-time challenge for an account-scoped session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionProofRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short-lived account and device session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionGrant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/devices": {
+      "get": {
+        "operationId": "listAccountDevices",
+        "summary": "List the authenticated account's signed public-device registry",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current signed public-device registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addAccountDevice",
+        "summary": "Apply an add-only signed public-device transition",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedDeviceRegistryTransition"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated signed public-device registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/metadata": {
+      "put": {
+        "operationId": "putEncryptedVaultMetadata",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Opaque encrypted metadata accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getEncryptedVaultMetadata",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque encrypted metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EncryptedVaultMetadataEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/objects/{object_id}": {
+      "put": {
+        "operationId": "putOpaqueCiphertextObject",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Opaque ciphertext object accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getOpaqueCiphertextObject",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          },
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque ciphertext object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/patches": {
+      "post": {
+        "operationId": "appendEncryptedPatch",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Opaque encrypted patch accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listEncryptedPatches",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque encrypted patch page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/vaults/{vault_id}/snapshots": {
+      "put": {
+        "operationId": "putEncryptedSnapshot",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Opaque encrypted snapshot accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getEncryptedSnapshot",
+        "x-atlasvault-implementation-chunk": "C14",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VaultId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque encrypted snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque-session-token"
+      }
+    },
+    "parameters": {
+      "AccountId": {
+        "name": "account_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^ava1-[0-9a-f]{64}$"
+        }
+      },
+      "VaultId": {
+        "name": "vault_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "ObjectId": {
+        "name": "object_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "responses": {
+      "InvalidRequest": {
+        "description": "Request or signature is invalid"
+      },
+      "Unauthorized": {
+        "description": "Account or device authentication failed"
+      },
+      "Conflict": {
+        "description": "Account or registry revision conflict"
+      }
+    },
+    "schemas": {
+      "DeviceDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "device_id",
+          "signing_public_key",
+          "agreement_public_key",
+          "created_at",
+          "key_epoch"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-device-descriptor"
+          },
+          "version": {
+            "const": 1
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          },
+          "signing_public_key": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "agreement_public_key": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SignedDeviceDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "descriptor",
+          "signature"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-signed-device-descriptor"
+          },
+          "version": {
+            "const": 1
+          },
+          "descriptor": {
+            "$ref": "#/components/schemas/DeviceDescriptor"
+          },
+          "signature": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "DeviceRegistryTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "revision",
+          "parent_revision",
+          "operation",
+          "device",
+          "signer_device_id"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-device-registry-transition"
+          },
+          "version": {
+            "const": 1
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^ava1-[0-9a-f]{64}$"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "operation": {
+            "const": "add"
+          },
+          "device": {
+            "$ref": "#/components/schemas/SignedDeviceDescriptor"
+          },
+          "signer_device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          }
+        }
+      },
+      "SignedDeviceRegistryTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "transition",
+          "signature"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-signed-device-registry-transition"
+          },
+          "version": {
+            "const": 1
+          },
+          "transition": {
+            "$ref": "#/components/schemas/DeviceRegistryTransition"
+          },
+          "signature": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "AuthenticationChallengeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          }
+        }
+      },
+      "AuthenticationChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "challenge_id",
+          "challenge",
+          "expires_in_seconds"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "pattern": "^avc1-[0-9a-f]{32}$"
+          },
+          "challenge": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "expires_in_seconds": {
+            "const": 120
+          }
+        }
+      },
+      "SessionProofRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "device_id",
+          "challenge_id",
+          "signature"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "pattern": "^avd1-[0-9a-f]{64}$"
+          },
+          "challenge_id": {
+            "type": "string",
+            "pattern": "^avc1-[0-9a-f]{32}$"
+          },
+          "signature": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "SessionGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token_type",
+          "access_token",
+          "expires_in_seconds"
+        ],
+        "properties": {
+          "token_type": {
+            "const": "Bearer"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "const": 900
+          }
+        }
+      },
+      "DeviceRegistryView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "account_id",
+          "revision",
+          "devices"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-server-device-registry"
+          },
+          "version": {
+            "const": 1
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^ava1-[0-9a-f]{64}$"
+          },
+          "revision": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignedDeviceDescriptor"
+            }
+          }
+        }
+      },
+      "EncryptedVaultMetadataEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "vault_id",
+          "revision",
+          "key_epoch",
+          "nonce_b64",
+          "ciphertext_b64",
+          "aad_b64",
+          "signature_b64",
+          "content_sha256"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-encrypted-metadata-envelope"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "vault_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "nonce_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "aad_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "signature_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "OpaqueCiphertextEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "version",
+          "object_id",
+          "revision",
+          "parent_revision",
+          "key_epoch",
+          "nonce_b64",
+          "ciphertext_b64",
+          "aad_b64",
+          "signature_b64",
+          "tombstone",
+          "content_sha256"
+        ],
+        "properties": {
+          "format": {
+            "const": "atlasvault-opaque-ciphertext-envelope"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "parent_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_epoch": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "nonce_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "aad_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "signature_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "tombstone": {
+            "type": "boolean"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "OpaqueCiphertextPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "objects",
+          "next_cursor"
+        ],
+        "properties": {
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpaqueCiphertextEnvelope"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

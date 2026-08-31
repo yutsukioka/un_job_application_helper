@@ -12,26 +12,24 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
-from atlasvault_api.app import (  # noqa: E402
+from atlasvault_api.app import (
     ACCOUNT_SESSION_PROOF_DOMAIN,
     DEVICE_REGISTRY_TRANSITION_DOMAIN,
     AtlasVaultBackend,
     create_app,
 )
-from vaultsync.device_identity import (  # noqa: E402
+from vaultsync.device_identity import (
     DeviceIdentity,
     device_identity_from_private_keys,
 )
-from vaultsync.service_contract_guard import (  # noqa: E402
+from vaultsync.service_contract_guard import (
     BANNED_WIRE_FIELD_NAMES,
     find_raw_secret_wire_contract_violations,
 )
-
 
 VECTOR_PATH = (
     ROOT
@@ -224,9 +222,10 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
         "SignedDeviceRegistryTransition",
         "OpaqueCiphertextEnvelope",
     ):
-        assert contract["components"]["schemas"][schema_name][
-            "additionalProperties"
-        ] is False
+        assert (
+            contract["components"]["schemas"][schema_name]["additionalProperties"]
+            is False
+        )
 
     for path in (
         "/v1/vaults/{vault_id}/metadata",
@@ -236,6 +235,25 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     ):
         for operation in contract["paths"][path].values():
             assert operation["x-atlasvault-implementation-chunk"] == "C14"
+
+    generated = create_app(AtlasVaultBackend()).openapi()
+    implemented_operations = {
+        ("/v1/accounts/{account_id}/devices/bootstrap", "post"),
+        ("/v1/accounts/{account_id}/auth/challenges", "post"),
+        ("/v1/accounts/{account_id}/sessions", "post"),
+        ("/v1/accounts/{account_id}/devices", "get"),
+        ("/v1/accounts/{account_id}/devices", "post"),
+    }
+    assert {
+        (path, method)
+        for path, path_item in generated["paths"].items()
+        for method in path_item
+    } == implemented_operations
+    for path, method in implemented_operations:
+        assert (
+            generated["paths"][path][method]["operationId"]
+            == contract["paths"][path][method]["operationId"]
+        )
 
     assert find_raw_secret_wire_contract_violations(ROOT / "services") == []
 
@@ -354,11 +372,10 @@ def test_c13_registry_tamper_and_stale_parent_fail_closed(
     )
 
     stale = deepcopy(transition)
-    stale["transition"]["parent_revision"] = None
+    stale["transition"]["parent_revision"] = "10000000-0000-4000-8000-000000000099"
     stale["signature"] = _encode64(
         device_a.sign(
-            DEVICE_REGISTRY_TRANSITION_DOMAIN
-            + _canonical_bytes(stale["transition"])
+            DEVICE_REGISTRY_TRANSITION_DOMAIN + _canonical_bytes(stale["transition"])
         )
     )
     assert (
