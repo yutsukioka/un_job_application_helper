@@ -15,6 +15,13 @@ sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
 from atlasvault_api.app import AtlasVaultBackend, create_app
+from atlasvault_api.controls import (
+    AbuseControlPolicy,
+    AccountDeviceRateLimiter,
+    RequestRateExceeded,
+    SecretFreeTelemetry,
+    StoragePrincipal,
+)
 from test_atlasvault_backend_c13 import (
     ACCOUNT_A,
     ACCOUNT_B,
@@ -36,6 +43,7 @@ from test_atlasvault_backend_c14 import (
 DEVICE_REQUEST_LIMIT = 24
 ACCOUNT_REQUEST_LIMIT = 40
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
+OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
 
 @pytest.fixture
@@ -399,3 +407,66 @@ def test_c15_logs_metrics_and_errors_are_secret_free(
         set(metric) == {"category", "outcome", "count"}
         for metric in snapshot["metrics"]
     )
+
+
+def test_c15_rate_limiter_is_windowed_and_fails_closed_on_clock_rollback() -> None:
+    now = [10.0]
+    limiter = AccountDeviceRateLimiter(
+        AbuseControlPolicy(
+            account_request_limit=2,
+            device_request_limit=1,
+            window_seconds=60.0,
+            max_request_bytes=1024,
+        ),
+        monotonic=lambda: now[0],
+    )
+    first = StoragePrincipal(account_id="account-a", device_id="device-a")
+    second = StoragePrincipal(account_id="account-a", device_id="device-b")
+    limiter.consume(first)
+    with pytest.raises(RequestRateExceeded):
+        limiter.consume(first)
+    limiter.consume(second)
+    with pytest.raises(RequestRateExceeded):
+        limiter.consume(StoragePrincipal("account-a", "device-c"))
+
+    now[0] = 70.0
+    limiter.consume(first)
+    now[0] = 69.0
+    with pytest.raises(RequestRateExceeded):
+        limiter.consume(StoragePrincipal("account-b", "device-c"))
+
+
+def test_c15_contract_declares_storage_controls() -> None:
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    controls = contract["x-atlasvault-c15-controls"]
+    assert controls == {
+        "accountRequestLimit": ACCOUNT_REQUEST_LIMIT,
+        "deviceRequestLimit": DEVICE_REQUEST_LIMIT,
+        "maxRequestBytes": MAX_REQUEST_BYTES,
+        "rateWindowSeconds": 60,
+        "telemetryDimensions": ["category", "outcome", "count"],
+    }
+    for path in (
+        "/v1/vaults/{vault_id}/metadata",
+        "/v1/vaults/{vault_id}/objects/{object_id}",
+        "/v1/vaults/{vault_id}/patches",
+        "/v1/vaults/{vault_id}/snapshots",
+    ):
+        for operation in contract["paths"][path].values():
+            assert operation["security"] == [{"bearerAuth": []}]
+            assert {"401", "413", "429"} <= set(operation["responses"])
+
+
+def test_c15_telemetry_coarsens_unknown_categories() -> None:
+    telemetry = SecretFreeTelemetry()
+    telemetry.record("user-controlled-value", 418)
+    assert telemetry.snapshot() == {
+        "events": [
+            {
+                "category": "other",
+                "outcome": "error",
+                "status_code": 418,
+            }
+        ],
+        "metrics": [{"category": "other", "outcome": "error", "count": 1}],
+    }

@@ -195,7 +195,7 @@ def test_c13_openapi_is_zero_knowledge_and_matches_wire_guard() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
 
     assert contract["openapi"] == "3.1.0"
-    assert contract["info"]["version"] == "1.1.0"
+    assert contract["info"]["version"] == "1.2.0"
     assert set(contract["paths"]) == {
         "/v1/accounts/{account_id}/devices/bootstrap",
         "/v1/accounts/{account_id}/auth/challenges",

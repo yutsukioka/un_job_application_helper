@@ -1,8 +1,10 @@
 # AtlasVault Zero-Knowledge Sync API Contract
 
-Status: C13 account authentication and signed device-registry handlers and C14
-opaque storage handlers are implemented. The current store is injected,
-process-local test infrastructure; durable deployment remains a later P4 gate.
+Status: C13 account authentication and signed device-registry handlers, C14
+opaque storage handlers, and C15 authorization, abuse-control, and secret-free
+observability boundaries are implemented. The current store and request limiter
+are injected, process-local test infrastructure; durable deployment remains the
+C16 P4 gate.
 
 This document defines the API boundary for syncing AtlasVault data.
 The API is intentionally opaque: it may route and store encrypted blobs, but it
@@ -10,7 +12,7 @@ must not accept, derive, log, or return decrypted user data.
 
 The machine-readable source is
 `contracts/api/atlasvault_sync_openapi.json` (OpenAPI 3.1, contract version
-1.1.0). Its object schemas reject unknown fields. The Python service models are
+1.2.0). Its object schemas reject unknown fields. The Python service models are
 also strict, and `tests/security/test_A4_encrypted_sync_wire_guard.py` checks
 them against `BANNED_WIRE_FIELD_NAMES` in
 `packages/vaultsync/vaultsync/service_contract_guard.py`.
@@ -116,6 +118,33 @@ The C13 endpoints are:
 C13 intentionally supports add-only transitions. Device revocation, rotation,
 and convergent registry synchronization are not implied by this contract.
 
+## Account/Device Authorization And Abuse Controls
+
+Every ciphertext metadata, object, patch, and snapshot operation requires an
+active bearer session for a device currently registered to an account. The
+authenticated account selects the server-side opaque namespace; a token for a
+different account cannot read or mutate it. Authentication runs before request
+model parsing or storage mutation.
+
+C15 applies one aggregate storage-request window across all ciphertext paths:
+
+- 40 requests per authenticated account per 60-second window;
+- 24 requests per authenticated device per 60-second window;
+- 192 MiB maximum encoded HTTP request body.
+
+Limits are keyed by authenticated account and device IDs rather than bearer
+tokens. Rotating a session, changing ciphertext endpoints, or adding another
+device therefore cannot reset the applicable device or account window. A
+non-finite or regressing monotonic clock fails closed. Expired process-local
+windows are removed rather than retained indefinitely.
+
+The body ceiling is checked before request parsing from a valid declared length
+and while streaming request chunks. Oversized requests return a fixed 413
+response and do not reach the storage handler. Rate exhaustion returns a fixed
+429 response. C16 must choose a shared limiter before any multi-instance
+deployment; process-local limits are sufficient only for this in-process P4
+contract and its tests.
+
 ## Versioned Ciphertext Storage Shape
 
 C14 registers the following account-session-authenticated storage paths:
@@ -200,8 +229,8 @@ Allowed request fields per record:
 - `tombstone`.
 
 The server validates shape, path consistency, conditional revisions, and the
-account session. It must not decrypt or inspect `ciphertext_b64`. Broader
-account/device authorization and abuse controls remain C15 work.
+account/device session. It must not decrypt or inspect `ciphertext_b64`. C15
+enforces account/device throttles before this handler runs.
 
 ### Get Opaque Changes
 
@@ -246,11 +275,16 @@ Logs, traces, metrics, and error reports must not include:
 - recovery keys;
 - raw vault keys;
 - AES-GCM nonces paired with plaintext;
-- full encrypted blobs unless explicitly needed in a local debug fixture using
-  fake test data.
+- full encrypted blobs, including fake fixture payloads;
+- bearer tokens, idempotency keys, account/device/vault/object IDs, or request
+  paths;
+- user-supplied validation values or PII.
 
-Production logs may include opaque IDs, counts, version numbers, and high-level
-failure classes.
+C15 emits only a fixed request category (`account`, `storage`, or `other`), a
+fixed outcome class, an HTTP status number, and aggregate counts. Event history
+is bounded. Metrics have exactly `category`, `outcome`, and `count` dimensions;
+no request-derived label is permitted. Validation, authorization, storage,
+size, and throttling failures use fixed response text and do not echo input.
 
 ## Manual Export And Import
 

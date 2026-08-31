@@ -2,8 +2,19 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AtlasVault Zero-Knowledge Sync API",
-    "version": "1.1.0",
-    "description": "Account authentication, signed public-device registry, and ciphertext-only opaque storage with conditional revisions, stable cursors, and idempotent retries."
+    "version": "1.2.0",
+    "description": "Account/device-authorized ciphertext-only storage with conditional revisions, safe retries, bounded requests, throttling, and secret-free observability."
+  },
+  "x-atlasvault-c15-controls": {
+    "accountRequestLimit": 40,
+    "deviceRequestLimit": 24,
+    "rateWindowSeconds": 60,
+    "maxRequestBytes": 201326592,
+    "telemetryDimensions": [
+      "category",
+      "outcome",
+      "count"
+    ]
   },
   "paths": {
     "/v1/accounts/{account_id}/devices/bootstrap": {
@@ -242,6 +253,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -274,6 +291,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -330,6 +353,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -365,6 +394,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -418,6 +453,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -456,6 +497,12 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -509,6 +556,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -541,6 +594,12 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -642,6 +701,12 @@
       },
       "NotFound": {
         "description": "Opaque resource was not found"
+      },
+      "RequestTooLarge": {
+        "description": "Request body exceeds the fixed ciphertext request ceiling"
+      },
+      "RateLimited": {
+        "description": "Authenticated account or device request window is exhausted"
       }
     },
     "schemas": {

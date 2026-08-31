@@ -17,14 +17,24 @@ from typing import Annotated, Any, Literal, NoReturn
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from fastapi import FastAPI, Header, HTTPException, Path, Query, status
+from fastapi import FastAPI, Header, HTTPException, Path, Query, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from vaultsync.device_identity import (
     DeviceIdentityError,
     SignedDeviceDescriptor,
     verify_signed_device_descriptor,
 )
 
+from atlasvault_api.controls import (
+    AbuseControlPolicy,
+    AccountDeviceRateLimiter,
+    RequestRateExceeded,
+    SecretFreeTelemetry,
+    StoragePrincipal,
+)
 from atlasvault_api.storage import (
     IDEMPOTENCY_KEY_MAX_LENGTH,
     MAX_PAGE_SIZE,
@@ -186,6 +196,8 @@ class AtlasVaultBackend:
         *,
         entropy: Callable[[int], bytes] = secrets.token_bytes,
         monotonic: Callable[[], float] = time.monotonic,
+        abuse_policy: AbuseControlPolicy | None = None,
+        telemetry: SecretFreeTelemetry | None = None,
     ) -> None:
         self._entropy = entropy
         self._monotonic = monotonic
@@ -194,6 +206,12 @@ class AtlasVaultBackend:
         self._challenges: dict[tuple[str, str], _Challenge] = {}
         self._sessions: dict[bytes, _Session] = {}
         self.storage = InMemoryOpaqueStore(entropy=entropy)
+        self.abuse_policy = abuse_policy or AbuseControlPolicy()
+        self._storage_limiter = AccountDeviceRateLimiter(
+            self.abuse_policy,
+            monotonic=monotonic,
+        )
+        self.telemetry = telemetry or SecretFreeTelemetry()
 
     def bootstrap_account(
         self,
@@ -348,6 +366,16 @@ class AtlasVaultBackend:
         with self._lock:
             return self._authorize_token(token).account_id
 
+    def authorize_storage(self, token: str) -> StoragePrincipal:
+        with self._lock:
+            session = self._authorize_token(token)
+            principal = StoragePrincipal(
+                account_id=session.account_id,
+                device_id=session.device_id,
+            )
+            self._storage_limiter.consume(principal)
+            return principal
+
     def _authorize(self, account_id: str, token: str) -> _Session:
         session = self._authorize_token(token)
         if not hmac.compare_digest(session.account_id, account_id):
@@ -405,17 +433,111 @@ CursorQuery = Annotated[
 PageSizeQuery = Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)]
 
 
+class _RequestBodyTooLarge(ValueError):
+    """Raised before an oversized body reaches a request model or handler."""
+
+
+class _SecurityBoundaryMiddleware:
+    def __init__(self, app: ASGIApp, *, backend: AtlasVaultBackend) -> None:
+        self._app = app
+        self._backend = backend
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        category = _request_category(scope)
+        response_started = False
+        response_status = 500
+
+        async def observed_send(message: Message) -> None:
+            nonlocal response_started, response_status
+            if message["type"] == "http.response.start":
+                response_started = True
+                response_status = int(message["status"])
+            await send(message)
+
+        if category == "storage":
+            try:
+                authorization = _scope_header(scope, b"authorization")
+                self._backend.authorize_storage(_bearer_token(authorization))
+            except AuthorizationFailed:
+                await _send_fixed_error(
+                    observed_send,
+                    401,
+                    "Authorization failed.",
+                )
+                self._backend.telemetry.record(category, 401)
+                return
+            except RequestRateExceeded:
+                await _send_fixed_error(
+                    observed_send,
+                    429,
+                    "Request rate exceeded.",
+                )
+                self._backend.telemetry.record(category, 429)
+                return
+
+        try:
+            declared_length = _declared_content_length(scope)
+            if declared_length is not None and (
+                declared_length > self._backend.abuse_policy.max_request_bytes
+            ):
+                raise _RequestBodyTooLarge
+            received_bytes = 0
+
+            async def limited_receive() -> Message:
+                nonlocal received_bytes
+                message = await receive()
+                if message["type"] == "http.request":
+                    received_bytes += len(message.get("body", b""))
+                    if received_bytes > self._backend.abuse_policy.max_request_bytes:
+                        raise _RequestBodyTooLarge
+                return message
+
+            await self._app(scope, limited_receive, observed_send)
+        except _RequestBodyTooLarge:
+            if response_started:
+                raise
+            await _send_fixed_error(
+                observed_send,
+                413,
+                "Request body too large.",
+            )
+        except Exception:
+            self._backend.telemetry.record(category, 500)
+            raise
+        self._backend.telemetry.record(category, response_status)
+
+
 def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     service = backend or AtlasVaultBackend()
     app = FastAPI(
         title="AtlasVault Zero-Knowledge Sync API",
-        version="1.1.0",
+        version="1.2.0",
         description=(
-            "Account authentication, signed public-device registry, and C14 "
-            "opaque ciphertext storage with safe retry semantics."
+            "Account authentication, signed public-device registry, opaque "
+            "ciphertext storage, and C15 abuse and observability controls."
         ),
     )
     app.state.backend = service
+    app.add_middleware(_SecurityBoundaryMiddleware, backend=service)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _request: Request,
+        _error: RequestValidationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Invalid request."},
+        )
 
     @app.post(
         "/v1/accounts/{account_id}/devices/bootstrap",
@@ -705,6 +827,71 @@ def _authorized_storage_account(
             status_code=401,
             detail="Authorization failed.",
         ) from exc
+
+
+def _request_category(scope: Scope) -> str:
+    path = str(scope.get("path", ""))
+    if path.startswith("/v1/vaults/"):
+        return "storage"
+    if path.startswith("/v1/accounts/"):
+        return "account"
+    return "other"
+
+
+def _scope_header(scope: Scope, name: bytes) -> str | None:
+    values = [
+        value
+        for header_name, value in scope.get("headers", ())
+        if header_name.lower() == name
+    ]
+    if len(values) != 1:
+        return None
+    try:
+        return values[0].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+
+
+def _declared_content_length(scope: Scope) -> int | None:
+    values = [
+        value
+        for header_name, value in scope.get("headers", ())
+        if header_name.lower() == b"content-length"
+    ]
+    if not values:
+        return None
+    if len(values) != 1:
+        raise _RequestBodyTooLarge
+    try:
+        length = int(values[0].decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise _RequestBodyTooLarge from exc
+    if length < 0:
+        raise _RequestBodyTooLarge
+    return length
+
+
+async def _send_fixed_error(
+    send: Send,
+    status_code: int,
+    detail: str,
+) -> None:
+    body = json.dumps(
+        {"detail": detail},
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status_code,
+            "headers": [
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"content-type", b"application/json"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 def _raise_storage_http_error(error: ValueError) -> NoReturn:
