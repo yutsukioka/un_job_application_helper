@@ -281,20 +281,26 @@ def test_c14_conditional_object_write_rejects_stale_parent(
         payload=b"stale-ciphertext",
     )
 
-    assert client.put(
-        path,
-        headers=_write_headers(
-            authorization, expected="*", idempotency_key="cas-create"
-        ),
-        json=first,
-    ).status_code == 200
-    assert client.put(
-        path,
-        headers=_write_headers(
-            authorization, expected="cas-r1", idempotency_key="cas-update"
-        ),
-        json=second,
-    ).status_code == 200
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization, expected="*", idempotency_key="cas-create"
+            ),
+            json=first,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization, expected="cas-r1", idempotency_key="cas-update"
+            ),
+            json=second,
+        ).status_code
+        == 200
+    )
     conflict = client.put(
         path,
         headers=_write_headers(
@@ -317,13 +323,16 @@ def test_c14_concurrent_compare_and_set_accepts_exactly_one_writer(
         parent_revision=None,
         payload=b"initial",
     )
-    assert client.put(
-        path,
-        headers=_write_headers(
-            authorization, expected="*", idempotency_key="concurrent-create"
-        ),
-        json=initial,
-    ).status_code == 200
+    assert (
+        client.put(
+            path,
+            headers=_write_headers(
+                authorization, expected="*", idempotency_key="concurrent-create"
+            ),
+            json=initial,
+        ).status_code
+        == 200
+    )
 
     candidates = [
         _opaque_envelope(
@@ -435,15 +444,18 @@ def test_c14_cursor_pages_are_stable_across_retry_and_later_appends(
         parent_revision="page-r5",
         payload=b"page-6",
     )
-    assert client.post(
-        path,
-        headers=_write_headers(
-            authorization,
-            expected="page-r5",
-            idempotency_key="page-write-6",
-        ),
-        json=later,
-    ).status_code == 201
+    assert (
+        client.post(
+            path,
+            headers=_write_headers(
+                authorization,
+                expected="page-r5",
+                idempotency_key="page-write-6",
+            ),
+            json=later,
+        ).status_code
+        == 201
+    )
 
     second = client.get(
         path,
@@ -511,9 +523,7 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
         ("/v1/vaults/{vault_id}/patches", "post"),
         ("/v1/vaults/{vault_id}/snapshots", "put"),
     ):
-        refs = {
-            item["$ref"] for item in contract["paths"][path][method]["parameters"]
-        }
+        refs = {item["$ref"] for item in contract["paths"][path][method]["parameters"]}
         assert "#/components/parameters/IfMatch" in refs
         assert "#/components/parameters/IdempotencyKey" in refs
 

@@ -1,4 +1,4 @@
-"""Zero-knowledge AtlasVault account and device service boundary."""
+"""Zero-knowledge AtlasVault account, device, and opaque-storage boundary."""
 
 from atlasvault_api.app import AtlasVaultBackend, create_app
 

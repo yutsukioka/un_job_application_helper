@@ -1,8 +1,8 @@
 # AtlasVault Zero-Knowledge Sync API Contract
 
-Status: C13 account authentication and signed device-registry handlers are
-implemented. Ciphertext storage operations are versioned here but remain
-unimplemented until C14.
+Status: C13 account authentication and signed device-registry handlers and C14
+opaque storage handlers are implemented. The current store is injected,
+process-local test infrastructure; durable deployment remains a later P4 gate.
 
 This document defines the API boundary for syncing AtlasVault data.
 The API is intentionally opaque: it may route and store encrypted blobs, but it
@@ -10,7 +10,7 @@ must not accept, derive, log, or return decrypted user data.
 
 The machine-readable source is
 `contracts/api/atlasvault_sync_openapi.json` (OpenAPI 3.1, contract version
-1.0.0). Its object schemas reject unknown fields. The Python service models are
+1.1.0). Its object schemas reject unknown fields. The Python service models are
 also strict, and `tests/security/test_A4_encrypted_sync_wire_guard.py` checks
 them against `BANNED_WIRE_FIELD_NAMES` in
 `packages/vaultsync/vaultsync/service_contract_guard.py`.
@@ -90,9 +90,10 @@ None of those endpoints may receive:
 Authentication tokens are not encryption keys. Account IDs are not vault keys.
 Device IDs must be opaque sync identifiers and must not embed personal data.
 
-The current C13 implementation uses injected ephemeral account, challenge,
-session, and registry state. It requires no deployment credential or hosting
-configuration. Durable backend state and deployment are later P4 chunks.
+The current implementation uses injected ephemeral account, challenge,
+session, registry, and opaque-storage state. It requires no deployment
+credential or hosting configuration. Durable backend state and deployment are
+later P4 chunks.
 
 ## Signed Server Device Registry
 
@@ -117,8 +118,7 @@ and convergent registry synchronization are not implied by this contract.
 
 ## Versioned Ciphertext Storage Shape
 
-The OpenAPI contract reserves the following authenticated storage paths for
-C14. C13 does not register handlers for them:
+C14 registers the following account-session-authenticated storage paths:
 
 - `/v1/vaults/{vault_id}/metadata`;
 - `/v1/vaults/{vault_id}/objects/{object_id}`;
@@ -127,9 +127,39 @@ C14. C13 does not register handlers for them:
 
 Every request and response body is an exact encrypted-metadata or opaque-
 ciphertext envelope. Plaintext, passphrases, recovery keys, raw vault keys, and
-unwrapped vault keys are forbidden. Conditional revisions, cursors,
-idempotency, storage, and retry behavior are implemented in C14 and later P4
-chunks rather than in C13.
+unwrapped vault keys are forbidden. The service validates only envelope shape,
+opaque path consistency, and concurrency metadata. It does not decode
+`ciphertext_b64`, recompute its digest, inspect encrypted content, or use any
+content-derived value as a storage key.
+
+The in-process store namespaces state by authenticated account ID, opaque vault
+ID, operation kind, and opaque object ID. These identifiers are supplied by the
+protocol and must not encode vault contents. The store emits random opaque
+cursors; it never derives cursor or idempotency state from ciphertext.
+
+### Conditional Writes And Safe Retries
+
+Every write requires:
+
+- `If-Match: *` for creation of an absent resource, or the exact current opaque
+  revision for replacement or append;
+- an opaque `Idempotency-Key` scoped to that storage operation.
+
+Object, patch, and snapshot envelopes must also name the expected current
+revision in `parent_revision`. A stale parent, changed replay under the same
+idempotency key, or reuse of one revision for different bytes returns a
+conflict without mutation. Replaying the same operation returns its original
+response. Repeating the identical revision under a new idempotency key is also
+suppressed, so delivery is exactly-once in effect.
+
+Patch appends form a compare-and-set sequence at this backend storage layer.
+The server does not decrypt patches or decide record conflicts. Client patch
+semantics, authenticated snapshot contents, and convergence remain P5 work.
+
+`GET /v1/vaults/{vault_id}/patches` accepts `page_size` on the first request and
+returns an opaque `next_cursor`. Cursor state captures the append boundary and
+page size. Retrying a cursor returns the same page and next cursor, while later
+appends appear only in a fresh listing.
 
 ### Put Vault Metadata
 
@@ -169,8 +199,9 @@ Allowed request fields per record:
 - `signature_b64` and `content_sha256`;
 - `tombstone`.
 
-The server may validate shape, size, version allowlists, and authenticated user
-permissions. It must not decrypt or inspect `ciphertext_b64`.
+The server validates shape, path consistency, conditional revisions, and the
+account session. It must not decrypt or inspect `ciphertext_b64`. Broader
+account/device authorization and abuse controls remain C15 work.
 
 ### Get Opaque Changes
 
@@ -200,7 +231,7 @@ file storage, or another provider. Provider choice must not change the vault
 format. Providers store:
 
 - encrypted vault metadata;
-- encrypted record JSON blobs;
+- opaque encrypted record envelopes;
 - opaque sync cursors and clocks.
 
 Providers must not store plaintext user-saved text or raw secrets.

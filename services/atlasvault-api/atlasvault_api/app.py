@@ -1,4 +1,4 @@
-"""C13 account authentication and signed device-registry endpoints."""
+"""AtlasVault account, device-registry, and opaque-storage endpoints."""
 
 from __future__ import annotations
 
@@ -13,16 +13,30 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from fastapi import FastAPI, Header, HTTPException, Path, status
+from fastapi import FastAPI, Header, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from vaultsync.device_identity import (
     DeviceIdentityError,
     SignedDeviceDescriptor,
     verify_signed_device_descriptor,
+)
+
+from atlasvault_api.storage import (
+    IDEMPOTENCY_KEY_MAX_LENGTH,
+    MAX_PAGE_SIZE,
+    OPAQUE_ID_MAX_LENGTH,
+    REVISION_MAX_LENGTH,
+    EncryptedVaultMetadataEnvelopeModel,
+    InMemoryOpaqueStore,
+    InvalidOpaqueStorageRequest,
+    OpaqueCiphertextEnvelopeModel,
+    OpaqueCiphertextPageModel,
+    OpaqueStorageConflict,
+    OpaqueStorageNotFound,
 )
 
 ACCOUNT_SESSION_PROOF_DOMAIN = b"atlasvault-account-session-proof-v1:"
@@ -161,10 +175,10 @@ class _Account:
 
 
 class AtlasVaultBackend:
-    """Ephemeral C13 account/session/device-registry state.
+    """Ephemeral account, public-device, and opaque ciphertext state.
 
-    Ciphertext objects are intentionally absent until C14. Session tokens are
-    random bearer credentials and only their SHA-256 digests are retained.
+    Session tokens are random bearer credentials and only their SHA-256
+    digests are retained. Storage envelopes remain opaque to this service.
     """
 
     def __init__(
@@ -179,6 +193,7 @@ class AtlasVaultBackend:
         self._accounts: dict[str, _Account] = {}
         self._challenges: dict[tuple[str, str], _Challenge] = {}
         self._sessions: dict[bytes, _Session] = {}
+        self.storage = InMemoryOpaqueStore(entropy=entropy)
 
     def bootstrap_account(
         self,
@@ -329,15 +344,23 @@ class AtlasVaultBackend:
             account.revision = transition.revision
             return self._registry_view(account_id)
 
+    def authorize_account(self, token: str) -> str:
+        with self._lock:
+            return self._authorize_token(token).account_id
+
     def _authorize(self, account_id: str, token: str) -> _Session:
+        session = self._authorize_token(token)
+        if not hmac.compare_digest(session.account_id, account_id):
+            raise AuthorizationFailed
+        return session
+
+    def _authorize_token(self, token: str) -> _Session:
         digest = _token_digest(token)
         session = self._sessions.get(digest)
         if session is None or session.expires_at <= self._monotonic():
             self._sessions.pop(digest, None)
             raise AuthorizationFailed
-        if not hmac.compare_digest(session.account_id, account_id):
-            raise AuthorizationFailed
-        account = self._accounts.get(account_id)
+        account = self._accounts.get(session.account_id)
         if account is None or session.device_id not in account.devices:
             raise AuthorizationFailed
         return session
@@ -355,16 +378,41 @@ class AtlasVaultBackend:
 
 AccountPath = Annotated[str, Path(pattern=ACCOUNT_ID_PATTERN)]
 AuthorizationHeader = Annotated[str | None, Header(alias="Authorization")]
+VaultPath = Annotated[
+    str,
+    Path(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
+]
+ObjectPath = Annotated[
+    str,
+    Path(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
+]
+IfMatchHeader = Annotated[
+    str,
+    Header(alias="If-Match", min_length=1, max_length=REVISION_MAX_LENGTH),
+]
+IdempotencyKeyHeader = Annotated[
+    str,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
+    ),
+]
+CursorQuery = Annotated[
+    str | None,
+    Query(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH),
+]
+PageSizeQuery = Annotated[int | None, Query(ge=1, le=MAX_PAGE_SIZE)]
 
 
 def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     service = backend or AtlasVaultBackend()
     app = FastAPI(
         title="AtlasVault Zero-Knowledge Sync API",
-        version="1.0.0",
+        version="1.1.0",
         description=(
-            "C13 account authentication and signed public-device registry. "
-            "Ciphertext storage is reserved for C14."
+            "Account authentication, signed public-device registry, and C14 "
+            "opaque ciphertext storage with safe retry semantics."
         ),
     )
     app.state.backend = service
@@ -469,7 +517,202 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 status_code=409, detail="Registry revision conflict."
             ) from exc
 
+    @app.put(
+        "/v1/vaults/{vault_id}/metadata",
+        response_model=EncryptedVaultMetadataEnvelopeModel,
+        operation_id="putEncryptedVaultMetadata",
+    )
+    def put_encrypted_vault_metadata(
+        vault_id: VaultPath,
+        request: EncryptedVaultMetadataEnvelopeModel,
+        if_match: IfMatchHeader,
+        idempotency_key: IdempotencyKeyHeader,
+        authorization: AuthorizationHeader = None,
+    ) -> EncryptedVaultMetadataEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.put_metadata(
+                account_id,
+                vault_id,
+                request,
+                expected_revision=if_match,
+                idempotency_key=idempotency_key,
+            )
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.get(
+        "/v1/vaults/{vault_id}/metadata",
+        response_model=EncryptedVaultMetadataEnvelopeModel,
+        operation_id="getEncryptedVaultMetadata",
+    )
+    def get_encrypted_vault_metadata(
+        vault_id: VaultPath,
+        authorization: AuthorizationHeader = None,
+    ) -> EncryptedVaultMetadataEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.get_metadata(account_id, vault_id)
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.put(
+        "/v1/vaults/{vault_id}/objects/{object_id}",
+        response_model=OpaqueCiphertextEnvelopeModel,
+        operation_id="putOpaqueCiphertextObject",
+    )
+    def put_opaque_ciphertext_object(
+        vault_id: VaultPath,
+        object_id: ObjectPath,
+        request: OpaqueCiphertextEnvelopeModel,
+        if_match: IfMatchHeader,
+        idempotency_key: IdempotencyKeyHeader,
+        authorization: AuthorizationHeader = None,
+    ) -> OpaqueCiphertextEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.put_object(
+                account_id,
+                vault_id,
+                object_id,
+                request,
+                expected_revision=if_match,
+                idempotency_key=idempotency_key,
+            )
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.get(
+        "/v1/vaults/{vault_id}/objects/{object_id}",
+        response_model=OpaqueCiphertextEnvelopeModel,
+        operation_id="getOpaqueCiphertextObject",
+    )
+    def get_opaque_ciphertext_object(
+        vault_id: VaultPath,
+        object_id: ObjectPath,
+        authorization: AuthorizationHeader = None,
+    ) -> OpaqueCiphertextEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.get_object(account_id, vault_id, object_id)
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.post(
+        "/v1/vaults/{vault_id}/patches",
+        response_model=OpaqueCiphertextEnvelopeModel,
+        status_code=status.HTTP_201_CREATED,
+        operation_id="appendEncryptedPatch",
+    )
+    def append_encrypted_patch(
+        vault_id: VaultPath,
+        request: OpaqueCiphertextEnvelopeModel,
+        if_match: IfMatchHeader,
+        idempotency_key: IdempotencyKeyHeader,
+        authorization: AuthorizationHeader = None,
+    ) -> OpaqueCiphertextEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.append_patch(
+                account_id,
+                vault_id,
+                request,
+                expected_revision=if_match,
+                idempotency_key=idempotency_key,
+            )
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.get(
+        "/v1/vaults/{vault_id}/patches",
+        response_model=OpaqueCiphertextPageModel,
+        operation_id="listEncryptedPatches",
+    )
+    def list_encrypted_patches(
+        vault_id: VaultPath,
+        authorization: AuthorizationHeader = None,
+        cursor: CursorQuery = None,
+        page_size: PageSizeQuery = None,
+    ) -> OpaqueCiphertextPageModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.list_patches(
+                account_id,
+                vault_id,
+                cursor=cursor,
+                page_size=page_size,
+            )
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.put(
+        "/v1/vaults/{vault_id}/snapshots",
+        response_model=OpaqueCiphertextEnvelopeModel,
+        operation_id="putEncryptedSnapshot",
+    )
+    def put_encrypted_snapshot(
+        vault_id: VaultPath,
+        request: OpaqueCiphertextEnvelopeModel,
+        if_match: IfMatchHeader,
+        idempotency_key: IdempotencyKeyHeader,
+        authorization: AuthorizationHeader = None,
+    ) -> OpaqueCiphertextEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.put_snapshot(
+                account_id,
+                vault_id,
+                request,
+                expected_revision=if_match,
+                idempotency_key=idempotency_key,
+            )
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
+    @app.get(
+        "/v1/vaults/{vault_id}/snapshots",
+        response_model=OpaqueCiphertextEnvelopeModel,
+        operation_id="getEncryptedSnapshot",
+    )
+    def get_encrypted_snapshot(
+        vault_id: VaultPath,
+        authorization: AuthorizationHeader = None,
+    ) -> OpaqueCiphertextEnvelopeModel:
+        account_id = _authorized_storage_account(service, authorization)
+        try:
+            return service.storage.get_snapshot(account_id, vault_id)
+        except _STORAGE_ERRORS as exc:
+            _raise_storage_http_error(exc)
+
     return app
+
+
+_STORAGE_ERRORS = (
+    InvalidOpaqueStorageRequest,
+    OpaqueStorageConflict,
+    OpaqueStorageNotFound,
+)
+
+
+def _authorized_storage_account(
+    backend: AtlasVaultBackend,
+    authorization: str | None,
+) -> str:
+    try:
+        return backend.authorize_account(_bearer_token(authorization))
+    except AuthorizationFailed as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization failed.",
+        ) from exc
+
+
+def _raise_storage_http_error(error: ValueError) -> NoReturn:
+    if isinstance(error, OpaqueStorageNotFound):
+        raise HTTPException(status_code=404, detail="Opaque resource not found.")
+    if isinstance(error, OpaqueStorageConflict):
+        raise HTTPException(status_code=409, detail="Opaque revision conflict.")
+    raise HTTPException(status_code=400, detail="Invalid opaque storage request.")
 
 
 def _require_account_match(path_account_id: str, body_account_id: str) -> None:
