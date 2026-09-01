@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import re
 import secrets
 import threading
 import time
@@ -24,6 +25,8 @@ OPAQUE_ID_PATTERN = (
 REVISION_MAX_LENGTH = 128
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 HEADER_SAFE_ASCII_PATTERN = r"^[!-~]+$"
+REVISION_PATTERN = r"^[A-Za-z0-9._~-]+$"
+IF_MATCH_HEADER_PATTERN = r'^(?:\*|"[A-Za-z0-9._~-]+")$'
 MAX_KEY_EPOCH = (1 << 63) - 1
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
@@ -31,7 +34,7 @@ CURSOR_PREFIX = "avcur1-"
 CURSOR_LIFETIME_SECONDS = 300
 IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS = 600
 MAX_RECEIPT_PRUNE_PER_WRITE = 64
-_REVISION_PATTERN = r"^[!-~]+$"
+MAX_CURSOR_PRUNE_PER_LIST = 64
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 Base64EnvelopeValue = Annotated[
     str,
@@ -55,7 +58,7 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
-        pattern=_REVISION_PATTERN,
+        pattern=REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(
@@ -100,13 +103,13 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
     revision: str = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
-        pattern=_REVISION_PATTERN,
+        pattern=REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     parent_revision: str | None = Field(
         min_length=1,
         max_length=REVISION_MAX_LENGTH,
-        pattern=_REVISION_PATTERN,
+        pattern=REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(
@@ -169,6 +172,12 @@ StorageEnvelope = EncryptedVaultMetadataEnvelopeModel | OpaqueCiphertextEnvelope
 class _WriteAttempt:
     expected_revision: str
     envelope_fingerprint: bytes
+
+
+@dataclass(frozen=True)
+class _PreparedWrite:
+    attempt: _WriteAttempt
+    envelope_bytes: int
 
 
 @dataclass(frozen=True)
@@ -256,6 +265,7 @@ class InMemoryOpaqueStore:
     ) -> EncryptedVaultMetadataEnvelopeModel:
         if envelope.vault_id != vault_id:
             raise InvalidOpaqueStorageRequest
+        prepared = _prepare_write(envelope, expected_revision, idempotency_key)
         with self._lock:
             self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
@@ -263,8 +273,7 @@ class InMemoryOpaqueStore:
                 state,
                 "metadata",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
             )
             if replay is not None:
                 return _require_metadata(replay)
@@ -274,8 +283,7 @@ class InMemoryOpaqueStore:
                     state,
                     "metadata",
                     idempotency_key,
-                    expected_revision,
-                    envelope,
+                    prepared.attempt,
                     duplicate,
                 )
                 return _require_metadata(duplicate)
@@ -287,19 +295,18 @@ class InMemoryOpaqueStore:
             capacity = self._capacity_delta(
                 account_id,
                 vault_id,
-                envelope,
+                prepared.envelope_bytes,
             )
             self._require_capacity(account_id, capacity)
             state.metadata = envelope
             state.metadata_revision_fingerprints[envelope.revision] = (
-                _envelope_fingerprint(envelope)
+                prepared.attempt.envelope_fingerprint
             )
             self._record(
                 state,
                 "metadata",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
                 envelope,
             )
             self._retain_state(account_id, vault_id, state, capacity)
@@ -328,6 +335,7 @@ class InMemoryOpaqueStore:
     ) -> OpaqueCiphertextEnvelopeModel:
         if envelope.object_id != object_id:
             raise InvalidOpaqueStorageRequest
+        prepared = _prepare_write(envelope, expected_revision, idempotency_key)
         with self._lock:
             self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
@@ -336,8 +344,7 @@ class InMemoryOpaqueStore:
                 state,
                 scope,
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
             )
             if replay is not None:
                 return _require_opaque(replay)
@@ -349,8 +356,7 @@ class InMemoryOpaqueStore:
                     state,
                     scope,
                     idempotency_key,
-                    expected_revision,
-                    envelope,
+                    prepared.attempt,
                     duplicate,
                 )
                 return _require_opaque(duplicate)
@@ -359,19 +365,18 @@ class InMemoryOpaqueStore:
             capacity = self._capacity_delta(
                 account_id,
                 vault_id,
-                envelope,
+                prepared.envelope_bytes,
                 objects=int(current is None),
             )
             self._require_capacity(account_id, capacity)
             state.objects[object_id] = envelope
-            revisions[envelope.revision] = _envelope_fingerprint(envelope)
+            revisions[envelope.revision] = prepared.attempt.envelope_fingerprint
             state.object_revision_fingerprints[object_id] = revisions
             self._record(
                 state,
                 scope,
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
                 envelope,
             )
             self._retain_state(account_id, vault_id, state, capacity)
@@ -398,6 +403,7 @@ class InMemoryOpaqueStore:
         expected_revision: str,
         idempotency_key: str,
     ) -> OpaqueCiphertextEnvelopeModel:
+        prepared = _prepare_write(envelope, expected_revision, idempotency_key)
         with self._lock:
             self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
@@ -405,8 +411,7 @@ class InMemoryOpaqueStore:
                 state,
                 "patches",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
             )
             if replay is not None:
                 return _require_opaque(replay)
@@ -419,8 +424,7 @@ class InMemoryOpaqueStore:
                     state,
                     "patches",
                     idempotency_key,
-                    expected_revision,
-                    envelope,
+                    prepared.attempt,
                     duplicate,
                 )
                 return _require_opaque(duplicate)
@@ -429,7 +433,7 @@ class InMemoryOpaqueStore:
             capacity = self._capacity_delta(
                 account_id,
                 vault_id,
-                envelope,
+                prepared.envelope_bytes,
                 patches=1,
             )
             self._require_capacity(account_id, capacity)
@@ -439,8 +443,7 @@ class InMemoryOpaqueStore:
                 state,
                 "patches",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
                 envelope,
             )
             self._retain_state(account_id, vault_id, state, capacity)
@@ -455,7 +458,8 @@ class InMemoryOpaqueStore:
         page_size: int | None,
     ) -> OpaqueCiphertextPageModel:
         with self._lock:
-            self._prune_expired_cursors()
+            now = self._monotonic()
+            self._prune_expired_cursors(now)
             state = self._vaults.get((account_id, vault_id))
             patches = state.patches if state is not None else []
             if cursor is None:
@@ -471,10 +475,13 @@ class InMemoryOpaqueStore:
             record = self._cursors.get(cursor)
             if (
                 record is None
+                or record.expires_at <= now
                 or record.account_id != account_id
                 or record.vault_id != vault_id
                 or (page_size is not None and page_size != record.page_size)
             ):
+                if record is not None and record.expires_at <= now:
+                    self._cursors.pop(cursor, None)
                 raise InvalidOpaqueStorageRequest
             return self._page(
                 account_id,
@@ -495,6 +502,7 @@ class InMemoryOpaqueStore:
         expected_revision: str,
         idempotency_key: str,
     ) -> OpaqueCiphertextEnvelopeModel:
+        prepared = _prepare_write(envelope, expected_revision, idempotency_key)
         with self._lock:
             self._prune_expired_receipts()
             state = self._state(account_id, vault_id)
@@ -502,8 +510,7 @@ class InMemoryOpaqueStore:
                 state,
                 "snapshot",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
             )
             if replay is not None:
                 return _require_opaque(replay)
@@ -513,8 +520,7 @@ class InMemoryOpaqueStore:
                     state,
                     "snapshot",
                     idempotency_key,
-                    expected_revision,
-                    envelope,
+                    prepared.attempt,
                     duplicate,
                 )
                 return _require_opaque(duplicate)
@@ -526,19 +532,18 @@ class InMemoryOpaqueStore:
             capacity = self._capacity_delta(
                 account_id,
                 vault_id,
-                envelope,
+                prepared.envelope_bytes,
             )
             self._require_capacity(account_id, capacity)
             state.snapshot = envelope
             state.snapshot_revision_fingerprints[envelope.revision] = (
-                _envelope_fingerprint(envelope)
+                prepared.attempt.envelope_fingerprint
             )
             self._record(
                 state,
                 "snapshot",
                 idempotency_key,
-                expected_revision,
-                envelope,
+                prepared.attempt,
                 envelope,
             )
             self._retain_state(account_id, vault_id, state, capacity)
@@ -591,7 +596,7 @@ class InMemoryOpaqueStore:
         self,
         account_id: str,
         vault_id: str,
-        envelope: StorageEnvelope,
+        envelope_bytes: int,
         *,
         objects: int = 0,
         patches: int = 0,
@@ -601,7 +606,7 @@ class InMemoryOpaqueStore:
             objects=objects,
             patches=patches,
             revisions=1,
-            envelope_bytes=len(envelope.model_dump_json().encode("utf-8")),
+            envelope_bytes=envelope_bytes,
         )
 
     def _require_capacity(
@@ -633,20 +638,15 @@ class InMemoryOpaqueStore:
         state: _VaultState,
         scope: str,
         idempotency_key: str,
-        expected_revision: str,
-        envelope: StorageEnvelope,
+        attempt: _WriteAttempt,
     ) -> StorageEnvelope | None:
-        _require_write_tokens(expected_revision, idempotency_key)
         receipt = state.receipts.get((scope, idempotency_key))
         if receipt is None:
             return None
         if receipt.expires_at <= self._monotonic():
             state.receipts.pop((scope, idempotency_key), None)
             return None
-        if receipt.attempt != _WriteAttempt(
-            expected_revision,
-            _envelope_fingerprint(envelope),
-        ):
+        if receipt.attempt != attempt:
             raise OpaqueStorageConflict
         return receipt.response
 
@@ -655,17 +655,13 @@ class InMemoryOpaqueStore:
         state: _VaultState,
         scope: str,
         idempotency_key: str,
-        expected_revision: str,
-        envelope: StorageEnvelope,
+        attempt: _WriteAttempt,
         response: StorageEnvelope,
     ) -> None:
         receipt_key = (scope, idempotency_key)
         expires_at = self._monotonic() + IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS
         state.receipts[receipt_key] = _Receipt(
-            attempt=_WriteAttempt(
-                expected_revision,
-                _envelope_fingerprint(envelope),
-            ),
+            attempt=attempt,
             response=response,
             expires_at=expires_at,
         )
@@ -754,10 +750,13 @@ class InMemoryOpaqueStore:
                 return token
         raise RuntimeError("cursor entropy source repeated")
 
-    def _prune_expired_cursors(self) -> None:
-        now = self._monotonic()
-        while self._cursor_expiries and self._cursor_expiries[0][0] <= now:
+    def _prune_expired_cursors(self, now: float) -> None:
+        remaining = MAX_CURSOR_PRUNE_PER_LIST
+        while (
+            remaining and self._cursor_expiries and self._cursor_expiries[0][0] <= now
+        ):
             _, _, token = heapq.heappop(self._cursor_expiries)
+            remaining -= 1
             cursor = self._cursors.get(token)
             if cursor is not None and cursor.expires_at <= now:
                 self._cursors.pop(token, None)
@@ -782,8 +781,20 @@ def _reject_historical_revision(
         raise OpaqueStorageConflict
 
 
-def _envelope_fingerprint(envelope: StorageEnvelope) -> bytes:
-    return hashlib.sha256(envelope.model_dump_json().encode("utf-8")).digest()
+def _prepare_write(
+    envelope: StorageEnvelope,
+    expected_revision: str,
+    idempotency_key: str,
+) -> _PreparedWrite:
+    _require_write_tokens(expected_revision, idempotency_key)
+    encoded = envelope.model_dump_json().encode("utf-8")
+    return _PreparedWrite(
+        attempt=_WriteAttempt(
+            expected_revision=expected_revision,
+            envelope_fingerprint=hashlib.sha256(encoded).digest(),
+        ),
+        envelope_bytes=len(encoded),
+    )
 
 
 def _require_cas(
@@ -813,7 +824,8 @@ def _require_write_tokens(expected_revision: str, idempotency_key: str) -> None:
     if (
         not expected_revision
         or len(expected_revision) > REVISION_MAX_LENGTH
-        or not _is_header_safe_ascii(expected_revision)
+        or expected_revision != "*"
+        and re.fullmatch(REVISION_PATTERN, expected_revision) is None
         or not idempotency_key
         or len(idempotency_key) > IDEMPOTENCY_KEY_MAX_LENGTH
         or not _is_header_safe_ascii(idempotency_key)

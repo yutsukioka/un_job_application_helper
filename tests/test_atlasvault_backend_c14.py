@@ -45,6 +45,8 @@ REGISTRY_REVISION = "14000000-0000-4000-8000-000000000001"
 _CURSOR_LIFETIME_SECONDS = 300
 _RECEIPT_LIFETIME_SECONDS = 600
 HEADER_SAFE_ASCII_PATTERN = r"^[!-~]+$"
+REVISION_PATTERN = r"^[A-Za-z0-9._~-]+$"
+IF_MATCH_HEADER_PATTERN = r'^(?:\*|"[A-Za-z0-9._~-]+")$'
 
 
 class DeterministicEntropy:
@@ -163,7 +165,7 @@ def _write_headers(
 ) -> dict[str, str]:
     return {
         **authorization,
-        "If-Match": expected,
+        "If-Match": expected if expected == "*" else f'"{expected}"',
         "Idempotency-Key": idempotency_key,
     }
 
@@ -829,7 +831,8 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert re.fullmatch(path_id_pattern, "vault.with.dots") is not None
     assert parameters["IfMatch"]["name"] == "If-Match"
     assert parameters["IdempotencyKey"]["name"] == "Idempotency-Key"
-    assert parameters["IfMatch"]["schema"]["pattern"] == HEADER_SAFE_ASCII_PATTERN
+    assert parameters["IfMatch"]["schema"]["pattern"] == IF_MATCH_HEADER_PATTERN
+    assert parameters["IfMatch"]["schema"]["maxLength"] == 130
     assert (
         parameters["IdempotencyKey"]["schema"]["pattern"] == HEADER_SAFE_ASCII_PATTERN
     )
@@ -890,7 +893,7 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
                     if option.get("type") == "string"
                 )
             assert string_revision["minLength"] == 1
-            assert string_revision["pattern"] == "^[!-~]+$"
+            assert string_revision["pattern"] == REVISION_PATTERN
             max_length = revision.get("maxLength")
             if max_length is None:
                 max_length = next(

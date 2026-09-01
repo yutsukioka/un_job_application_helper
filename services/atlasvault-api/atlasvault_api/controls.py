@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 DEFAULT_ACCOUNT_REQUEST_LIMIT = 40
 DEFAULT_DEVICE_REQUEST_LIMIT = 24
+DEFAULT_ACCOUNT_VERIFICATION_LIMIT = 64
 DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_MAX_REQUEST_BYTES = 192 * 1024 * 1024
 DEFAULT_MAX_ACCOUNT_REQUEST_BYTES = 64 * 1024
@@ -27,7 +28,7 @@ DEFAULT_MAX_RETAINED_OBJECTS_PER_ACCOUNT = 16_384
 DEFAULT_MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
 DEFAULT_MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
 DEFAULT_MAX_RETAINED_BYTES = 1024 * 1024 * 1024
-DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT = 512 * 1024 * 1024
+DEFAULT_MAX_RETAINED_BYTES_PER_ACCOUNT = 256 * 1024 * 1024
 MAX_RETAINED_SECURITY_EVENTS = 256
 MAX_COUNTER_PRUNE_PER_REQUEST = 64
 
@@ -37,6 +38,10 @@ _SECURITY_LOGGER = logging.getLogger("atlasvault_api.security")
 
 class RequestRateExceeded(ValueError):
     """Raised when an authenticated account or device exhausts its window."""
+
+
+class AccountVerificationRateExceeded(RequestRateExceeded):
+    """Raised before an account route would exceed its crypto-work budget."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class StoragePrincipal:
 class AbuseControlPolicy:
     account_request_limit: int = DEFAULT_ACCOUNT_REQUEST_LIMIT
     device_request_limit: int = DEFAULT_DEVICE_REQUEST_LIMIT
+    account_verification_limit: int = DEFAULT_ACCOUNT_VERIFICATION_LIMIT
     window_seconds: float = DEFAULT_RATE_WINDOW_SECONDS
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     max_account_request_bytes: int = DEFAULT_MAX_ACCOUNT_REQUEST_BYTES
@@ -70,6 +76,7 @@ class AbuseControlPolicy:
         integer_limits = (
             self.account_request_limit,
             self.device_request_limit,
+            self.account_verification_limit,
             self.max_request_bytes,
             self.max_account_request_bytes,
             self.max_accounts,
@@ -193,6 +200,44 @@ class AccountDeviceRateLimiter:
                     and now - counter.started_at >= self._policy.window_seconds
                 ):
                     counters.pop(key, None)
+
+
+class AccountVerificationRateLimiter:
+    """Global fixed-window limiter for account-route signature verification."""
+
+    def __init__(
+        self,
+        policy: AbuseControlPolicy,
+        *,
+        monotonic: Callable[[], float],
+    ) -> None:
+        self._limit = policy.account_verification_limit
+        self._window_seconds = policy.window_seconds
+        self._monotonic = monotonic
+        self._lock = threading.Lock()
+        self._window_started_at: float | None = None
+        self._count = 0
+        self._last_observed: float | None = None
+
+    def consume(self) -> None:
+        with self._lock:
+            now = self._monotonic()
+            if (
+                not math.isfinite(now)
+                or self._last_observed is not None
+                and now < self._last_observed
+            ):
+                raise AccountVerificationRateExceeded
+            self._last_observed = now
+            if (
+                self._window_started_at is None
+                or now - self._window_started_at >= self._window_seconds
+            ):
+                self._window_started_at = now
+                self._count = 0
+            if self._count >= self._limit:
+                raise AccountVerificationRateExceeded
+            self._count += 1
 
 
 class SecretFreeTelemetry:

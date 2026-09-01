@@ -50,6 +50,7 @@ from test_atlasvault_backend_c14 import (
 
 DEVICE_REQUEST_LIMIT = 24
 ACCOUNT_REQUEST_LIMIT = 40
+ACCOUNT_VERIFICATION_LIMIT = 64
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
 MAX_ACCOUNT_REQUEST_BYTES = 64 * 1024
 MAX_RETAINED_ACCOUNTS = 1024
@@ -64,7 +65,7 @@ MAX_RETAINED_OBJECTS_PER_ACCOUNT = 16_384
 MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
 MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
 MAX_RETAINED_BYTES = 1024 * 1024 * 1024
-MAX_RETAINED_BYTES_PER_ACCOUNT = 512 * 1024 * 1024
+MAX_RETAINED_BYTES_PER_ACCOUNT = 256 * 1024 * 1024
 MAX_KEY_EPOCH = (1 << 63) - 1
 OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
@@ -559,6 +560,7 @@ def test_c15_contract_declares_storage_controls() -> None:
     assert controls == {
         "accountRequestLimit": ACCOUNT_REQUEST_LIMIT,
         "deviceRequestLimit": DEVICE_REQUEST_LIMIT,
+        "accountVerificationLimit": ACCOUNT_VERIFICATION_LIMIT,
         "maxRetainedAccounts": MAX_RETAINED_ACCOUNTS,
         "maxLiveChallenges": MAX_LIVE_CHALLENGES,
         "maxChallengesPerDevice": MAX_CHALLENGES_PER_DEVICE,
@@ -783,6 +785,7 @@ def test_c15_storage_key_epochs_use_the_shared_signed_64_bit_bound(
     (
         "account_request_limit",
         "device_request_limit",
+        "account_verification_limit",
         "max_request_bytes",
         "max_accounts",
         "max_challenges",
@@ -980,6 +983,7 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
     policy = AbuseControlPolicy(
         account_request_limit=11,
         device_request_limit=7,
+        account_verification_limit=9,
         window_seconds=31,
         max_request_bytes=123_456,
         max_account_request_bytes=4_096,
@@ -1001,6 +1005,7 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
     assert schema["x-atlasvault-c15-controls"] == {
         "accountRequestLimit": 11,
         "deviceRequestLimit": 7,
+        "accountVerificationLimit": 9,
         "maxRetainedAccounts": 17,
         "maxLiveChallenges": 19,
         "maxChallengesPerDevice": 3,

@@ -138,6 +138,7 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 
 - 40 requests per authenticated account per 60-second window;
 - 24 requests per authenticated device per 60-second window;
+- 64 account-route signature verifications per process per 60-second window;
 - 1,024 retained account registries per process;
 - 4,096 live authentication challenges per process;
 - 8 live authentication challenges per account/device pair;
@@ -150,7 +151,7 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 - 65,536 retained patches per account;
 - 131,072 retained ciphertext revisions per account;
 - 1 GiB conservative retained ciphertext-revision bytes per process;
-- 512 MiB conservative retained ciphertext-revision bytes per account;
+- 256 MiB conservative retained ciphertext-revision bytes per account;
 - 64 KiB maximum encoded HTTP request body on account-control routes;
 - 192 MiB maximum encoded HTTP request body on storage routes.
 
@@ -165,6 +166,10 @@ each request.
 Account bootstrap fails with 429 before insertion when the fixed process-local
 registry ceiling is reached. This bounds unauthenticated self-signed account
 creation without retaining request-derived dimensions in telemetry.
+Bootstrap, session proof, and signed device-addition verification also share a
+global fixed-window budget that is consumed before Ed25519 work. Random account
+IDs or authenticated registry updates therefore cannot trigger unbounded
+signature verification outside the storage request limiter.
 Challenge and session issuance enforce both process-wide and per-account/device
 ceilings, then fail with 429 before retaining state. Signed device addition
 likewise fails with 429 before mutation when its per-account ceiling is reached.
@@ -183,9 +188,14 @@ conservative and cumulative: replacing a current envelope does not refund its
 budget because revision fingerprints and short-lived idempotency evidence remain
 retained. This fail-closed bound keeps the default embedded backend finite; a
 durable production backend must provide equivalent or stricter quotas.
+The default per-account byte ceiling is one quarter of the process ceiling, so
+two accounts cannot consume the global retained-byte budget.
 Idempotency receipts retain only a fixed-size request-envelope fingerprint plus
 a reference to the accepted current response; replaying a large duplicate under
 new idempotency keys cannot retain another full request envelope per receipt.
+Each write serializes its envelope once before entering the store lock, then
+reuses the resulting encoded length and SHA-256 fingerprint for capacity,
+revision-history, and idempotency checks.
 
 The route-specific body ceiling is checked before request parsing from a valid
 declared length and while streaming request chunks. Oversized requests return a
@@ -234,14 +244,18 @@ cursors; it never derives cursor or idempotency state from ciphertext.
 
 Every write requires:
 
-- `If-Match: *` for creation of an absent resource, or the exact current opaque
-  revision for replacement or append;
+- `If-Match: *` for creation of an absent resource, or a quoted strong
+  entity-tag containing the exact current opaque revision for replacement or
+  append;
 - an opaque `Idempotency-Key` scoped to that storage operation.
 
-Both header values are limited to 1-128 visible ASCII bytes (`!` through `~`),
-excluding spaces, control characters, Unicode, and HTTP `obs-text`. The same
-constraint appears in the canonical and served OpenAPI schemas and is enforced
-again at the storage boundary.
+Revision values use 1-128 ASCII letters, digits, `.`, `_`, `~`, or `-`; the
+`If-Match` transport form is either `*` or that revision enclosed in double
+quotes. The service removes the quotes before exact CAS comparison.
+`Idempotency-Key` remains limited to 1-128 visible ASCII bytes (`!` through
+`~`), excluding spaces, control characters, Unicode, and HTTP `obs-text`.
+These constraints appear in the canonical and served OpenAPI schemas and are
+enforced again at the storage boundary.
 
 Object, patch, and snapshot envelopes must also name the expected current
 revision in `parent_revision`. A stale parent, changed replay under the same
@@ -268,6 +282,9 @@ page size. Retrying a cursor returns the same page and next cursor, while later
 appends appear only in a fresh listing. Cursor records expire after 300 seconds;
 an expired cursor fails closed and the client starts a fresh listing. Cursor
 expiry uses a min-heap, so listings do not scan the global live-cursor registry.
+At most 64 due cursor entries are reclaimed per listing, and the selected
+cursor's own expiry is checked independently so a due backlog cannot make an
+expired cursor usable or monopolize the store lock.
 The OpenAPI parameter intentionally has no unconditional default: omitting it
 on the first page selects 100 server-side, while later requests inherit the
 size retained in their cursor and may omit the parameter.

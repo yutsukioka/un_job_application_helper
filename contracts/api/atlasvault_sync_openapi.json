@@ -8,6 +8,7 @@
   "x-atlasvault-c15-controls": {
     "accountRequestLimit": 40,
     "deviceRequestLimit": 24,
+    "accountVerificationLimit": 64,
     "maxRetainedAccounts": 1024,
     "maxLiveChallenges": 4096,
     "maxChallengesPerDevice": 8,
@@ -20,7 +21,7 @@
     "maxRetainedPatchesPerAccount": 65536,
     "maxRetainedRevisionsPerAccount": 131072,
     "maxRetainedBytes": 1073741824,
-    "maxRetainedBytesPerAccount": 536870912,
+    "maxRetainedBytesPerAccount": 268435456,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
     "maxAccountRequestBytes": 65536,
@@ -729,12 +730,12 @@
         "name": "If-Match",
         "in": "header",
         "required": true,
-        "description": "Opaque current revision, or * when creating an absent resource.",
+        "description": "Quoted strong entity-tag for the opaque current revision, or * when creating an absent resource.",
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[!-~]+$"
+          "maxLength": 130,
+          "pattern": "^(?:\\*|\"[A-Za-z0-9._~-]+\")$"
         }
       },
       "IdempotencyKey": {
@@ -1175,7 +1176,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[!-~]+$",
+            "pattern": "^[A-Za-z0-9._~-]+$",
             "not": {
               "const": "*"
             }
@@ -1246,7 +1247,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[!-~]+$",
+            "pattern": "^[A-Za-z0-9._~-]+$",
             "not": {
               "const": "*"
             }
@@ -1258,7 +1259,7 @@
             ],
             "minLength": 1,
             "maxLength": 128,
-            "pattern": "^[!-~]+$",
+            "pattern": "^[A-Za-z0-9._~-]+$",
             "not": {
               "const": "*"
             }

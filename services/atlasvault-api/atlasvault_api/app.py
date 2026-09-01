@@ -43,6 +43,8 @@ from vaultsync.device_identity import (
 from atlasvault_api.controls import (
     AbuseControlPolicy,
     AccountDeviceRateLimiter,
+    AccountVerificationRateExceeded,
+    AccountVerificationRateLimiter,
     RequestRateExceeded,
     SecretFreeTelemetry,
     StoragePrincipal,
@@ -50,6 +52,7 @@ from atlasvault_api.controls import (
 from atlasvault_api.storage import (
     HEADER_SAFE_ASCII_PATTERN,
     IDEMPOTENCY_KEY_MAX_LENGTH,
+    IF_MATCH_HEADER_PATTERN,
     MAX_KEY_EPOCH,
     MAX_PAGE_SIZE,
     OPAQUE_ID_MAX_LENGTH,
@@ -447,6 +450,10 @@ class AtlasVaultBackend:
             self.abuse_policy,
             monotonic=monotonic,
         )
+        self._account_verification_limiter = AccountVerificationRateLimiter(
+            self.abuse_policy,
+            monotonic=monotonic,
+        )
         self.telemetry = telemetry or SecretFreeTelemetry()
 
     def bootstrap_account(
@@ -461,6 +468,7 @@ class AtlasVaultBackend:
             raise InvalidRegistryTransition
         with self._lock:
             self._require_account_capacity(account_id)
+        self._account_verification_limiter.consume()
         descriptor = transition.device.verified()
         if not hmac.compare_digest(
             transition.signer_device_id,
@@ -544,6 +552,7 @@ class AtlasVaultBackend:
             if signed_descriptor is None:
                 raise AuthorizationFailed
 
+        self._account_verification_limiter.consume()
         _verify_session_proof(account_id, request, challenge, signed_descriptor)
         token = _encode_token(_entropy_bytes(self._entropy, 32))
         digest = _token_digest(token)
@@ -616,6 +625,7 @@ class AtlasVaultBackend:
             if signer is None:
                 raise AuthorizationFailed
 
+        self._account_verification_limiter.consume()
         signer_descriptor = signer.verified().descriptor
         _verify_transition_signature(
             signed_transition,
@@ -774,8 +784,8 @@ IfMatchHeader = Annotated[
     Header(
         alias="If-Match",
         min_length=1,
-        max_length=REVISION_MAX_LENGTH,
-        pattern=HEADER_SAFE_ASCII_PATTERN,
+        max_length=REVISION_MAX_LENGTH + 2,
+        pattern=IF_MATCH_HEADER_PATTERN,
     ),
 ]
 IdempotencyKeyHeader = Annotated[
@@ -927,6 +937,10 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400, detail="Invalid registry transition."
             ) from exc
+        except AccountVerificationRateExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="Account verification rate exceeded."
+            ) from exc
         except RevisionConflict as exc:
             raise HTTPException(
                 status_code=409, detail="Account already exists."
@@ -975,6 +989,10 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=401, detail="Authentication failed."
             ) from exc
+        except AccountVerificationRateExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="Account verification rate exceeded."
+            ) from exc
         except RequestRateExceeded as exc:
             raise HTTPException(
                 status_code=429, detail="Session capacity exceeded."
@@ -1022,6 +1040,10 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409, detail="Registry revision conflict."
             ) from exc
+        except AccountVerificationRateExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="Account verification rate exceeded."
+            ) from exc
         except RequestRateExceeded as exc:
             raise HTTPException(
                 status_code=429, detail="Device capacity exceeded."
@@ -1046,7 +1068,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 account_id,
                 vault_id,
                 request,
-                expected_revision=if_match,
+                expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
             )
         except _STORAGE_ERRORS as exc:
@@ -1089,7 +1111,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 vault_id,
                 object_id,
                 request,
-                expected_revision=if_match,
+                expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
             )
         except _STORAGE_ERRORS as exc:
@@ -1132,7 +1154,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 account_id,
                 vault_id,
                 request,
-                expected_revision=if_match,
+                expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
             )
         except _STORAGE_ERRORS as exc:
@@ -1180,7 +1202,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
                 account_id,
                 vault_id,
                 request,
-                expected_revision=if_match,
+                expected_revision=_parse_if_match(if_match),
                 idempotency_key=idempotency_key,
             )
         except _STORAGE_ERRORS as exc:
@@ -1207,6 +1229,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     served_schema["x-atlasvault-c15-controls"] = {
         "accountRequestLimit": policy.account_request_limit,
         "deviceRequestLimit": policy.device_request_limit,
+        "accountVerificationLimit": policy.account_verification_limit,
         "maxRetainedAccounts": policy.max_accounts,
         "maxLiveChallenges": policy.max_challenges,
         "maxChallengesPerDevice": policy.max_challenges_per_device,
@@ -1429,3 +1452,9 @@ def _credential_token(
     if authorization is None:
         raise AuthorizationFailed
     return _bearer_token(f"{authorization.scheme} {authorization.credentials}")
+
+
+def _parse_if_match(value: str) -> str:
+    if value == "*":
+        return value
+    return value[1:-1]
