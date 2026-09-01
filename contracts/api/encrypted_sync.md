@@ -109,6 +109,13 @@ account-scoped session for the signer device and a transition signature from
 that same active device. The parent revision must equal the current registry
 revision, target descriptors must pass their existing self-signature and
 device-ID checks, and tampered or stale transitions fail closed.
+Public signing/agreement keys and authentication challenges are canonical
+base64 encodings of exactly 32 bytes; descriptor, transition, and session-proof
+signatures are canonical base64 encodings of exactly 64 bytes. Their schemas
+publish the corresponding length and alphabet constraints. Device and
+transition signature verification runs outside the shared registry lock, then
+authorization, capacity, parent revision, and revision uniqueness are rechecked
+under the lock immediately before commit.
 
 The C13 endpoints are:
 
@@ -166,6 +173,9 @@ its tests.
 Every documented account and storage operation publishes the 413 middleware
 boundary together with each handler-specific 400, 401, 404, 409, or 429 result,
 so the served and checked-in OpenAPI response sets remain identical.
+Each reusable canonical error response also publishes its JSON body schema:
+fixed failures return an object with a string `detail`, while validation
+failures return the exact generic `{"detail":"Invalid request."}` shape.
 
 ## Versioned Ciphertext Storage Shape
 
@@ -196,6 +206,11 @@ Every write requires:
   revision for replacement or append;
 - an opaque `Idempotency-Key` scoped to that storage operation.
 
+Both header values are limited to 1-128 visible ASCII bytes (`!` through `~`),
+excluding spaces, control characters, Unicode, and HTTP `obs-text`. The same
+constraint appears in the canonical and served OpenAPI schemas and is enforced
+again at the storage boundary.
+
 Object, patch, and snapshot envelopes must also name the expected current
 revision in `parent_revision`. A stale parent, changed replay under the same
 idempotency key, or reuse of one revision for different bytes returns a
@@ -206,6 +221,9 @@ suppressed, so delivery is exactly-once in effect.
 Idempotency receipts are retained for a 600-second retry window and then
 reclaimed. A retry outside that window is evaluated against current revision
 state rather than retaining obsolete ciphertext envelopes indefinitely.
+Receipt expiries are tracked globally in a min-heap and at most 64 due entries
+are reclaimed per write, so a write never scans every retained vault while
+holding the store lock.
 
 Patch appends form a compare-and-set sequence at this backend storage layer.
 The server does not decrypt patches or decide record conflicts. Client patch

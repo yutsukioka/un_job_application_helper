@@ -726,7 +726,8 @@
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[!-~]+$"
         }
       },
       "IdempotencyKey": {
@@ -737,7 +738,8 @@
         "schema": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128
+          "maxLength": 128,
+          "pattern": "^[!-~]+$"
         }
       },
       "Cursor": {
@@ -766,28 +768,102 @@
     },
     "responses": {
       "InvalidRequest": {
-        "description": "Request or signature is invalid"
+        "description": "Request or signature is invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "Unauthorized": {
-        "description": "Account or device authentication failed"
+        "description": "Account or device authentication failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "Conflict": {
-        "description": "Account, registry, conditional revision, or idempotency conflict"
+        "description": "Account, registry, conditional revision, or idempotency conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "NotFound": {
-        "description": "Opaque resource was not found"
+        "description": "Opaque resource was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "RequestTooLarge": {
-        "description": "Request body exceeds the fixed ciphertext request ceiling"
+        "description": "Request body exceeds the fixed ciphertext request ceiling",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "RateLimited": {
-        "description": "Authenticated account or device request window is exhausted"
+        "description": "Authenticated account or device request window is exhausted",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FixedErrorResponse"
+            }
+          }
+        }
       },
       "ValidationFailed": {
-        "description": "Request path, header, or body validation failed"
+        "description": "Request path, header, or body validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RequestValidationFailure"
+            }
+          }
+        }
       }
     },
     "schemas": {
+      "FixedErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "RequestValidationFailure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "Invalid request."
+          }
+        }
+      },
       "DeviceDescriptor": {
         "type": "object",
         "additionalProperties": false,
@@ -813,10 +889,16 @@
           },
           "signing_public_key": {
             "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$",
             "contentEncoding": "base64"
           },
           "agreement_public_key": {
             "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$",
             "contentEncoding": "base64"
           },
           "created_at": {
@@ -852,6 +934,9 @@
           },
           "signature": {
             "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{86}==$",
             "contentEncoding": "base64"
           }
         }
@@ -926,6 +1011,9 @@
           },
           "signature": {
             "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{86}==$",
             "contentEncoding": "base64"
           }
         }
@@ -958,6 +1046,9 @@
           },
           "challenge": {
             "type": "string",
+            "minLength": 44,
+            "maxLength": 44,
+            "pattern": "^[A-Za-z0-9+/]{43}=$",
             "contentEncoding": "base64"
           },
           "expires_in_seconds": {
@@ -984,6 +1075,9 @@
           },
           "signature": {
             "type": "string",
+            "minLength": 88,
+            "maxLength": 88,
+            "pattern": "^[A-Za-z0-9+/]{86}==$",
             "contentEncoding": "base64"
           }
         }

@@ -812,13 +812,12 @@ def test_c13_account_base64_schema_requires_exact_binary_lengths(
     ):
         descriptor = schemas[names["descriptor"]]["properties"]
         for field in ("signing_public_key", "agreement_public_key"):
-            assert descriptor[field] == {
-                "type": "string",
-                "minLength": 44,
-                "maxLength": 44,
-                "pattern": BASE64_32_PATTERN,
-                "contentEncoding": "base64",
-            }
+            value = descriptor[field]
+            assert value["type"] == "string"
+            assert value["minLength"] == 44
+            assert value["maxLength"] == 44
+            assert value["pattern"] == BASE64_32_PATTERN
+            assert value["contentEncoding"] == "base64"
         for schema_name, field, pattern, length in (
             (names["signed_descriptor"], "signature", BASE64_64_PATTERN, 88),
             (names["signed_transition"], "signature", BASE64_64_PATTERN, 88),

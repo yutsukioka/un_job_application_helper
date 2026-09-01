@@ -595,8 +595,8 @@ def test_c15_account_bootstrap_is_bounded_before_retention() -> None:
         device=device_b,
         signer=device_b,
     )
-    rejected["transition"]["device"]["signature"] = "AA=="
-    rejected["signature"] = "AA=="
+    rejected["transition"]["device"]["signature"] = _encode64(bytes(64))
+    rejected["signature"] = _encode64(bytes(64))
     response = client.post(
         f"/v1/accounts/{ACCOUNT_B}/devices/bootstrap",
         json=rejected,

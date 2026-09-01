@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import secrets
 import threading
 import time
@@ -20,12 +21,14 @@ OPAQUE_ID_PATTERN = (
 )
 REVISION_MAX_LENGTH = 128
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
+HEADER_SAFE_ASCII_PATTERN = r"^[!-~]+$"
 MAX_KEY_EPOCH = (1 << 63) - 1
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CURSOR_PREFIX = "avcur1-"
 CURSOR_LIFETIME_SECONDS = 300
 IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS = 600
+MAX_RECEIPT_PRUNE_PER_WRITE = 64
 _REVISION_PATTERN = r"^[!-~]+$"
 _STRICT_MODEL = ConfigDict(extra="forbid", frozen=True, strict=True)
 Base64EnvelopeValue = Annotated[
@@ -212,6 +215,10 @@ class InMemoryOpaqueStore:
         self._lock = threading.RLock()
         self._vaults: dict[tuple[str, str], _VaultState] = {}
         self._cursors: dict[str, _Cursor] = {}
+        self._receipt_expiries: list[
+            tuple[float, int, _VaultState, tuple[str, str]]
+        ] = []
+        self._next_receipt_expiry_sequence = 0
 
     def put_metadata(
         self,
@@ -533,22 +540,35 @@ class InMemoryOpaqueStore:
         envelope: StorageEnvelope,
         response: StorageEnvelope,
     ) -> None:
-        state.receipts[(scope, idempotency_key)] = _Receipt(
+        receipt_key = (scope, idempotency_key)
+        expires_at = self._monotonic() + IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS
+        state.receipts[receipt_key] = _Receipt(
             attempt=_WriteAttempt(expected_revision, envelope),
             response=response,
-            expires_at=self._monotonic() + IDEMPOTENCY_RECEIPT_LIFETIME_SECONDS,
+            expires_at=expires_at,
+        )
+        self._next_receipt_expiry_sequence += 1
+        heapq.heappush(
+            self._receipt_expiries,
+            (
+                expires_at,
+                self._next_receipt_expiry_sequence,
+                state,
+                receipt_key,
+            ),
         )
 
     def _prune_expired_receipts(self) -> None:
         now = self._monotonic()
-        for state in self._vaults.values():
-            expired = [
-                key
-                for key, receipt in state.receipts.items()
-                if receipt.expires_at <= now
-            ]
-            for key in expired:
-                del state.receipts[key]
+        remaining = MAX_RECEIPT_PRUNE_PER_WRITE
+        while (
+            remaining and self._receipt_expiries and self._receipt_expiries[0][0] <= now
+        ):
+            _, _, state, receipt_key = heapq.heappop(self._receipt_expiries)
+            remaining -= 1
+            receipt = state.receipts.get(receipt_key)
+            if receipt is not None and receipt.expires_at <= now:
+                state.receipts.pop(receipt_key, None)
 
     def _page(
         self,
@@ -665,12 +685,16 @@ def _require_write_tokens(expected_revision: str, idempotency_key: str) -> None:
     if (
         not expected_revision
         or len(expected_revision) > REVISION_MAX_LENGTH
-        or not expected_revision.isascii()
+        or not _is_header_safe_ascii(expected_revision)
         or not idempotency_key
         or len(idempotency_key) > IDEMPOTENCY_KEY_MAX_LENGTH
-        or not idempotency_key.isascii()
+        or not _is_header_safe_ascii(idempotency_key)
     ):
         raise InvalidOpaqueStorageRequest
+
+
+def _is_header_safe_ascii(value: str) -> bool:
+    return all("!" <= character <= "~" for character in value)
 
 
 def _require_metadata(

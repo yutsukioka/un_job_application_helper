@@ -47,6 +47,7 @@ from atlasvault_api.controls import (
     StoragePrincipal,
 )
 from atlasvault_api.storage import (
+    HEADER_SAFE_ASCII_PATTERN,
     IDEMPOTENCY_KEY_MAX_LENGTH,
     MAX_KEY_EPOCH,
     MAX_PAGE_SIZE,
@@ -69,6 +70,10 @@ DEVICE_ID_PATTERN = r"^avd1-[0-9a-f]{64}$"
 CHALLENGE_ID_PATTERN = r"^avc1-[0-9a-f]{32}$"
 CHALLENGE_BYTES = 32
 SIGNATURE_BYTES = 64
+BASE64_32_LENGTH = 44
+BASE64_64_LENGTH = 88
+BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
+BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
 REGISTRY_REVISION_PATTERN = (
@@ -83,9 +88,23 @@ RegistryRevision = Annotated[
         json_schema_extra={"format": "uuid"},
     ),
 ]
-Base64Value = Annotated[
+Base64Bytes32Value = Annotated[
     str,
-    Field(json_schema_extra={"contentEncoding": "base64"}),
+    Field(
+        min_length=BASE64_32_LENGTH,
+        max_length=BASE64_32_LENGTH,
+        pattern=BASE64_32_PATTERN,
+        json_schema_extra={"contentEncoding": "base64"},
+    ),
+]
+Base64Bytes64Value = Annotated[
+    str,
+    Field(
+        min_length=BASE64_64_LENGTH,
+        max_length=BASE64_64_LENGTH,
+        pattern=BASE64_64_PATTERN,
+        json_schema_extra={"contentEncoding": "base64"},
+    ),
 ]
 UtcSecondsValue = Annotated[
     str,
@@ -102,8 +121,8 @@ class DeviceDescriptorModel(BaseModel):
     format: Literal["atlasvault-device-descriptor"]
     version: Literal[1]
     device_id: str = Field(pattern=DEVICE_ID_PATTERN)
-    signing_public_key: Base64Value
-    agreement_public_key: Base64Value
+    signing_public_key: Base64Bytes32Value
+    agreement_public_key: Base64Bytes32Value
     created_at: UtcSecondsValue
     key_epoch: int = Field(
         ge=1,
@@ -127,7 +146,7 @@ class SignedDeviceDescriptorModel(BaseModel):
     format: Literal["atlasvault-signed-device-descriptor"]
     version: Literal[1]
     descriptor: DeviceDescriptorModel
-    signature: Base64Value
+    signature: Base64Bytes64Value
 
     def verified(self) -> SignedDeviceDescriptor:
         try:
@@ -157,7 +176,7 @@ class SignedDeviceRegistryTransitionModel(BaseModel):
     format: Literal["atlasvault-signed-device-registry-transition"]
     version: Literal[1]
     transition: DeviceRegistryTransitionModel
-    signature: Base64Value
+    signature: Base64Bytes64Value
 
 
 class AuthenticationChallengeRequest(BaseModel):
@@ -170,7 +189,7 @@ class AuthenticationChallenge(BaseModel):
     model_config = _STRICT_MODEL
 
     challenge_id: str = Field(pattern=CHALLENGE_ID_PATTERN)
-    challenge: Base64Value
+    challenge: Base64Bytes32Value
     expires_in_seconds: Literal[CHALLENGE_LIFETIME_SECONDS]
 
 
@@ -179,7 +198,7 @@ class SessionProofRequest(BaseModel):
 
     device_id: str = Field(pattern=DEVICE_ID_PATTERN)
     challenge_id: str = Field(pattern=CHALLENGE_ID_PATTERN)
-    signature: Base64Value
+    signature: Base64Bytes64Value
 
 
 class SessionGrant(BaseModel):
@@ -552,12 +571,30 @@ class AtlasVaultBackend:
             signer = account.devices.get(transition.signer_device_id)
             if signer is None:
                 raise AuthorizationFailed
-            signer_descriptor = signer.verified().descriptor
-            _verify_transition_signature(
-                signed_transition,
-                signer_descriptor.signing_public_key,
-            )
-            target = transition.device.verified()
+
+        signer_descriptor = signer.verified().descriptor
+        _verify_transition_signature(
+            signed_transition,
+            signer_descriptor.signing_public_key,
+        )
+        target = transition.device.verified()
+
+        with self._lock:
+            session = self._authorize(account_id, token)
+            account = self._accounts[account_id]
+            if not hmac.compare_digest(
+                session.device_id,
+                transition.signer_device_id,
+            ):
+                raise AuthorizationFailed
+            if not hmac.compare_digest(account.revision, transition.parent_revision):
+                raise RevisionConflict
+            if transition.revision in account.used_revisions:
+                raise RevisionConflict
+            if len(account.devices) >= self.abuse_policy.max_devices_per_account:
+                raise RequestRateExceeded
+            if transition.signer_device_id not in account.devices:
+                raise AuthorizationFailed
             if target.descriptor.device_id in account.devices:
                 raise RevisionConflict
             account.devices[target.descriptor.device_id] = transition.device
@@ -675,7 +712,12 @@ ObjectPath = Annotated[
 ]
 IfMatchHeader = Annotated[
     str,
-    Header(alias="If-Match", min_length=1, max_length=REVISION_MAX_LENGTH),
+    Header(
+        alias="If-Match",
+        min_length=1,
+        max_length=REVISION_MAX_LENGTH,
+        pattern=HEADER_SAFE_ASCII_PATTERN,
+    ),
 ]
 IdempotencyKeyHeader = Annotated[
     str,
@@ -683,6 +725,7 @@ IdempotencyKeyHeader = Annotated[
         alias="Idempotency-Key",
         min_length=1,
         max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
+        pattern=HEADER_SAFE_ASCII_PATTERN,
     ),
 ]
 CursorQuery = Annotated[
