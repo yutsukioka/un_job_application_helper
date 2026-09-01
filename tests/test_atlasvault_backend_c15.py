@@ -15,7 +15,11 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
-from atlasvault_api.app import AtlasVaultBackend, create_app
+from atlasvault_api.app import (
+    ACCOUNT_SESSION_PROOF_DOMAIN,
+    AtlasVaultBackend,
+    create_app,
+)
 from atlasvault_api.controls import (
     AbuseControlPolicy,
     AccountDeviceRateLimiter,
@@ -29,6 +33,8 @@ from test_atlasvault_backend_c13 import (
     REVISION_1,
     REVISION_2,
     _bootstrap,
+    _canonical_bytes,
+    _encode64,
     _identities,
     _session,
     _signed_transition,
@@ -46,7 +52,11 @@ ACCOUNT_REQUEST_LIMIT = 40
 MAX_REQUEST_BYTES = 192 * 1024 * 1024
 MAX_RETAINED_ACCOUNTS = 1024
 MAX_LIVE_CHALLENGES = 4096
+MAX_CHALLENGES_PER_DEVICE = 8
+MAX_LIVE_SESSIONS = 4096
+MAX_SESSIONS_PER_DEVICE = 8
 MAX_DEVICES_PER_ACCOUNT = 256
+MAX_KEY_EPOCH = (1 << 63) - 1
 OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
 
@@ -106,6 +116,35 @@ def _storage_writes() -> list[tuple[str, str, dict[str, Any]]]:
             ),
         ),
     ]
+
+
+def _challenge_proof(
+    client: TestClient,
+    identity: Any,
+    *,
+    account_id: str,
+) -> dict[str, str]:
+    response = client.post(
+        f"/v1/accounts/{account_id}/auth/challenges",
+        json={"device_id": identity.device_id},
+    )
+    assert response.status_code == 201, response.text
+    challenge = response.json()
+    payload = {
+        "format": "atlasvault-account-session-proof",
+        "version": 1,
+        "account_id": account_id,
+        "device_id": identity.device_id,
+        "challenge_id": challenge["challenge_id"],
+        "challenge": challenge["challenge"],
+    }
+    return {
+        "device_id": identity.device_id,
+        "challenge_id": challenge["challenge_id"],
+        "signature": _encode64(
+            identity.sign(ACCOUNT_SESSION_PROOF_DOMAIN + _canonical_bytes(payload))
+        ),
+    }
 
 
 def test_c15_every_ciphertext_route_requires_auth_and_unauthorized_writes_do_not_mutate(
@@ -513,6 +552,9 @@ def test_c15_contract_declares_storage_controls() -> None:
         "deviceRequestLimit": DEVICE_REQUEST_LIMIT,
         "maxRetainedAccounts": MAX_RETAINED_ACCOUNTS,
         "maxLiveChallenges": MAX_LIVE_CHALLENGES,
+        "maxChallengesPerDevice": MAX_CHALLENGES_PER_DEVICE,
+        "maxLiveSessions": MAX_LIVE_SESSIONS,
+        "maxSessionsPerDevice": MAX_SESSIONS_PER_DEVICE,
         "maxDevicesPerAccount": MAX_DEVICES_PER_ACCOUNT,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "rateWindowSeconds": 60,
@@ -607,6 +649,139 @@ def test_c15_devices_per_account_are_bounded_before_mutation() -> None:
     account = backend._accounts[ACCOUNT_A]
     assert set(account.devices) == {device_a.device_id}
     assert account.used_revisions == {REVISION_1}
+
+
+def test_c15_challenge_capacity_is_isolated_per_account_device() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(
+            max_challenges=3,
+            max_challenges_per_device=1,
+        ),
+    )
+    client = TestClient(create_app(backend))
+    device_a, device_b = _identities()
+    _bootstrap(client, device_a, account_id=ACCOUNT_A)
+    _bootstrap(
+        client,
+        device_b,
+        account_id=ACCOUNT_B,
+        revision="20000000-0000-4000-8000-000000000001",
+    )
+
+    path_a = f"/v1/accounts/{ACCOUNT_A}/auth/challenges"
+    body_a = {"device_id": device_a.device_id}
+    assert client.post(path_a, json=body_a).status_code == 201
+    limited = client.post(path_a, json=body_a)
+    assert limited.status_code == 429
+    assert limited.json() == {"detail": "Challenge capacity exceeded."}
+
+    path_b = f"/v1/accounts/{ACCOUNT_B}/auth/challenges"
+    assert (
+        client.post(path_b, json={"device_id": device_b.device_id}).status_code == 201
+    )
+    assert len(backend._challenges) == 2
+
+
+def test_c15_live_session_retention_is_bounded_before_insertion() -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(
+            max_sessions=1,
+            max_sessions_per_device=1,
+        ),
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    _session(client, device, account_id=ACCOUNT_A)
+
+    proof = _challenge_proof(client, device, account_id=ACCOUNT_A)
+    limited = client.post(f"/v1/accounts/{ACCOUNT_A}/sessions", json=proof)
+    assert limited.status_code == 429
+    assert limited.json() == {"detail": "Session capacity exceeded."}
+    assert len(backend._sessions) == 1
+
+
+def test_c15_account_openapi_matches_runtime_failures_and_body_limit() -> None:
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    generated = create_app().openapi()
+    for path in (
+        "/v1/accounts/{account_id}/devices/bootstrap",
+        "/v1/accounts/{account_id}/auth/challenges",
+        "/v1/accounts/{account_id}/sessions",
+        "/v1/accounts/{account_id}/devices",
+    ):
+        for method, operation in contract["paths"][path].items():
+            assert "413" in operation["responses"]
+            assert set(generated["paths"][path][method]["responses"]) == set(
+                operation["responses"]
+            )
+
+
+def test_c15_storage_key_epochs_use_the_shared_signed_64_bit_bound(
+    authorized_client: tuple[AtlasVaultBackend, TestClient, dict[str, str], str],
+) -> None:
+    backend, client, authorization, _ = authorized_client
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    generated = create_app().openapi()
+    for schemas, metadata_name, opaque_name in (
+        (
+            contract["components"]["schemas"],
+            "EncryptedVaultMetadataEnvelope",
+            "OpaqueCiphertextEnvelope",
+        ),
+        (
+            generated["components"]["schemas"],
+            "EncryptedVaultMetadataEnvelopeModel",
+            "OpaqueCiphertextEnvelopeModel",
+        ),
+    ):
+        assert schemas[metadata_name]["properties"]["key_epoch"]["maximum"] == (
+            MAX_KEY_EPOCH
+        )
+        assert schemas[opaque_name]["properties"]["key_epoch"]["maximum"] == (
+            MAX_KEY_EPOCH
+        )
+
+    envelope = _metadata(revision="epoch-too-large", payload=b"opaque")
+    envelope["key_epoch"] = MAX_KEY_EPOCH + 1
+    response = client.put(
+        f"/v1/vaults/{VAULT_ID}/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key="epoch-too-large",
+        ),
+        json=envelope,
+    )
+    assert response.status_code == 422
+    assert backend.storage._vaults == {}
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "account_request_limit",
+        "device_request_limit",
+        "max_request_bytes",
+        "max_accounts",
+        "max_challenges",
+        "max_challenges_per_device",
+        "max_sessions",
+        "max_sessions_per_device",
+        "max_devices_per_account",
+    ),
+)
+@pytest.mark.parametrize("invalid", (float("nan"), 1.0, True))
+def test_c15_abuse_control_integer_limits_require_positive_actual_integers(
+    field: str,
+    invalid: object,
+) -> None:
+    with pytest.raises(ValueError, match="invalid abuse-control policy"):
+        AbuseControlPolicy(**{field: invalid})
 
 
 def test_c15_telemetry_coarsens_unknown_categories() -> None:
