@@ -117,11 +117,11 @@ final class AtlasVaultEncryptedPatchQueueTests: XCTestCase {
 
         try inbox.stagePage(
             expectedCursor: "cursor-after-two",
-            nextCursor: "cursor-after-replay",
+            nextCursor: nil,
             operations: operations
         )
         XCTAssertEqual(try inbox.pendingOperations(), [])
-        XCTAssertEqual(try inbox.cursor(), "cursor-after-replay")
+        XCTAssertNil(try inbox.cursor())
         XCTAssertNil(try inbox.applyNext { applied.append($0.operationID) })
         XCTAssertEqual(applied, operations.map(\.operationID))
 
@@ -129,7 +129,7 @@ final class AtlasVaultEncryptedPatchQueueTests: XCTestCase {
         changed["lamport"] = 99
         XCTAssertThrowsError(
             try inbox.stagePage(
-                expectedCursor: "cursor-after-replay",
+                expectedCursor: nil,
                 nextCursor: "cursor-invalid",
                 operations: [try AtlasVaultEncryptedPatchOperation(jsonObject: changed)]
             )

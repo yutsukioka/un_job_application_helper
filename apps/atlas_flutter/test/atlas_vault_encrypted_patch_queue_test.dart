@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -26,8 +25,9 @@ void main() {
         )
         .toList(growable: false);
     queueKey = Uint8List.fromList(
-      (await Sha256().hash(utf8.encode('atlasvault-c17-synthetic-queue-key')))
-          .bytes,
+      (await Sha256().hash(
+        utf8.encode('atlasvault-c17-synthetic-queue-key'),
+      )).bytes,
     );
   });
 
@@ -150,18 +150,21 @@ void main() {
 
     await inbox.stagePage(
       expectedCursor: 'cursor-after-two',
-      nextCursor: 'cursor-after-replay',
+      nextCursor: null,
       operations: operations,
     );
     expect(await inbox.pendingOperations(), isEmpty);
-    expect(await inbox.readCursor(), 'cursor-after-replay');
-    expect(await inbox.applyNext((value) => applied.add(value.operationId)), isNull);
+    expect(await inbox.readCursor(), isNull);
+    expect(
+      await inbox.applyNext((value) => applied.add(value.operationId)),
+      isNull,
+    );
     expect(applied, operations.map((value) => value.operationId));
 
     final changed = operations.first.toJson()..['lamport'] = 99;
     expect(
       () => inbox.stagePage(
-        expectedCursor: 'cursor-after-replay',
+        expectedCursor: null,
         nextCursor: 'cursor-invalid',
         operations: <AtlasVaultEncryptedPatchOperation>[
           AtlasVaultEncryptedPatchOperation.fromJson(changed),
@@ -171,88 +174,91 @@ void main() {
     );
   });
 
-  test('inbox rejects ordering and parent regressions before persistence', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'atlasvault-c17-invalid-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final file = File('${directory.path}/inbox.queue');
-    final inbox = AtlasVaultDurableEncryptedInbox(
-      file,
-      encryptionKey: queueKey,
-    );
+  test(
+    'inbox rejects ordering and parent regressions before persistence',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'atlasvault-c17-invalid-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/inbox.queue');
+      final inbox = AtlasVaultDurableEncryptedInbox(
+        file,
+        encryptionKey: queueKey,
+      );
 
-    await expectLater(
-      inbox.stagePage(
-        expectedCursor: null,
-        nextCursor: 'cursor-invalid',
-        operations: operations.reversed.toList(),
-      ),
-      throwsA(isA<AtlasVaultEncryptedPatchException>()),
-    );
-    expect(await file.exists(), isFalse);
+      await expectLater(
+        inbox.stagePage(
+          expectedCursor: null,
+          nextCursor: 'cursor-invalid',
+          operations: operations.reversed.toList(),
+        ),
+        throwsA(isA<AtlasVaultEncryptedPatchException>()),
+      );
+      expect(await file.exists(), isFalse);
 
-    final invalid = operations.last.toJson();
-    (invalid['envelope']! as Map<String, Object?>)['parent_revision'] =
-        'wrong-parent';
-    await expectLater(
-      inbox.stagePage(
-        expectedCursor: null,
-        nextCursor: 'cursor-invalid',
-        operations: <AtlasVaultEncryptedPatchOperation>[
-          operations.first,
-          AtlasVaultEncryptedPatchOperation.fromJson(invalid),
-        ],
-      ),
-      throwsA(isA<AtlasVaultEncryptedPatchException>()),
-    );
-    expect(await file.exists(), isFalse);
-  });
+      final invalid = operations.last.toJson();
+      (invalid['envelope']! as Map<String, Object?>)['parent_revision'] =
+          'wrong-parent';
+      await expectLater(
+        inbox.stagePage(
+          expectedCursor: null,
+          nextCursor: 'cursor-invalid',
+          operations: <AtlasVaultEncryptedPatchOperation>[
+            operations.first,
+            AtlasVaultEncryptedPatchOperation.fromJson(invalid),
+          ],
+        ),
+        throwsA(isA<AtlasVaultEncryptedPatchException>()),
+      );
+      expect(await file.exists(), isFalse);
+    },
+  );
 
-  test('outbox and inbox survive process kill and restart', () async {
-    final directory = await Directory.systemTemp.createTemp(
-      'atlasvault-c17-process-',
-    );
-    addTearDown(() => directory.delete(recursive: true));
-    final outboxFile = File('${directory.path}/outbox.queue');
-    final inboxFile = File('${directory.path}/inbox.queue');
-    final readyFile = File('${directory.path}/ready');
-    final process = await Process.start(
-      '/usr/bin/env',
-      <String>[
+  test(
+    'outbox and inbox survive process kill and restart',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'atlasvault-c17-process-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final outboxFile = File('${directory.path}/outbox.queue');
+      final inboxFile = File('${directory.path}/inbox.queue');
+      final readyFile = File('${directory.path}/ready');
+      final process = await Process.start('/usr/bin/env', <String>[
         'dart',
         'run',
         'test/support/atlas_vault_sync_queue_process.dart',
         outboxFile.path,
         inboxFile.path,
         readyFile.path,
-      ],
-      workingDirectory: Directory.current.path,
-    );
-    addTearDown(() => process.kill(ProcessSignal.sigkill));
-    final deadline = DateTime.now().add(const Duration(seconds: 30));
-    while (!await readyFile.exists() && DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-    if (!await readyFile.exists()) {
-      final stderr = await utf8.decodeStream(process.stderr);
-      fail('queue helper did not become ready: $stderr');
-    }
-    expect(process.kill(ProcessSignal.sigkill), isTrue);
-    expect(await process.exitCode, isNot(0));
+      ], workingDirectory: Directory.current.path);
+      addTearDown(() => process.kill(ProcessSignal.sigkill));
+      final deadline = DateTime.now().add(const Duration(seconds: 30));
+      while (!await readyFile.exists() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      if (!await readyFile.exists()) {
+        final stderr = await utf8.decodeStream(process.stderr);
+        fail('queue helper did not become ready: $stderr');
+      }
+      expect(process.kill(ProcessSignal.sigkill), isTrue);
+      expect(await process.exitCode, isNot(0));
 
-    expect(
-      await AtlasVaultDurableEncryptedOutbox(
-        outboxFile,
+      expect(
+        await AtlasVaultDurableEncryptedOutbox(
+          outboxFile,
+          encryptionKey: queueKey,
+        ).pendingOperations(),
+        operations,
+      );
+      final inbox = AtlasVaultDurableEncryptedInbox(
+        inboxFile,
         encryptionKey: queueKey,
-      ).pendingOperations(),
-      operations,
-    );
-    final inbox = AtlasVaultDurableEncryptedInbox(
-      inboxFile,
-      encryptionKey: queueKey,
-    );
-    expect(await inbox.readCursor(), isNull);
-    expect(await inbox.pendingOperations(), operations);
-  });
+      );
+      expect(await inbox.readCursor(), isNull);
+      expect(await inbox.pendingOperations(), operations);
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }

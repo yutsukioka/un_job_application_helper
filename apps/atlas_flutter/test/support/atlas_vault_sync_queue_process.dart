@@ -1,9 +1,8 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:atlas/atlas_vault.dart';
+import 'package:atlas/src/atlas_vault/sync_queue.dart';
 import 'package:cryptography/cryptography.dart';
 
 import 'atlas_vault_vector_loader.dart';
@@ -18,14 +17,14 @@ Future<void> main(List<String> arguments) async {
   );
   final operations = atlasVaultList(root['operations'])
       .map(
-        (value) => AtlasVaultEncryptedPatchOperation.fromJson(
-          atlasVaultObject(value),
-        ),
+        (value) =>
+            AtlasVaultEncryptedPatchOperation.fromJson(atlasVaultObject(value)),
       )
       .toList(growable: false);
   final key = Uint8List.fromList(
-    (await Sha256().hash(utf8.encode('atlasvault-c17-synthetic-queue-key')))
-        .bytes,
+    (await Sha256().hash(
+      utf8.encode('atlasvault-c17-synthetic-queue-key'),
+    )).bytes,
   );
   final outbox = AtlasVaultDurableEncryptedOutbox(
     File(arguments[0]),
@@ -43,5 +42,7 @@ Future<void> main(List<String> arguments) async {
     operations: operations,
   );
   await File(arguments[2]).writeAsString('ready\n', flush: true);
-  await Completer<void>().future;
+  while (true) {
+    await Future<void>.delayed(const Duration(minutes: 1));
+  }
 }

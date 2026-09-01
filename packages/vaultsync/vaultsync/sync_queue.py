@@ -1,0 +1,680 @@
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import secrets
+import uuid
+from dataclasses import dataclass, replace
+from functools import total_ordering
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+
+PATCH_FORMAT = "atlasvault-encrypted-patch-operation"
+PATCH_VERSION = 1
+OPAQUE_ENVELOPE_FORMAT = "atlasvault-opaque-ciphertext-envelope"
+QUEUE_ENVELOPE_FORMAT = "atlasvault-encrypted-transfer-queue"
+QUEUE_VERSION = 1
+MAXIMUM_QUEUE_FILE_BYTES = 128 * 1024 * 1024
+MAXIMUM_QUEUE_OPERATIONS = 65_536
+MAXIMUM_ENVELOPE_FIELD_BYTES = 96 * 1024 * 1024
+MAXIMUM_CURSOR_LENGTH = 2_048
+_MAXIMUM_INTEGER = 2**63 - 1
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9._~-]{1,128}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+class PatchQueueError(ValueError):
+    """Raised when encrypted patch or queue state fails closed."""
+
+
+def _error() -> PatchQueueError:
+    return PatchQueueError("encrypted patch queue state is invalid")
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
+        raise _error()
+    return value
+
+
+def _exact(value: Mapping[str, Any], keys: set[str]) -> None:
+    if set(value) != keys:
+        raise _error()
+
+
+def _text(value: Any, *, maximum: int = 128) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise _error()
+    return value
+
+
+def _identifier(value: Any) -> str:
+    text = _text(value)
+    if _IDENTIFIER.fullmatch(text) is None or text == "*":
+        raise _error()
+    return text
+
+
+def _integer(value: Any) -> int:
+    if type(value) is not int or value < 1 or value > _MAXIMUM_INTEGER:
+        raise _error()
+    return value
+
+
+def _canonical_uuid(value: Any) -> str:
+    text = _text(value, maximum=36)
+    if _UUID.fullmatch(text) is None:
+        raise _error()
+    try:
+        if str(uuid.UUID(text)) != text:
+            raise _error()
+    except (ValueError, AttributeError) as exc:
+        raise _error() from exc
+    return text
+
+
+def _canonical_base64(
+    value: Any,
+    *,
+    exact_bytes: int | None = None,
+    minimum_bytes: int = 1,
+) -> str:
+    text = _text(value, maximum=MAXIMUM_ENVELOPE_FIELD_BYTES * 2)
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise _error() from exc
+    if base64.b64encode(decoded).decode("ascii") != text:
+        raise _error()
+    if len(decoded) < minimum_bytes or len(decoded) > MAXIMUM_ENVELOPE_FIELD_BYTES:
+        raise _error()
+    if exact_bytes is not None and len(decoded) != exact_bytes:
+        raise _error()
+    return text
+
+
+def _canonical_json(value: Mapping[str, Any]) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+    except (TypeError, ValueError) as exc:
+        raise _error() from exc
+
+
+@dataclass(frozen=True)
+class OpaqueCiphertextEnvelope:
+    format: str
+    version: int
+    object_id: str
+    revision: str
+    parent_revision: str | None
+    key_epoch: int
+    nonce_b64: str
+    ciphertext_b64: str
+    aad_b64: str
+    signature_b64: str
+    tombstone: bool
+    content_sha256: str
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> OpaqueCiphertextEnvelope:
+        obj = _mapping(value)
+        _exact(
+            obj,
+            {
+                "format",
+                "version",
+                "object_id",
+                "revision",
+                "parent_revision",
+                "key_epoch",
+                "nonce_b64",
+                "ciphertext_b64",
+                "aad_b64",
+                "signature_b64",
+                "tombstone",
+                "content_sha256",
+            },
+        )
+        if obj["format"] != OPAQUE_ENVELOPE_FORMAT:
+            raise _error()
+        version = _integer(obj["version"])
+        parent = obj["parent_revision"]
+        if parent is not None:
+            parent = _identifier(parent)
+        if type(obj["tombstone"]) is not bool:
+            raise _error()
+        ciphertext = _canonical_base64(obj["ciphertext_b64"], minimum_bytes=16)
+        digest = _text(obj["content_sha256"], maximum=64)
+        if _SHA256.fullmatch(digest) is None or not secrets.compare_digest(
+            hashlib.sha256(base64.b64decode(ciphertext)).hexdigest(), digest
+        ):
+            raise _error()
+        return cls(
+            format=OPAQUE_ENVELOPE_FORMAT,
+            version=version,
+            object_id=_identifier(obj["object_id"]),
+            revision=_identifier(obj["revision"]),
+            parent_revision=parent,
+            key_epoch=_integer(obj["key_epoch"]),
+            nonce_b64=_canonical_base64(obj["nonce_b64"], exact_bytes=12),
+            ciphertext_b64=ciphertext,
+            aad_b64=_canonical_base64(obj["aad_b64"]),
+            signature_b64=_canonical_base64(obj["signature_b64"]),
+            tombstone=obj["tombstone"],
+            content_sha256=digest,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "format": self.format,
+            "version": self.version,
+            "object_id": self.object_id,
+            "revision": self.revision,
+            "parent_revision": self.parent_revision,
+            "key_epoch": self.key_epoch,
+            "nonce_b64": self.nonce_b64,
+            "ciphertext_b64": self.ciphertext_b64,
+            "aad_b64": self.aad_b64,
+            "signature_b64": self.signature_b64,
+            "tombstone": self.tombstone,
+            "content_sha256": self.content_sha256,
+        }
+
+
+@total_ordering
+@dataclass(frozen=True)
+class EncryptedPatchOperation:
+    operation_id: str
+    operation_type: str
+    author_device_id: str
+    author_sequence: int
+    lamport: int
+    envelope: OpaqueCiphertextEnvelope
+    format: str = PATCH_FORMAT
+    version: int = PATCH_VERSION
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> EncryptedPatchOperation:
+        obj = _mapping(value)
+        _exact(
+            obj,
+            {
+                "format",
+                "version",
+                "operation_id",
+                "operation_type",
+                "author_device_id",
+                "author_sequence",
+                "lamport",
+                "envelope",
+            },
+        )
+        if obj["format"] != PATCH_FORMAT or obj["version"] != PATCH_VERSION:
+            raise _error()
+        envelope = OpaqueCiphertextEnvelope.from_dict(_mapping(obj["envelope"]))
+        operation_type = obj["operation_type"]
+        expected_type = "delete" if envelope.tombstone else "upsert"
+        if operation_type != expected_type:
+            raise _error()
+        return cls(
+            operation_id=_canonical_uuid(obj["operation_id"]),
+            operation_type=expected_type,
+            author_device_id=_identifier(obj["author_device_id"]),
+            author_sequence=_integer(obj["author_sequence"]),
+            lamport=_integer(obj["lamport"]),
+            envelope=envelope,
+        )
+
+    @property
+    def idempotency_key(self) -> str:
+        return self.operation_id
+
+    @property
+    def order_key(self) -> tuple[int, str, int, str]:
+        return (
+            self.lamport,
+            self.author_device_id,
+            self.author_sequence,
+            self.operation_id,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "format": self.format,
+            "version": self.version,
+            "operation_id": self.operation_id,
+            "operation_type": self.operation_type,
+            "author_device_id": self.author_device_id,
+            "author_sequence": self.author_sequence,
+            "lamport": self.lamport,
+            "envelope": self.envelope.to_dict(),
+        }
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, EncryptedPatchOperation):
+            return NotImplemented
+        return self.order_key < other.order_key
+
+
+def _fingerprint(operation: EncryptedPatchOperation) -> str:
+    return hashlib.sha256(_canonical_json(operation.to_dict())).hexdigest()
+
+
+class _EncryptedQueueFile:
+    def __init__(self, path: str | Path, encryption_key: bytes, *, kind: str) -> None:
+        if not isinstance(encryption_key, bytes) or len(encryption_key) != 32:
+            raise _error()
+        self.path = Path(path)
+        self._key = encryption_key
+        self._aad = f"{QUEUE_ENVELOPE_FORMAT}:v1:{kind}".encode("ascii")
+
+    def read(self, default: Mapping[str, Any]) -> dict[str, Any]:
+        if not self.path.exists():
+            return dict(default)
+        try:
+            size = self.path.stat().st_size
+            if size <= 0 or size > MAXIMUM_QUEUE_FILE_BYTES:
+                raise _error()
+            outer = _mapping(json.loads(self.path.read_bytes()))
+            _exact(outer, {"format", "version", "nonce_b64", "ciphertext_b64"})
+            if (
+                outer["format"] != QUEUE_ENVELOPE_FORMAT
+                or outer["version"] != QUEUE_VERSION
+            ):
+                raise _error()
+            nonce = base64.b64decode(
+                _canonical_base64(outer["nonce_b64"], exact_bytes=12)
+            )
+            ciphertext = base64.b64decode(
+                _canonical_base64(outer["ciphertext_b64"], minimum_bytes=16)
+            )
+            state_bytes = AESGCM(self._key).decrypt(nonce, ciphertext, self._aad)
+            return dict(_mapping(json.loads(state_bytes)))
+        except PatchQueueError:
+            raise
+        except (InvalidTag, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _error() from exc
+
+    def write(self, state: Mapping[str, Any]) -> None:
+        state_bytes = _canonical_json(state)
+        if not state_bytes or len(state_bytes) > MAXIMUM_QUEUE_FILE_BYTES:
+            raise _error()
+        nonce = secrets.token_bytes(12)
+        ciphertext = AESGCM(self._key).encrypt(nonce, state_bytes, self._aad)
+        encoded = _canonical_json(
+            {
+                "format": QUEUE_ENVELOPE_FORMAT,
+                "version": QUEUE_VERSION,
+                "nonce_b64": base64.b64encode(nonce).decode("ascii"),
+                "ciphertext_b64": base64.b64encode(ciphertext).decode("ascii"),
+            }
+        )
+        if len(encoded) > MAXIMUM_QUEUE_FILE_BYTES:
+            raise _error()
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = None
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            os.chmod(self.path, 0o600)
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory = os.open(self.path.parent, directory_flags)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except (OSError, ValueError) as exc:
+            raise _error() from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _outbox_default() -> dict[str, Any]:
+    return {
+        "format": "atlasvault-encrypted-outbox-state",
+        "version": 1,
+        "operations": [],
+    }
+
+
+def _load_outbox(store: _EncryptedQueueFile) -> list[EncryptedPatchOperation]:
+    state = _mapping(store.read(_outbox_default()))
+    _exact(state, {"format", "version", "operations"})
+    if state["format"] != "atlasvault-encrypted-outbox-state" or state["version"] != 1:
+        raise _error()
+    raw = state["operations"]
+    if not isinstance(raw, list) or len(raw) > MAXIMUM_QUEUE_OPERATIONS:
+        raise _error()
+    operations = [EncryptedPatchOperation.from_dict(_mapping(item)) for item in raw]
+    if operations != sorted(operations) or len({item.operation_id for item in operations}) != len(
+        operations
+    ):
+        raise _error()
+    return operations
+
+
+class DurableEncryptedOutbox:
+    def __init__(self, path: str | Path, *, encryption_key: bytes) -> None:
+        self._store = _EncryptedQueueFile(path, encryption_key, kind="outbox")
+
+    def pending_operations(self) -> tuple[EncryptedPatchOperation, ...]:
+        return tuple(_load_outbox(self._store))
+
+    def next_pending(self) -> EncryptedPatchOperation | None:
+        pending = self.pending_operations()
+        return pending[0] if pending else None
+
+    def enqueue(self, operation: EncryptedPatchOperation) -> None:
+        if not isinstance(operation, EncryptedPatchOperation):
+            raise _error()
+        operations = _load_outbox(self._store)
+        for current in operations:
+            if current.operation_id == operation.operation_id:
+                if not secrets.compare_digest(_fingerprint(current), _fingerprint(operation)):
+                    raise _error()
+                return
+        if len(operations) >= MAXIMUM_QUEUE_OPERATIONS:
+            raise _error()
+        operations.append(operation)
+        operations.sort()
+        self._store.write(
+            {
+                "format": "atlasvault-encrypted-outbox-state",
+                "version": 1,
+                "operations": [item.to_dict() for item in operations],
+            }
+        )
+
+    def confirm_remote_acceptance(self, operation_id: str) -> None:
+        operation_id = _canonical_uuid(operation_id)
+        operations = _load_outbox(self._store)
+        retained = [item for item in operations if item.operation_id != operation_id]
+        if len(retained) == len(operations):
+            raise _error()
+        self._store.write(
+            {
+                "format": "atlasvault-encrypted-outbox-state",
+                "version": 1,
+                "operations": [item.to_dict() for item in retained],
+            }
+        )
+
+
+@dataclass(frozen=True)
+class _InboxState:
+    cursor: str | None
+    pending_page: bool
+    pending_next_cursor: str | None
+    pending: tuple[EncryptedPatchOperation, ...]
+    applied_fingerprints: Mapping[str, str]
+    author_sequences: Mapping[str, int]
+    object_revisions: Mapping[str, str]
+    last_order: tuple[int, str, int, str] | None
+
+
+def _inbox_default() -> dict[str, Any]:
+    return {
+        "format": "atlasvault-encrypted-inbox-state",
+        "version": 1,
+        "cursor": None,
+        "pending_page": False,
+        "pending_next_cursor": None,
+        "pending_operations": [],
+        "applied_fingerprints": {},
+        "author_sequences": {},
+        "object_revisions": {},
+        "last_order": None,
+    }
+
+
+def _cursor(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _text(value, maximum=MAXIMUM_CURSOR_LENGTH)
+
+
+def _load_inbox(store: _EncryptedQueueFile) -> _InboxState:
+    state = _mapping(store.read(_inbox_default()))
+    _exact(
+        state,
+        {
+            "format",
+            "version",
+            "cursor",
+            "pending_page",
+            "pending_next_cursor",
+            "pending_operations",
+            "applied_fingerprints",
+            "author_sequences",
+            "object_revisions",
+            "last_order",
+        },
+    )
+    if state["format"] != "atlasvault-encrypted-inbox-state" or state["version"] != 1:
+        raise _error()
+    raw_pending = state["pending_operations"]
+    if not isinstance(raw_pending, list) or len(raw_pending) > MAXIMUM_QUEUE_OPERATIONS:
+        raise _error()
+    pending = tuple(
+        EncryptedPatchOperation.from_dict(_mapping(item)) for item in raw_pending
+    )
+    if pending != tuple(sorted(pending)) or len({item.operation_id for item in pending}) != len(
+        pending
+    ):
+        raise _error()
+    fingerprints = _mapping(state["applied_fingerprints"])
+    if len(fingerprints) > MAXIMUM_QUEUE_OPERATIONS:
+        raise _error()
+    validated_fingerprints: dict[str, str] = {}
+    for operation_id, digest in fingerprints.items():
+        operation_id = _canonical_uuid(operation_id)
+        digest = _text(digest, maximum=64)
+        if _SHA256.fullmatch(digest) is None:
+            raise _error()
+        validated_fingerprints[operation_id] = digest
+    author_sequences = _mapping(state["author_sequences"])
+    object_revisions = _mapping(state["object_revisions"])
+    if (
+        len(author_sequences) > MAXIMUM_QUEUE_OPERATIONS
+        or len(object_revisions) > MAXIMUM_QUEUE_OPERATIONS
+    ):
+        raise _error()
+    validated_sequences = {
+        _identifier(key): _integer(value) for key, value in author_sequences.items()
+    }
+    validated_revisions = {
+        _identifier(key): _identifier(value) for key, value in object_revisions.items()
+    }
+    raw_order = state["last_order"]
+    last_order: tuple[int, str, int, str] | None = None
+    if raw_order is not None:
+        if not isinstance(raw_order, list) or len(raw_order) != 4:
+            raise _error()
+        last_order = (
+            _integer(raw_order[0]),
+            _identifier(raw_order[1]),
+            _integer(raw_order[2]),
+            _canonical_uuid(raw_order[3]),
+        )
+    if type(state["pending_page"]) is not bool:
+        raise _error()
+    pending_page = state["pending_page"]
+    pending_next_cursor = _cursor(state["pending_next_cursor"])
+    if bool(pending) != pending_page:
+        raise _error()
+    return _InboxState(
+        cursor=_cursor(state["cursor"]),
+        pending_page=pending_page,
+        pending_next_cursor=pending_next_cursor,
+        pending=pending,
+        applied_fingerprints=validated_fingerprints,
+        author_sequences=validated_sequences,
+        object_revisions=validated_revisions,
+        last_order=last_order,
+    )
+
+
+def _inbox_dict(state: _InboxState) -> dict[str, Any]:
+    return {
+        "format": "atlasvault-encrypted-inbox-state",
+        "version": 1,
+        "cursor": state.cursor,
+        "pending_page": state.pending_page,
+        "pending_next_cursor": state.pending_next_cursor,
+        "pending_operations": [item.to_dict() for item in state.pending],
+        "applied_fingerprints": dict(state.applied_fingerprints),
+        "author_sequences": dict(state.author_sequences),
+        "object_revisions": dict(state.object_revisions),
+        "last_order": list(state.last_order) if state.last_order is not None else None,
+    }
+
+
+def _advance_metadata(
+    operation: EncryptedPatchOperation,
+    *,
+    author_sequences: dict[str, int],
+    object_revisions: dict[str, str],
+    last_order: tuple[int, str, int, str] | None,
+) -> tuple[int, str, int, str]:
+    if last_order is not None and operation.order_key <= last_order:
+        raise _error()
+    expected_sequence = author_sequences.get(operation.author_device_id, 0) + 1
+    if operation.author_sequence != expected_sequence:
+        raise _error()
+    expected_parent = object_revisions.get(operation.envelope.object_id)
+    if operation.envelope.parent_revision != expected_parent:
+        raise _error()
+    author_sequences[operation.author_device_id] = operation.author_sequence
+    object_revisions[operation.envelope.object_id] = operation.envelope.revision
+    return operation.order_key
+
+
+class DurableEncryptedInbox:
+    def __init__(self, path: str | Path, *, encryption_key: bytes) -> None:
+        self._store = _EncryptedQueueFile(path, encryption_key, kind="inbox")
+
+    @property
+    def cursor(self) -> str | None:
+        return _load_inbox(self._store).cursor
+
+    def pending_operations(self) -> tuple[EncryptedPatchOperation, ...]:
+        return _load_inbox(self._store).pending
+
+    def stage_page(
+        self,
+        *,
+        expected_cursor: str | None,
+        next_cursor: str | None,
+        operations: Iterable[EncryptedPatchOperation],
+    ) -> None:
+        expected_cursor = _cursor(expected_cursor)
+        next_cursor = _cursor(next_cursor)
+        state = _load_inbox(self._store)
+        if state.pending or state.cursor != expected_cursor:
+            raise _error()
+        incoming = tuple(operations)
+        if len(incoming) > MAXIMUM_QUEUE_OPERATIONS or any(
+            not isinstance(item, EncryptedPatchOperation) for item in incoming
+        ):
+            raise _error()
+        if incoming != tuple(sorted(incoming)) or len(
+            {item.operation_id for item in incoming}
+        ) != len(incoming):
+            raise _error()
+
+        sequences = dict(state.author_sequences)
+        revisions = dict(state.object_revisions)
+        last_order = state.last_order
+        new_operations: list[EncryptedPatchOperation] = []
+        for operation in incoming:
+            digest = _fingerprint(operation)
+            known = state.applied_fingerprints.get(operation.operation_id)
+            if known is not None:
+                if not secrets.compare_digest(known, digest):
+                    raise _error()
+                continue
+            last_order = _advance_metadata(
+                operation,
+                author_sequences=sequences,
+                object_revisions=revisions,
+                last_order=last_order,
+            )
+            new_operations.append(operation)
+
+        if len(state.applied_fingerprints) + len(new_operations) > MAXIMUM_QUEUE_OPERATIONS:
+            raise _error()
+        updated = replace(
+            state,
+            cursor=next_cursor if not new_operations else state.cursor,
+            pending_page=bool(new_operations),
+            pending_next_cursor=next_cursor,
+            pending=tuple(new_operations),
+        )
+        self._store.write(_inbox_dict(updated))
+
+    def apply_next(
+        self,
+        apply: Callable[[EncryptedPatchOperation], None],
+    ) -> EncryptedPatchOperation | None:
+        if not callable(apply):
+            raise _error()
+        state = _load_inbox(self._store)
+        if not state.pending:
+            return None
+        operation = state.pending[0]
+        apply(operation)
+        sequences = dict(state.author_sequences)
+        revisions = dict(state.object_revisions)
+        last_order = _advance_metadata(
+            operation,
+            author_sequences=sequences,
+            object_revisions=revisions,
+            last_order=state.last_order,
+        )
+        fingerprints = dict(state.applied_fingerprints)
+        fingerprints[operation.operation_id] = _fingerprint(operation)
+        remaining = state.pending[1:]
+        updated = replace(
+            state,
+            cursor=state.pending_next_cursor if not remaining else state.cursor,
+            pending_page=bool(remaining),
+            pending_next_cursor=state.pending_next_cursor if remaining else None,
+            pending=remaining,
+            applied_fingerprints=fingerprints,
+            author_sequences=sequences,
+            object_revisions=revisions,
+            last_order=last_order,
+        )
+        self._store.write(_inbox_dict(updated))
+        return operation

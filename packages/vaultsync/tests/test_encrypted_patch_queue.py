@@ -154,11 +154,18 @@ def test_inbox_cursor_waits_for_durable_apply_and_duplicates_apply_once(
     assert inbox.apply_next(lambda item: applied.append(item.operation_id)) is None
     assert applied == [first.operation_id, second.operation_id]
 
+    inbox.stage_page(
+        expected_cursor="cursor-after-replay",
+        next_cursor=None,
+        operations=(first, second),
+    )
+    assert inbox.cursor is None
+
     changed_duplicate = first.to_dict()
     changed_duplicate["lamport"] = 99
     with pytest.raises(PatchQueueError):
         inbox.stage_page(
-            expected_cursor="cursor-after-replay",
+            expected_cursor=None,
             next_cursor="cursor-invalid",
             operations=(EncryptedPatchOperation.from_dict(changed_duplicate),),
         )

@@ -62,7 +62,9 @@ operations, persists them encrypted, and leaves the current remote cursor
 unchanged. `applyNext` invokes the caller's durable apply boundary, then
 atomically records the operation as applied. The cursor advances to the page's
 `next_cursor` only after every operation in that page is durably recorded as
-applied.
+applied. A terminal page may carry a null `next_cursor`; the encrypted inbox
+therefore stores an explicit staged-page marker instead of inferring pending
+state from cursor nullability.
 
 An already-applied `operation_id` with identical canonical bytes is a harmless
 duplicate. Reuse of an ID with different bytes fails closed. New operations
