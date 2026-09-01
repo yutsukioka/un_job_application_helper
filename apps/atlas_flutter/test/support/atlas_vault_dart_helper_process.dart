@@ -41,6 +41,22 @@ String _resolveDartExecutable() {
         executableName,
       ].join(Platform.pathSeparator);
       if (File(candidate).existsSync()) return candidate;
+      if (Platform.isWindows &&
+          (File(
+                <String>[directory, 'dart.bat'].join(Platform.pathSeparator),
+              ).existsSync() ||
+              File(
+                <String>[directory, 'flutter.bat'].join(Platform.pathSeparator),
+              ).existsSync())) {
+        final bundled = <String>[
+          directory,
+          'cache',
+          'dart-sdk',
+          'bin',
+          'dart.exe',
+        ].join(Platform.pathSeparator);
+        if (File(bundled).existsSync()) return bundled;
+      }
     }
   }
   throw StateError('Dart executable is unavailable.');

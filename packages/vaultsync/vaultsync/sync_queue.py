@@ -297,6 +297,33 @@ def _sequence_owners_json(
     return result
 
 
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _ensure_durable_directory(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            raise _error()
+        missing.append(current)
+        current = parent
+    if not current.is_dir():
+        raise _error()
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        if not directory.is_dir():
+            raise _error()
+        _fsync_directory(directory.parent)
+
+
 class _EncryptedQueueFile:
     def __init__(self, path: str | Path, encryption_key: bytes, *, kind: str) -> None:
         if not isinstance(encryption_key, bytes) or len(encryption_key) != 32:
@@ -304,6 +331,29 @@ class _EncryptedQueueFile:
         self.path = Path(path)
         self._key = encryption_key
         self._aad = f"{QUEUE_ENVELOPE_FORMAT}:v1:{kind}".encode("ascii")
+        self._cleanup_abandoned_staging_files()
+
+    def _cleanup_abandoned_staging_files(self) -> None:
+        parent = self.path.parent
+        if not parent.exists():
+            return
+        prefix = f".{self.path.name}."
+        suffix = ".tmp"
+        try:
+            if not parent.is_dir():
+                raise _error()
+            for candidate in parent.iterdir():
+                name = candidate.name
+                if not name.startswith(prefix) or not name.endswith(suffix):
+                    continue
+                token = name[len(prefix) : -len(suffix)]
+                parsed = uuid.UUID(token)
+                if parsed.hex != token:
+                    continue
+                if candidate.is_file() or candidate.is_symlink():
+                    candidate.unlink()
+        except (OSError, ValueError) as exc:
+            raise _error() from exc
 
     def read(self, default: Mapping[str, Any]) -> dict[str, Any]:
         if not self.path.exists():
@@ -353,7 +403,7 @@ class _EncryptedQueueFile:
         )
         if len(encoded) > MAXIMUM_QUEUE_FILE_BYTES:
             raise _error()
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _ensure_durable_directory(self.path.parent)
         temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
         descriptor: int | None = None
         try:
@@ -371,12 +421,7 @@ class _EncryptedQueueFile:
                 before_replace()
             os.replace(temporary, self.path)
             os.chmod(self.path, 0o600)
-            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            directory = os.open(self.path.parent, directory_flags)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            _fsync_directory(self.path.parent)
         except (OSError, ValueError) as exc:
             raise _error() from exc
         finally:
@@ -997,7 +1042,8 @@ def _resolve_convergent_records(
         list[
             tuple[
                 OpaqueCiphertextEnvelope,
-                tuple[int, int, str, int, str],
+                EncryptedPatchOperation | None,
+                AuthenticatedCollectionSnapshot | None,
             ]
         ],
     ] = {}
@@ -1006,20 +1052,57 @@ def _resolve_convergent_records(
             candidates.setdefault(envelope.object_id, []).append(
                 (
                     envelope,
-                    (0, 0, "", 0, snapshot.canonical_payload_sha256),
+                    None,
+                    snapshot,
                 )
             )
     for operation in state.operations:
         candidates.setdefault(operation.envelope.object_id, []).append(
-            (operation.envelope, (1, *operation.order_key))
+            (operation.envelope, operation, None)
         )
     resolved: list[OpaqueCiphertextEnvelope] = []
     for object_id in sorted(candidates):
         object_candidates = candidates[object_id]
         if any(item[0].tombstone for item in object_candidates):
             object_candidates = [item for item in object_candidates if item[0].tombstone]
-        resolved.append(max(object_candidates, key=lambda item: item[1])[0])
+        operation_candidates = [item for item in object_candidates if item[1] is not None]
+        if operation_candidates:
+            resolved.append(
+                max(
+                    operation_candidates,
+                    key=lambda item: item[1].order_key,  # type: ignore[union-attr]
+                )[0]
+            )
+            continue
+        snapshot_candidates = [item for item in object_candidates if item[2] is not None]
+        undominated = [
+            candidate
+            for candidate in snapshot_candidates
+            if not any(
+                _snapshot_dominates(other[2], candidate[2])
+                for other in snapshot_candidates
+                if other is not candidate
+            )
+        ]
+        resolved.append(
+            max(
+                undominated,
+                key=lambda item: item[2].canonical_payload_sha256,  # type: ignore[union-attr]
+            )[0]
+        )
     return tuple(resolved)
+
+
+def _snapshot_dominates(
+    newer: AuthenticatedCollectionSnapshot | None,
+    older: AuthenticatedCollectionSnapshot | None,
+) -> bool:
+    if newer is None or older is None or newer.collection_revision <= older.collection_revision:
+        return False
+    return all(
+        newer.author_sequence_owners.get(sequence_key) == operation_id
+        for sequence_key, operation_id in older.author_sequence_owners.items()
+    )
 
 
 class DurableEncryptedConvergentReplica:

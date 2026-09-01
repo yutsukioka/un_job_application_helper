@@ -44,7 +44,7 @@ typedef _FsyncDart = int Function(int);
 typedef _CloseNative = Int32 Function(Int32);
 typedef _CloseDart = int Function(int);
 
-Future<void> _syncParentDirectory(File file) async {
+Future<void> _syncDirectory(Directory directory) async {
   if (Platform.isWindows) return;
   if (!(Platform.isLinux ||
       Platform.isMacOS ||
@@ -58,7 +58,7 @@ Future<void> _syncParentDirectory(File file) async {
   final open = library.lookupFunction<_OpenNative, _OpenDart>('open');
   final fsync = library.lookupFunction<_FsyncNative, _FsyncDart>('fsync');
   final close = library.lookupFunction<_CloseNative, _CloseDart>('close');
-  final bytes = utf8.encode(file.parent.path);
+  final bytes = utf8.encode(directory.path);
   final path = malloc(bytes.length + 1).cast<Uint8>();
   if (path.address == 0) _invalid();
   var descriptor = -1;
@@ -75,6 +75,27 @@ Future<void> _syncParentDirectory(File file) async {
   } finally {
     if (descriptor >= 0) close(descriptor);
     free(path.cast<Void>());
+  }
+}
+
+Future<void> _syncParentDirectory(File file) => _syncDirectory(file.parent);
+
+Future<void> _ensureDurableParentDirectory(File file) async {
+  final missing = <Directory>[];
+  var current = file.parent;
+  while (!await current.exists()) {
+    final parent = current.parent;
+    if (parent.path == current.path) _invalid();
+    missing.add(current);
+    current = parent;
+  }
+  for (final directory in missing.reversed) {
+    try {
+      await directory.create();
+    } on FileSystemException {
+      if (!await directory.exists()) rethrow;
+    }
+    await _syncDirectory(directory.parent);
   }
 }
 
@@ -364,7 +385,7 @@ final class _EncryptedQueueFile {
 
   Future<Map<String, Object?>> read(Map<String, Object?> fallback) async {
     try {
-      await file.parent.create(recursive: true);
+      await _ensureDurableParentDirectory(file);
       await recoverInterruptedCacheReplacement(file);
       if (!await file.exists()) return Map<String, Object?>.from(fallback);
       final length = await file.length();
@@ -428,7 +449,7 @@ final class _EncryptedQueueFile {
         }),
       );
       if (encoded.length > _maximumQueueBytes) _invalid();
-      await file.parent.create(recursive: true);
+      await _ensureDurableParentDirectory(file);
       await recoverInterruptedCacheReplacement(file);
       final staged = cacheReplacementTemporaryFile(file);
       if (await staged.exists()) _invalid();
@@ -1137,22 +1158,27 @@ final class _ConvergentCandidate {
   const _ConvergentCandidate({
     required this.envelope,
     required this.operation,
-    required this.snapshotDigest,
+    required this.snapshot,
   });
 
   final AtlasVaultOpaqueCiphertextEnvelope envelope;
   final AtlasVaultEncryptedPatchOperation? operation;
-  final String snapshotDigest;
+  final AtlasVaultAuthenticatedCollectionSnapshot? snapshot;
+}
 
-  bool winsOver(_ConvergentCandidate other) {
-    if (envelope.tombstone != other.envelope.tombstone) {
-      return envelope.tombstone;
+bool _snapshotDominates(
+  AtlasVaultAuthenticatedCollectionSnapshot newer,
+  AtlasVaultAuthenticatedCollectionSnapshot older,
+) {
+  if (newer.collectionRevision <= older.collectionRevision) return false;
+  for (final device in older.authorSequenceOwners.entries) {
+    final newerOwners = newer.authorSequenceOwners[device.key];
+    if (newerOwners == null) return false;
+    for (final owner in device.value.entries) {
+      if (newerOwners[owner.key] != owner.value) return false;
     }
-    if (operation != null && other.operation == null) return true;
-    if (operation == null && other.operation != null) return false;
-    if (operation != null) return operation!.compareTo(other.operation!) > 0;
-    return snapshotDigest.compareTo(other.snapshotDigest) > 0;
   }
+  return true;
 }
 
 final class AtlasVaultDurableEncryptedConvergentReplica {
@@ -1279,14 +1305,13 @@ final class AtlasVaultDurableEncryptedConvergentReplica {
 
   Future<List<AtlasVaultOpaqueCiphertextEnvelope>> currentRecords() async {
     final state = await _load();
-    final winners = <String, _ConvergentCandidate>{};
-    void consider(_ConvergentCandidate candidate) {
-      final objectId = candidate.envelope.objectId;
-      final current = winners[objectId];
-      if (current == null || candidate.winsOver(current)) {
-        winners[objectId] = candidate;
-      }
-    }
+    final candidates = <String, List<_ConvergentCandidate>>{};
+    void consider(_ConvergentCandidate candidate) => candidates
+        .putIfAbsent(
+          candidate.envelope.objectId,
+          () => <_ConvergentCandidate>[],
+        )
+        .add(candidate);
 
     for (final snapshot in state.snapshots) {
       for (final envelope in snapshot.records) {
@@ -1294,7 +1319,7 @@ final class AtlasVaultDurableEncryptedConvergentReplica {
           _ConvergentCandidate(
             envelope: envelope,
             operation: null,
-            snapshotDigest: snapshot.canonicalPayloadSha256,
+            snapshot: snapshot,
           ),
         );
       }
@@ -1304,13 +1329,50 @@ final class AtlasVaultDurableEncryptedConvergentReplica {
         _ConvergentCandidate(
           envelope: operation.envelope,
           operation: operation,
-          snapshotDigest: '',
+          snapshot: null,
         ),
       );
     }
+    final winners = <String, AtlasVaultOpaqueCiphertextEnvelope>{};
+    for (final entry in candidates.entries) {
+      var eligible = entry.value;
+      if (eligible.any((item) => item.envelope.tombstone)) {
+        eligible = eligible
+            .where((item) => item.envelope.tombstone)
+            .toList(growable: false);
+      }
+      final operationCandidates = eligible
+          .where((item) => item.operation != null)
+          .toList(growable: false);
+      if (operationCandidates.isNotEmpty) {
+        operationCandidates.sort(
+          (left, right) => left.operation!.compareTo(right.operation!),
+        );
+        winners[entry.key] = operationCandidates.last.envelope;
+        continue;
+      }
+      final snapshotCandidates = eligible
+          .where((item) => item.snapshot != null)
+          .toList(growable: false);
+      final undominated = snapshotCandidates
+          .where(
+            (candidate) => !snapshotCandidates.any(
+              (other) =>
+                  !identical(candidate, other) &&
+                  _snapshotDominates(other.snapshot!, candidate.snapshot!),
+            ),
+          )
+          .toList();
+      undominated.sort(
+        (left, right) => left.snapshot!.canonicalPayloadSha256.compareTo(
+          right.snapshot!.canonicalPayloadSha256,
+        ),
+      );
+      winners[entry.key] = undominated.last.envelope;
+    }
     final objectIds = winners.keys.toList()..sort();
     return List<AtlasVaultOpaqueCiphertextEnvelope>.unmodifiable(
-      objectIds.map((item) => winners[item]!.envelope),
+      objectIds.map((item) => winners[item]!),
     );
   }
 

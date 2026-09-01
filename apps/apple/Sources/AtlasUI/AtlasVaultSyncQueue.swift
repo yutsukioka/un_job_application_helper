@@ -301,6 +301,59 @@ private func fingerprint(_ operation: AtlasVaultEncryptedPatchOperation) throws 
     sha256Hex(try canonicalJSON(operation.jsonObject))
 }
 
+private func syncDirectory(_ directory: URL) throws {
+    let descriptor = Darwin.open(directory.path, O_RDONLY | O_DIRECTORY)
+    guard descriptor >= 0 else { throw invalid() }
+    defer { Darwin.close(descriptor) }
+    guard Darwin.fsync(descriptor) == 0 else { throw invalid() }
+}
+
+private func ensureDurableDirectory(_ directory: URL) throws {
+    var missing: [URL] = []
+    var current = directory.standardizedFileURL
+    var isDirectory = ObjCBool(false)
+    while !FileManager.default.fileExists(atPath: current.path, isDirectory: &isDirectory) {
+        let parent = current.deletingLastPathComponent()
+        guard parent.path != current.path else { throw invalid() }
+        missing.append(current)
+        current = parent
+    }
+    guard isDirectory.boolValue else { throw invalid() }
+    for item in missing.reversed() {
+        try FileManager.default.createDirectory(
+            at: item,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try syncDirectory(item.deletingLastPathComponent())
+    }
+}
+
+private func removeAbandonedQueueStages(for fileURL: URL) throws {
+    let parent = fileURL.deletingLastPathComponent()
+    var isDirectory = ObjCBool(false)
+    guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory) else {
+        return
+    }
+    guard isDirectory.boolValue else { throw invalid() }
+    let prefix = ".\(fileURL.lastPathComponent)."
+    let suffix = ".tmp"
+    for candidate in try FileManager.default.contentsOfDirectory(
+        at: parent,
+        includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+    ) {
+        let name = candidate.lastPathComponent
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { continue }
+        let start = name.index(name.startIndex, offsetBy: prefix.count)
+        let end = name.index(name.endIndex, offsetBy: -suffix.count)
+        guard UUID(uuidString: String(name[start..<end])) != nil else { continue }
+        let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        if values.isRegularFile == true || values.isSymbolicLink == true {
+            try FileManager.default.removeItem(at: candidate)
+        }
+    }
+}
+
 private struct EncryptedQueueFile {
     let fileURL: URL
     private let key: SymmetricKey
@@ -311,6 +364,7 @@ private struct EncryptedQueueFile {
         self.fileURL = fileURL.standardizedFileURL
         self.key = SymmetricKey(data: encryptionKey)
         self.aad = Data("\(queueEnvelopeFormat):v1:\(kind)".utf8)
+        try removeAbandonedQueueStages(for: self.fileURL)
     }
 
     func read(default fallback: [String: Any]) throws -> [String: Any] {
@@ -377,11 +431,7 @@ private struct EncryptedQueueFile {
             let encoded = try canonicalJSON(outer)
             guard encoded.count <= maximumQueueBytes else { throw invalid() }
             let parent = fileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(
-                at: parent,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
+            try ensureDurableDirectory(parent)
             let staged = parent.appendingPathComponent(
                 ".\(fileURL.lastPathComponent).\(UUID().uuidString).tmp"
             )
@@ -400,11 +450,7 @@ private struct EncryptedQueueFile {
                 [.posixPermissions: 0o600],
                 ofItemAtPath: fileURL.path
             )
-            let descriptor = Darwin.open(parent.path, O_RDONLY | O_DIRECTORY)
-            if descriptor >= 0 {
-                defer { Darwin.close(descriptor) }
-                guard Darwin.fsync(descriptor) == 0 else { throw invalid() }
-            }
+            try syncDirectory(parent)
         } catch let error as AtlasVaultEncryptedPatchQueueError {
             throw error
         } catch {
@@ -1024,17 +1070,21 @@ private func loadConvergentReplica(
 private struct ConvergentCandidate {
     let envelope: AtlasVaultOpaqueCiphertextEnvelope
     let operation: AtlasVaultEncryptedPatchOperation?
-    let snapshotDigest: String
+    let snapshot: AtlasVaultAuthenticatedCollectionSnapshot?
+}
 
-    func wins(over other: ConvergentCandidate) -> Bool {
-        if envelope.tombstone != other.envelope.tombstone { return envelope.tombstone }
-        if operation != nil, other.operation == nil { return true }
-        if operation == nil, other.operation != nil { return false }
-        if let operation, let otherOperation = other.operation {
-            return otherOperation < operation
+private func snapshotDominates(
+    _ newer: AtlasVaultAuthenticatedCollectionSnapshot,
+    _ older: AtlasVaultAuthenticatedCollectionSnapshot
+) -> Bool {
+    guard newer.collectionRevision > older.collectionRevision else { return false }
+    for (deviceID, owners) in older.authorSequenceOwners {
+        guard let newerOwners = newer.authorSequenceOwners[deviceID] else { return false }
+        for (sequence, operationID) in owners where newerOwners[sequence] != operationID {
+            return false
         }
-        return snapshotDigest > other.snapshotDigest
     }
+    return true
 }
 
 public final class AtlasVaultDurableEncryptedConvergentReplica {
@@ -1147,18 +1197,17 @@ public final class AtlasVaultDurableEncryptedConvergentReplica {
 
     public func currentRecords() throws -> [AtlasVaultOpaqueCiphertextEnvelope] {
         let state = try load()
-        var winners: [String: ConvergentCandidate] = [:]
+        var candidates: [String: [ConvergentCandidate]] = [:]
         func consider(_ candidate: ConvergentCandidate) {
             let objectID = candidate.envelope.objectID
-            if let current = winners[objectID], !candidate.wins(over: current) { return }
-            winners[objectID] = candidate
+            candidates[objectID, default: []].append(candidate)
         }
         for snapshot in state.snapshots {
             for envelope in snapshot.records {
                 consider(ConvergentCandidate(
                     envelope: envelope,
                     operation: nil,
-                    snapshotDigest: snapshot.canonicalPayloadSHA256
+                    snapshot: snapshot
                 ))
             }
         }
@@ -1166,10 +1215,39 @@ public final class AtlasVaultDurableEncryptedConvergentReplica {
             consider(ConvergentCandidate(
                 envelope: operation.envelope,
                 operation: operation,
-                snapshotDigest: ""
+                snapshot: nil
             ))
         }
-        return winners.keys.sorted().compactMap { winners[$0]?.envelope }
+        var winners: [String: AtlasVaultOpaqueCiphertextEnvelope] = [:]
+        for (objectID, objectCandidates) in candidates {
+            var eligible = objectCandidates
+            if eligible.contains(where: { $0.envelope.tombstone }) {
+                eligible = eligible.filter { $0.envelope.tombstone }
+            }
+            let operationCandidates = eligible.filter { $0.operation != nil }
+            if let winner = operationCandidates.max(by: {
+                $0.operation! < $1.operation!
+            }) {
+                winners[objectID] = winner.envelope
+                continue
+            }
+            let snapshotCandidates = eligible.filter { $0.snapshot != nil }
+            let undominated = snapshotCandidates.filter { candidate in
+                !snapshotCandidates.contains { other in
+                    other.snapshot!.canonicalPayloadSHA256
+                        != candidate.snapshot!.canonicalPayloadSHA256
+                        && snapshotDominates(other.snapshot!, candidate.snapshot!)
+                }
+            }
+            guard let winner = undominated.max(by: {
+                $0.snapshot!.canonicalPayloadSHA256
+                    < $1.snapshot!.canonicalPayloadSHA256
+            }) else {
+                throw invalid()
+            }
+            winners[objectID] = winner.envelope
+        }
+        return winners.keys.sorted().compactMap { winners[$0] }
     }
 
     public func acceptedOperationCount() throws -> Int { try load().receipts.count }

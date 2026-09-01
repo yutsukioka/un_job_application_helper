@@ -89,7 +89,10 @@ private func decryptTransport(
 
 private func result(_ parts: Parts) throws -> [String: Any] {
     let records = try parts.replica.currentRecords().map(\.jsonObject)
-    let canonical = try JSONSerialization.data(withJSONObject: records, options: [.sortedKeys])
+    let canonical = try JSONSerialization.data(
+        withJSONObject: records,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
     return [
         "pid": ProcessInfo.processInfo.processIdentifier,
         "records": records,
