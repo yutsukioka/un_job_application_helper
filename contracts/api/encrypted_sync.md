@@ -132,6 +132,9 @@ C15 applies one aggregate storage-request window across all ciphertext paths:
 - 24 requests per authenticated device per 60-second window;
 - 1,024 retained account registries per process;
 - 4,096 live authentication challenges per process;
+- 8 live authentication challenges per account/device pair;
+- 4,096 live session digests per process;
+- 8 live session digests per account/device pair;
 - 256 retained public devices per account;
 - 192 MiB maximum encoded HTTP request body.
 
@@ -144,8 +147,9 @@ windows are removed rather than retained indefinitely.
 Account bootstrap fails with 429 before insertion when the fixed process-local
 registry ceiling is reached. This bounds unauthenticated self-signed account
 creation without retaining request-derived dimensions in telemetry.
-Challenge issuance and signed device addition likewise fail with 429 before
-retaining state when their fixed ceilings are reached.
+Challenge and session issuance enforce both process-wide and per-account/device
+ceilings, then fail with 429 before retaining state. Signed device addition
+likewise fails with 429 before mutation when its per-account ceiling is reached.
 
 The body ceiling is checked before request parsing from a valid declared length
 and while streaming request chunks. Oversized requests return a fixed 413
@@ -153,6 +157,10 @@ response and do not reach the storage handler. Rate exhaustion returns a fixed
 429 response. C16 must choose a shared limiter before any multi-instance
 deployment; process-local limits are sufficient only for this in-process P4
 contract and its tests.
+
+Every documented account and storage operation publishes the 413 middleware
+boundary together with each handler-specific 400, 401, 404, 409, or 429 result,
+so the served and checked-in OpenAPI response sets remain identical.
 
 ## Versioned Ciphertext Storage Shape
 
@@ -219,6 +227,8 @@ Allowed request fields:
 The ciphertext may decrypt client-side to wrapped vault keys and crypto
 parameters. The server envelope must not contain raw vault keys, passphrases,
 recovery keys, or plaintext user records.
+Metadata and opaque object `key_epoch` values use the shared positive signed
+64-bit range (`1...9223372036854775807`) enforced by all AtlasVault clients.
 
 ### Get Vault Metadata
 

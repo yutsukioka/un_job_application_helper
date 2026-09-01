@@ -10,6 +10,9 @@
     "deviceRequestLimit": 24,
     "maxRetainedAccounts": 1024,
     "maxLiveChallenges": 4096,
+    "maxChallengesPerDevice": 8,
+    "maxLiveSessions": 4096,
+    "maxSessionsPerDevice": 8,
     "maxDevicesPerAccount": 256,
     "rateWindowSeconds": 60,
     "maxRequestBytes": 201326592,
@@ -59,6 +62,9 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
@@ -101,6 +107,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
@@ -142,6 +151,12 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -176,6 +191,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
           }
         }
       },
@@ -224,6 +242,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -1060,7 +1081,8 @@
           },
           "key_epoch": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9223372036854775807
           },
           "nonce_b64": {
             "type": "string",
@@ -1142,7 +1164,8 @@
           },
           "key_epoch": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9223372036854775807
           },
           "nonce_b64": {
             "type": "string",

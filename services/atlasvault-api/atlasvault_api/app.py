@@ -47,6 +47,7 @@ from atlasvault_api.controls import (
 )
 from atlasvault_api.storage import (
     IDEMPOTENCY_KEY_MAX_LENGTH,
+    MAX_KEY_EPOCH,
     MAX_PAGE_SIZE,
     OPAQUE_ID_MAX_LENGTH,
     OPAQUE_ID_PATTERN,
@@ -69,7 +70,6 @@ CHALLENGE_BYTES = 32
 SIGNATURE_BYTES = 64
 CHALLENGE_LIFETIME_SECONDS = 120
 SESSION_LIFETIME_SECONDS = 900
-MAX_KEY_EPOCH = (1 << 63) - 1
 REGISTRY_REVISION_PATTERN = (
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -199,6 +199,65 @@ class FixedErrorResponse(BaseModel):
     model_config = _STRICT_MODEL
 
     detail: str
+
+
+_ACCOUNT_BODY_LIMIT_OPENAPI_RESPONSE = {
+    413: {
+        "description": "Request body exceeds the fixed ciphertext request ceiling",
+        "model": FixedErrorResponse,
+    }
+}
+_ACCOUNT_AUTH_OPENAPI_RESPONSES = {
+    **_ACCOUNT_BODY_LIMIT_OPENAPI_RESPONSE,
+    401: {
+        "description": "Account or device authorization failed",
+        "model": FixedErrorResponse,
+    },
+}
+_ACCOUNT_BOOTSTRAP_OPENAPI_RESPONSES = {
+    **_ACCOUNT_BODY_LIMIT_OPENAPI_RESPONSE,
+    400: {
+        "description": "Signed registry transition is invalid",
+        "model": FixedErrorResponse,
+    },
+    409: {
+        "description": "Account already exists",
+        "model": FixedErrorResponse,
+    },
+    429: {
+        "description": "Account registration capacity is exhausted",
+        "model": FixedErrorResponse,
+    },
+}
+_ACCOUNT_CHALLENGE_OPENAPI_RESPONSES = {
+    **_ACCOUNT_AUTH_OPENAPI_RESPONSES,
+    429: {
+        "description": "Challenge capacity is exhausted",
+        "model": FixedErrorResponse,
+    },
+}
+_ACCOUNT_SESSION_OPENAPI_RESPONSES = {
+    **_ACCOUNT_AUTH_OPENAPI_RESPONSES,
+    429: {
+        "description": "Session capacity is exhausted",
+        "model": FixedErrorResponse,
+    },
+}
+_ACCOUNT_DEVICE_WRITE_OPENAPI_RESPONSES = {
+    **_ACCOUNT_AUTH_OPENAPI_RESPONSES,
+    400: {
+        "description": "Signed registry transition is invalid",
+        "model": FixedErrorResponse,
+    },
+    409: {
+        "description": "Registry revision conflicts with current state",
+        "model": FixedErrorResponse,
+    },
+    429: {
+        "description": "Device capacity is exhausted",
+        "model": FixedErrorResponse,
+    },
+}
 
 
 _STORAGE_COMMON_OPENAPI_RESPONSES = {
@@ -358,6 +417,13 @@ class AtlasVaultBackend:
                 raise AuthorizationFailed
             if len(self._challenges) >= self.abuse_policy.max_challenges:
                 raise RequestRateExceeded
+            device_challenges = sum(
+                stored_account_id == account_id
+                and challenge.device_id == request.device_id
+                for (stored_account_id, _), challenge in self._challenges.items()
+            )
+            if device_challenges >= self.abuse_policy.max_challenges_per_device:
+                raise RequestRateExceeded
             challenge_id = f"avc1-{_entropy_bytes(self._entropy, 16).hex()}"
             key = (account_id, challenge_id)
             if key in self._challenges:
@@ -381,6 +447,8 @@ class AtlasVaultBackend:
     ) -> SessionGrant:
         with self._lock:
             now = self._monotonic()
+            self._prune_expired_sessions(now)
+            self._require_session_capacity(account_id, request.device_id)
             challenge = self._challenges.pop(
                 (account_id, request.challenge_id),
                 None,
@@ -414,7 +482,6 @@ class AtlasVaultBackend:
                 )
             except (InvalidSignature, TypeError, ValueError) as exc:
                 raise AuthorizationFailed from exc
-            self._prune_expired_sessions(now)
             token = _encode_token(_entropy_bytes(self._entropy, 32))
             digest = _token_digest(token)
             if digest in self._sessions:
@@ -500,6 +567,16 @@ class AtlasVaultBackend:
         if account_id in self._accounts:
             raise RevisionConflict
         if len(self._accounts) >= self.abuse_policy.max_accounts:
+            raise RequestRateExceeded
+
+    def _require_session_capacity(self, account_id: str, device_id: str) -> None:
+        if len(self._sessions) >= self.abuse_policy.max_sessions:
+            raise RequestRateExceeded
+        device_sessions = sum(
+            session.account_id == account_id and session.device_id == device_id
+            for session in self._sessions.values()
+        )
+        if device_sessions >= self.abuse_policy.max_sessions_per_device:
             raise RequestRateExceeded
 
     def _authorize_token(self, token: str) -> _Session:
@@ -698,12 +775,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/accounts/{account_id}/devices/bootstrap",
         response_model=DeviceRegistryView,
-        responses={
-            429: {
-                "description": "Account registration capacity is exhausted",
-                "model": FixedErrorResponse,
-            }
-        },
+        responses=_ACCOUNT_BOOTSTRAP_OPENAPI_RESPONSES,
         status_code=status.HTTP_201_CREATED,
         operation_id="bootstrapAccountDevice",
     )
@@ -729,12 +801,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/accounts/{account_id}/auth/challenges",
         response_model=AuthenticationChallenge,
-        responses={
-            429: {
-                "description": "Challenge capacity is exhausted",
-                "model": FixedErrorResponse,
-            }
-        },
+        responses=_ACCOUNT_CHALLENGE_OPENAPI_RESPONSES,
         status_code=status.HTTP_201_CREATED,
         operation_id="createAccountChallenge",
     )
@@ -756,6 +823,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/accounts/{account_id}/sessions",
         response_model=SessionGrant,
+        responses=_ACCOUNT_SESSION_OPENAPI_RESPONSES,
         status_code=status.HTTP_201_CREATED,
         operation_id="createAccountSession",
     )
@@ -769,10 +837,15 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=401, detail="Authentication failed."
             ) from exc
+        except RequestRateExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="Session capacity exceeded."
+            ) from exc
 
     @app.get(
         "/v1/accounts/{account_id}/devices",
         response_model=DeviceRegistryView,
+        responses=_ACCOUNT_AUTH_OPENAPI_RESPONSES,
         operation_id="listAccountDevices",
     )
     def list_account_devices(
@@ -789,12 +862,7 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
     @app.post(
         "/v1/accounts/{account_id}/devices",
         response_model=DeviceRegistryView,
-        responses={
-            429: {
-                "description": "Device capacity is exhausted",
-                "model": FixedErrorResponse,
-            }
-        },
+        responses=_ACCOUNT_DEVICE_WRITE_OPENAPI_RESPONSES,
         operation_id="addAccountDevice",
     )
     def add_account_device(
@@ -1001,9 +1069,14 @@ def create_app(backend: AtlasVaultBackend | None = None) -> FastAPI:
             _raise_storage_http_error(exc)
 
     served_schema = app.openapi()
-    served_schema["components"]["schemas"]["DeviceDescriptorModel"]["properties"][
-        "key_epoch"
-    ]["maximum"] = MAX_KEY_EPOCH
+    for schema_name in (
+        "DeviceDescriptorModel",
+        "EncryptedVaultMetadataEnvelopeModel",
+        "OpaqueCiphertextEnvelopeModel",
+    ):
+        served_schema["components"]["schemas"][schema_name]["properties"]["key_epoch"][
+            "maximum"
+        ] = MAX_KEY_EPOCH
     app.openapi_schema = served_schema
     return app
 

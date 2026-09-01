@@ -15,6 +15,9 @@ DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_MAX_REQUEST_BYTES = 192 * 1024 * 1024
 DEFAULT_MAX_ACCOUNTS = 1024
 DEFAULT_MAX_CHALLENGES = 4096
+DEFAULT_MAX_CHALLENGES_PER_DEVICE = 8
+DEFAULT_MAX_SESSIONS = 4096
+DEFAULT_MAX_SESSIONS_PER_DEVICE = 8
 DEFAULT_MAX_DEVICES_PER_ACCOUNT = 256
 MAX_RETAINED_SECURITY_EVENTS = 256
 
@@ -40,18 +43,32 @@ class AbuseControlPolicy:
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES
     max_accounts: int = DEFAULT_MAX_ACCOUNTS
     max_challenges: int = DEFAULT_MAX_CHALLENGES
+    max_challenges_per_device: int = DEFAULT_MAX_CHALLENGES_PER_DEVICE
+    max_sessions: int = DEFAULT_MAX_SESSIONS
+    max_sessions_per_device: int = DEFAULT_MAX_SESSIONS_PER_DEVICE
     max_devices_per_account: int = DEFAULT_MAX_DEVICES_PER_ACCOUNT
 
     def __post_init__(self) -> None:
+        integer_limits = (
+            self.account_request_limit,
+            self.device_request_limit,
+            self.max_request_bytes,
+            self.max_accounts,
+            self.max_challenges,
+            self.max_challenges_per_device,
+            self.max_sessions,
+            self.max_sessions_per_device,
+            self.max_devices_per_account,
+        )
+        valid_window = (
+            type(self.window_seconds) in (int, float)
+            and not isinstance(self.window_seconds, bool)
+            and math.isfinite(self.window_seconds)
+            and self.window_seconds > 0
+        )
         if (
-            self.account_request_limit < 1
-            or self.device_request_limit < 1
-            or not math.isfinite(self.window_seconds)
-            or self.window_seconds <= 0
-            or self.max_request_bytes < 1
-            or self.max_accounts < 1
-            or self.max_challenges < 1
-            or self.max_devices_per_account < 1
+            any(type(limit) is not int or limit < 1 for limit in integer_limits)
+            or not valid_window
         ):
             raise ValueError("invalid abuse-control policy")
 

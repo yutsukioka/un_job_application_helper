@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +20,7 @@ OPAQUE_ID_PATTERN = (
 )
 REVISION_MAX_LENGTH = 128
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
+MAX_KEY_EPOCH = (1 << 63) - 1
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CURSOR_PREFIX = "avcur1-"
@@ -52,12 +53,26 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
         pattern=_REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
-    key_epoch: int = Field(ge=1)
+    key_epoch: int = Field(
+        ge=1,
+        le=MAX_KEY_EPOCH,
+        json_schema_extra={"maximum": MAX_KEY_EPOCH},
+    )
     nonce_b64: Base64EnvelopeValue
     ciphertext_b64: Base64EnvelopeValue
     aad_b64: Base64EnvelopeValue
     signature_b64: Base64EnvelopeValue
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: Any,
+        handler: Any,
+    ) -> dict[str, Any]:
+        schema = handler(core_schema)
+        schema["properties"]["key_epoch"]["maximum"] = MAX_KEY_EPOCH
+        return schema
 
     @field_validator("revision")
     @classmethod
@@ -89,13 +104,27 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
         pattern=_REVISION_PATTERN,
         json_schema_extra={"not": {"const": "*"}},
     )
-    key_epoch: int = Field(ge=1)
+    key_epoch: int = Field(
+        ge=1,
+        le=MAX_KEY_EPOCH,
+        json_schema_extra={"maximum": MAX_KEY_EPOCH},
+    )
     nonce_b64: Base64EnvelopeValue
     ciphertext_b64: Base64EnvelopeValue
     aad_b64: Base64EnvelopeValue
     signature_b64: Base64EnvelopeValue
     tombstone: bool
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: Any,
+        handler: Any,
+    ) -> dict[str, Any]:
+        schema = handler(core_schema)
+        schema["properties"]["key_epoch"]["maximum"] = MAX_KEY_EPOCH
+        return schema
 
     @field_validator("revision", "parent_revision")
     @classmethod
