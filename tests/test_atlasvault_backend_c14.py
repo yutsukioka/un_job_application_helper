@@ -22,6 +22,7 @@ from atlasvault_api.app import (
     AtlasVaultBackend,
     create_app,
 )
+from atlasvault_api.controls import AbuseControlPolicy
 from atlasvault_api.storage import (
     EncryptedVaultMetadataEnvelopeModel,
     InvalidOpaqueStorageRequest,
@@ -834,6 +835,7 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     )
     assert parameters["Cursor"]["name"] == "cursor"
     assert parameters["PageSize"]["name"] == "page_size"
+    assert "default" not in parameters["PageSize"]["schema"]
     assert parameters["VaultId"]["schema"]["pattern"] == path_id_pattern
     assert parameters["ObjectId"]["schema"]["pattern"] == path_id_pattern
 
@@ -1199,3 +1201,155 @@ def test_c14_expired_receipt_is_ignored_even_beyond_prune_budget() -> None:
             expected_revision="*",
             idempotency_key="receipt-budget-target",
         )
+
+
+def test_c14_retained_storage_quotas_fail_before_mutation() -> None:
+    def client_for(
+        **limits: int,
+    ) -> tuple[AtlasVaultBackend, TestClient, dict[str, str]]:
+        backend = AtlasVaultBackend(
+            entropy=DeterministicEntropy(),
+            monotonic=lambda: 2_000.0,
+            abuse_policy=AbuseControlPolicy(**limits),
+        )
+        client = TestClient(create_app(backend))
+        return backend, client, _authorize(client, _identity())
+
+    backend, client, authorization = client_for(
+        max_retained_vaults=1,
+        max_retained_vaults_per_account=1,
+    )
+    first = _metadata(revision="vault-cap-r1", payload=b"first")
+    assert (
+        client.put(
+            f"/v1/vaults/{VAULT_ID}/metadata",
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="vault-cap-first",
+            ),
+            json=first,
+        ).status_code
+        == 200
+    )
+    second = _metadata(revision="vault-cap-r2", payload=b"second")
+    second["vault_id"] = "vault-c14-over-cap"
+    limited = client.put(
+        "/v1/vaults/vault-c14-over-cap/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key="vault-cap-second",
+        ),
+        json=second,
+    )
+    assert limited.status_code == 429
+    assert set(backend.storage._vaults) == {(ACCOUNT_ID, VAULT_ID)}
+
+    backend, client, authorization = client_for(max_retained_objects_per_account=1)
+    for index in range(2):
+        object_id = f"object-cap-{index + 1}"
+        response = client.put(
+            f"/v1/vaults/{VAULT_ID}/objects/{object_id}",
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key=object_id,
+            ),
+            json=_opaque_envelope(
+                object_id=object_id,
+                revision=f"object-cap-r{index + 1}",
+                parent_revision=None,
+                payload=object_id.encode("ascii"),
+            ),
+        )
+        assert response.status_code == (200 if index == 0 else 429), response.text
+    state = backend.storage._vaults[(ACCOUNT_ID, VAULT_ID)]
+    assert set(state.objects) == {"object-cap-1"}
+
+    backend, client, authorization = client_for(max_retained_patches_per_account=1)
+    first_patch = _opaque_envelope(
+        object_id="patch-cap-1",
+        revision="patch-cap-r1",
+        parent_revision=None,
+        payload=b"first",
+    )
+    assert (
+        client.post(
+            f"/v1/vaults/{VAULT_ID}/patches",
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="patch-cap-first",
+            ),
+            json=first_patch,
+        ).status_code
+        == 201
+    )
+    limited = client.post(
+        f"/v1/vaults/{VAULT_ID}/patches",
+        headers=_write_headers(
+            authorization,
+            expected="patch-cap-r1",
+            idempotency_key="patch-cap-second",
+        ),
+        json=_opaque_envelope(
+            object_id="patch-cap-2",
+            revision="patch-cap-r2",
+            parent_revision="patch-cap-r1",
+            payload=b"second",
+        ),
+    )
+    assert limited.status_code == 429
+    assert [
+        item.revision
+        for item in backend.storage._vaults[(ACCOUNT_ID, VAULT_ID)].patches
+    ] == ["patch-cap-r1"]
+
+    backend, client, authorization = client_for(max_retained_revisions_per_account=1)
+    first = _metadata(revision="revision-cap-r1", payload=b"first")
+    assert (
+        client.put(
+            f"/v1/vaults/{VAULT_ID}/metadata",
+            headers=_write_headers(
+                authorization,
+                expected="*",
+                idempotency_key="revision-cap-first",
+            ),
+            json=first,
+        ).status_code
+        == 200
+    )
+    limited = client.put(
+        f"/v1/vaults/{VAULT_ID}/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="revision-cap-r1",
+            idempotency_key="revision-cap-second",
+        ),
+        json=_metadata(revision="revision-cap-r2", payload=b"second"),
+    )
+    assert limited.status_code == 429
+    assert (
+        backend.storage.get_metadata(ACCOUNT_ID, VAULT_ID).revision == "revision-cap-r1"
+    )
+
+    envelope = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="byte-cap-r1", payload=b"opaque")
+    )
+    retained_size = len(envelope.model_dump_json().encode("utf-8"))
+    backend, client, authorization = client_for(
+        max_retained_bytes=retained_size - 1,
+        max_retained_bytes_per_account=retained_size - 1,
+    )
+    limited = client.put(
+        f"/v1/vaults/{VAULT_ID}/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key="byte-cap-first",
+        ),
+        json=envelope.model_dump(mode="json"),
+    )
+    assert limited.status_code == 429
+    assert backend.storage._vaults == {}

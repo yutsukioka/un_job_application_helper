@@ -845,6 +845,43 @@ def test_c13_account_base64_schema_requires_exact_binary_lengths(
     )
     assert response.status_code == 422
 
+    noncanonical = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision=REVISION_1,
+        parent_revision=None,
+        device=device,
+        signer=device,
+    )
+    noncanonical["transition"]["device"]["descriptor"]["signing_public_key"] = (
+        f"{'A' * 42}B="
+    )
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=noncanonical,
+    )
+    assert response.status_code == 422
+
+    assert BASE64_32_PATTERN == r"^[A-Za-z0-9+/]{42}[AQgw]=$"
+    assert BASE64_64_PATTERN == r"^[A-Za-z0-9+/]{85}[AEIMQUYcgkosw048]==$"
+
+
+def test_c13_protected_unauthorized_routes_send_bearer_challenge() -> None:
+    client = TestClient(create_app())
+
+    devices = client.get(f"/v1/accounts/{ACCOUNT_A}/devices")
+    storage = client.get("/v1/vaults/test-vault/metadata")
+    challenge = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": f"avd1-{'0' * 64}"},
+    )
+
+    assert devices.status_code == 401
+    assert devices.headers["www-authenticate"] == "Bearer"
+    assert storage.status_code == 401
+    assert storage.headers["www-authenticate"] == "Bearer"
+    assert challenge.status_code == 401
+    assert "www-authenticate" not in challenge.headers
+
 
 def test_c13_canonical_reusable_errors_publish_json_body_schemas() -> None:
     contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))

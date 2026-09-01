@@ -58,6 +58,13 @@ MAX_CHALLENGES_PER_DEVICE = 8
 MAX_LIVE_SESSIONS = 4096
 MAX_SESSIONS_PER_DEVICE = 8
 MAX_DEVICES_PER_ACCOUNT = 256
+MAX_RETAINED_VAULTS = 4096
+MAX_RETAINED_VAULTS_PER_ACCOUNT = 128
+MAX_RETAINED_OBJECTS_PER_ACCOUNT = 16_384
+MAX_RETAINED_PATCHES_PER_ACCOUNT = 65_536
+MAX_RETAINED_REVISIONS_PER_ACCOUNT = 131_072
+MAX_RETAINED_BYTES = 1024 * 1024 * 1024
+MAX_RETAINED_BYTES_PER_ACCOUNT = 512 * 1024 * 1024
 MAX_KEY_EPOCH = (1 << 63) - 1
 OPENAPI_PATH = ROOT / "contracts" / "api" / "atlasvault_sync_openapi.json"
 
@@ -558,6 +565,13 @@ def test_c15_contract_declares_storage_controls() -> None:
         "maxLiveSessions": MAX_LIVE_SESSIONS,
         "maxSessionsPerDevice": MAX_SESSIONS_PER_DEVICE,
         "maxDevicesPerAccount": MAX_DEVICES_PER_ACCOUNT,
+        "maxRetainedVaults": MAX_RETAINED_VAULTS,
+        "maxRetainedVaultsPerAccount": MAX_RETAINED_VAULTS_PER_ACCOUNT,
+        "maxRetainedObjectsPerAccount": MAX_RETAINED_OBJECTS_PER_ACCOUNT,
+        "maxRetainedPatchesPerAccount": MAX_RETAINED_PATCHES_PER_ACCOUNT,
+        "maxRetainedRevisionsPerAccount": MAX_RETAINED_REVISIONS_PER_ACCOUNT,
+        "maxRetainedBytes": MAX_RETAINED_BYTES,
+        "maxRetainedBytesPerAccount": MAX_RETAINED_BYTES_PER_ACCOUNT,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "maxAccountRequestBytes": MAX_ACCOUNT_REQUEST_BYTES,
         "rateWindowSeconds": 60,
@@ -776,6 +790,13 @@ def test_c15_storage_key_epochs_use_the_shared_signed_64_bit_bound(
         "max_sessions",
         "max_sessions_per_device",
         "max_devices_per_account",
+        "max_retained_vaults",
+        "max_retained_vaults_per_account",
+        "max_retained_objects_per_account",
+        "max_retained_patches_per_account",
+        "max_retained_revisions_per_account",
+        "max_retained_bytes",
+        "max_retained_bytes_per_account",
     ),
 )
 @pytest.mark.parametrize("invalid", (float("nan"), 1.0, True))
@@ -892,6 +913,32 @@ def test_c15_invalid_session_challenge_does_not_scan_live_sessions() -> None:
     assert response.status_code == 401
 
 
+def test_c15_challenge_issuance_does_not_scan_live_challenges() -> None:
+    class NoFullScanChallenges(dict[tuple[str, str], object]):
+        def items(self) -> object:
+            raise AssertionError("full challenge scan is forbidden")
+
+        def values(self) -> object:
+            raise AssertionError("full per-device challenge scan is forbidden")
+
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+    )
+    client = TestClient(create_app(backend))
+    device, _ = _identities()
+    _bootstrap(client, device, account_id=ACCOUNT_A)
+    backend._challenges = NoFullScanChallenges()
+
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/auth/challenges",
+        json={"device_id": device.device_id},
+    )
+
+    assert response.status_code == 201, response.text
+    assert len(backend._challenges) == 1
+
+
 def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
     policy = AbuseControlPolicy(
         account_request_limit=11,
@@ -905,6 +952,13 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
         max_sessions=23,
         max_sessions_per_device=5,
         max_devices_per_account=13,
+        max_retained_vaults=29,
+        max_retained_vaults_per_account=11,
+        max_retained_objects_per_account=31,
+        max_retained_patches_per_account=37,
+        max_retained_revisions_per_account=41,
+        max_retained_bytes=500_000,
+        max_retained_bytes_per_account=200_000,
     )
     schema = create_app(AtlasVaultBackend(abuse_policy=policy)).openapi()
     assert schema["x-atlasvault-c15-controls"] == {
@@ -916,6 +970,13 @@ def test_c15_served_schema_publishes_enforced_abuse_controls() -> None:
         "maxLiveSessions": 23,
         "maxSessionsPerDevice": 5,
         "maxDevicesPerAccount": 13,
+        "maxRetainedVaults": 29,
+        "maxRetainedVaultsPerAccount": 11,
+        "maxRetainedObjectsPerAccount": 31,
+        "maxRetainedPatchesPerAccount": 37,
+        "maxRetainedRevisionsPerAccount": 41,
+        "maxRetainedBytes": 500_000,
+        "maxRetainedBytesPerAccount": 200_000,
         "rateWindowSeconds": 31,
         "maxRequestBytes": 123_456,
         "maxAccountRequestBytes": 4_096,
