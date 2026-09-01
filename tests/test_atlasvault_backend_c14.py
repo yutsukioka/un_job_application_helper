@@ -669,12 +669,20 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert parameters["PageSize"]["name"] == "page_size"
 
     generated = create_app(AtlasVaultBackend()).openapi()
-    for schemas in (
-        contract["components"]["schemas"],
-        generated["components"]["schemas"],
+    for schemas, metadata_name, opaque_name in (
+        (
+            contract["components"]["schemas"],
+            "EncryptedVaultMetadataEnvelope",
+            "OpaqueCiphertextEnvelope",
+        ),
+        (
+            generated["components"]["schemas"],
+            "EncryptedVaultMetadataEnvelopeModel",
+            "OpaqueCiphertextEnvelopeModel",
+        ),
     ):
-        metadata_properties = schemas["EncryptedVaultMetadataEnvelope"]["properties"]
-        opaque_properties = schemas["OpaqueCiphertextEnvelope"]["properties"]
+        metadata_properties = schemas[metadata_name]["properties"]
+        opaque_properties = schemas[opaque_name]["properties"]
         for identifier in (
             metadata_properties["vault_id"],
             opaque_properties["object_id"],
@@ -686,7 +694,14 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
             opaque_properties["revision"],
             opaque_properties["parent_revision"],
         ):
-            assert revision["maxLength"] == 128
+            max_length = revision.get("maxLength")
+            if max_length is None:
+                max_length = next(
+                    option["maxLength"]
+                    for option in revision["anyOf"]
+                    if option.get("type") == "string"
+                )
+            assert max_length == 128
             assert revision["not"] == {"const": "*"}
 
     for path, method in (

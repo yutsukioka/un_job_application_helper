@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 OPAQUE_ID_MAX_LENGTH = 128
 REVISION_MAX_LENGTH = 128
@@ -26,13 +26,24 @@ class EncryptedVaultMetadataEnvelopeModel(BaseModel):
     format: Literal["atlasvault-encrypted-metadata-envelope"]
     version: int = Field(ge=1)
     vault_id: str = Field(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH)
-    revision: str = Field(min_length=1, max_length=REVISION_MAX_LENGTH)
+    revision: str = Field(
+        min_length=1,
+        max_length=REVISION_MAX_LENGTH,
+        json_schema_extra={"not": {"const": "*"}},
+    )
     key_epoch: int = Field(ge=1)
     nonce_b64: str = Field(min_length=1)
     ciphertext_b64: str = Field(min_length=1)
     aad_b64: str = Field(min_length=1)
     signature_b64: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("revision")
+    @classmethod
+    def reject_creation_wildcard(cls, value: str) -> str:
+        if value == "*":
+            raise ValueError("creation wildcard cannot be stored as a revision")
+        return value
 
 
 class OpaqueCiphertextEnvelopeModel(BaseModel):
@@ -41,10 +52,15 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
     format: Literal["atlasvault-opaque-ciphertext-envelope"]
     version: int = Field(ge=1)
     object_id: str = Field(min_length=1, max_length=OPAQUE_ID_MAX_LENGTH)
-    revision: str = Field(min_length=1, max_length=REVISION_MAX_LENGTH)
+    revision: str = Field(
+        min_length=1,
+        max_length=REVISION_MAX_LENGTH,
+        json_schema_extra={"not": {"const": "*"}},
+    )
     parent_revision: str | None = Field(
         default=None,
         max_length=REVISION_MAX_LENGTH,
+        json_schema_extra={"not": {"const": "*"}},
     )
     key_epoch: int = Field(ge=1)
     nonce_b64: str = Field(min_length=1)
@@ -53,6 +69,13 @@ class OpaqueCiphertextEnvelopeModel(BaseModel):
     signature_b64: str = Field(min_length=1)
     tombstone: bool
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("revision", "parent_revision")
+    @classmethod
+    def reject_creation_wildcard(cls, value: str | None) -> str | None:
+        if value == "*":
+            raise ValueError("creation wildcard cannot be stored as a revision")
+        return value
 
 
 class OpaqueCiphertextPageModel(BaseModel):
@@ -152,7 +175,6 @@ class InMemoryOpaqueStore:
             )
             if replay is not None:
                 return _require_metadata(replay)
-            _reject_changed_revision(state.metadata_revision_fingerprints, envelope)
             duplicate = _same_revision(state.metadata, envelope)
             if duplicate is not None:
                 self._record(
@@ -164,6 +186,10 @@ class InMemoryOpaqueStore:
                     duplicate,
                 )
                 return _require_metadata(duplicate)
+            _reject_historical_revision(
+                state.metadata_revision_fingerprints,
+                envelope,
+            )
             _require_cas(state.metadata, expected_revision)
             state.metadata = envelope
             state.metadata_revision_fingerprints[envelope.revision] = (
@@ -216,7 +242,6 @@ class InMemoryOpaqueStore:
                 return _require_opaque(replay)
             current = state.objects.get(object_id)
             revisions = state.object_revision_fingerprints.setdefault(object_id, {})
-            _reject_changed_revision(revisions, envelope)
             duplicate = _same_revision(current, envelope)
             if duplicate is not None:
                 self._record(
@@ -228,6 +253,7 @@ class InMemoryOpaqueStore:
                     duplicate,
                 )
                 return _require_opaque(duplicate)
+            _reject_historical_revision(revisions, envelope)
             _require_parent_cas(current, envelope, expected_revision)
             state.objects[object_id] = envelope
             revisions[envelope.revision] = _envelope_fingerprint(envelope)
@@ -360,7 +386,6 @@ class InMemoryOpaqueStore:
             )
             if replay is not None:
                 return _require_opaque(replay)
-            _reject_changed_revision(state.snapshot_revision_fingerprints, envelope)
             duplicate = _same_revision(state.snapshot, envelope)
             if duplicate is not None:
                 self._record(
@@ -372,6 +397,10 @@ class InMemoryOpaqueStore:
                     duplicate,
                 )
                 return _require_opaque(duplicate)
+            _reject_historical_revision(
+                state.snapshot_revision_fingerprints,
+                envelope,
+            )
             _require_parent_cas(state.snapshot, envelope, expected_revision)
             state.snapshot = envelope
             state.snapshot_revision_fingerprints[envelope.revision] = (
@@ -498,12 +527,11 @@ def _same_revision(
     return current
 
 
-def _reject_changed_revision(
+def _reject_historical_revision(
     history: dict[str, bytes],
     incoming: StorageEnvelope,
 ) -> None:
-    previous = history.get(incoming.revision)
-    if previous is not None and previous != _envelope_fingerprint(incoming):
+    if incoming.revision in history:
         raise OpaqueStorageConflict
 
 

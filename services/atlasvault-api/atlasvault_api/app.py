@@ -260,6 +260,8 @@ class AtlasVaultBackend:
         request: AuthenticationChallengeRequest,
     ) -> AuthenticationChallenge:
         with self._lock:
+            now = self._monotonic()
+            self._prune_expired_challenges(now)
             account = self._accounts.get(account_id)
             if account is None or request.device_id not in account.devices:
                 raise AuthorizationFailed
@@ -271,7 +273,7 @@ class AtlasVaultBackend:
             self._challenges[key] = _Challenge(
                 device_id=request.device_id,
                 challenge=challenge,
-                expires_at=self._monotonic() + CHALLENGE_LIFETIME_SECONDS,
+                expires_at=now + CHALLENGE_LIFETIME_SECONDS,
             )
             return AuthenticationChallenge(
                 challenge_id=challenge_id,
@@ -418,6 +420,15 @@ class AtlasVaultBackend:
         ]
         for digest in expired:
             del self._sessions[digest]
+
+    def _prune_expired_challenges(self, now: float) -> None:
+        expired = [
+            key
+            for key, challenge in self._challenges.items()
+            if challenge.expires_at <= now
+        ]
+        for key in expired:
+            del self._challenges[key]
 
     def _registry_view(self, account_id: str) -> DeviceRegistryView:
         account = self._accounts[account_id]

@@ -982,11 +982,16 @@
             "minimum": 1
           },
           "vault_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           },
           "revision": {
             "type": "string",
-            "maxLength": 128
+            "maxLength": 128,
+            "not": {
+              "const": "*"
+            }
           },
           "key_epoch": {
             "type": "integer",
@@ -1040,18 +1045,26 @@
             "minimum": 1
           },
           "object_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           },
           "revision": {
             "type": "string",
-            "maxLength": 128
+            "maxLength": 128,
+            "not": {
+              "const": "*"
+            }
           },
           "parent_revision": {
             "type": [
               "string",
               "null"
             ],
-            "maxLength": 128
+            "maxLength": 128,
+            "not": {
+              "const": "*"
+            }
           },
           "key_epoch": {
             "type": "integer",
