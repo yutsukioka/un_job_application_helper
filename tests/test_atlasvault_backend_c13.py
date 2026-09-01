@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "vaultsync"))
 sys.path.insert(0, str(ROOT / "services" / "atlasvault-api"))
 
+import atlasvault_api.app as app_module
 from atlasvault_api.app import (
     ACCOUNT_SESSION_PROOF_DOMAIN,
     CHALLENGE_LIFETIME_SECONDS,
@@ -47,6 +48,8 @@ ACCOUNT_B = f"ava1-{hashlib.sha256(b'account-b').hexdigest()}"
 REVISION_1 = "10000000-0000-4000-8000-000000000001"
 REVISION_2 = "10000000-0000-4000-8000-000000000002"
 UTC_SECONDS_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+BASE64_32_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
+BASE64_64_PATTERN = r"^[A-Za-z0-9+/]{86}==$"
 
 
 class DeterministicEntropy:
@@ -733,3 +736,137 @@ def test_c13_models_reject_forbidden_extra_wire_fields(
         ).status_code
         == 422
     )
+
+
+def test_c13_device_signature_verification_runs_outside_backend_lock(
+    backend_client: tuple[AtlasVaultBackend, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend, client = backend_client
+    device_a, device_b = _identities()
+    _bootstrap(client, device_a)
+    token, _ = _session(client, device_a)
+    lock_observations: list[bool] = []
+    original_transition_verify = app_module._verify_transition_signature
+    original_descriptor_verify = app_module.SignedDeviceDescriptorModel.verified
+
+    def verify_transition(*args: object, **kwargs: object) -> None:
+        lock_observations.append(backend._lock._is_owned())
+        original_transition_verify(*args, **kwargs)
+
+    def verify_descriptor(
+        model: app_module.SignedDeviceDescriptorModel,
+    ) -> object:
+        lock_observations.append(backend._lock._is_owned())
+        return original_descriptor_verify(model)
+
+    monkeypatch.setattr(app_module, "_verify_transition_signature", verify_transition)
+    monkeypatch.setattr(
+        app_module.SignedDeviceDescriptorModel,
+        "verified",
+        verify_descriptor,
+    )
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_signed_transition(
+            account_id=ACCOUNT_A,
+            revision=REVISION_2,
+            parent_revision=REVISION_1,
+            device=device_b,
+            signer=device_a,
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert lock_observations == [False, False, False]
+
+
+def test_c13_account_base64_schema_requires_exact_binary_lengths(
+    backend_client: tuple[AtlasVaultBackend, TestClient],
+) -> None:
+    _, client = backend_client
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    served = create_app(AtlasVaultBackend()).openapi()
+    for schemas, names in (
+        (
+            contract["components"]["schemas"],
+            {
+                "descriptor": "DeviceDescriptor",
+                "signed_descriptor": "SignedDeviceDescriptor",
+                "signed_transition": "SignedDeviceRegistryTransition",
+                "challenge": "AuthenticationChallenge",
+                "proof": "SessionProofRequest",
+            },
+        ),
+        (
+            served["components"]["schemas"],
+            {
+                "descriptor": "DeviceDescriptorModel",
+                "signed_descriptor": "SignedDeviceDescriptorModel",
+                "signed_transition": "SignedDeviceRegistryTransitionModel",
+                "challenge": "AuthenticationChallenge",
+                "proof": "SessionProofRequest",
+            },
+        ),
+    ):
+        descriptor = schemas[names["descriptor"]]["properties"]
+        for field in ("signing_public_key", "agreement_public_key"):
+            assert descriptor[field] == {
+                "type": "string",
+                "minLength": 44,
+                "maxLength": 44,
+                "pattern": BASE64_32_PATTERN,
+                "contentEncoding": "base64",
+            }
+        for schema_name, field, pattern, length in (
+            (names["signed_descriptor"], "signature", BASE64_64_PATTERN, 88),
+            (names["signed_transition"], "signature", BASE64_64_PATTERN, 88),
+            (names["challenge"], "challenge", BASE64_32_PATTERN, 44),
+            (names["proof"], "signature", BASE64_64_PATTERN, 88),
+        ):
+            value = schemas[schema_name]["properties"][field]
+            assert value["minLength"] == length
+            assert value["maxLength"] == length
+            assert value["pattern"] == pattern
+            assert value["contentEncoding"] == "base64"
+
+    device, _ = _identities()
+    bootstrap = _signed_transition(
+        account_id=ACCOUNT_A,
+        revision=REVISION_1,
+        parent_revision=None,
+        device=device,
+        signer=device,
+    )
+    bootstrap["transition"]["device"]["descriptor"]["signing_public_key"] = ""
+    response = client.post(
+        f"/v1/accounts/{ACCOUNT_A}/devices/bootstrap",
+        json=bootstrap,
+    )
+    assert response.status_code == 422
+
+
+def test_c13_canonical_reusable_errors_publish_json_body_schemas() -> None:
+    contract = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    responses = contract["components"]["responses"]
+    for name in (
+        "InvalidRequest",
+        "Unauthorized",
+        "Conflict",
+        "NotFound",
+        "RequestTooLarge",
+        "RateLimited",
+    ):
+        assert responses[name]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/FixedErrorResponse"
+        }
+    assert responses["ValidationFailed"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RequestValidationFailure"
+    }
+    schemas = contract["components"]["schemas"]
+    assert schemas["FixedErrorResponse"]["required"] == ["detail"]
+    assert schemas["RequestValidationFailure"]["properties"]["detail"] == {
+        "type": "string",
+        "const": "Invalid request.",
+    }

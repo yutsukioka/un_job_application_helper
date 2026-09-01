@@ -22,6 +22,10 @@ from atlasvault_api.app import (
     AtlasVaultBackend,
     create_app,
 )
+from atlasvault_api.storage import (
+    EncryptedVaultMetadataEnvelopeModel,
+    InvalidOpaqueStorageRequest,
+)
 from vaultsync.device_identity import DeviceIdentity, device_identity_from_private_keys
 from vaultsync.service_contract_guard import find_raw_secret_wire_contract_violations
 
@@ -38,6 +42,7 @@ VAULT_ID = "vault-c14-opaque"
 REGISTRY_REVISION = "14000000-0000-4000-8000-000000000001"
 _CURSOR_LIFETIME_SECONDS = 300
 _RECEIPT_LIFETIME_SECONDS = 600
+HEADER_SAFE_ASCII_PATTERN = r"^[!-~]+$"
 
 
 class DeterministicEntropy:
@@ -822,6 +827,10 @@ def test_c14_contract_requires_cas_idempotency_and_opaque_cursor_parameters() ->
     assert re.fullmatch(path_id_pattern, "vault.with.dots") is not None
     assert parameters["IfMatch"]["name"] == "If-Match"
     assert parameters["IdempotencyKey"]["name"] == "Idempotency-Key"
+    assert parameters["IfMatch"]["schema"]["pattern"] == HEADER_SAFE_ASCII_PATTERN
+    assert (
+        parameters["IdempotencyKey"]["schema"]["pattern"] == HEADER_SAFE_ASCII_PATTERN
+    )
     assert parameters["Cursor"]["name"] == "cursor"
     assert parameters["PageSize"]["name"] == "page_size"
     assert parameters["VaultId"]["schema"]["pattern"] == path_id_pattern
@@ -1048,3 +1057,49 @@ def test_c14_stored_revisions_use_header_safe_ascii(
         json=envelope,
     )
     assert response.status_code == 422
+
+
+def test_c14_receipt_pruning_does_not_scan_every_retained_vault() -> None:
+    class NoFullScanVaults(dict[tuple[str, str], object]):
+        def values(self) -> object:
+            raise AssertionError("full retained-vault scan is forbidden")
+
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 2_000.0,
+    )
+    client = TestClient(create_app(backend))
+    authorization = _authorize(client, _identity())
+    backend.storage._vaults = NoFullScanVaults(backend.storage._vaults)
+    response = client.put(
+        f"/v1/vaults/{VAULT_ID}/metadata",
+        headers=_write_headers(
+            authorization,
+            expected="*",
+            idempotency_key="no-full-vault-scan",
+        ),
+        json=_metadata(revision="no-scan-r1", payload=b"opaque"),
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    ("expected_revision", "idempotency_key"),
+    [("\t", "safe-key"), ("*", "bad\tkey"), ("\x7f", "safe-key")],
+)
+def test_c14_write_tokens_reject_non_visible_ascii(
+    expected_revision: str,
+    idempotency_key: str,
+) -> None:
+    backend = AtlasVaultBackend(entropy=DeterministicEntropy())
+    envelope = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="header-token-r1", payload=b"opaque")
+    )
+    with pytest.raises(InvalidOpaqueStorageRequest):
+        backend.storage.put_metadata(
+            ACCOUNT_ID,
+            VAULT_ID,
+            envelope,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
