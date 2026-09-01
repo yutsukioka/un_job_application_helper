@@ -1382,3 +1382,108 @@ def test_c14_duplicate_receipts_retain_only_attempt_fingerprints(
         assert isinstance(attempt["envelope_fingerprint"], bytes)
         assert len(attempt["envelope_fingerprint"]) == hashlib.sha256().digest_size
         assert receipt.response is state.metadata
+
+
+def test_c14_cursor_cleanup_is_bounded_and_target_expiry_fails_closed() -> None:
+    now = [2_000.0]
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: now[0],
+    )
+    store = backend.storage
+    tokens = [
+        store._new_cursor(
+            ACCOUNT_ID,
+            VAULT_ID,
+            start=0,
+            end=0,
+            page_size=1,
+        )
+        for _ in range(65)
+    ]
+
+    now[0] += _CURSOR_LIFETIME_SECONDS + 1
+    with pytest.raises(InvalidOpaqueStorageRequest):
+        store.list_patches(
+            ACCOUNT_ID,
+            VAULT_ID,
+            cursor=tokens[-1],
+            page_size=None,
+        )
+
+    assert len(store._cursor_expiries) == 1
+    assert tokens[-1] not in store._cursors
+
+
+def test_c14_envelope_facts_are_computed_once_outside_the_store_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 2_000.0,
+    )
+    envelope = EncryptedVaultMetadataEnvelopeModel.model_validate(
+        _metadata(revision="one-pass-r1", payload=b"opaque")
+    )
+    original = EncryptedVaultMetadataEnvelopeModel.model_dump_json
+    lock_observations: list[bool] = []
+
+    def observed_dump(
+        self: EncryptedVaultMetadataEnvelopeModel, *args: object, **kwargs: object
+    ) -> str:
+        lock_observations.append(backend.storage._lock._is_owned())
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        EncryptedVaultMetadataEnvelopeModel,
+        "model_dump_json",
+        observed_dump,
+    )
+    backend.storage.put_metadata(
+        ACCOUNT_ID,
+        VAULT_ID,
+        envelope,
+        expected_revision="*",
+        idempotency_key="one-pass",
+    )
+
+    assert lock_observations == [False]
+
+
+def test_c14_if_match_uses_strong_entity_tags_at_the_http_boundary(
+    storage_client: tuple[AtlasVaultBackend, TestClient, dict[str, str]],
+) -> None:
+    _, client, authorization = storage_client
+    path = f"/v1/vaults/{VAULT_ID}/metadata"
+    first = client.put(
+        path,
+        headers={
+            **authorization,
+            "If-Match": "*",
+            "Idempotency-Key": "etag-first",
+        },
+        json=_metadata(revision="etag-r1", payload=b"first"),
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.put(
+        path,
+        headers={
+            **authorization,
+            "If-Match": '"etag-r1"',
+            "Idempotency-Key": "etag-second",
+        },
+        json=_metadata(revision="etag-r2", payload=b"second"),
+    )
+    assert second.status_code == 200, second.text
+
+    unquoted = client.put(
+        path,
+        headers={
+            **authorization,
+            "If-Match": "etag-r2",
+            "Idempotency-Key": "etag-unquoted",
+        },
+        json=_metadata(revision="etag-r3", payload=b"third"),
+    )
+    assert unquoted.status_code == 422

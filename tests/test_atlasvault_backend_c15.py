@@ -1034,3 +1034,47 @@ def test_c15_telemetry_coarsens_unknown_categories() -> None:
         ],
         "metrics": [{"category": "other", "outcome": "error", "count": 1}],
     }
+
+
+def test_c15_default_account_storage_budget_reserves_global_capacity() -> None:
+    policy = AbuseControlPolicy()
+    assert policy.max_retained_bytes_per_account * 4 <= policy.max_retained_bytes
+
+
+def test_c15_account_signature_verification_is_globally_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = AtlasVaultBackend(
+        entropy=DeterministicEntropy(),
+        monotonic=lambda: 3_000.0,
+        abuse_policy=AbuseControlPolicy(account_verification_limit=1),
+    )
+    client = TestClient(create_app(backend))
+    device_a, device_b = _identities()
+    original = app_module._verify_transition_signature
+    verification_calls = 0
+
+    def observed_verify(*args: object, **kwargs: object) -> None:
+        nonlocal verification_calls
+        verification_calls += 1
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "_verify_transition_signature", observed_verify)
+    for index, (account_id, device) in enumerate(
+        ((ACCOUNT_A, device_a), (ACCOUNT_B, device_b)),
+    ):
+        request = _signed_transition(
+            account_id=account_id,
+            revision=f"{index + 1:08d}-0000-4000-8000-000000000001",
+            parent_revision=None,
+            device=device,
+            signer=device,
+        )
+        request["signature"] = _encode64(bytes(64))
+        response = client.post(
+            f"/v1/accounts/{account_id}/devices/bootstrap",
+            json=request,
+        )
+        assert response.status_code == (400 if index == 0 else 429), response.text
+
+    assert verification_calls == 1
