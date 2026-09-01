@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlasvault.local/contracts/encrypted_patch_queue.schema.json",
+  "title": "AtlasVault encrypted patch operation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "operation_id",
+    "operation_type",
+    "author_device_id",
+    "author_sequence",
+    "lamport",
+    "envelope"
+  ],
+  "properties": {
+    "format": {
+      "const": "atlasvault-encrypted-patch-operation"
+    },
+    "version": {
+      "const": 1
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "operation_type": {
+      "enum": ["upsert", "delete"]
+    },
+    "author_device_id": {
+      "$ref": "#/$defs/opaqueIdentifier"
+    },
+    "author_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "lamport": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "envelope": {
+      "$ref": "#/$defs/opaqueCiphertextEnvelope"
+    }
+  },
+  "$defs": {
+    "opaqueIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "canonicalBase64": {
+      "type": "string",
+      "minLength": 1,
+      "contentEncoding": "base64"
+    },
+    "opaqueCiphertextEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version",
+        "object_id",
+        "revision",
+        "parent_revision",
+        "key_epoch",
+        "nonce_b64",
+        "ciphertext_b64",
+        "aad_b64",
+        "signature_b64",
+        "tombstone",
+        "content_sha256"
+      ],
+      "properties": {
+        "format": {
+          "const": "atlasvault-opaque-ciphertext-envelope"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "object_id": {
+          "$ref": "#/$defs/opaqueIdentifier"
+        },
+        "revision": {
+          "$ref": "#/$defs/opaqueIdentifier"
+        },
+        "parent_revision": {
+          "oneOf": [
+            {"$ref": "#/$defs/opaqueIdentifier"},
+            {"type": "null"}
+          ]
+        },
+        "key_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "nonce_b64": {
+          "$ref": "#/$defs/canonicalBase64"
+        },
+        "ciphertext_b64": {
+          "$ref": "#/$defs/canonicalBase64"
+        },
+        "aad_b64": {
+          "$ref": "#/$defs/canonicalBase64"
+        },
+        "signature_b64": {
+          "$ref": "#/$defs/canonicalBase64"
+        },
+        "tombstone": {
+          "type": "boolean"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

@@ -38,3 +38,4 @@ export 'src/atlas_vault/recovery.dart'
         unwrapAtlasVaultRecoveryWrapV2,
         wrapAtlasVaultKeyWithRecoveryV2;
 export 'src/atlas_vault/strict_values.dart' show AtlasVaultFormatException;
+export 'src/atlas_vault/sync_queue.dart';
