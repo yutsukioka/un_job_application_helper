@@ -59,6 +59,30 @@ void main() {
     );
   });
 
+  test('restart helpers launch Dart directly and queue renames sync', () async {
+    final helperSource = await File(
+      'test/support/atlas_vault_dart_helper_process.dart',
+    ).readAsString();
+    expect(helperSource, contains("Platform.environment['PATH']"));
+    expect(helperSource, contains('existsSync()'));
+    expect(helperSource, isNot(contains('runInShell:')));
+
+    final queueSource = await File(
+      'lib/src/atlas_vault/sync_queue.dart',
+    ).readAsString();
+    final replacement = queueSource.indexOf('await replaceCacheFile(');
+    final directorySync = queueSource.indexOf(
+      'await _syncParentDirectory(file);',
+      replacement,
+    );
+    expect(replacement, greaterThanOrEqualTo(0));
+    expect(directorySync, greaterThan(replacement));
+    expect(
+      queueSource,
+      contains("lookupFunction<_FsyncNative, _FsyncDart>('fsync')"),
+    );
+  });
+
   test('outbox is encrypted, ordered, durable, and ack gated', () async {
     final directory = await Directory.systemTemp.createTemp(
       'atlasvault-c17-outbox-',

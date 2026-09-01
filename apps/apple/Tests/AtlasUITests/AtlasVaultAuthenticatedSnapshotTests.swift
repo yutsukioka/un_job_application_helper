@@ -45,6 +45,31 @@ final class AtlasVaultAuthenticatedSnapshotTests: XCTestCase {
         )
     }
 
+    func testCanonicalSnapshotReceiptsDoNotEscapeSlashes() throws {
+        let directory = try temporaryDirectory("canonical-slash")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var raw = try XCTUnwrap(loadOperations().first).jsonObject
+        var envelope = try XCTUnwrap(raw["envelope"] as? [String: Any])
+        envelope["aad_b64"] = "/w=="
+        raw["envelope"] = envelope
+        let operation = try AtlasVaultEncryptedPatchOperation(jsonObject: raw)
+        let value = try collection(directory.appendingPathComponent("slash.collection"))
+
+        try value.append(operation)
+        let snapshot = try value.compact()
+        let payload = try XCTUnwrap(snapshot.jsonObject["payload"] as? [String: Any])
+        let receipts = try XCTUnwrap(payload["applied_fingerprints"] as? [String: String])
+        let canonical = try JSONSerialization.data(
+            withJSONObject: operation.jsonObject,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        let expected = SHA256.hash(data: canonical)
+            .map { String(format: "%02x", $0) }
+            .joined()
+
+        XCTAssertEqual(receipts[operation.operationID], expected)
+    }
+
     func testCompactionPreservesReplayBytesTombstonesAndReceipts() throws {
         let directory = try temporaryDirectory("preservation")
         defer { try? FileManager.default.removeItem(at: directory) }
